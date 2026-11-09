@@ -6,3 +6,4 @@
 pub mod account;
 pub mod common;
 pub mod payload;
+pub mod traces;

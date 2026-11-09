@@ -1,0 +1,39 @@
+---
+source: crates/server/src/api/traces.rs
+expression: snap(&summary)
+---
+{
+  "trace_id": "0bf47f46319b5ed774cf3eda73817b89",
+  "span_id": "b51c18d3aa8f7e77",
+  "parent_span_id": "b1000000000000ff",
+  "name": "chat claude-sonnet-4-5",
+  "span_kind": "llm",
+  "start_time": "2025-12-31T23:59:50.000000000Z",
+  "end_time": "2025-12-31T23:59:52.400000000Z",
+  "duration_ns": 2400000000,
+  "status": "unset",
+  "status_message": "ok",
+  "service_name": "support-bot",
+  "session_id": "sess-42",
+  "user_id": "user-17",
+  "environment": "production",
+  "release": "1.4.2",
+  "tags": [
+    "support"
+  ],
+  "metadata": {
+    "priority": "1"
+  },
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-5-20250929",
+  "input_tokens": 1200,
+  "output_tokens": 300,
+  "cache_read_tokens": 1000,
+  "cache_write_tokens": 100,
+  "reasoning_tokens": 12,
+  "total_tokens": 1500,
+  "cost_total": 0.005475,
+  "ttft_ns": 600000000,
+  "input_preview": "How do I reset my password?",
+  "output_preview": "Go to Settings, then Security, then Reset password."
+}

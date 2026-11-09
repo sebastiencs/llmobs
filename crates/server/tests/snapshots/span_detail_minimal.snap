@@ -1,0 +1,25 @@
+---
+source: crates/server/src/api/traces.rs
+expression: snap(&minimal_detail)
+---
+{
+  "trace_id": "a1000000000000000000000000000001",
+  "span_id": "b100000000000011",
+  "name": "root",
+  "span_kind": "span",
+  "start_time": "2026-01-01T10:00:00.000000000Z",
+  "end_time": "2026-01-01T10:00:00.000000000Z",
+  "duration_ns": 0,
+  "status": "unset",
+  "tags": [],
+  "metadata": {},
+  "attributes": {},
+  "resource_attributes": {},
+  "events": [],
+  "links": [],
+  "media_refs": [],
+  "truncated": [],
+  "conventions": [],
+  "ingest_time": "2026-01-01T10:00:00.000000000Z",
+  "schema_version": 1
+}
