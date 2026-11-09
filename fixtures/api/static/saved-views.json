@@ -1,0 +1,33 @@
+{
+  "data": [
+    {
+      "id": "01900000-0000-7000-8000-000000000210",
+      "kind": "traces",
+      "name": "Errors",
+      "state": {
+        "filter": "status = 'error'",
+        "time_range": "last_24h"
+      },
+      "owner_user_id": "01900000-0000-7000-8000-000000000100",
+      "shared": true,
+      "is_default": true,
+      "created_at": "2026-01-01T09:00:00.000000000Z",
+      "updated_at": "2026-01-01T09:00:00.000000000Z"
+    },
+    {
+      "id": "01900000-0000-7000-8000-000000000211",
+      "kind": "sql",
+      "name": "Cost per model per day",
+      "state": {
+        "query": "SELECT model, date_trunc('day', start_time) AS day, sum(cost_total) AS cost FROM spans WHERE span_kind = 'llm' GROUP BY model, day ORDER BY day, cost DESC",
+        "params": []
+      },
+      "owner_user_id": "01900000-0000-7000-8000-000000000100",
+      "shared": false,
+      "is_default": false,
+      "created_at": "2026-01-01T09:00:00.000000000Z",
+      "updated_at": "2026-01-01T09:00:00.000000000Z"
+    }
+  ],
+  "next_cursor": null
+}

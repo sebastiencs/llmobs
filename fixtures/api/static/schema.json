@@ -1,0 +1,792 @@
+{
+  "views": [
+    {
+      "name": "traces",
+      "description": "One row per trace. Merge bookkeeping columns are not exposed.",
+      "columns": [
+        {
+          "name": "trace_id",
+          "column_type": "string",
+          "nullable": false,
+          "description": "Trace id, 16 bytes as lowercase hex."
+        },
+        {
+          "name": "start_time",
+          "column_type": "timestamp",
+          "nullable": false,
+          "description": "Earliest span start."
+        },
+        {
+          "name": "end_time",
+          "column_type": "timestamp",
+          "nullable": false,
+          "description": "Latest span end."
+        },
+        {
+          "name": "duration_ns",
+          "column_type": "integer",
+          "nullable": false,
+          "description": "end_time minus start_time, in nanoseconds."
+        },
+        {
+          "name": "duration_ms",
+          "column_type": "float",
+          "nullable": false,
+          "description": "duration_ns / 1e6, for convenience."
+        },
+        {
+          "name": "name",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Name of the root span, else the earliest span."
+        },
+        {
+          "name": "root_span_id",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Span id of the root. Null when the trace has no root."
+        },
+        {
+          "name": "has_root",
+          "column_type": "boolean",
+          "nullable": false,
+          "description": "Whether a root span is present."
+        },
+        {
+          "name": "status",
+          "column_type": "string",
+          "nullable": false,
+          "description": "error if any span errored, else the root status, else unset."
+        },
+        {
+          "name": "session_id",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Session id, preferring the root."
+        },
+        {
+          "name": "user_id",
+          "column_type": "string",
+          "nullable": true,
+          "description": "End-user id, preferring the root."
+        },
+        {
+          "name": "environment",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Deployment environment."
+        },
+        {
+          "name": "release",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Git SHA or version string."
+        },
+        {
+          "name": "tags",
+          "column_type": "string_list",
+          "nullable": false,
+          "description": "Distinct union of span tags."
+        },
+        {
+          "name": "metadata",
+          "column_type": "string_map",
+          "nullable": false,
+          "description": "Root metadata, with keys from other spans added when absent."
+        },
+        {
+          "name": "input_preview",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Root input preview, else the first llm span's."
+        },
+        {
+          "name": "output_preview",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Root output preview, else the first llm span's."
+        },
+        {
+          "name": "span_count",
+          "column_type": "integer",
+          "nullable": false,
+          "description": "Number of spans."
+        },
+        {
+          "name": "error_count",
+          "column_type": "integer",
+          "nullable": false,
+          "description": "Number of spans with status error."
+        },
+        {
+          "name": "llm_count",
+          "column_type": "integer",
+          "nullable": false,
+          "description": "Number of llm spans."
+        },
+        {
+          "name": "input_tokens",
+          "column_type": "integer",
+          "nullable": true,
+          "description": "Sum of input tokens. Null when every span omitted the field."
+        },
+        {
+          "name": "output_tokens",
+          "column_type": "integer",
+          "nullable": true,
+          "description": "Sum of output tokens. Null when every span omitted the field."
+        },
+        {
+          "name": "cache_read_tokens",
+          "column_type": "integer",
+          "nullable": true,
+          "description": "Sum of cache-read tokens. Null when every span omitted the field."
+        },
+        {
+          "name": "cache_write_tokens",
+          "column_type": "integer",
+          "nullable": true,
+          "description": "Sum of cache-write tokens. Null when every span omitted the field."
+        },
+        {
+          "name": "reasoning_tokens",
+          "column_type": "integer",
+          "nullable": true,
+          "description": "Sum of reasoning tokens. Null when every span omitted the field."
+        },
+        {
+          "name": "total_tokens",
+          "column_type": "integer",
+          "nullable": true,
+          "description": "Sum of total tokens. Null when every span omitted the field."
+        },
+        {
+          "name": "cost_total",
+          "column_type": "float",
+          "nullable": true,
+          "description": "Sum of span costs, USD. Null when every span omitted the field."
+        },
+        {
+          "name": "models",
+          "column_type": "string_list",
+          "nullable": false,
+          "description": "Distinct model names."
+        }
+      ]
+    },
+    {
+      "name": "spans",
+      "description": "One row per span, including payload columns.",
+      "columns": [
+        {
+          "name": "trace_id",
+          "column_type": "string",
+          "nullable": false,
+          "description": "Trace id, 16 bytes as lowercase hex."
+        },
+        {
+          "name": "span_id",
+          "column_type": "string",
+          "nullable": false,
+          "description": "Span id, 8 bytes as lowercase hex."
+        },
+        {
+          "name": "parent_span_id",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Parent span id. Null when the span was received as a root."
+        },
+        {
+          "name": "name",
+          "column_type": "string",
+          "nullable": false,
+          "description": "Span name."
+        },
+        {
+          "name": "span_kind",
+          "column_type": "string",
+          "nullable": false,
+          "description": "Kind of work: llm, embedding, tool, agent, chain, retriever, reranker, guardrail, evaluator, or span."
+        },
+        {
+          "name": "start_time",
+          "column_type": "timestamp",
+          "nullable": false,
+          "description": "Start time."
+        },
+        {
+          "name": "end_time",
+          "column_type": "timestamp",
+          "nullable": false,
+          "description": "End time."
+        },
+        {
+          "name": "duration_ns",
+          "column_type": "integer",
+          "nullable": false,
+          "description": "end_time minus start_time, in nanoseconds."
+        },
+        {
+          "name": "duration_ms",
+          "column_type": "float",
+          "nullable": false,
+          "description": "duration_ns / 1e6, for convenience."
+        },
+        {
+          "name": "status",
+          "column_type": "string",
+          "nullable": false,
+          "description": "unset, ok, or error."
+        },
+        {
+          "name": "status_message",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Status description."
+        },
+        {
+          "name": "service_name",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Resource service.name."
+        },
+        {
+          "name": "session_id",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Session id."
+        },
+        {
+          "name": "user_id",
+          "column_type": "string",
+          "nullable": true,
+          "description": "End-user id."
+        },
+        {
+          "name": "environment",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Deployment environment. llmobs-eval is reserved for evaluator runs."
+        },
+        {
+          "name": "release",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Git SHA or version string."
+        },
+        {
+          "name": "tags",
+          "column_type": "string_list",
+          "nullable": false,
+          "description": "Tags."
+        },
+        {
+          "name": "metadata",
+          "column_type": "string_map",
+          "nullable": false,
+          "description": "User metadata. Values are JSON-encoded scalars or strings."
+        },
+        {
+          "name": "provider",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Normalized provider name, for example openai or anthropic."
+        },
+        {
+          "name": "request_model",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Model named in the request."
+        },
+        {
+          "name": "response_model",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Model named in the response."
+        },
+        {
+          "name": "model",
+          "column_type": "string",
+          "nullable": true,
+          "description": "coalesce(response_model, request_model)."
+        },
+        {
+          "name": "operation",
+          "column_type": "string",
+          "nullable": true,
+          "description": "GenAI operation name."
+        },
+        {
+          "name": "input_tokens",
+          "column_type": "integer",
+          "nullable": true,
+          "description": "Input tokens, including cached tokens."
+        },
+        {
+          "name": "output_tokens",
+          "column_type": "integer",
+          "nullable": true,
+          "description": "Output tokens, including reasoning tokens."
+        },
+        {
+          "name": "cache_read_tokens",
+          "column_type": "integer",
+          "nullable": true,
+          "description": "Cache-read tokens."
+        },
+        {
+          "name": "cache_write_tokens",
+          "column_type": "integer",
+          "nullable": true,
+          "description": "Cache-write tokens."
+        },
+        {
+          "name": "reasoning_tokens",
+          "column_type": "integer",
+          "nullable": true,
+          "description": "Reasoning tokens."
+        },
+        {
+          "name": "total_tokens",
+          "column_type": "integer",
+          "nullable": true,
+          "description": "Total tokens."
+        },
+        {
+          "name": "cost_input",
+          "column_type": "float",
+          "nullable": true,
+          "description": "Input cost, USD."
+        },
+        {
+          "name": "cost_output",
+          "column_type": "float",
+          "nullable": true,
+          "description": "Output cost, USD."
+        },
+        {
+          "name": "cost_total",
+          "column_type": "float",
+          "nullable": true,
+          "description": "Total cost, USD, including cache and reasoning."
+        },
+        {
+          "name": "cost_source",
+          "column_type": "string",
+          "nullable": true,
+          "description": "computed, reported, or none."
+        },
+        {
+          "name": "ttft_ns",
+          "column_type": "integer",
+          "nullable": true,
+          "description": "Time to first token, nanoseconds."
+        },
+        {
+          "name": "request_params",
+          "column_type": "json",
+          "nullable": true,
+          "description": "Request parameters such as temperature and max_tokens."
+        },
+        {
+          "name": "input",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Stored payload text."
+        },
+        {
+          "name": "input_format",
+          "column_type": "string",
+          "nullable": true,
+          "description": "messages, json, or text."
+        },
+        {
+          "name": "output",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Stored payload text."
+        },
+        {
+          "name": "output_format",
+          "column_type": "string",
+          "nullable": true,
+          "description": "messages, json, or text."
+        },
+        {
+          "name": "input_preview",
+          "column_type": "string",
+          "nullable": true,
+          "description": "First 512 characters of the plain-text rendering."
+        },
+        {
+          "name": "output_preview",
+          "column_type": "string",
+          "nullable": true,
+          "description": "First 512 characters of the plain-text rendering."
+        },
+        {
+          "name": "system_instructions",
+          "column_type": "json",
+          "nullable": true,
+          "description": "System instructions as JSON text."
+        },
+        {
+          "name": "tool_definitions",
+          "column_type": "json",
+          "nullable": true,
+          "description": "Tool definitions as JSON text."
+        },
+        {
+          "name": "attributes",
+          "column_type": "string_map",
+          "nullable": false,
+          "description": "Span attributes not consumed by normalization. Values are JSON-encoded."
+        },
+        {
+          "name": "resource_attributes",
+          "column_type": "string_map",
+          "nullable": false,
+          "description": "Resource attributes except service.name. Values are JSON-encoded."
+        },
+        {
+          "name": "scope_name",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Instrumentation scope name."
+        },
+        {
+          "name": "scope_version",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Instrumentation scope version."
+        },
+        {
+          "name": "events",
+          "column_type": "json",
+          "nullable": false,
+          "description": "Span events. Each item has time, name, and attributes."
+        },
+        {
+          "name": "links",
+          "column_type": "json",
+          "nullable": false,
+          "description": "Span links. Each item has trace_id, span_id, and attributes."
+        },
+        {
+          "name": "media_refs",
+          "column_type": "string_list",
+          "nullable": false,
+          "description": "SHA-256 hex of extracted media blobs."
+        },
+        {
+          "name": "truncated",
+          "column_type": "string_list",
+          "nullable": false,
+          "description": "Names of attributes truncated at ingest."
+        },
+        {
+          "name": "conventions",
+          "column_type": "string_list",
+          "nullable": false,
+          "description": "Detected conventions, for example genai or openinference."
+        },
+        {
+          "name": "ingest_time",
+          "column_type": "timestamp",
+          "nullable": false,
+          "description": "Server receive time."
+        },
+        {
+          "name": "schema_version",
+          "column_type": "integer",
+          "nullable": false,
+          "description": "Row-level normalization version."
+        }
+      ]
+    },
+    {
+      "name": "sessions",
+      "description": "One row per session.",
+      "columns": [
+        {
+          "name": "session_id",
+          "column_type": "string",
+          "nullable": false,
+          "description": "Session id."
+        },
+        {
+          "name": "start_time",
+          "column_type": "timestamp",
+          "nullable": false,
+          "description": "Earliest trace start."
+        },
+        {
+          "name": "end_time",
+          "column_type": "timestamp",
+          "nullable": false,
+          "description": "Latest trace end."
+        },
+        {
+          "name": "duration_ns",
+          "column_type": "integer",
+          "nullable": false,
+          "description": "end_time minus start_time, in nanoseconds."
+        },
+        {
+          "name": "duration_ms",
+          "column_type": "float",
+          "nullable": false,
+          "description": "duration_ns / 1e6, for convenience."
+        },
+        {
+          "name": "trace_count",
+          "column_type": "integer",
+          "nullable": false,
+          "description": "Number of traces in the session."
+        },
+        {
+          "name": "error_count",
+          "column_type": "integer",
+          "nullable": false,
+          "description": "Sum of trace error counts."
+        },
+        {
+          "name": "total_tokens",
+          "column_type": "integer",
+          "nullable": true,
+          "description": "Sum of trace total tokens."
+        },
+        {
+          "name": "cost_total",
+          "column_type": "float",
+          "nullable": true,
+          "description": "Sum of trace costs, USD."
+        },
+        {
+          "name": "user_id",
+          "column_type": "string",
+          "nullable": true,
+          "description": "End-user id of the session."
+        },
+        {
+          "name": "tags",
+          "column_type": "string_list",
+          "nullable": false,
+          "description": "Distinct union of trace tags."
+        }
+      ]
+    },
+    {
+      "name": "scores",
+      "description": "One row per live score.",
+      "columns": [
+        {
+          "name": "score_id",
+          "column_type": "string",
+          "nullable": false,
+          "description": "Score id."
+        },
+        {
+          "name": "target",
+          "column_type": "string",
+          "nullable": false,
+          "description": "span, trace, or session."
+        },
+        {
+          "name": "trace_id",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Trace id for a span or trace target."
+        },
+        {
+          "name": "span_id",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Span id for a span target."
+        },
+        {
+          "name": "session_id",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Session id for a session target, and copied for a trace target when known."
+        },
+        {
+          "name": "user_id",
+          "column_type": "string",
+          "nullable": true,
+          "description": "End-user id, when the writer knew it."
+        },
+        {
+          "name": "name",
+          "column_type": "string",
+          "nullable": false,
+          "description": "Score name."
+        },
+        {
+          "name": "data_type",
+          "column_type": "string",
+          "nullable": false,
+          "description": "numeric, boolean, categorical, or text."
+        },
+        {
+          "name": "value_num",
+          "column_type": "float",
+          "nullable": true,
+          "description": "Numeric value. Booleans are 0 or 1."
+        },
+        {
+          "name": "value_str",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Categorical label or text."
+        },
+        {
+          "name": "reason",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Explanation."
+        },
+        {
+          "name": "source",
+          "column_type": "string",
+          "nullable": false,
+          "description": "api, sdk, human, end_user, llm_judge, check, or webhook."
+        },
+        {
+          "name": "evaluator_id",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Evaluator that produced the score."
+        },
+        {
+          "name": "rule_id",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Online rule that produced the score."
+        },
+        {
+          "name": "experiment_id",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Experiment the score belongs to."
+        },
+        {
+          "name": "dataset_item_id",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Dataset item the score belongs to."
+        },
+        {
+          "name": "author_user_id",
+          "column_type": "string",
+          "nullable": true,
+          "description": "Person who annotated, for human scores."
+        },
+        {
+          "name": "metadata",
+          "column_type": "string_map",
+          "nullable": false,
+          "description": "Evaluator metadata. Values are strings."
+        },
+        {
+          "name": "created_at",
+          "column_type": "timestamp",
+          "nullable": false,
+          "description": "Creation time."
+        },
+        {
+          "name": "updated_at",
+          "column_type": "timestamp",
+          "nullable": false,
+          "description": "Last-writer-wins version."
+        },
+        {
+          "name": "deleted",
+          "column_type": "boolean",
+          "nullable": false,
+          "description": "Tombstone."
+        },
+        {
+          "name": "ingest_time",
+          "column_type": "timestamp",
+          "nullable": false,
+          "description": "Server receive time."
+        }
+      ]
+    }
+  ],
+  "functions": [
+    {
+      "name": "now",
+      "signature": "now() -> timestamp",
+      "description": "Current time.",
+      "in_filter": true
+    },
+    {
+      "name": "lower",
+      "signature": "lower(value: string) -> string",
+      "description": "Lowercase a string.",
+      "in_filter": true
+    },
+    {
+      "name": "upper",
+      "signature": "upper(value: string) -> string",
+      "description": "Uppercase a string.",
+      "in_filter": true
+    },
+    {
+      "name": "length",
+      "signature": "length(value: string) -> integer",
+      "description": "Number of characters.",
+      "in_filter": true
+    },
+    {
+      "name": "coalesce",
+      "signature": "coalesce(value: any, fallback: any) -> any",
+      "description": "First non-null argument.",
+      "in_filter": true
+    },
+    {
+      "name": "array_has",
+      "signature": "array_has(array: string_list, value: string) -> boolean",
+      "description": "Whether the list contains the value.",
+      "in_filter": true
+    },
+    {
+      "name": "array_length",
+      "signature": "array_length(array: string_list) -> integer",
+      "description": "Number of elements.",
+      "in_filter": true
+    },
+    {
+      "name": "date_trunc",
+      "signature": "date_trunc(unit: string, time: timestamp) -> timestamp",
+      "description": "Truncate a timestamp to a unit such as day or hour.",
+      "in_filter": true
+    },
+    {
+      "name": "abs",
+      "signature": "abs(value: float) -> float",
+      "description": "Absolute value.",
+      "in_filter": true
+    },
+    {
+      "name": "score",
+      "signature": "score(name: string) -> float",
+      "description": "Latest numeric score of that name on the row's target.",
+      "in_filter": true
+    },
+    {
+      "name": "score_label",
+      "signature": "score_label(name: string) -> string",
+      "description": "Latest categorical or text score of that name.",
+      "in_filter": true
+    },
+    {
+      "name": "has_score",
+      "signature": "has_score(name: string) -> boolean",
+      "description": "Whether the row's target has a score of that name.",
+      "in_filter": true
+    }
+  ]
+}

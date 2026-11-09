@@ -1,0 +1,17 @@
+{
+  "setup_required": false,
+  "password_enabled": true,
+  "signup": "invite_only",
+  "providers": [
+    {
+      "id": "github",
+      "display_name": "GitHub"
+    },
+    {
+      "id": "oidc:okta",
+      "display_name": "Okta"
+    }
+  ],
+  "smtp_enabled": false,
+  "email_verification_required": false
+}
