@@ -1,0 +1,13 @@
+{
+  "description": "OpenInference LLM span with flattened messages, a tool call whose arguments parse as JSON, and raw payloads that are dropped.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Mapping tables / Context fields",
+    "02 § Normalization rules",
+    "02 § Cost computation"
+  ],
+  "notes": "The system message stays inside input. output_preview is absent because the assistant message has no text part."
+}

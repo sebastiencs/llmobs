@@ -1,0 +1,195 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "weather-agent"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "openinference.instrumentation.openai",
+            "version": "0.1.30"
+          },
+          "spans": [
+            {
+              "traceId": "4f2712c5b1c18c7f6d336f4c4461af57",
+              "spanId": "a1dfb3be45d102d9",
+              "name": "ChatCompletion",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "LLM"
+                  }
+                },
+                {
+                  "key": "llm.model_name",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "llm.provider",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "llm.system",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "llm.invocation_parameters",
+                  "value": {
+                    "stringValue": "{\"temperature\": 0}"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.role",
+                  "value": {
+                    "stringValue": "system"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.content",
+                  "value": {
+                    "stringValue": "You are a weather bot."
+                  }
+                },
+                {
+                  "key": "llm.input_messages.1.message.role",
+                  "value": {
+                    "stringValue": "user"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.1.message.content",
+                  "value": {
+                    "stringValue": "What's the weather in Paris?"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.role",
+                  "value": {
+                    "stringValue": "assistant"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.tool_calls.0.tool_call.id",
+                  "value": {
+                    "stringValue": "call_1"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.tool_calls.0.tool_call.function.name",
+                  "value": {
+                    "stringValue": "get_weather"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments",
+                  "value": {
+                    "stringValue": "{\"city\": \"Paris\"}"
+                  }
+                },
+                {
+                  "key": "llm.tools.0.tool.json_schema",
+                  "value": {
+                    "stringValue": "{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}}}}"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt",
+                  "value": {
+                    "intValue": "50"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion",
+                  "value": {
+                    "intValue": "12"
+                  }
+                },
+                {
+                  "key": "llm.token_count.total",
+                  "value": {
+                    "intValue": "62"
+                  }
+                },
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"model\":\"gpt-4o-mini-2024-07-18\",\"temperature\":0,\"messages\":[{\"role\":\"system\",\"content\":\"You are a weather bot.\"},{\"role\":\"user\",\"content\":\"What's the weather in Paris?\"}]}"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "{\"id\":\"chatcmpl-weather1\",\"model\":\"gpt-4o-mini-2024-07-18\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\": \\\"Paris\\\"}\"}}]}}]}"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "sess-7"
+                  }
+                },
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "user-3"
+                  }
+                },
+                {
+                  "key": "metadata",
+                  "value": {
+                    "stringValue": "{\"customer\":\"acme\",\"plan\":\"pro\"}"
+                  }
+                },
+                {
+                  "key": "tag.tags",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "beta"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

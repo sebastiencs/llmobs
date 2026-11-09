@@ -1,0 +1,65 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "4f2712c5b1c18c7f6d336f4c4461af57",
+      "span_id": "a1dfb3be45d102d9",
+      "name": "ChatCompletion",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "ok",
+      "service_name": "weather-agent",
+      "session_id": "sess-7",
+      "user_id": "user-3",
+      "tags": [
+        "beta"
+      ],
+      "metadata": {
+        "customer": "acme",
+        "plan": "pro"
+      },
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "input_tokens": 50,
+      "output_tokens": 12,
+      "total_tokens": 62,
+      "cost_input": 0.00005,
+      "cost_output": 0.000048,
+      "cost_total": 0.000098,
+      "cost_source": "computed",
+      "request_params": "{\"temperature\":0}",
+      "input": "[{\"role\":\"system\",\"parts\":[{\"type\":\"text\",\"content\":\"You are a weather bot.\"}]},{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_1\",\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}]}]",
+      "output_format": "messages",
+      "input_preview": "What's the weather in Paris?",
+      "tool_definitions": "[{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}}}}]",
+      "attributes": {
+        "input.mime_type": "application/json",
+        "llm.invocation_parameters": "{\"temperature\": 0}",
+        "llm.model_name": "gpt-4o-mini-2024-07-18",
+        "llm.provider": "openai",
+        "llm.system": "openai",
+        "llm.token_count.completion": "12",
+        "llm.token_count.prompt": "50",
+        "llm.token_count.total": "62",
+        "metadata": "{\"customer\":\"acme\",\"plan\":\"pro\"}",
+        "openinference.span.kind": "LLM",
+        "output.mime_type": "application/json",
+        "session.id": "sess-7",
+        "tag.tags": "[\"beta\"]",
+        "user.id": "user-3"
+      },
+      "scope_name": "openinference.instrumentation.openai",
+      "scope_version": "0.1.30",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}
