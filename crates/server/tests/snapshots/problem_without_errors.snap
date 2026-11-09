@@ -1,0 +1,10 @@
+---
+source: crates/server/src/api/common.rs
+expression: snap(&without)
+---
+{
+  "type": "about:blank",
+  "title": "Not Found",
+  "status": 404,
+  "code": "not_found"
+}

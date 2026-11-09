@@ -98,6 +98,8 @@ base64 = "0.23.1"
 # OpenAPI 3.1 schemas. `uuid` enables the `format: uuid` schema. Do not enable
 # `preserve_order` or `preserve_path_order`: default `BTreeMap`s keep the document sorted.
 utoipa = { version = "6.0.0", features = ["uuid"] }
+# Same major as axum 0.8's query decoding. Axum is not a dependency yet.
+serde_urlencoded = "0.7.1"
 
 [profile.dev]
 debug = "line-tables-only"

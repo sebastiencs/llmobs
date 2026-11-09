@@ -1,0 +1,18 @@
+---
+source: crates/server/src/api/payload.rs
+expression: "serde_json::to_string_pretty(&messages).unwrap()"
+---
+{
+  "format": "messages",
+  "value": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "content": "hi"
+        }
+      ]
+    }
+  ]
+}

@@ -1,5 +1,6 @@
-//! HTTP and gRPC API, authentication, metadata database, evaluation, alerts,
-//! email, and MCP.
+//! HTTP API types for llmobs.
 //!
-//! See `docs/spec/04-metadata-db.md` and `docs/spec/06-evaluation.md` through
-//! `docs/spec/09-api.md`.
+//! [`api`] holds the request and response types for the observability read API
+//! (`docs/spec/09-api.md`). The crate does not serve HTTP yet.
+
+pub mod api;

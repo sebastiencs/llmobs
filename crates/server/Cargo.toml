@@ -13,3 +13,13 @@ workspace = true
 llmobs-core.workspace = true
 llmobs-otel.workspace = true
 llmobs-storage.workspace = true
+utoipa.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+serde_urlencoded.workspace = true
+strum.workspace = true

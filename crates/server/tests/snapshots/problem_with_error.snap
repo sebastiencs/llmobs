@@ -1,0 +1,21 @@
+---
+source: crates/server/src/api/common.rs
+expression: snap(&with_error)
+---
+{
+  "type": "about:blank",
+  "title": "Bad Request",
+  "status": 400,
+  "code": "invalid_filter",
+  "detail": "the filter is invalid",
+  "errors": [
+    {
+      "field": "filter",
+      "message": "unknown column",
+      "position": {
+        "line": 1,
+        "column": 4
+      }
+    }
+  ]
+}

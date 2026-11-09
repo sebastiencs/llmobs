@@ -1,0 +1,8 @@
+---
+source: crates/server/src/api/payload.rs
+expression: "serde_json::to_string_pretty(&text).unwrap()"
+---
+{
+  "format": "text",
+  "value": "hello"
+}
