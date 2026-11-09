@@ -1,0 +1,112 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "246fb436d417997950dcc0bfaa059192",
+      "span_id": "7b462eafe62b0017",
+      "name": "ai.generateText",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.100000000Z",
+      "status": "unset",
+      "service_name": "next-app",
+      "session_id": "s-1",
+      "user_id": "u-1",
+      "metadata": {
+        "feature": "greeting"
+      },
+      "provider": "openai",
+      "request_model": "gpt-4o-mini",
+      "request_params": "{\"maxRetries\":2}",
+      "input": "{\"prompt\":\"Say hi to Ada\"}",
+      "input_format": "json",
+      "output": "Hi Ada!",
+      "output_format": "text",
+      "input_preview": "{\"prompt\":\"Say hi to Ada\"}",
+      "output_preview": "Hi Ada!",
+      "attributes": {
+        "ai.model.id": "gpt-4o-mini",
+        "ai.model.provider": "openai.chat",
+        "ai.operationId": "ai.generateText",
+        "ai.response.finishReason": "stop",
+        "ai.settings.maxRetries": "2",
+        "ai.telemetry.functionId": "greet",
+        "ai.telemetry.metadata.feature": "greeting",
+        "ai.telemetry.metadata.sessionId": "s-1",
+        "ai.telemetry.metadata.userId": "u-1",
+        "ai.usage.inputTokens": "9",
+        "ai.usage.outputTokens": "4",
+        "operation.name": "ai.generateText"
+      },
+      "scope_name": "ai",
+      "scope_version": "5.0.0",
+      "conventions": [
+        "vercel"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "246fb436d417997950dcc0bfaa059192",
+      "span_id": "c2f7678ce75c59ff",
+      "parent_span_id": "7b462eafe62b0017",
+      "name": "ai.generateText.doGenerate",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.100000000Z",
+      "end_time": "2025-12-31T23:59:51.100000000Z",
+      "status": "unset",
+      "service_name": "next-app",
+      "session_id": "s-1",
+      "user_id": "u-1",
+      "metadata": {
+        "feature": "greeting"
+      },
+      "provider": "openai",
+      "request_model": "gpt-4o-mini",
+      "response_model": "gpt-4o-mini-2024-07-18",
+      "input_tokens": 9,
+      "output_tokens": 4,
+      "total_tokens": 13,
+      "cost_input": 9e-6,
+      "cost_output": 0.000016,
+      "cost_total": 0.000025,
+      "cost_source": "computed",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Say hi to Ada\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Hi Ada!\"}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "input_preview": "Say hi to Ada",
+      "output_preview": "Hi Ada!",
+      "attributes": {
+        "ai.model.id": "gpt-4o-mini",
+        "ai.model.provider": "openai.chat",
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.response.finishReason": "stop",
+        "ai.response.model": "gpt-4o-mini-2024-07-18",
+        "ai.telemetry.metadata.feature": "greeting",
+        "ai.telemetry.metadata.sessionId": "s-1",
+        "ai.telemetry.metadata.userId": "u-1",
+        "ai.usage.inputTokens": "9",
+        "ai.usage.outputTokens": "4",
+        "gen_ai.request.model": "gpt-4o-mini",
+        "gen_ai.response.finish_reasons": "[\"stop\"]",
+        "gen_ai.response.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.system": "openai.chat",
+        "gen_ai.usage.input_tokens": "9",
+        "gen_ai.usage.output_tokens": "4",
+        "operation.name": "ai.generateText.doGenerate"
+      },
+      "scope_name": "ai",
+      "scope_version": "5.0.0",
+      "conventions": [
+        "genai",
+        "vercel"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}
