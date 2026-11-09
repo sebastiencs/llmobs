@@ -37,6 +37,10 @@ run *args:
 # Everything CI runs for Rust
 check: fmt-check lint test deny
 
+# Regenerate crates/server/openapi.json
+openapi:
+    LLMOBS_OPENAPI_WRITE=1 cargo test -p llmobs-server --test openapi -- contract_file_is_up_to_date
+
 # Validate OTLP fixtures
 fixtures-check:
     cargo test -p llmobs-otel --test fixtures

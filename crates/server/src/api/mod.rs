@@ -6,6 +6,7 @@
 pub mod account;
 pub mod common;
 pub mod metrics;
+pub mod openapi;
 pub mod payload;
 pub mod saved_views;
 pub mod schema;

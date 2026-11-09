@@ -1,0 +1,5423 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "llmobs API",
+    "description": "Observability read API. The rules are in docs/spec/09-api.md.",
+    "version": "0.0.0"
+  },
+  "paths": {
+    "/api/auth/config": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Get the auth config",
+        "operationId": "get_auth_config",
+        "responses": {
+          "200": {
+            "description": "Login methods the UI should offer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthConfig"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Get the current user",
+        "operationId": "get_me",
+        "responses": {
+          "200": {
+            "description": "The signed-in user and org memberships.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{org}/projects": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "List projects",
+        "operationId": "list_projects",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Org UUID or slug.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return (1–1000, default 50).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Limit",
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of projects.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Get a project",
+        "operationId": "get_project",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/media/{sha256}": {
+      "get": {
+        "tags": [
+          "media"
+        ],
+        "summary": "Get a media blob",
+        "description": "Supports `Range`. A satisfiable range returns 206; an unsatisfiable range returns 416. `Cache-Control` is `private, immutable`. The response `Content-Type` is the blob's MIME type.",
+        "operationId": "get_media",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sha256",
+            "in": "path",
+            "description": "SHA-256 of the media blob, lowercase hex.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "description": "Optional byte range. A satisfiable range returns 206; an unsatisfiable range returns 416.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The whole blob.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "description": "Bytes of the blob. The response Content-Type is the blob's MIME type."
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "The requested byte range.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "description": "Bytes of the blob. The response Content-Type is the blob's MIME type."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "The Range header does not overlap the blob.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/metrics": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Get metrics",
+        "description": "Series have one point per bucket. Latencies and TTFT are nanoseconds. Costs are USD. Results are cached for 10 seconds.",
+        "operationId": "get_metrics",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Inclusive range start. RFC 3339 or epoch milliseconds.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TimeParam"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Exclusive range end. RFC 3339 or epoch milliseconds.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TimeParam"
+            }
+          },
+          {
+            "name": "bucket",
+            "in": "query",
+            "description": "Bucket width. Defaults to `auto` (~120 points).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/MetricsBucket"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "description": "Filter DSL expression. Applied to the view each series is computed on (spec 05).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "group_by",
+            "in": "query",
+            "description": "Split series that are not already split.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/MetricsGroupBy"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dashboard metrics.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/saved-views": {
+      "get": {
+        "tags": [
+          "saved_views"
+        ],
+        "summary": "List saved views",
+        "operationId": "list_saved_views",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "Return only this kind.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/SavedViewKind"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return (1–1000, default 50).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Limit",
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of saved views.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "saved_views"
+        ],
+        "summary": "Create a saved view",
+        "operationId": "create_saved_view",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSavedView"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created saved view.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/saved-views/{id}": {
+      "delete": {
+        "tags": [
+          "saved_views"
+        ],
+        "summary": "Delete a saved view",
+        "operationId": "delete_saved_view",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Saved view id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "saved_views"
+        ],
+        "summary": "Update a saved view",
+        "operationId": "update_saved_view",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Saved view id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSavedView"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated saved view.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/schema": {
+      "get": {
+        "tags": [
+          "schema"
+        ],
+        "summary": "Get the schema",
+        "operationId": "get_schema",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Views and functions the filter builder and SQL console show.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchemaResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/scores": {
+      "get": {
+        "tags": [
+          "scores"
+        ],
+        "summary": "List scores",
+        "operationId": "list_scores",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "description": "Kind of target to return.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ScoreTargetKind"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "query",
+            "description": "Scores attached to this trace.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TraceId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "span_id",
+            "in": "query",
+            "description": "Scores attached to this span.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/SpanId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "query",
+            "description": "Scores attached to this session.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Score name.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "description": "Who wrote the score.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ScoreSource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Inclusive `created_at` start. RFC 3339 or epoch milliseconds.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TimeParam"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Exclusive `created_at` end. RFC 3339 or epoch milliseconds.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TimeParam"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return (1–1000, default 50).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Limit",
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of scores.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScorePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/sessions": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "List sessions",
+        "operationId": "list_sessions",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "description": "Filter DSL expression over the `sessions` view (spec 05).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Inclusive range start. RFC 3339 or epoch milliseconds.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TimeParam"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Exclusive range end. RFC 3339 or epoch milliseconds.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TimeParam"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort key. Defaults to start time.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SessionSort"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Sort direction. Defaults to descending.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SortOrder"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return (1–1000, default 50).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Limit",
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of sessions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/sessions/{session_id}": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Get a session",
+        "description": "Turns are the session's traces by start time, at most 1000. `input` and `output` are the root span's payloads, omitted when the trace has no root.",
+        "operationId": "get_session",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "path",
+            "description": "Session id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The session and its turns.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/spans": {
+      "get": {
+        "tags": [
+          "spans"
+        ],
+        "summary": "List spans",
+        "description": "Evaluation traces (`environment = llmobs-eval`) and experiment traces are excluded unless `include_eval` or `include_experiments` is set.",
+        "operationId": "list_spans",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "description": "Filter DSL expression over the `spans` view (spec 05).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Full-text search (spec 05 § Full-text search).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Inclusive range start. RFC 3339 or epoch milliseconds.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TimeParam"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Exclusive range end. RFC 3339 or epoch milliseconds.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TimeParam"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort key. Defaults to start time.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SpanSort"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Sort direction. Defaults to descending.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SortOrder"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return (1–1000, default 50).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Limit",
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "include_eval",
+            "in": "query",
+            "description": "Include spans from the evaluation environment. Default false. Spec 05 § Default exclusions.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "include_experiments",
+            "in": "query",
+            "description": "Include experiment spans. Default false. Spec 05 § Default exclusions.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of spans.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpanPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/traces": {
+      "get": {
+        "tags": [
+          "traces"
+        ],
+        "summary": "List traces",
+        "description": "Evaluation traces (`environment = llmobs-eval`) and experiment traces are excluded unless `include_eval` or `include_experiments` is set.",
+        "operationId": "list_traces",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "description": "Filter DSL expression over the `traces` view (spec 05).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Full-text search (spec 05 § Full-text search).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Inclusive range start. RFC 3339 or epoch milliseconds.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TimeParam"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Exclusive range end. RFC 3339 or epoch milliseconds.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TimeParam"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort key. Defaults to start time.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TraceSort"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Sort direction. Defaults to descending.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SortOrder"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return (1–1000, default 50).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Limit",
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "include_eval",
+            "in": "query",
+            "description": "Include traces from the evaluation environment. Default false. Spec 05 § Default exclusions.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "include_experiments",
+            "in": "query",
+            "description": "Include experiment traces. Default false. Spec 05 § Default exclusions.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of traces.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TracePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/traces/stream": {
+      "get": {
+        "tags": [
+          "traces"
+        ],
+        "summary": "Stream traces",
+        "description": "Evaluation traces (`environment = llmobs-eval`) and experiment traces are excluded unless `include_eval` or `include_experiments` is set. Server-sent events: `trace` data is a TraceSummary; `resync` and `ping` data are `{}`. `ping` is sent every 15 seconds.",
+        "operationId": "stream_traces",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "description": "Filter DSL expression over the light columns of the `traces` view (spec 05).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "include_eval",
+            "in": "query",
+            "description": "Include traces from the evaluation environment. Default false. Spec 05 § Default exclusions.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "include_experiments",
+            "in": "query",
+            "description": "Include experiment traces. Default false. Spec 05 § Default exclusions.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Live trace summaries.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/traces/{trace_id}": {
+      "get": {
+        "tags": [
+          "traces"
+        ],
+        "summary": "Get a trace",
+        "description": "Spans are a flat pre-order list: roots first, children sorted by start time then span id. `depth` is 0 at a root. `detached` is true when the parent is missing or the span sits in a parent cycle. At most 20000 spans; `truncated` is true when more exist.",
+        "operationId": "get_trace",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "path",
+            "description": "Trace id, 16 bytes as lowercase hex.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TraceId"
+            }
+          },
+          {
+            "name": "around",
+            "in": "query",
+            "description": "Instant the client is looking at. RFC 3339 or epoch milliseconds.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TimeParam"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The trace and its span tree.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/traces/{trace_id}/spans/{span_id}": {
+      "get": {
+        "tags": [
+          "spans"
+        ],
+        "summary": "Get a span",
+        "operationId": "get_span",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "path",
+            "description": "Trace id, 16 bytes as lowercase hex.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TraceId"
+            }
+          },
+          {
+            "name": "span_id",
+            "in": "path",
+            "description": "Span id, 8 bytes as lowercase hex.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SpanId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The span, including payloads.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpanDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/traces/{trace_id}/stream": {
+      "get": {
+        "tags": [
+          "traces"
+        ],
+        "summary": "Stream a trace",
+        "description": "Server-sent events: `span` data is a SpanSummary; `resync` and `ping` data are `{}`. `ping` is sent every 15 seconds. The stream closes after 10 minutes idle.",
+        "operationId": "stream_trace",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "path",
+            "description": "Trace id, 16 bytes as lowercase hex.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TraceId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Live spans of one trace.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/users": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "List users",
+        "description": "The filter runs on the `traces` view before traces are grouped by user.",
+        "operationId": "list_users",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "description": "Filter DSL expression over the `traces` view, applied before grouping (spec 05).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Inclusive range start. RFC 3339 or epoch milliseconds.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TimeParam"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Exclusive range end. RFC 3339 or epoch milliseconds.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TimeParam"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort key. Defaults to last seen.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/UserSort"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Sort direction. Defaults to descending.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SortOrder"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return (1–1000, default 50).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Limit",
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of end users.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndUserPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/users/{user_id}": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Get a user",
+        "description": "Sessions are the user's 100 most recent.",
+        "operationId": "get_user",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "End-user id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user and recent sessions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndUserDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AuthConfig": {
+        "type": "object",
+        "description": "Login methods the UI should offer.\n\n`GET /api/auth/config`. Spec 08 § Sign-up policy and spec 09 § Auth.",
+        "required": [
+          "setup_required",
+          "password_enabled",
+          "signup",
+          "providers",
+          "smtp_enabled",
+          "email_verification_required"
+        ],
+        "properties": {
+          "email_verification_required": {
+            "type": "boolean",
+            "description": "New accounts must verify their email before signing in."
+          },
+          "password_enabled": {
+            "type": "boolean",
+            "description": "Password login is enabled. False when `LLMOBS_AUTH_DISABLE_PASSWORD` is set."
+          },
+          "providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthProvider"
+            },
+            "description": "Configured OAuth and OIDC providers."
+          },
+          "setup_required": {
+            "type": "boolean",
+            "description": "No user exists yet, so the UI shows the setup page."
+          },
+          "signup": {
+            "$ref": "#/components/schemas/SignupPolicy",
+            "description": "Who may create an account after bootstrap."
+          },
+          "smtp_enabled": {
+            "type": "boolean",
+            "description": "SMTP is configured, so password reset and verification email can be sent."
+          }
+        }
+      },
+      "AuthProvider": {
+        "type": "object",
+        "description": "One OAuth or OIDC provider the UI can start a login with.\n\nSpec 08 § OAuth / OIDC. `id` matches `identities.provider`.",
+        "required": [
+          "id",
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "description": "Name shown on the login button."
+          },
+          "id": {
+            "type": "string",
+            "description": "Provider id: `github`, `google`, or `oidc:<name>`."
+          }
+        }
+      },
+      "BlobPart": {
+        "type": "object",
+        "description": "Inline base64 media, before extraction replaces it with a URI.",
+        "required": [
+          "type",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "Base64 payload."
+          },
+          "mime_type": {
+            "type": "string",
+            "description": "MIME type, when known."
+          },
+          "modality": {
+            "$ref": "#/components/schemas/Modality"
+          },
+          "type": {
+            "type": "string",
+            "description": "Part type.",
+            "enum": [
+              "blob"
+            ]
+          }
+        },
+        "additionalProperties": true
+      },
+      "ColumnSchema": {
+        "type": "object",
+        "description": "One column of a logical view.\n\nSpec 05 § Logical views.",
+        "required": [
+          "name",
+          "column_type",
+          "nullable",
+          "description"
+        ],
+        "properties": {
+          "column_type": {
+            "$ref": "#/components/schemas/ColumnType",
+            "description": "Type the filter UI uses to pick operators."
+          },
+          "description": {
+            "type": "string",
+            "description": "What the column means."
+          },
+          "name": {
+            "type": "string",
+            "description": "Column name."
+          },
+          "nullable": {
+            "type": "boolean",
+            "description": "Whether the column may be null."
+          }
+        }
+      },
+      "ColumnType": {
+        "type": "string",
+        "description": "Column type the filter UI understands.\n\nSpec 05 § Logical views.",
+        "enum": [
+          "string",
+          "integer",
+          "float",
+          "boolean",
+          "timestamp",
+          "string_list",
+          "string_map",
+          "json"
+        ]
+      },
+      "Convention": {
+        "type": "string",
+        "description": "An instrumentation convention detected on a span.\n\nSpec 01 `conventions` and spec 02 § Convention detection.",
+        "enum": [
+          "llmobs",
+          "genai",
+          "openinference",
+          "openllmetry",
+          "vercel",
+          "langfuse",
+          "laminar",
+          "google_adk"
+        ]
+      },
+      "CostSource": {
+        "type": "string",
+        "description": "Where a span's cost came from.\n\nSpec 01 `cost_source`.",
+        "enum": [
+          "computed",
+          "reported",
+          "none"
+        ]
+      },
+      "CreateSavedView": {
+        "type": "object",
+        "description": "Body of `POST /api/projects/{project_id}/saved-views`.\n\nSpec 09 § Saved views.",
+        "required": [
+          "kind",
+          "name",
+          "state"
+        ],
+        "properties": {
+          "is_default": {
+            "type": "boolean",
+            "description": "Default view for this kind. Default false."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SavedViewKind",
+            "description": "Which page the view opens."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name."
+          },
+          "shared": {
+            "type": "boolean",
+            "description": "Visible to every member of the project. Default false."
+          },
+          "state": {
+            "type": "object",
+            "description": "Opaque UI state: list-page URL params, or `{query, params}` for SQL."
+          }
+        },
+        "additionalProperties": false
+      },
+      "EndUserDetail": {
+        "type": "object",
+        "description": "User summary plus the most recent sessions.\n\nSpec 09 § Response shapes.",
+        "required": [
+          "user",
+          "sessions"
+        ],
+        "properties": {
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionSummary"
+            },
+            "description": "The user's most recent sessions. At most [`MAX_USER_SESSIONS`]."
+          },
+          "user": {
+            "$ref": "#/components/schemas/EndUserSummary",
+            "description": "User row."
+          }
+        }
+      },
+      "EndUserPage": {
+        "type": "object",
+        "description": "One page of results. `next_cursor` is null when there is no next page.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EndUserSummary"
+            },
+            "description": "Items in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
+      },
+      "EndUserSummary": {
+        "type": "object",
+        "description": "One row of the end-user list.\n\n`first_seen` is the minimum trace `start_time` and `last_seen` the maximum `end_time`.\n`error_count` is the sum of the traces' `error_count`. Spec 09 § Users.",
+        "required": [
+          "user_id",
+          "first_seen",
+          "last_seen",
+          "trace_count",
+          "session_count",
+          "error_count"
+        ],
+        "properties": {
+          "cost_total": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Sum of trace costs, USD. Omitted when every trace omitted the field."
+          },
+          "error_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of the traces' `error_count`."
+          },
+          "first_seen": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Earliest trace start, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          },
+          "last_seen": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Latest trace end, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          },
+          "session_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of sessions."
+          },
+          "total_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Sum of trace token totals. Omitted when every trace omitted the field."
+          },
+          "trace_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of traces."
+          },
+          "user_id": {
+            "type": "string",
+            "description": "End-user id."
+          }
+        }
+      },
+      "FieldError": {
+        "type": "object",
+        "description": "One field that failed validation.\n\nSpec 09 § Conventions.",
+        "required": [
+          "field",
+          "message"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "Request field, query parameter, or expression the error refers to."
+          },
+          "message": {
+            "type": "string",
+            "description": "What is wrong with the field."
+          },
+          "position": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TextPosition",
+                "description": "Location inside the field value, for filter and SQL errors."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "FunctionSchema": {
+        "type": "object",
+        "description": "One function the filter DSL or SQL console can call.\n\nSpec 05 § Filter DSL.",
+        "required": [
+          "name",
+          "signature",
+          "description",
+          "in_filter"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "What the function does."
+          },
+          "in_filter": {
+            "type": "boolean",
+            "description": "Whether the filter DSL allows the function. SQL allows every function."
+          },
+          "name": {
+            "type": "string",
+            "description": "Function name."
+          },
+          "signature": {
+            "type": "string",
+            "description": "Argument and return types, for example `score(name: string) -> float`."
+          }
+        }
+      },
+      "Kpi": {
+        "type": "object",
+        "description": "One headline number.\n\n`previous` covers the same-length period just before `from`. Spec 05 § Dashboard metrics.",
+        "required": [
+          "metric"
+        ],
+        "properties": {
+          "metric": {
+            "$ref": "#/components/schemas/KpiMetric",
+            "description": "Which headline."
+          },
+          "previous": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Value over the previous range. Omitted when that range has no data."
+          },
+          "value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Value over `[from, to)`. Omitted when the range has no data."
+          }
+        }
+      },
+      "KpiMetric": {
+        "type": "string",
+        "description": "Headline metrics.\n\nSpec 05 § Dashboard metrics.",
+        "enum": [
+          "traces",
+          "error_rate",
+          "latency_p95",
+          "cost_total",
+          "total_tokens"
+        ]
+      },
+      "Limit": {
+        "type": "integer",
+        "format": "int32",
+        "description": "Page size. Default 50, accepted range 1–1000.\n\nSpec 09 § Conventions.",
+        "default": 50,
+        "maximum": 1000,
+        "minimum": 1
+      },
+      "Me": {
+        "type": "object",
+        "description": "The signed-in user and the orgs they belong to.\n\n`GET /api/auth/me`. Spec 09 § Auth.",
+        "required": [
+          "user",
+          "orgs"
+        ],
+        "properties": {
+          "orgs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrgMembership"
+            },
+            "description": "Orgs the user belongs to, with their org role."
+          },
+          "user": {
+            "$ref": "#/components/schemas/User",
+            "description": "The signed-in user."
+          }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "description": "One message in a conversation. Spec 01 § Canonical message format.",
+        "required": [
+          "role",
+          "parts"
+        ],
+        "properties": {
+          "finish_reason": {
+            "type": "string",
+            "description": "Why generation stopped. Omitted from JSON when absent."
+          },
+          "name": {
+            "type": "string",
+            "description": "Optional speaker name. Omitted from JSON when absent."
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Part"
+            },
+            "description": "Message parts. Always present; empty when the message has none."
+          },
+          "role": {
+            "$ref": "#/components/schemas/MessageRole"
+          }
+        },
+        "additionalProperties": true
+      },
+      "MessageRole": {
+        "type": "string",
+        "description": "Message speaker. Known values are `system`, `user`, `assistant`, and `tool`. Any other string is kept."
+      },
+      "MetricName": {
+        "type": "string",
+        "description": "Series name.\n\nLatencies and TTFT are nanoseconds as `f64`. Costs are USD. Spec 05 § Dashboard metrics.",
+        "enum": [
+          "traces",
+          "errors",
+          "error_rate",
+          "latency_p50",
+          "latency_p95",
+          "latency_p99",
+          "cost",
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "ttft_p50",
+          "ttft_p95",
+          "llm_latency_p50",
+          "llm_latency_p95",
+          "cost_by_model",
+          "score_avg",
+          "eval_cost"
+        ]
+      },
+      "MetricPoint": {
+        "type": "object",
+        "description": "One bucket of a series.\n\nSpec 05 § Dashboard metrics.",
+        "required": [
+          "time"
+        ],
+        "properties": {
+          "time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Bucket start, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          },
+          "value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Bucket value. Omitted when the bucket has no data."
+          }
+        }
+      },
+      "MetricSeries": {
+        "type": "object",
+        "description": "One time series.\n\nEvery series has one point per bucket from `from` to `to`. Spec 05 § Dashboard metrics.",
+        "required": [
+          "metric",
+          "points"
+        ],
+        "properties": {
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Group key: the `group_by` value, a model, or a score name. Omitted when the series is not split."
+          },
+          "metric": {
+            "$ref": "#/components/schemas/MetricName",
+            "description": "Which series."
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricPoint"
+            },
+            "description": "One point per bucket."
+          }
+        }
+      },
+      "MetricsBucket": {
+        "type": "string",
+        "description": "Width of each metrics bucket.\n\nSpec 05 § Dashboard metrics.",
+        "enum": [
+          "auto",
+          "1m",
+          "5m",
+          "10m",
+          "15m",
+          "30m",
+          "1h",
+          "6h",
+          "12h",
+          "1d"
+        ]
+      },
+      "MetricsGroupBy": {
+        "type": "string",
+        "description": "Dimension that splits series which are not already split.\n\nSpec 05 § Dashboard metrics.",
+        "enum": [
+          "model",
+          "environment",
+          "release"
+        ]
+      },
+      "MetricsResponse": {
+        "type": "object",
+        "description": "Dashboard response.\n\nSpec 05 § Dashboard metrics.",
+        "required": [
+          "from",
+          "to",
+          "bucket_ns",
+          "kpis",
+          "series",
+          "top_models"
+        ],
+        "properties": {
+          "bucket_ns": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Resolved bucket width, nanoseconds."
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Inclusive range start, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          },
+          "group_by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MetricsGroupBy",
+                "description": "Split applied to series that are not already split. Omitted when absent."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kpis": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Kpi"
+            },
+            "description": "Headline numbers for the range and the previous range of the same length."
+          },
+          "series": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricSeries"
+            },
+            "description": "One point per bucket, for every series."
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Exclusive range end, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          },
+          "top_models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelUsage"
+            },
+            "description": "At most 10 models, by cost descending."
+          }
+        }
+      },
+      "Modality": {
+        "type": "string",
+        "description": "Media kind. Known values are `image`, `video`, and `audio`. Any other string is kept."
+      },
+      "ModelUsage": {
+        "type": "object",
+        "description": "One model in the cost ranking.\n\nAt most 10, by cost descending. Spec 05 § Dashboard metrics.",
+        "required": [
+          "model",
+          "llm_count"
+        ],
+        "properties": {
+          "cost_total": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Sum of `cost_total`, USD. Omitted when every span omitted the field."
+          },
+          "llm_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of `llm` spans."
+          },
+          "model": {
+            "type": "string",
+            "description": "Model name."
+          },
+          "total_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Sum of `total_tokens`. Omitted when every span omitted the field."
+          }
+        }
+      },
+      "OrgId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "Organization id. A UUID, created as UUIDv7 and parsed from any version.\n\nSpec README § Cross-cutting conventions and decision D61."
+      },
+      "OrgMembership": {
+        "type": "object",
+        "description": "One org membership of the signed-in user.\n\nSpec 04 `org_members`.",
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "role"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/OrgId",
+            "description": "Org id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name."
+          },
+          "role": {
+            "$ref": "#/components/schemas/OrgRole",
+            "description": "Org role. A project override of `none` hides that project and is never returned."
+          },
+          "slug": {
+            "type": "string",
+            "description": "URL slug."
+          }
+        }
+      },
+      "OrgRole": {
+        "type": "string",
+        "description": "Role on an org, and the caller's effective role on a project.\n\nSpec 04 `org_members.role` and spec 08 § Authorization. `none` is not a response value:\na project override of `none` hides the project.",
+        "enum": [
+          "owner",
+          "admin",
+          "member",
+          "viewer"
+        ]
+      },
+      "Part": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/TextPart"
+          },
+          {
+            "$ref": "#/components/schemas/ReasoningPart"
+          },
+          {
+            "$ref": "#/components/schemas/ToolCallPart"
+          },
+          {
+            "$ref": "#/components/schemas/ToolCallResponsePart"
+          },
+          {
+            "$ref": "#/components/schemas/UriPart"
+          },
+          {
+            "$ref": "#/components/schemas/BlobPart"
+          },
+          {
+            "$ref": "#/components/schemas/UnknownPart"
+          }
+        ],
+        "description": "One part of a canonical message. Spec 01 § Canonical message format."
+      },
+      "Payload": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A JSON array of canonical messages.",
+            "required": [
+              "format",
+              "value"
+            ],
+            "properties": {
+              "format": {
+                "type": "string",
+                "description": "Payload encoding.",
+                "enum": [
+                  "messages"
+                ]
+              },
+              "value": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Any JSON value.",
+            "required": [
+              "format",
+              "value"
+            ],
+            "properties": {
+              "format": {
+                "type": "string",
+                "description": "Payload encoding.",
+                "enum": [
+                  "json"
+                ]
+              },
+              "value": {
+                "description": "Any JSON value."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Plain text.",
+            "required": [
+              "format",
+              "value"
+            ],
+            "properties": {
+              "format": {
+                "type": "string",
+                "description": "Payload encoding.",
+                "enum": [
+                  "text"
+                ]
+              },
+              "value": {
+                "type": "string",
+                "description": "Plain text."
+              }
+            }
+          }
+        ],
+        "description": "Parsed span payload: messages, any JSON, or plain text. Spec 09 § Response shapes."
+      },
+      "Problem": {
+        "type": "object",
+        "description": "RFC 7807 problem document.\n\nSpec 09 § Conventions.",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ProblemCode",
+            "description": "Machine-readable error code."
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Extra explanation. Omitted when absent."
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldError"
+            },
+            "description": "Field errors. Omitted when empty, because RFC 7807 clients expect the member to be absent."
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "description": "HTTP status code.",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string",
+            "description": "Short human-readable summary, the reason phrase of [`Self::status`]."
+          },
+          "type": {
+            "type": "string",
+            "description": "Problem type URI. Always `about:blank` in this version."
+          }
+        }
+      },
+      "ProblemCode": {
+        "type": "string",
+        "description": "Machine-readable error code.\n\nSpec 09 § Conventions. Later endpoints add codes.",
+        "enum": [
+          "bad_request",
+          "invalid_filter",
+          "unauthorized",
+          "forbidden",
+          "not_found",
+          "rate_limited",
+          "internal"
+        ]
+      },
+      "Project": {
+        "type": "object",
+        "description": "A project the caller can see.\n\nSpec 04 `projects` and spec 09 § Orgs, projects.",
+        "required": [
+          "id",
+          "org_id",
+          "slug",
+          "name",
+          "role",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Creation time, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          },
+          "id": {
+            "$ref": "#/components/schemas/ProjectId",
+            "description": "Project id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name."
+          },
+          "org_id": {
+            "$ref": "#/components/schemas/OrgId",
+            "description": "Owning org."
+          },
+          "retention_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Retention in days. Omitted when the project uses the default.",
+            "minimum": 0
+          },
+          "role": {
+            "$ref": "#/components/schemas/OrgRole",
+            "description": "The caller's effective role on this project."
+          },
+          "slug": {
+            "type": "string",
+            "description": "URL slug, unique within the org."
+          }
+        }
+      },
+      "ProjectId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "Project id. A UUID, created as UUIDv7 and parsed from any version.\n\nSpec README § Cross-cutting conventions. Stored as lowercase hyphenated text (spec 01 `project_id`)."
+      },
+      "ProjectPage": {
+        "type": "object",
+        "description": "One page of results. `next_cursor` is null when there is no next page.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Project"
+            },
+            "description": "Items in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
+      },
+      "ReasoningPart": {
+        "type": "object",
+        "description": "Model reasoning, separate from the user-visible text.",
+        "required": [
+          "type",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "The reasoning text."
+          },
+          "type": {
+            "type": "string",
+            "description": "Part type.",
+            "enum": [
+              "reasoning"
+            ]
+          }
+        },
+        "additionalProperties": true
+      },
+      "SavedView": {
+        "type": "object",
+        "description": "A saved list view or SQL query.\n\nSpec 04 `saved_views` and spec 09 § Saved views.",
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "state",
+          "shared",
+          "is_default",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Creation time, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Saved view id."
+          },
+          "is_default": {
+            "type": "boolean",
+            "description": "Default view for this kind when the caller has no view of their own."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SavedViewKind",
+            "description": "Which page the view opens."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name."
+          },
+          "owner_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Owner. Omitted when the view has no owner."
+          },
+          "shared": {
+            "type": "boolean",
+            "description": "Visible to every member of the project."
+          },
+          "state": {
+            "type": "object",
+            "description": "Opaque UI state: list-page URL params, or `{query, params}` for SQL."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last update, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          }
+        }
+      },
+      "SavedViewKind": {
+        "type": "string",
+        "description": "What a saved view opens.\n\nSpec 04 `saved_views.kind`.",
+        "enum": [
+          "traces",
+          "spans",
+          "sessions",
+          "users",
+          "sql"
+        ]
+      },
+      "SavedViewPage": {
+        "type": "object",
+        "description": "One page of results. `next_cursor` is null when there is no next page.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedView"
+            },
+            "description": "Items in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
+      },
+      "SchemaResponse": {
+        "type": "object",
+        "description": "Views and functions the filter builder and SQL console show.\n\n`GET /api/projects/{project_id}/schema`. Spec 05 and spec 09 § Schema.",
+        "required": [
+          "views",
+          "functions"
+        ],
+        "properties": {
+          "functions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FunctionSchema"
+            },
+            "description": "Functions."
+          },
+          "views": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ViewSchema"
+            },
+            "description": "Logical views."
+          }
+        }
+      },
+      "Score": {
+        "type": "object",
+        "description": "One score row.\n\nSpec 01 § Score. JSON omits empty `Option` and `BTreeMap` fields. Instants are RFC 3339 (D64).",
+        "required": [
+          "project_id",
+          "score_id",
+          "target",
+          "name",
+          "value",
+          "source",
+          "created_at",
+          "updated_at",
+          "deleted",
+          "ingest_time"
+        ],
+        "properties": {
+          "author_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Person who annotated, for `human` scores. Spec 01 `author_user_id`."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Creation time, nanoseconds since the Unix epoch. Spec 01 `created_at`."
+          },
+          "dataset_item_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Dataset item the score belongs to. Spec 01 `dataset_item_id`."
+          },
+          "deleted": {
+            "type": "boolean",
+            "description": "Tombstone. Spec 01 `deleted`."
+          },
+          "evaluator_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Evaluator that produced the score. Spec 01 `evaluator_id`."
+          },
+          "experiment_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Experiment the score belongs to. Spec 01 `experiment_id`."
+          },
+          "ingest_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Server receive time, nanoseconds since the Unix epoch. Spec 01 `ingest_time`."
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Evaluator metadata. Values are strings. Spec 01 `metadata` and spec 06.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string",
+            "description": "Score name, for example `hallucination`. Spec 01 `name`."
+          },
+          "project_id": {
+            "$ref": "#/components/schemas/ProjectId",
+            "description": "Partition key. Spec 01 `project_id`."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Explanation. Spec 01 `reason`."
+          },
+          "rule_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Online rule that produced the score. Spec 01 `rule_id`."
+          },
+          "score_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Last-writer-wins key. Spec 01 `score_id`."
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Session of a span or trace target, when known. Ignored for session targets. Spec 01 `session_id`."
+          },
+          "source": {
+            "$ref": "#/components/schemas/ScoreSource",
+            "description": "Who wrote the score. Spec 01 `source`."
+          },
+          "target": {
+            "$ref": "#/components/schemas/ScoreTarget",
+            "description": "Span, trace, or session this score is attached to. Spec 01 `target`."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last-writer-wins version, nanoseconds since the Unix epoch. Spec 01 `updated_at`."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "End-user id, when the writer knows it. Spec 01 `user_id`."
+          },
+          "value": {
+            "$ref": "#/components/schemas/ScoreValue",
+            "description": "The score value. Spec 01 `data_type`, `value_num`, `value_str`."
+          }
+        }
+      },
+      "ScoreBrief": {
+        "type": "object",
+        "description": "The latest score of one name on a trace, span, session, or user row.\n\nSpec 09 § Response shapes.",
+        "required": [
+          "score_id",
+          "name",
+          "value",
+          "source"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Score name."
+          },
+          "score_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Score id."
+          },
+          "source": {
+            "$ref": "#/components/schemas/ScoreSource",
+            "description": "Who wrote the score."
+          },
+          "value": {
+            "$ref": "#/components/schemas/ScoreValue",
+            "description": "Score value."
+          }
+        }
+      },
+      "ScorePage": {
+        "type": "object",
+        "description": "One page of results. `next_cursor` is null when there is no next page.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Score"
+            },
+            "description": "Items in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
+      },
+      "ScoreSource": {
+        "type": "string",
+        "description": "Who wrote a score.\n\nSpec 01 § Score `source` and spec 06 § Scores.",
+        "enum": [
+          "api",
+          "sdk",
+          "human",
+          "end_user",
+          "llm_judge",
+          "check",
+          "webhook"
+        ]
+      },
+      "ScoreTarget": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "One span. Both ids are required.",
+            "required": [
+              "trace_id",
+              "span_id",
+              "type"
+            ],
+            "properties": {
+              "span_id": {
+                "$ref": "#/components/schemas/SpanId",
+                "description": "The span."
+              },
+              "trace_id": {
+                "$ref": "#/components/schemas/TraceId",
+                "description": "Trace that owns the span."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "span"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "One trace.",
+            "required": [
+              "trace_id",
+              "type"
+            ],
+            "properties": {
+              "trace_id": {
+                "$ref": "#/components/schemas/TraceId",
+                "description": "The trace."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "trace"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "One session.",
+            "required": [
+              "session_id",
+              "type"
+            ],
+            "properties": {
+              "session_id": {
+                "type": "string",
+                "description": "Session id."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "session"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What a score is attached to.\n\nJSON is internally tagged: `{\"type\":\"span\",\"trace_id\":\"…\",\"span_id\":\"…\"}`. Spec 01 § Score `target`."
+      },
+      "ScoreTargetKind": {
+        "type": "string",
+        "description": "What a score is attached to.\n\nSpec 01 § Score `target`.",
+        "enum": [
+          "span",
+          "trace",
+          "session"
+        ]
+      },
+      "ScoreValue": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A finite number.",
+            "required": [
+              "value",
+              "data_type"
+            ],
+            "properties": {
+              "data_type": {
+                "type": "string",
+                "enum": [
+                  "numeric"
+                ]
+              },
+              "value": {
+                "type": "number",
+                "format": "double",
+                "description": "A finite number."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "True or false. Stored numerically as 1 or 0.",
+            "required": [
+              "value",
+              "data_type"
+            ],
+            "properties": {
+              "data_type": {
+                "type": "string",
+                "enum": [
+                  "boolean"
+                ]
+              },
+              "value": {
+                "type": "boolean",
+                "description": "True or false. Stored numerically as 1 or 0."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A label and an optional numeric mapping.",
+            "required": [
+              "value",
+              "data_type"
+            ],
+            "properties": {
+              "data_type": {
+                "type": "string",
+                "enum": [
+                  "categorical"
+                ]
+              },
+              "value": {
+                "type": "object",
+                "description": "A label and an optional numeric mapping.",
+                "required": [
+                  "label"
+                ],
+                "properties": {
+                  "label": {
+                    "type": "string",
+                    "description": "Category label. Stored in `value_str`."
+                  },
+                  "value": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "format": "double",
+                    "description": "Optional numeric mapping. Stored in `value_num`. Omitted from JSON when absent."
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Free text.",
+            "required": [
+              "value",
+              "data_type"
+            ],
+            "properties": {
+              "data_type": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              },
+              "value": {
+                "type": "string",
+                "description": "Free text."
+              }
+            }
+          }
+        ],
+        "description": "The value carried by a score.\n\nJSON is adjacently tagged: `{\"data_type\":\"numeric\",\"value\":0.8}`. A categorical value is\n`{\"data_type\":\"categorical\",\"value\":{\"label\":\"correct\",\"value\":1.0}}`. Spec 01 § Score."
+      },
+      "SessionDetail": {
+        "type": "object",
+        "description": "Session summary plus its turns.\n\nSpec 09 § Response shapes.",
+        "required": [
+          "session",
+          "turns",
+          "truncated"
+        ],
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/SessionSummary",
+            "description": "Session row."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when traces were omitted because the session is larger than [`MAX_SESSION_TRACES`]."
+          },
+          "turns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionTurn"
+            },
+            "description": "Traces by `start_time`. At most [`MAX_SESSION_TRACES`]."
+          }
+        }
+      },
+      "SessionPage": {
+        "type": "object",
+        "description": "One page of results. `next_cursor` is null when there is no next page.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionSummary"
+            },
+            "description": "Items in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
+      },
+      "SessionSort": {
+        "type": "string",
+        "description": "Sort key for session lists.\n\nSpec 09 § Sessions.",
+        "enum": [
+          "start_time",
+          "end_time",
+          "trace_count",
+          "cost_total"
+        ]
+      },
+      "SessionSummary": {
+        "type": "object",
+        "description": "One row of the session list.\n\nSpec 01 § Session and spec 09 § Sessions.",
+        "required": [
+          "session_id",
+          "start_time",
+          "end_time",
+          "duration_ns",
+          "trace_count",
+          "error_count",
+          "scores"
+        ],
+        "properties": {
+          "cost_total": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Sum of trace costs, USD. Omitted when every trace omitted the field."
+          },
+          "duration_ns": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`end_time - start_time`, nanoseconds."
+          },
+          "end_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Latest trace end, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          },
+          "error_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of the traces' `error_count`."
+          },
+          "scores": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScoreBrief"
+            },
+            "description": "Latest score of each name attached to this session."
+          },
+          "session_id": {
+            "type": "string",
+            "description": "Session id."
+          },
+          "start_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Earliest trace start, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          },
+          "total_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Sum of trace token totals. Omitted when every trace omitted the field."
+          },
+          "trace_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of traces in the session."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "End-user id."
+          }
+        }
+      },
+      "SessionTurn": {
+        "type": "object",
+        "description": "One trace in a session, oldest first, with the root span's payloads.\n\n`input` and `output` are omitted when the trace has no root. Spec 09 § Response shapes.",
+        "required": [
+          "trace"
+        ],
+        "properties": {
+          "input": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Payload",
+                "description": "Root span input."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "output": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Payload",
+                "description": "Root span output."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trace": {
+            "$ref": "#/components/schemas/TraceSummary",
+            "description": "Trace row."
+          }
+        }
+      },
+      "SignupPolicy": {
+        "type": "string",
+        "description": "Who may register after the first user exists.\n\nSpec 08 `LLMOBS_AUTH_SIGNUP`.",
+        "enum": [
+          "open",
+          "invite_only",
+          "disabled"
+        ]
+      },
+      "SortOrder": {
+        "type": "string",
+        "description": "Sort direction. Default is descending.\n\nSpec 09 § Conventions.",
+        "enum": [
+          "asc",
+          "desc"
+        ]
+      },
+      "SpanDetail": {
+        "type": "object",
+        "description": "Every stored span column except `project_id`, plus computed `duration_ns` and `model`.\n\n`input_format` and `output_format` are the `format` tag of [`Payload`]. Spec 01 § Span.",
+        "required": [
+          "trace_id",
+          "span_id",
+          "name",
+          "span_kind",
+          "start_time",
+          "end_time",
+          "duration_ns",
+          "status",
+          "tags",
+          "metadata",
+          "attributes",
+          "resource_attributes",
+          "events",
+          "links",
+          "media_refs",
+          "truncated",
+          "conventions",
+          "ingest_time",
+          "schema_version"
+        ],
+        "properties": {
+          "attributes": {
+            "type": "object",
+            "description": "Span attributes not consumed by normalization.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "cache_read_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Cache-read tokens."
+          },
+          "cache_write_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Cache-write tokens."
+          },
+          "conventions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Convention"
+            },
+            "description": "Conventions detected on the span."
+          },
+          "cost_input": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Input cost, USD."
+          },
+          "cost_output": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Output cost, USD."
+          },
+          "cost_source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CostSource",
+                "description": "How cost was obtained."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_total": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Total cost, USD."
+          },
+          "duration_ns": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`end_time - start_time`, nanoseconds. Saturates on overflow."
+          },
+          "end_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          },
+          "environment": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Deployment environment."
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpanEventView"
+            },
+            "description": "Span events."
+          },
+          "ingest_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Server receive time, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          },
+          "input": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Payload",
+                "description": "Parsed input. Omitted when the stored span has no input text."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input_preview": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "First 512 characters of the plain-text input rendering."
+          },
+          "input_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Input tokens, including cached tokens."
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpanLinkView"
+            },
+            "description": "Span links."
+          },
+          "media_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "SHA-256 hex of extracted media blobs."
+          },
+          "metadata": {
+            "type": "object",
+            "description": "User metadata.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Response model, or the request model when the response names none."
+          },
+          "name": {
+            "type": "string",
+            "description": "Span name."
+          },
+          "operation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "GenAI operation name."
+          },
+          "output": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Payload",
+                "description": "Parsed output. Omitted when the stored span has no output text."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "output_preview": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "First 512 characters of the plain-text output rendering."
+          },
+          "output_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Output tokens, including reasoning tokens."
+          },
+          "parent_span_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SpanId",
+                "description": "Parent span. Omitted when this span is a root of the received trace."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Normalized provider name."
+          },
+          "reasoning_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Reasoning tokens."
+          },
+          "release": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Release."
+          },
+          "request_model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Model named in the request."
+          },
+          "request_params": {
+            "description": "Request parameters. A JSON string when the stored text is not JSON."
+          },
+          "resource_attributes": {
+            "type": "object",
+            "description": "Resource attributes except `service.name`.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "response_model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Model named in the response."
+          },
+          "schema_version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Normalization version of this row.",
+            "minimum": 0
+          },
+          "scope_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Instrumentation scope name."
+          },
+          "scope_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Instrumentation scope version."
+          },
+          "service_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resource `service.name`."
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Session id."
+          },
+          "span_id": {
+            "$ref": "#/components/schemas/SpanId",
+            "description": "Span id."
+          },
+          "span_kind": {
+            "$ref": "#/components/schemas/SpanKind",
+            "description": "Kind of work."
+          },
+          "start_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          },
+          "status": {
+            "$ref": "#/components/schemas/SpanStatus",
+            "description": "OTel status."
+          },
+          "status_message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Status description."
+          },
+          "system_instructions": {
+            "description": "System instructions. A JSON string when the stored text is not JSON."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tags."
+          },
+          "tool_definitions": {
+            "description": "Tool definitions. A JSON string when the stored text is not JSON."
+          },
+          "total_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Total tokens."
+          },
+          "trace_id": {
+            "$ref": "#/components/schemas/TraceId",
+            "description": "Trace id."
+          },
+          "truncated": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Names of attributes truncated at ingest."
+          },
+          "ttft_ns": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Time to first token, nanoseconds."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "End-user id."
+          }
+        }
+      },
+      "SpanEventView": {
+        "type": "object",
+        "description": "One span event as returned by the API.\n\nAbsent stored attributes become `{}`. Spec 01 `events`.",
+        "required": [
+          "time",
+          "name",
+          "attributes"
+        ],
+        "properties": {
+          "attributes": {
+            "description": "Event attributes. `{}` when the stored span had none."
+          },
+          "name": {
+            "type": "string",
+            "description": "Event name."
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Event time, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          }
+        }
+      },
+      "SpanId": {
+        "type": "string",
+        "description": "Span id, 8 bytes as lowercase hex.",
+        "pattern": "^[0-9a-f]{16}$"
+      },
+      "SpanKind": {
+        "type": "string",
+        "description": "Kind of work a span represents.\n\nSpec 01 § Span kinds. Stored in `spans.span_kind`.",
+        "enum": [
+          "llm",
+          "embedding",
+          "tool",
+          "agent",
+          "chain",
+          "retriever",
+          "reranker",
+          "guardrail",
+          "evaluator",
+          "span"
+        ]
+      },
+      "SpanLinkView": {
+        "type": "object",
+        "description": "One span link as returned by the API.\n\nAbsent stored attributes become `{}`. Spec 01 `links`.",
+        "required": [
+          "trace_id",
+          "span_id",
+          "attributes"
+        ],
+        "properties": {
+          "attributes": {
+            "description": "Link attributes. `{}` when the stored span had none."
+          },
+          "span_id": {
+            "$ref": "#/components/schemas/SpanId",
+            "description": "Linked span id."
+          },
+          "trace_id": {
+            "$ref": "#/components/schemas/TraceId",
+            "description": "Linked trace id."
+          }
+        }
+      },
+      "SpanPage": {
+        "type": "object",
+        "description": "One page of results. `next_cursor` is null when there is no next page.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpanSummary"
+            },
+            "description": "Items in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
+      },
+      "SpanSort": {
+        "type": "string",
+        "description": "Sort key for span lists.\n\nSpec 09 § Traces.",
+        "enum": [
+          "start_time",
+          "duration",
+          "cost_total",
+          "total_tokens"
+        ]
+      },
+      "SpanStatus": {
+        "type": "string",
+        "description": "OTel span status.\n\nSpec 01 `status`. Stored in `spans.status` and `traces.status`.",
+        "enum": [
+          "unset",
+          "ok",
+          "error"
+        ]
+      },
+      "SpanSummary": {
+        "type": "object",
+        "description": "Light columns of one span, for lists, trees, and the span stream.\n\nSpec 09 § Response shapes.",
+        "required": [
+          "trace_id",
+          "span_id",
+          "name",
+          "span_kind",
+          "start_time",
+          "end_time",
+          "duration_ns",
+          "status",
+          "tags",
+          "metadata"
+        ],
+        "properties": {
+          "cache_read_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Cache-read tokens."
+          },
+          "cache_write_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Cache-write tokens."
+          },
+          "cost_total": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Total cost, USD."
+          },
+          "duration_ns": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`end_time - start_time`, nanoseconds. Saturates on overflow."
+          },
+          "end_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          },
+          "environment": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Deployment environment."
+          },
+          "input_preview": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "First 512 characters of the plain-text input rendering."
+          },
+          "input_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Input tokens, including cached tokens."
+          },
+          "metadata": {
+            "type": "object",
+            "description": "User metadata.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Response model, or the request model when the response names none."
+          },
+          "name": {
+            "type": "string",
+            "description": "Span name."
+          },
+          "output_preview": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "First 512 characters of the plain-text output rendering."
+          },
+          "output_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Output tokens, including reasoning tokens."
+          },
+          "parent_span_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SpanId",
+                "description": "Parent span. Omitted when this span is a root of the received trace."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Normalized provider name."
+          },
+          "reasoning_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Reasoning tokens."
+          },
+          "release": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Release."
+          },
+          "service_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resource `service.name`."
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Session id."
+          },
+          "span_id": {
+            "$ref": "#/components/schemas/SpanId",
+            "description": "Span id."
+          },
+          "span_kind": {
+            "$ref": "#/components/schemas/SpanKind",
+            "description": "Kind of work."
+          },
+          "start_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          },
+          "status": {
+            "$ref": "#/components/schemas/SpanStatus",
+            "description": "OTel status."
+          },
+          "status_message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Status description."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tags."
+          },
+          "total_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Total tokens."
+          },
+          "trace_id": {
+            "$ref": "#/components/schemas/TraceId",
+            "description": "Trace id."
+          },
+          "ttft_ns": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Time to first token, nanoseconds."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "End-user id."
+          }
+        }
+      },
+      "TextPart": {
+        "type": "object",
+        "description": "Plain text.",
+        "required": [
+          "type",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "The text."
+          },
+          "type": {
+            "type": "string",
+            "description": "Part type.",
+            "enum": [
+              "text"
+            ]
+          }
+        },
+        "additionalProperties": true
+      },
+      "TextPosition": {
+        "type": "object",
+        "description": "A 1-based character position inside a field value.\n\nSpec 09 § Conventions.",
+        "required": [
+          "line",
+          "column"
+        ],
+        "properties": {
+          "column": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1-based column number, in characters.",
+            "minimum": 0
+          },
+          "line": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1-based line number, in characters.",
+            "minimum": 0
+          }
+        }
+      },
+      "TimeParam": {
+        "type": "string",
+        "description": "RFC 3339 timestamp or epoch milliseconds."
+      },
+      "ToolCallPart": {
+        "type": "object",
+        "description": "A tool or function call requested by the model.",
+        "required": [
+          "type",
+          "name",
+          "arguments"
+        ],
+        "properties": {
+          "arguments": {
+            "description": "Arguments, as JSON."
+          },
+          "id": {
+            "type": "string",
+            "description": "Provider call id, when the source has one."
+          },
+          "name": {
+            "type": "string",
+            "description": "Tool name."
+          },
+          "type": {
+            "type": "string",
+            "description": "Part type.",
+            "enum": [
+              "tool_call"
+            ]
+          }
+        },
+        "additionalProperties": true
+      },
+      "ToolCallResponsePart": {
+        "type": "object",
+        "description": "The result of a tool call.",
+        "required": [
+          "type",
+          "response"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Provider call id, when the source has one."
+          },
+          "response": {
+            "description": "Tool result, as JSON."
+          },
+          "type": {
+            "type": "string",
+            "description": "Part type.",
+            "enum": [
+              "tool_call_response"
+            ]
+          }
+        },
+        "additionalProperties": true
+      },
+      "TraceDetail": {
+        "type": "object",
+        "description": "Trace summary plus its span tree.\n\nSpec 09 § Response shapes.",
+        "required": [
+          "trace",
+          "spans",
+          "truncated"
+        ],
+        "properties": {
+          "spans": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TreeSpan"
+            },
+            "description": "Spans in pre-order. At most [`MAX_TRACE_SPANS`]."
+          },
+          "trace": {
+            "$ref": "#/components/schemas/TraceSummary",
+            "description": "Trace row."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when spans were omitted because the trace is larger than [`MAX_TRACE_SPANS`]."
+          }
+        }
+      },
+      "TraceId": {
+        "type": "string",
+        "description": "Trace id, 16 bytes as lowercase hex.",
+        "pattern": "^[0-9a-f]{32}$"
+      },
+      "TracePage": {
+        "type": "object",
+        "description": "One page of results. `next_cursor` is null when there is no next page.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TraceSummary"
+            },
+            "description": "Items in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
+      },
+      "TraceSort": {
+        "type": "string",
+        "description": "Sort key for trace lists.\n\nSpec 09 § Traces.",
+        "enum": [
+          "start_time",
+          "duration",
+          "cost_total",
+          "total_tokens"
+        ]
+      },
+      "TraceSummary": {
+        "type": "object",
+        "description": "One row of the trace list.\n\nSpec 01 § Trace and spec 09 § Traces.",
+        "required": [
+          "trace_id",
+          "has_root",
+          "name",
+          "start_time",
+          "end_time",
+          "duration_ns",
+          "status",
+          "tags",
+          "metadata",
+          "span_count",
+          "error_count",
+          "llm_count",
+          "models",
+          "scores"
+        ],
+        "properties": {
+          "cache_read_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Sum of cache-read tokens. Omitted when every span omitted the field."
+          },
+          "cache_write_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Sum of cache-write tokens. Omitted when every span omitted the field."
+          },
+          "cost_total": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Sum of span costs, USD. Omitted when every span omitted the field."
+          },
+          "duration_ns": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`end_time - start_time`, nanoseconds."
+          },
+          "end_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Latest span end, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          },
+          "environment": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Deployment environment."
+          },
+          "error_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of spans with status `error`."
+          },
+          "has_root": {
+            "type": "boolean",
+            "description": "Whether a span with no parent is present."
+          },
+          "input_preview": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Root input preview, or the first `llm` span's."
+          },
+          "input_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Sum of span input tokens. Omitted when every span omitted the field."
+          },
+          "llm_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of `llm` spans."
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Root metadata, filled with keys from later spans when absent.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Sorted distinct model names."
+          },
+          "name": {
+            "type": "string",
+            "description": "Root span name, or the earliest span's name when there is no root."
+          },
+          "output_preview": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Root output preview, or the first `llm` span's."
+          },
+          "output_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Sum of span output tokens. Omitted when every span omitted the field."
+          },
+          "reasoning_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Sum of reasoning tokens. Omitted when every span omitted the field."
+          },
+          "release": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Release."
+          },
+          "root_span_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SpanId",
+                "description": "Span id of the root. Omitted when the trace has no root."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scores": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScoreBrief"
+            },
+            "description": "Latest score of each name attached to this trace."
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Session id."
+          },
+          "span_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of spans."
+          },
+          "start_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Earliest span start, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          },
+          "status": {
+            "$ref": "#/components/schemas/SpanStatus",
+            "description": "`error` when any span errored, otherwise the root's status, otherwise `unset`."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Sorted distinct tags of every span."
+          },
+          "total_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Sum of total tokens. Omitted when every span omitted the field."
+          },
+          "trace_id": {
+            "$ref": "#/components/schemas/TraceId",
+            "description": "Trace id."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "End-user id."
+          }
+        }
+      },
+      "TreeSpan": {
+        "type": "object",
+        "description": "One span in a flat pre-order trace tree.\n\nSpec 09 § Response shapes.",
+        "required": [
+          "depth",
+          "detached",
+          "span"
+        ],
+        "properties": {
+          "depth": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Distance from the root. Roots are 0.",
+            "minimum": 0
+          },
+          "detached": {
+            "type": "boolean",
+            "description": "The parent is missing, or this span sits in a parent cycle."
+          },
+          "span": {
+            "$ref": "#/components/schemas/SpanSummary",
+            "description": "Light columns of the span."
+          }
+        }
+      },
+      "UnknownPart": {
+        "type": "object",
+        "description": "A part type this version does not model; render as JSON.",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Part type, when the payload has one."
+          }
+        },
+        "additionalProperties": true
+      },
+      "UpdateSavedView": {
+        "type": "object",
+        "description": "Body of `PATCH /api/projects/{project_id}/saved-views/{id}`.\n\nOmitted fields are left unchanged. Spec 09 § Saved views.",
+        "properties": {
+          "is_default": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Default view for this kind."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name."
+          },
+          "shared": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Visible to every member of the project."
+          },
+          "state": {
+            "type": "object",
+            "description": "Opaque UI state: list-page URL params, or `{query, params}` for SQL."
+          }
+        },
+        "additionalProperties": false
+      },
+      "UriPart": {
+        "type": "object",
+        "description": "Media addressed by a URI, including `media://` after extraction.",
+        "required": [
+          "type",
+          "uri"
+        ],
+        "properties": {
+          "mime_type": {
+            "type": "string",
+            "description": "MIME type, when known."
+          },
+          "modality": {
+            "$ref": "#/components/schemas/Modality"
+          },
+          "type": {
+            "type": "string",
+            "description": "Part type.",
+            "enum": [
+              "uri"
+            ]
+          },
+          "uri": {
+            "type": "string",
+            "description": "The URI."
+          }
+        },
+        "additionalProperties": true
+      },
+      "User": {
+        "type": "object",
+        "description": "A user account.\n\nSpec 04 `users` and spec 08.",
+        "required": [
+          "id",
+          "email",
+          "is_instance_admin"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "User id."
+          },
+          "is_instance_admin": {
+            "type": "boolean",
+            "description": "Instance administrator, allowed to manage instance settings."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name. Omitted when the user has not set one."
+          }
+        }
+      },
+      "UserSort": {
+        "type": "string",
+        "description": "Sort key for user lists.\n\nSpec 09 § Users.",
+        "enum": [
+          "last_seen",
+          "trace_count",
+          "cost_total"
+        ]
+      },
+      "ViewName": {
+        "type": "string",
+        "description": "Logical views a filter or SQL query can name.\n\nSpec 05 § Logical views.",
+        "enum": [
+          "spans",
+          "traces",
+          "sessions",
+          "scores",
+          "experiment_items",
+          "dataset_items"
+        ]
+      },
+      "ViewSchema": {
+        "type": "object",
+        "description": "One logical view.\n\nSpec 05 § Logical views.",
+        "required": [
+          "name",
+          "description",
+          "columns"
+        ],
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ColumnSchema"
+            },
+            "description": "Columns, in spec order."
+          },
+          "description": {
+            "type": "string",
+            "description": "What the view contains."
+          },
+          "name": {
+            "$ref": "#/components/schemas/ViewName",
+            "description": "View name."
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A personal access token (`pat-…`) or a secret key (`sk-…`)."
+      },
+      "session_cookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "llmobs_session",
+        "description": "Browser session cookie."
+      }
+    }
+  },
+  "security": [
+    {
+      "session_cookie": []
+    },
+    {
+      "bearer": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "auth",
+      "description": "Login methods and the current user."
+    },
+    {
+      "name": "projects",
+      "description": "Projects the caller can see."
+    },
+    {
+      "name": "traces",
+      "description": "Trace list, detail, and live streams."
+    },
+    {
+      "name": "spans",
+      "description": "Span list and detail."
+    },
+    {
+      "name": "sessions",
+      "description": "Session list and detail."
+    },
+    {
+      "name": "users",
+      "description": "End users."
+    },
+    {
+      "name": "scores",
+      "description": "Scores attached to spans, traces, and sessions."
+    },
+    {
+      "name": "schema",
+      "description": "Filter and SQL catalog."
+    },
+    {
+      "name": "saved_views",
+      "description": "Saved list views and SQL queries."
+    },
+    {
+      "name": "metrics",
+      "description": "Dashboard metrics."
+    },
+    {
+      "name": "media",
+      "description": "Extracted media blobs."
+    }
+  ]
+}
