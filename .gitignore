@@ -1,0 +1,15 @@
+/target
+/llmobs-data/
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+coverage/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.swp
