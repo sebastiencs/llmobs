@@ -72,7 +72,8 @@ If the code has to deviate from the spec, update the spec **in the same change**
 
 ```
 crates/
-  core/      llmobs-core     shared types, Arrow schemas, IDs, time, config            (spec 01)
+  core/      llmobs-core     shared contracts: IDs, enums, names, messages, Span/Score,
+                             Arrow schemas + batch conversion (no config: D59)        (spec 01)
   otel/      llmobs-otel     OTLP decode, normalization, media, truncation, cost      (spec 02)
   storage/   llmobs-storage  WAL, memtable, Parquet, catalog, compaction, deletion,
                              DataFusion providers, filter DSL, SQL sandbox            (specs 03, 05)

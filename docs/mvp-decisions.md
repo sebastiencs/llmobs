@@ -105,6 +105,16 @@ Competitor research: `research/competitors.md`.
 | D56 | Allocator | mimalloc as global allocator of the binary. |
 | D57 | Dependency licenses | cargo-deny runs advisories/bans/sources only; license check deferred until our license (D9) is decided. |
 | D58 | Agent instructions | `AGENTS.md` at the root (with `CLAUDE.md` symlink); `.cursor/rules` kept. |
+| D59 | Config ownership | No config in `llmobs-core`: each crate owns its config section (otel: ingest limits, storage: storage/WAL/compaction, server: auth/SMTP/…); the server assembles the top-level config and does figment loading. |
+| D60 | Span contract | `llmobs-core` defines owned Rust `Span`/`Score` structs (serde) and the `Span`/`Score` → Arrow `RecordBatch` conversion; otel outputs `Vec<Span>`, storage consumes batches. |
+| D61 | ID types | Newtypes only for `TraceId`, `SpanId` (fixed bytes, hex, all-zero invalid), `ProjectId`, `OrgId` (UUID). Other entity IDs are plain `uuid::Uuid`. |
+| D62 | Arrow string columns | In memory every string column is `Utf8`; "(dict)" in spec 01 means Parquet dictionary encoding, not an Arrow `Dictionary` type. |
+| D63 | Contract tests | `insta` snapshot tests lock schemas, enums, names and serde formats of `llmobs-core`. |
+| D64 | JSON timestamps | Instants are `i64` ns in Rust/Arrow and RFC 3339 UTC strings with 9 fractional digits and `Z` in JSON (fixtures, API). Durations (`ttft_ns`, `duration_ns`) stay JSON integers. |
+| D65 | Message extra fields | Canonical message parts and messages keep unmodelled fields in an `extra` map (typed part preserved, exact JSON round-trip); `Unknown` only for unknown/invalid part types. |
+| D66 | OTLP fixture format | `fixtures/otlp/<group>/<case>/{case.json, input.json, expected.json}`; input in standard OTLP/JSON; expected = `llmobs_core::Span` JSON + extracted media + rejected count; canonical pretty JSON; validated by a test in `llmobs-otel`. |
+| D67 | Fixture prices | Fixtures use a fixed, fictitious test price table (`fixtures/otlp/prices.json`), never the embedded LiteLLM snapshot. |
+| D68 | Normalization clarifications | Spec 02 § Normalization rules (map value encoding, consumed-attribute retention, tokens/cost only on llm/embedding, previews, system messages, tool arguments, truncation, rejection, …), pinned by the four hand-written fixtures. |
 
 ## Open
 

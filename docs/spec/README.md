@@ -62,7 +62,7 @@ Single tokio runtime. CPU-heavy work (Parquet encode, compaction, DataFusion exe
 ```
 crates/
   llmobs/            # binary: CLI (clap) — serve, admin, query, trace, mcp-stdio
-  llmobs-core/       # ids, time, config, errors, shared types (Span, Score, …)
+  llmobs-core/       # shared contracts only: ids, stored enums, names, message types, Span/Score structs, Arrow schemas + batch conversion (D59–D63)
   llmobs-otel/       # OTLP decode (prost/opentelemetry-proto), convention detection, normalization, media extraction
   llmobs-storage/    # WAL, memtable, Parquet writer/reader, catalog, flush, compaction, deletion, retention, GC
   llmobs-query/      # DataFusion session factory, TableProviders, filter DSL, SQL sandbox, metrics queries

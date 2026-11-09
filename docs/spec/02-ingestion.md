@@ -110,6 +110,33 @@ Token semantics: we follow OTel — `input_tokens` **includes** cached tokens; `
 
 Span-level context fields are copied to the trace partial; the SDK sets them on every span inside a context block so traces are consistent even without the root.
 
+## Normalization rules (clarifications)
+
+These rules resolve ambiguities in the tables above. They were fixed while writing the first hand-written fixtures (D68); `fixtures/otlp/` pins them.
+
+1. **Map values** (`attributes`, `resource_attributes`, `metadata`): OTLP `stringValue` is stored verbatim (no JSON quotes). Every other `AnyValue` is stored as its compact JSON encoding: int → `1200`, double → `0.2`, bool → `true`, array → `["stop"]`, kvlist → JSON object, bytes → base64 JSON string. A metadata source that is a JSON object string (OpenInference `metadata`) is expanded into one entry per key, using the same rule for each value.
+2. **Consumed attributes:**
+   - *Payload* attributes are always removed from `attributes` once consumed. These are every attribute that feeds `input`, `output`, `system_instructions` or `tool_definitions`, including flattened `llm.input_messages.*`, `llm.output_messages.*`, `llm.tools.*` and `gen_ai.prompt.*`/`gen_ai.completion.*`.
+   - Payload attributes of **lower-precedence** conventions for a field that a higher-precedence source already filled are removed too, for example OpenInference `input.value` when `llm.input_messages.*` exist.
+   - Every other consumed attribute is kept in `attributes` if its encoded value is at most 256 bytes; otherwise it is removed.
+3. **Tokens and cost** are normalized only on `llm` and `embedding` spans. On other kinds the usage attributes stay in `attributes`, and the token and cost columns are null. This prevents double counting with child LLM spans (Vercel `ai.generateText`). `provider`, `request_model`, `response_model` and `operation` are normalized on every kind.
+4. **`total_tokens`**: taken from a total attribute if present, else `input_tokens + output_tokens` when both are known, else null.
+5. **System messages:** system messages that arrive *inside* a message list (OpenInference, OpenLLMetry, Vercel) stay in `input` as `role: system` messages. `system_instructions` is filled only from dedicated sources (`gen_ai.system_instructions`).
+6. **Tool calls:** a tool call's `arguments` (and a tool response's `response`) is parsed into a JSON value when it is a string containing valid JSON; otherwise it is kept as a JSON string.
+7. **`tool_definitions`**: a JSON array, with one element per tool (parsed JSON schema objects), in index order.
+8. **`request_params`**: a compact JSON object with keys sorted alphabetically. Null when there are no parameters.
+9. **Previews** (max 512 Unicode scalar values, cut with no ellipsis):
+   - `messages` input: text parts of the last `user` message, joined with `\n`. If there is no user message, use the last message's text parts.
+   - `messages` output: text parts of the last message, joined with `\n`. Null if it has none.
+   - `json`: the compact JSON.
+   - `text`: the text.
+10. **Payload format for non-message values:** a value that parses as a JSON object or array is `json`; any other string is `text`. So Vercel `ai.prompt` (JSON object string) is `json`, and `ai.response.text` is `text`.
+11. **Context fields consumed from metadata-like sources** (`ai.telemetry.metadata.sessionId`/`userId`, `traceloop.association.properties.session_id`/`user_id`, …) fill `session_id`/`user_id` and are **not** duplicated in the `metadata` map. Their sibling keys do go to `metadata`, with the source prefix stripped (`ai.telemetry.metadata.feature` → `feature`).
+12. **`provider`** is lowercased and mapped through an alias table owned by `llmobs-otel` (`openai.chat`, `openai.responses` → `openai`; `anthropic.messages` → `anthropic`; …). Unknown values are kept lowercased.
+13. **`conventions`** are listed in precedence order (§ Convention detection), without duplicates.
+14. **Truncation of strings:** cut at the largest UTF-8 character boundary ≤ the limit, then append the marker. The stored value is therefore slightly longer than the limit. Payloads are measured **after** media extraction.
+15. **Rejected spans:** a span whose trace ID or span ID is missing, of the wrong length or all zeros is rejected (counted in `partial_success.rejected_spans`). The other spans of the request are still accepted. An all-zero `parentSpanId` is treated as absent.
+
 ## Media extraction
 
 Applied to `input`, `output`, `system_instructions` after message conversion and to raw `json` payloads.
@@ -160,6 +187,9 @@ For each committed span, matching online rules (06) with `target = span` are eva
 
 ## Testing
 
-- `fixtures/otlp/<convention>/<case>.json`: real OTLP exports captured from each instrumentation (OpenAI via OpenInference, OpenAI via OpenLLMetry, Vercel AI SDK v5/v6 generateText + streamText + tool calls, Anthropic with cache tokens, Gemini multimodal, LangChain, LangGraph, OpenAI Agents SDK, Google ADK, Laminar, Langfuse SDK v3).
-- `fixtures/otlp/…/<case>.expected.json`: the normalized span(s). Golden tests diff them.
+The fixture format is defined in `fixtures/otlp/README.md` (D66). Each case is a directory `fixtures/otlp/<group>/<case>/` with `case.json` (metadata, settings), `input.json` (OTLP/JSON `ExportTraceServiceRequest`) and `expected.json` (normalized spans in `llmobs_core::Span` JSON, extracted media, rejected count). Fixtures use the fixed test price table `fixtures/otlp/prices.json`, not the embedded LiteLLM snapshot (D67).
+
+- Hand-written cases pin this spec's rules (Phase 0 step 3).
+- Captured cases come from real instrumentations: OpenAI via OpenInference, OpenAI via OpenLLMetry, Vercel AI SDK v5/v6 generateText + streamText + tool calls, Anthropic with cache tokens, Gemini multimodal, LangChain, LangGraph, OpenAI Agents SDK, Google ADK, Laminar, Langfuse SDK v3. They are recorded by `tools/capture`, and their expected outputs are blessed by the golden test and then reviewed.
+- Golden test (`llmobs-otel`): normalize every `input.json` and compare with `expected.json`. Costs are compared with a `1e-12` tolerance; everything else exactly.
 - Property tests: normalization never panics on arbitrary attribute maps (proptest).

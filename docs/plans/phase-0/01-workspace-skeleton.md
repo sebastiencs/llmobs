@@ -270,7 +270,7 @@ debug = true
    - `server`: `llmobs-core`, `llmobs-otel`, `llmobs-storage`.
    - `cli`: `llmobs-core`, `llmobs-server`.
 4. `src/lib.rs` of each library: only a `//!` crate doc. Two to five lines giving the crate's responsibility, with a pointer to the spec section:
-   - `core`: shared types, Arrow schemas, IDs, time, config (spec 01, README §conventions).
+   - `core`: shared contracts — IDs, stored enums, branded names, message types, Span/Score structs, Arrow schemas and batch conversion; no config (spec 01, README §conventions, D59–D63).
    - `otel`: OTLP decoding, convention detection and normalization, media extraction, truncation, cost computation (spec 02).
    - `storage`: WAL, memtable, Parquet files, catalog, compaction, deletion, retention, media GC, DataFusion table providers, filter DSL and SQL sandbox (specs 03, 05).
    - `server`: HTTP/gRPC API, auth, metadata DB, evaluation, alerts, email, MCP (specs 04, 06–09).

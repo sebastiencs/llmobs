@@ -37,6 +37,8 @@ A single closed enum, `span_kind`, stored as a dictionary-encoded string.
 
 One row per OTel span, after normalization. Columns marked **P** are the "light" projection read by list views; heavy columns are only read when a span/trace is opened or searched.
 
+Type notation in this document: "Utf8 (dict)" means a `Utf8` column in memory that is **dictionary-encoded in Parquet** (low cardinality); it is not an Arrow `Dictionary` type (D62). The Rust structs and Arrow schemas implementing these tables live in `llmobs-core` (D60).
+
 | Column | Arrow type | P | Notes |
 |---|---|---|---|
 | `project_id` | Utf8 (dict) | P | Partition key (constant per file). |
