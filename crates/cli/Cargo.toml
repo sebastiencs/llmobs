@@ -10,8 +10,10 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+clap.workspace = true
 llmobs-core.workspace = true
 llmobs-server.workspace = true
+mimalloc.workspace = true
 
 [[bin]]
 name = "llmobs"
