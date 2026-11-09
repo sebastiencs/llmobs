@@ -1,0 +1,27 @@
+---
+source: crates/core/src/schema.rs
+expression: render(scores_schema().as_ref())
+---
+project_id: Utf8 [non-null]
+score_id: Utf8 [non-null]
+target: Utf8 [non-null]
+trace_id: FixedSizeBinary(16) [nullable]
+span_id: FixedSizeBinary(8) [nullable]
+session_id: Utf8 [nullable]
+user_id: Utf8 [nullable]
+name: Utf8 [non-null]
+data_type: Utf8 [non-null]
+value_num: Float64 [nullable]
+value_str: Utf8 [nullable]
+reason: Utf8 [nullable]
+source: Utf8 [non-null]
+evaluator_id: Utf8 [nullable]
+rule_id: Utf8 [nullable]
+experiment_id: Utf8 [nullable]
+dataset_item_id: Utf8 [nullable]
+author_user_id: Utf8 [nullable]
+metadata: Map("entries": non-null Struct("keys": non-null Utf8, "values": Utf8), unsorted) [non-null]
+created_at: Timestamp(ns, "UTC") [non-null]
+updated_at: Timestamp(ns, "UTC") [non-null]
+deleted: Boolean [non-null]
+ingest_time: Timestamp(ns, "UTC") [non-null]
