@@ -1,0 +1,16 @@
+---
+source: crates/core/src/span.rs
+expression: "serde_json::to_string_pretty(&minimal_span()).unwrap()"
+---
+{
+  "project_id": "018f6b4e-7c1a-7c1a-8c1a-000000000001",
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "span_id": "00f067aa0ba902b7",
+  "name": "root",
+  "span_kind": "span",
+  "start_time": "1970-01-01T00:00:00.000000000Z",
+  "end_time": "1970-01-01T00:00:00.000000000Z",
+  "status": "unset",
+  "ingest_time": "1970-01-01T00:00:00.000000000Z",
+  "schema_version": 1
+}

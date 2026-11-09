@@ -1,0 +1,85 @@
+---
+source: crates/core/src/span.rs
+expression: "serde_json::to_string_pretty(&full_span()).unwrap()"
+---
+{
+  "project_id": "018f6b4e-7c1a-7c1a-8c1a-000000000001",
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "span_id": "00f067aa0ba902b7",
+  "parent_span_id": "00f067aa0ba902b8",
+  "name": "chat",
+  "span_kind": "llm",
+  "start_time": "2026-11-09T10:12:03.123456789Z",
+  "end_time": "2026-11-09T10:12:04.623456789Z",
+  "status": "error",
+  "status_message": "rate limited",
+  "service_name": "api",
+  "session_id": "chat-42",
+  "user_id": "u-17",
+  "environment": "production",
+  "release": "abc123",
+  "tags": [
+    "beta"
+  ],
+  "metadata": {
+    "plan": "\"pro\""
+  },
+  "provider": "openai",
+  "request_model": "gpt-5-mini",
+  "response_model": "gpt-5-mini-2026-11",
+  "operation": "chat",
+  "input_tokens": 10,
+  "output_tokens": 4,
+  "cache_read_tokens": 2,
+  "cache_write_tokens": 1,
+  "reasoning_tokens": 3,
+  "total_tokens": 14,
+  "cost_input": 0.001,
+  "cost_output": 0.002,
+  "cost_total": 0.003,
+  "cost_source": "computed",
+  "ttft_ns": 42000000,
+  "request_params": "{\"temperature\":0.2}",
+  "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"hi\"}]}]",
+  "input_format": "messages",
+  "output": "hello",
+  "output_format": "text",
+  "input_preview": "hi",
+  "output_preview": "hello",
+  "system_instructions": "[{\"type\":\"text\",\"content\":\"be brief\"}]",
+  "tool_definitions": "[]",
+  "attributes": {
+    "http.method": "\"GET\""
+  },
+  "resource_attributes": {
+    "host.name": "\"api\""
+  },
+  "scope_name": "llmobs",
+  "scope_version": "0.0.0",
+  "events": [
+    {
+      "time": "2026-11-09T10:12:03.123456789Z",
+      "name": "exception",
+      "attributes": "{\"exception.type\":\"RateLimit\"}"
+    }
+  ],
+  "links": [
+    {
+      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+      "span_id": "00f067aa0ba902b8",
+      "attributes": "{\"link.kind\":\"child\"}"
+    }
+  ],
+  "media_refs": [
+    "abababababababababababababababababababababababababababababababab"
+  ],
+  "truncated": [
+    "llmobs.input"
+  ],
+  "conventions": [
+    "llmobs",
+    "genai"
+  ],
+  "ingest_time": "2026-11-09T10:12:05.123456789Z",
+  "schema_version": 1
+}
