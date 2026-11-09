@@ -1,0 +1,27 @@
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+# D57: license policy deferred until our own license is chosen.
+# Do not remove this section; replace `allow` with the real policy then.
+version = 2
+allow = []
+confidence-threshold = 0.8
+# The `licenses` check is NOT run (see justfile `deny` recipe), so an empty allow-list is fine for now.
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true # path deps between workspace crates
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
