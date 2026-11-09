@@ -7,8 +7,8 @@ Everything compiles to DataFusion plans over the project-scoped providers of 03 
 | View | Rows | Backed by |
 |---|---|---|
 | `spans` | one per span | `SpansProvider` |
-| `traces` | one per trace (merged) | `TracesProvider` |
-| `sessions` | one per session_id | `SELECT session_id, min(start_time) AS start_time, max(end_time) AS end_time, count(*) AS trace_count, sum(cost_total) AS cost_total, sum(total_tokens) AS total_tokens, sum(error_count) AS error_count, first_value(user_id) AS user_id … FROM traces WHERE session_id IS NOT NULL GROUP BY session_id` |
+| `traces` | one per trace (merged; the merge bookkeeping columns `last_ingest_time` and `partial_count` are not exposed) | `TracesProvider` |
+| `sessions` | one per session_id | `SELECT session_id, min(start_time) AS start_time, max(end_time) AS end_time, count(*) AS trace_count, sum(cost_total) AS cost_total, sum(total_tokens) AS total_tokens, sum(error_count) AS error_count, first_value(user_id) AS user_id, <distinct union of tags> AS tags, max(end_time) - min(start_time) AS duration_ns … FROM traces WHERE session_id IS NOT NULL GROUP BY session_id` |
 | `scores` | one per live score | `ScoresProvider` |
 | `experiment_items` | experiment results | SQLite rows for the project, exposed via a `MemTable` built per query (bounded to 1M rows) |
 | `dataset_items` | current version items | same approach |
@@ -44,7 +44,7 @@ Parsed with `sqlparser::Parser::parse_expr` (DataFusion dialect), then validated
 - **Functions (allow-list):** `now()`, `lower`, `upper`, `length`, `coalesce`, `array_has`, `array_length`, `date_trunc`, `abs`, plus our UDFs:
   - `score(name)` → latest numeric score of that name attached to the row's target (trace/span/session), via a semi-join on `scores`; `score_label(name)` → categorical/text value.
   - `has_score(name)` → boolean.
-  - `duration_ms` is available as a derived column (`duration_ns / 1e6`) for convenience.
+  - `duration_ms` is available as a derived column (`duration_ns / 1e6`) on the `spans`, `traces` and `sessions` views, for convenience.
 - Anything else (subqueries, casts to unsupported types, window functions, unknown identifiers/functions) → 400 with a position-annotated error message.
 
 ### UI builder
