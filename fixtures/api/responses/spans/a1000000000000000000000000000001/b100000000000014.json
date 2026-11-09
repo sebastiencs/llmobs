@@ -1,0 +1,101 @@
+{
+  "trace_id": "a1000000000000000000000000000001",
+  "span_id": "b100000000000014",
+  "parent_span_id": "b100000000000011",
+  "name": "chat claude-sonnet-4-5",
+  "span_kind": "llm",
+  "start_time": "2026-01-01T10:00:02.350000000Z",
+  "end_time": "2026-01-01T10:00:04.100000000Z",
+  "duration_ns": 1750000000,
+  "status": "ok",
+  "service_name": "support-bot",
+  "session_id": "sess-001",
+  "user_id": "user-42",
+  "environment": "production",
+  "release": "v1.4.0",
+  "tags": [],
+  "metadata": {},
+  "provider": "anthropic",
+  "request_model": "claude-sonnet-4-5",
+  "response_model": "claude-sonnet-4-5",
+  "model": "claude-sonnet-4-5",
+  "operation": "chat",
+  "input_tokens": 1300,
+  "output_tokens": 60,
+  "cache_read_tokens": 1200,
+  "total_tokens": 1360,
+  "cost_input": 0.00066,
+  "cost_output": 0.0009,
+  "cost_total": 0.00156,
+  "cost_source": "computed",
+  "ttft_ns": 400000000,
+  "input": {
+    "format": "messages",
+    "value": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "content": "My order 1234 hasn't arrived."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "id": "call_1",
+            "name": "get_order_status",
+            "arguments": {
+              "order_id": "1234"
+            }
+          }
+        ],
+        "finish_reason": "tool_calls"
+      },
+      {
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_call_response",
+            "id": "call_1",
+            "response": {
+              "status": "shipped",
+              "eta": "2026-01-02"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "output": {
+    "format": "messages",
+    "value": [
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "content": "Your order 1234 shipped and arrives tomorrow."
+          }
+        ],
+        "finish_reason": "stop"
+      }
+    ]
+  },
+  "input_preview": "My order 1234 hasn't arrived.",
+  "output_preview": "Your order 1234 shipped and arrives tomorrow.",
+  "attributes": {},
+  "resource_attributes": {},
+  "events": [],
+  "links": [],
+  "media_refs": [],
+  "truncated": [],
+  "conventions": [
+    "genai"
+  ],
+  "ingest_time": "2026-01-01T10:00:04.600000000Z",
+  "schema_version": 1
+}

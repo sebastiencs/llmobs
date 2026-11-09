@@ -1,0 +1,100 @@
+{
+  "trace": {
+    "trace_id": "a1000000000000000000000000000002",
+    "root_span_id": "b100000000000021",
+    "has_root": true,
+    "name": "support-agent",
+    "start_time": "2026-01-01T10:05:00.000000000Z",
+    "end_time": "2026-01-01T10:05:02.500000000Z",
+    "duration_ns": 2500000000,
+    "status": "ok",
+    "session_id": "sess-001",
+    "user_id": "user-42",
+    "environment": "production",
+    "release": "v1.4.0",
+    "tags": [],
+    "metadata": {},
+    "input_preview": "Can I change the delivery address?",
+    "output_preview": "Yes. Send the new address and I will update the delivery.",
+    "span_count": 2,
+    "error_count": 0,
+    "llm_count": 1,
+    "input_tokens": 1500,
+    "output_tokens": 80,
+    "cache_read_tokens": 1200,
+    "total_tokens": 1580,
+    "cost_total": 0.00246,
+    "models": [
+      "claude-sonnet-4-5"
+    ],
+    "scores": [
+      {
+        "score_id": "01900000-0000-7000-8000-000000000304",
+        "name": "thumbs",
+        "value": {
+          "data_type": "boolean",
+          "value": true
+        },
+        "source": "end_user"
+      }
+    ]
+  },
+  "spans": [
+    {
+      "depth": 0,
+      "detached": false,
+      "span": {
+        "trace_id": "a1000000000000000000000000000002",
+        "span_id": "b100000000000021",
+        "name": "support-agent",
+        "span_kind": "agent",
+        "start_time": "2026-01-01T10:05:00.000000000Z",
+        "end_time": "2026-01-01T10:05:02.500000000Z",
+        "duration_ns": 2500000000,
+        "status": "ok",
+        "service_name": "support-bot",
+        "session_id": "sess-001",
+        "user_id": "user-42",
+        "environment": "production",
+        "release": "v1.4.0",
+        "tags": [],
+        "metadata": {},
+        "input_preview": "Can I change the delivery address?",
+        "output_preview": "Yes. Send the new address and I will update the delivery."
+      }
+    },
+    {
+      "depth": 1,
+      "detached": false,
+      "span": {
+        "trace_id": "a1000000000000000000000000000002",
+        "span_id": "b100000000000022",
+        "parent_span_id": "b100000000000021",
+        "name": "chat claude-sonnet-4-5",
+        "span_kind": "llm",
+        "start_time": "2026-01-01T10:05:00.050000000Z",
+        "end_time": "2026-01-01T10:05:02.400000000Z",
+        "duration_ns": 2350000000,
+        "status": "ok",
+        "service_name": "support-bot",
+        "session_id": "sess-001",
+        "user_id": "user-42",
+        "environment": "production",
+        "release": "v1.4.0",
+        "tags": [],
+        "metadata": {},
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+        "input_tokens": 1500,
+        "output_tokens": 80,
+        "cache_read_tokens": 1200,
+        "total_tokens": 1580,
+        "cost_total": 0.00246,
+        "ttft_ns": 350000000,
+        "input_preview": "Can I change the delivery address?",
+        "output_preview": "Yes. Send the new address and I will update the delivery."
+      }
+    }
+  ],
+  "truncated": false
+}

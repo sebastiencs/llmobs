@@ -1,0 +1,106 @@
+{
+  "trace_id": "a1000000000000000000000000000001",
+  "span_id": "b100000000000012",
+  "parent_span_id": "b100000000000011",
+  "name": "chat claude-sonnet-4-5",
+  "span_kind": "llm",
+  "start_time": "2026-01-01T10:00:00.100000000Z",
+  "end_time": "2026-01-01T10:00:01.900000000Z",
+  "duration_ns": 1800000000,
+  "status": "ok",
+  "service_name": "support-bot",
+  "session_id": "sess-001",
+  "user_id": "user-42",
+  "environment": "production",
+  "release": "v1.4.0",
+  "tags": [],
+  "metadata": {},
+  "provider": "anthropic",
+  "request_model": "claude-sonnet-4-5",
+  "response_model": "claude-sonnet-4-5",
+  "model": "claude-sonnet-4-5",
+  "operation": "chat",
+  "input_tokens": 1200,
+  "output_tokens": 40,
+  "cache_read_tokens": 1000,
+  "total_tokens": 1240,
+  "cost_input": 0.0009,
+  "cost_output": 0.0006,
+  "cost_total": 0.0015,
+  "cost_source": "computed",
+  "ttft_ns": 600000000,
+  "request_params": {
+    "max_tokens": 1024,
+    "temperature": 0.2
+  },
+  "input": {
+    "format": "messages",
+    "value": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "content": "My order 1234 hasn't arrived."
+          }
+        ]
+      }
+    ]
+  },
+  "output": {
+    "format": "messages",
+    "value": [
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "id": "call_1",
+            "name": "get_order_status",
+            "arguments": {
+              "order_id": "1234"
+            }
+          }
+        ],
+        "finish_reason": "tool_calls"
+      }
+    ]
+  },
+  "input_preview": "My order 1234 hasn't arrived.",
+  "system_instructions": [
+    {
+      "type": "text",
+      "content": "You are a support agent. Use tools to look up orders."
+    }
+  ],
+  "tool_definitions": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_order_status",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "order_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "order_id"
+          ]
+        }
+      }
+    }
+  ],
+  "attributes": {},
+  "resource_attributes": {},
+  "events": [],
+  "links": [],
+  "media_refs": [],
+  "truncated": [],
+  "conventions": [
+    "genai"
+  ],
+  "ingest_time": "2026-01-01T10:00:02.400000000Z",
+  "schema_version": 1
+}

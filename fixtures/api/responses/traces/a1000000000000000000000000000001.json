@@ -1,0 +1,159 @@
+{
+  "trace": {
+    "trace_id": "a1000000000000000000000000000001",
+    "root_span_id": "b100000000000011",
+    "has_root": true,
+    "name": "support-agent",
+    "start_time": "2026-01-01T10:00:00.000000000Z",
+    "end_time": "2026-01-01T10:00:04.200000000Z",
+    "duration_ns": 4200000000,
+    "status": "ok",
+    "session_id": "sess-001",
+    "user_id": "user-42",
+    "environment": "production",
+    "release": "v1.4.0",
+    "tags": [
+      "support"
+    ],
+    "metadata": {},
+    "input_preview": "My order 1234 hasn't arrived.",
+    "output_preview": "Your order 1234 shipped and arrives tomorrow.",
+    "span_count": 4,
+    "error_count": 0,
+    "llm_count": 2,
+    "input_tokens": 2500,
+    "output_tokens": 100,
+    "cache_read_tokens": 2200,
+    "total_tokens": 2600,
+    "cost_total": 0.00306,
+    "models": [
+      "claude-sonnet-4-5"
+    ],
+    "scores": [
+      {
+        "score_id": "01900000-0000-7000-8000-000000000302",
+        "name": "helpfulness",
+        "value": {
+          "data_type": "numeric",
+          "value": 0.9
+        },
+        "source": "llm_judge"
+      }
+    ]
+  },
+  "spans": [
+    {
+      "depth": 0,
+      "detached": false,
+      "span": {
+        "trace_id": "a1000000000000000000000000000001",
+        "span_id": "b100000000000011",
+        "name": "support-agent",
+        "span_kind": "agent",
+        "start_time": "2026-01-01T10:00:00.000000000Z",
+        "end_time": "2026-01-01T10:00:04.200000000Z",
+        "duration_ns": 4200000000,
+        "status": "ok",
+        "service_name": "support-bot",
+        "session_id": "sess-001",
+        "user_id": "user-42",
+        "environment": "production",
+        "release": "v1.4.0",
+        "tags": [
+          "support"
+        ],
+        "metadata": {},
+        "input_preview": "My order 1234 hasn't arrived.",
+        "output_preview": "Your order 1234 shipped and arrives tomorrow."
+      }
+    },
+    {
+      "depth": 1,
+      "detached": false,
+      "span": {
+        "trace_id": "a1000000000000000000000000000001",
+        "span_id": "b100000000000012",
+        "parent_span_id": "b100000000000011",
+        "name": "chat claude-sonnet-4-5",
+        "span_kind": "llm",
+        "start_time": "2026-01-01T10:00:00.100000000Z",
+        "end_time": "2026-01-01T10:00:01.900000000Z",
+        "duration_ns": 1800000000,
+        "status": "ok",
+        "service_name": "support-bot",
+        "session_id": "sess-001",
+        "user_id": "user-42",
+        "environment": "production",
+        "release": "v1.4.0",
+        "tags": [],
+        "metadata": {},
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+        "input_tokens": 1200,
+        "output_tokens": 40,
+        "cache_read_tokens": 1000,
+        "total_tokens": 1240,
+        "cost_total": 0.0015,
+        "ttft_ns": 600000000,
+        "input_preview": "My order 1234 hasn't arrived."
+      }
+    },
+    {
+      "depth": 1,
+      "detached": false,
+      "span": {
+        "trace_id": "a1000000000000000000000000000001",
+        "span_id": "b100000000000013",
+        "parent_span_id": "b100000000000011",
+        "name": "get_order_status",
+        "span_kind": "tool",
+        "start_time": "2026-01-01T10:00:01.950000000Z",
+        "end_time": "2026-01-01T10:00:02.300000000Z",
+        "duration_ns": 350000000,
+        "status": "ok",
+        "service_name": "support-bot",
+        "session_id": "sess-001",
+        "user_id": "user-42",
+        "environment": "production",
+        "release": "v1.4.0",
+        "tags": [],
+        "metadata": {},
+        "input_preview": "{\"order_id\":\"1234\"}",
+        "output_preview": "{\"status\":\"shipped\",\"eta\":\"2026-01-02\"}"
+      }
+    },
+    {
+      "depth": 1,
+      "detached": false,
+      "span": {
+        "trace_id": "a1000000000000000000000000000001",
+        "span_id": "b100000000000014",
+        "parent_span_id": "b100000000000011",
+        "name": "chat claude-sonnet-4-5",
+        "span_kind": "llm",
+        "start_time": "2026-01-01T10:00:02.350000000Z",
+        "end_time": "2026-01-01T10:00:04.100000000Z",
+        "duration_ns": 1750000000,
+        "status": "ok",
+        "service_name": "support-bot",
+        "session_id": "sess-001",
+        "user_id": "user-42",
+        "environment": "production",
+        "release": "v1.4.0",
+        "tags": [],
+        "metadata": {},
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+        "input_tokens": 1300,
+        "output_tokens": 60,
+        "cache_read_tokens": 1200,
+        "total_tokens": 1360,
+        "cost_total": 0.00156,
+        "ttft_ns": 400000000,
+        "input_preview": "My order 1234 hasn't arrived.",
+        "output_preview": "Your order 1234 shipped and arrives tomorrow."
+      }
+    }
+  ],
+  "truncated": false
+}

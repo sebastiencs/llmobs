@@ -1,0 +1,79 @@
+{
+  "trace": {
+    "trace_id": "a1000000000000000000000000000005",
+    "root_span_id": "b100000000000051",
+    "has_root": true,
+    "name": "judge helpfulness",
+    "start_time": "2026-01-01T10:01:00.000000000Z",
+    "end_time": "2026-01-01T10:01:01.500000000Z",
+    "duration_ns": 1500000000,
+    "status": "ok",
+    "environment": "llmobs-eval",
+    "release": "v1.4.0",
+    "tags": [],
+    "metadata": {},
+    "input_preview": "Score the helpfulness of the support reply from 0 to 1.",
+    "output_preview": "0.9",
+    "span_count": 2,
+    "error_count": 0,
+    "llm_count": 1,
+    "input_tokens": 600,
+    "output_tokens": 50,
+    "total_tokens": 650,
+    "cost_total": 0.0008,
+    "models": [
+      "gpt-4o-mini"
+    ],
+    "scores": []
+  },
+  "spans": [
+    {
+      "depth": 0,
+      "detached": false,
+      "span": {
+        "trace_id": "a1000000000000000000000000000005",
+        "span_id": "b100000000000051",
+        "name": "judge helpfulness",
+        "span_kind": "evaluator",
+        "start_time": "2026-01-01T10:01:00.000000000Z",
+        "end_time": "2026-01-01T10:01:01.500000000Z",
+        "duration_ns": 1500000000,
+        "status": "ok",
+        "service_name": "support-bot",
+        "environment": "llmobs-eval",
+        "release": "v1.4.0",
+        "tags": [],
+        "metadata": {}
+      }
+    },
+    {
+      "depth": 1,
+      "detached": false,
+      "span": {
+        "trace_id": "a1000000000000000000000000000005",
+        "span_id": "b100000000000052",
+        "parent_span_id": "b100000000000051",
+        "name": "chat gpt-4o-mini",
+        "span_kind": "llm",
+        "start_time": "2026-01-01T10:01:00.020000000Z",
+        "end_time": "2026-01-01T10:01:01.480000000Z",
+        "duration_ns": 1460000000,
+        "status": "ok",
+        "service_name": "support-bot",
+        "environment": "llmobs-eval",
+        "release": "v1.4.0",
+        "tags": [],
+        "metadata": {},
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "input_tokens": 600,
+        "output_tokens": 50,
+        "total_tokens": 650,
+        "cost_total": 0.0008,
+        "input_preview": "Score the helpfulness of the support reply from 0 to 1.",
+        "output_preview": "0.9"
+      }
+    }
+  ],
+  "truncated": false
+}

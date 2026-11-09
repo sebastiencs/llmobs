@@ -1,0 +1,34 @@
+{
+  "trace_id": "a1000000000000000000000000000003",
+  "span_id": "b100000000000031",
+  "name": "answer-question",
+  "span_kind": "chain",
+  "start_time": "2026-01-01T10:10:00.000000000Z",
+  "end_time": "2026-01-01T10:10:00.800000000Z",
+  "duration_ns": 800000000,
+  "status": "error",
+  "status_message": "upstream model error",
+  "service_name": "support-bot",
+  "session_id": "sess-002",
+  "user_id": "user-7",
+  "environment": "production",
+  "release": "v1.4.0",
+  "tags": [],
+  "metadata": {},
+  "input": {
+    "format": "text",
+    "value": "What is your refund policy?"
+  },
+  "input_preview": "What is your refund policy?",
+  "attributes": {},
+  "resource_attributes": {},
+  "events": [],
+  "links": [],
+  "media_refs": [],
+  "truncated": [],
+  "conventions": [
+    "genai"
+  ],
+  "ingest_time": "2026-01-01T10:10:01.300000000Z",
+  "schema_version": 1
+}

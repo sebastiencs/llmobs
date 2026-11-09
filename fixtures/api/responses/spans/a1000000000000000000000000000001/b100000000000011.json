@@ -1,0 +1,40 @@
+{
+  "trace_id": "a1000000000000000000000000000001",
+  "span_id": "b100000000000011",
+  "name": "support-agent",
+  "span_kind": "agent",
+  "start_time": "2026-01-01T10:00:00.000000000Z",
+  "end_time": "2026-01-01T10:00:04.200000000Z",
+  "duration_ns": 4200000000,
+  "status": "ok",
+  "service_name": "support-bot",
+  "session_id": "sess-001",
+  "user_id": "user-42",
+  "environment": "production",
+  "release": "v1.4.0",
+  "tags": [
+    "support"
+  ],
+  "metadata": {},
+  "input": {
+    "format": "text",
+    "value": "My order 1234 hasn't arrived."
+  },
+  "output": {
+    "format": "text",
+    "value": "Your order 1234 shipped and arrives tomorrow."
+  },
+  "input_preview": "My order 1234 hasn't arrived.",
+  "output_preview": "Your order 1234 shipped and arrives tomorrow.",
+  "attributes": {},
+  "resource_attributes": {},
+  "events": [],
+  "links": [],
+  "media_refs": [],
+  "truncated": [],
+  "conventions": [
+    "genai"
+  ],
+  "ingest_time": "2026-01-01T10:00:04.700000000Z",
+  "schema_version": 1
+}

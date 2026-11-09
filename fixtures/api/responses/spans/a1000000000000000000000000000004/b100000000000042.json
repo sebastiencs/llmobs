@@ -1,0 +1,49 @@
+{
+  "trace_id": "a1000000000000000000000000000004",
+  "span_id": "b100000000000042",
+  "parent_span_id": "b100000000000041",
+  "name": "vector-search",
+  "span_kind": "retriever",
+  "start_time": "2026-01-01T10:20:00.010000000Z",
+  "end_time": "2026-01-01T10:20:00.210000000Z",
+  "duration_ns": 200000000,
+  "status": "ok",
+  "service_name": "support-bot",
+  "user_id": "user-42",
+  "environment": "staging",
+  "release": "v1.4.0",
+  "tags": [],
+  "metadata": {},
+  "input": {
+    "format": "text",
+    "value": "shipping label"
+  },
+  "output": {
+    "format": "json",
+    "value": [
+      {
+        "id": "doc-1",
+        "score": 0.91,
+        "text": "Label: warehouse 7, dock B"
+      },
+      {
+        "id": "doc-2",
+        "score": 0.74,
+        "text": "Shipping label template"
+      }
+    ]
+  },
+  "input_preview": "shipping label",
+  "output_preview": "[{\"id\":\"doc-1\",\"score\":0.91,\"text\":\"Label: warehouse 7, dock B\"},{\"id\":\"doc-2\",\"score\":0.74,\"text\":\"Shipping label template\"}]",
+  "attributes": {},
+  "resource_attributes": {},
+  "events": [],
+  "links": [],
+  "media_refs": [],
+  "truncated": [],
+  "conventions": [
+    "genai"
+  ],
+  "ingest_time": "2026-01-01T10:20:00.710000000Z",
+  "schema_version": 1
+}

@@ -1,0 +1,44 @@
+{
+  "trace_id": "a1000000000000000000000000000001",
+  "span_id": "b100000000000013",
+  "parent_span_id": "b100000000000011",
+  "name": "get_order_status",
+  "span_kind": "tool",
+  "start_time": "2026-01-01T10:00:01.950000000Z",
+  "end_time": "2026-01-01T10:00:02.300000000Z",
+  "duration_ns": 350000000,
+  "status": "ok",
+  "service_name": "support-bot",
+  "session_id": "sess-001",
+  "user_id": "user-42",
+  "environment": "production",
+  "release": "v1.4.0",
+  "tags": [],
+  "metadata": {},
+  "input": {
+    "format": "json",
+    "value": {
+      "order_id": "1234"
+    }
+  },
+  "output": {
+    "format": "json",
+    "value": {
+      "status": "shipped",
+      "eta": "2026-01-02"
+    }
+  },
+  "input_preview": "{\"order_id\":\"1234\"}",
+  "output_preview": "{\"status\":\"shipped\",\"eta\":\"2026-01-02\"}",
+  "attributes": {},
+  "resource_attributes": {},
+  "events": [],
+  "links": [],
+  "media_refs": [],
+  "truncated": [],
+  "conventions": [
+    "genai"
+  ],
+  "ingest_time": "2026-01-01T10:00:02.800000000Z",
+  "schema_version": 1
+}

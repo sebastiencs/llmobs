@@ -1,0 +1,59 @@
+{
+  "trace": {
+    "trace_id": "a1000000000000000000000000000006",
+    "has_root": false,
+    "name": "chat claude-sonnet-4-5",
+    "start_time": "2026-01-01T10:30:00.000000000Z",
+    "end_time": "2026-01-01T10:30:02.000000000Z",
+    "duration_ns": 2000000000,
+    "status": "unset",
+    "environment": "production",
+    "release": "v1.4.0",
+    "tags": [],
+    "metadata": {},
+    "input_preview": "Summarize the open ticket.",
+    "output_preview": "The ticket is waiting on a carrier scan.",
+    "span_count": 1,
+    "error_count": 0,
+    "llm_count": 1,
+    "input_tokens": 400,
+    "output_tokens": 100,
+    "total_tokens": 500,
+    "cost_total": 0.0027,
+    "models": [
+      "claude-sonnet-4-5"
+    ],
+    "scores": []
+  },
+  "spans": [
+    {
+      "depth": 0,
+      "detached": true,
+      "span": {
+        "trace_id": "a1000000000000000000000000000006",
+        "span_id": "b100000000000061",
+        "parent_span_id": "b1000000000000ff",
+        "name": "chat claude-sonnet-4-5",
+        "span_kind": "llm",
+        "start_time": "2026-01-01T10:30:00.000000000Z",
+        "end_time": "2026-01-01T10:30:02.000000000Z",
+        "duration_ns": 2000000000,
+        "status": "ok",
+        "service_name": "support-bot",
+        "environment": "production",
+        "release": "v1.4.0",
+        "tags": [],
+        "metadata": {},
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+        "input_tokens": 400,
+        "output_tokens": 100,
+        "total_tokens": 500,
+        "cost_total": 0.0027,
+        "input_preview": "Summarize the open ticket.",
+        "output_preview": "The ticket is waiting on a carrier scan."
+      }
+    }
+  ],
+  "truncated": false
+}

@@ -1,0 +1,60 @@
+{
+  "trace_id": "a1000000000000000000000000000003",
+  "span_id": "b100000000000032",
+  "parent_span_id": "b100000000000031",
+  "name": "chat gpt-4o-mini",
+  "span_kind": "llm",
+  "start_time": "2026-01-01T10:10:00.050000000Z",
+  "end_time": "2026-01-01T10:10:00.750000000Z",
+  "duration_ns": 700000000,
+  "status": "error",
+  "status_message": "429 Too Many Requests",
+  "service_name": "support-bot",
+  "session_id": "sess-002",
+  "user_id": "user-7",
+  "environment": "production",
+  "release": "v1.4.0",
+  "tags": [],
+  "metadata": {},
+  "provider": "openai",
+  "request_model": "gpt-4o-mini",
+  "response_model": "gpt-4o-mini",
+  "model": "gpt-4o-mini",
+  "operation": "chat",
+  "cost_source": "none",
+  "input": {
+    "format": "messages",
+    "value": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "content": "What is your refund policy?"
+          }
+        ]
+      }
+    ]
+  },
+  "input_preview": "What is your refund policy?",
+  "attributes": {},
+  "resource_attributes": {},
+  "events": [
+    {
+      "time": "2026-01-01T10:10:00.750000000Z",
+      "name": "exception",
+      "attributes": {
+        "exception.type": "RateLimitError",
+        "exception.message": "rate limited"
+      }
+    }
+  ],
+  "links": [],
+  "media_refs": [],
+  "truncated": [],
+  "conventions": [
+    "genai"
+  ],
+  "ingest_time": "2026-01-01T10:10:01.250000000Z",
+  "schema_version": 1
+}

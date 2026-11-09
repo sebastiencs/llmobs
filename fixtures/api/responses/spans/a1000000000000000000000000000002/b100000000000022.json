@@ -1,0 +1,74 @@
+{
+  "trace_id": "a1000000000000000000000000000002",
+  "span_id": "b100000000000022",
+  "parent_span_id": "b100000000000021",
+  "name": "chat claude-sonnet-4-5",
+  "span_kind": "llm",
+  "start_time": "2026-01-01T10:05:00.050000000Z",
+  "end_time": "2026-01-01T10:05:02.400000000Z",
+  "duration_ns": 2350000000,
+  "status": "ok",
+  "service_name": "support-bot",
+  "session_id": "sess-001",
+  "user_id": "user-42",
+  "environment": "production",
+  "release": "v1.4.0",
+  "tags": [],
+  "metadata": {},
+  "provider": "anthropic",
+  "request_model": "claude-sonnet-4-5",
+  "response_model": "claude-sonnet-4-5",
+  "model": "claude-sonnet-4-5",
+  "operation": "chat",
+  "input_tokens": 1500,
+  "output_tokens": 80,
+  "cache_read_tokens": 1200,
+  "total_tokens": 1580,
+  "cost_input": 0.00126,
+  "cost_output": 0.0012,
+  "cost_total": 0.00246,
+  "cost_source": "computed",
+  "ttft_ns": 350000000,
+  "input": {
+    "format": "messages",
+    "value": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "content": "Can I change the delivery address?"
+          }
+        ]
+      }
+    ]
+  },
+  "output": {
+    "format": "messages",
+    "value": [
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "content": "Yes. Send the new address and I will update the delivery."
+          }
+        ],
+        "finish_reason": "stop"
+      }
+    ]
+  },
+  "input_preview": "Can I change the delivery address?",
+  "output_preview": "Yes. Send the new address and I will update the delivery.",
+  "attributes": {},
+  "resource_attributes": {},
+  "events": [],
+  "links": [],
+  "media_refs": [],
+  "truncated": [],
+  "conventions": [
+    "genai"
+  ],
+  "ingest_time": "2026-01-01T10:05:02.900000000Z",
+  "schema_version": 1
+}

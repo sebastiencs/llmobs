@@ -1,0 +1,22 @@
+{
+  "user": {
+    "user_id": "user-7",
+    "first_seen": "2026-01-01T10:10:00.000000000Z",
+    "last_seen": "2026-01-01T10:10:00.800000000Z",
+    "trace_count": 1,
+    "session_count": 1,
+    "error_count": 2
+  },
+  "sessions": [
+    {
+      "session_id": "sess-002",
+      "start_time": "2026-01-01T10:10:00.000000000Z",
+      "end_time": "2026-01-01T10:10:00.800000000Z",
+      "duration_ns": 800000000,
+      "trace_count": 1,
+      "error_count": 2,
+      "user_id": "user-7",
+      "scores": []
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "session": {
+    "session_id": "sess-002",
+    "start_time": "2026-01-01T10:10:00.000000000Z",
+    "end_time": "2026-01-01T10:10:00.800000000Z",
+    "duration_ns": 800000000,
+    "trace_count": 1,
+    "error_count": 2,
+    "user_id": "user-7",
+    "scores": []
+  },
+  "turns": [
+    {
+      "trace": {
+        "trace_id": "a1000000000000000000000000000003",
+        "root_span_id": "b100000000000031",
+        "has_root": true,
+        "name": "answer-question",
+        "start_time": "2026-01-01T10:10:00.000000000Z",
+        "end_time": "2026-01-01T10:10:00.800000000Z",
+        "duration_ns": 800000000,
+        "status": "error",
+        "session_id": "sess-002",
+        "user_id": "user-7",
+        "environment": "production",
+        "release": "v1.4.0",
+        "tags": [],
+        "metadata": {},
+        "input_preview": "What is your refund policy?",
+        "span_count": 2,
+        "error_count": 2,
+        "llm_count": 1,
+        "models": [
+          "gpt-4o-mini"
+        ],
+        "scores": [
+          {
+            "score_id": "01900000-0000-7000-8000-000000000306",
+            "name": "note",
+            "value": {
+              "data_type": "text",
+              "value": "Needs retry with backoff."
+            },
+            "source": "human"
+          }
+        ]
+      },
+      "input": {
+        "format": "text",
+        "value": "What is your refund policy?"
+      }
+    }
+  ],
+  "truncated": false
+}

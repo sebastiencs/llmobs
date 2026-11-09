@@ -1,0 +1,202 @@
+{
+  "data": [
+    {
+      "trace_id": "a1000000000000000000000000000006",
+      "has_root": false,
+      "name": "chat claude-sonnet-4-5",
+      "start_time": "2026-01-01T10:30:00.000000000Z",
+      "end_time": "2026-01-01T10:30:02.000000000Z",
+      "duration_ns": 2000000000,
+      "status": "unset",
+      "environment": "production",
+      "release": "v1.4.0",
+      "tags": [],
+      "metadata": {},
+      "input_preview": "Summarize the open ticket.",
+      "output_preview": "The ticket is waiting on a carrier scan.",
+      "span_count": 1,
+      "error_count": 0,
+      "llm_count": 1,
+      "input_tokens": 400,
+      "output_tokens": 100,
+      "total_tokens": 500,
+      "cost_total": 0.0027,
+      "models": [
+        "claude-sonnet-4-5"
+      ],
+      "scores": []
+    },
+    {
+      "trace_id": "a1000000000000000000000000000004",
+      "root_span_id": "b100000000000041",
+      "has_root": true,
+      "name": "describe-image",
+      "start_time": "2026-01-01T10:20:00.000000000Z",
+      "end_time": "2026-01-01T10:20:03.000000000Z",
+      "duration_ns": 3000000000,
+      "status": "ok",
+      "user_id": "user-42",
+      "environment": "staging",
+      "release": "v1.4.0",
+      "tags": [],
+      "metadata": {},
+      "input_preview": "What does this shipping label say?",
+      "output_preview": "It is addressed to warehouse 7.",
+      "span_count": 3,
+      "error_count": 0,
+      "llm_count": 1,
+      "input_tokens": 850,
+      "output_tokens": 120,
+      "total_tokens": 970,
+      "cost_total": 0.00133,
+      "models": [
+        "gpt-4o-mini"
+      ],
+      "scores": []
+    },
+    {
+      "trace_id": "a1000000000000000000000000000003",
+      "root_span_id": "b100000000000031",
+      "has_root": true,
+      "name": "answer-question",
+      "start_time": "2026-01-01T10:10:00.000000000Z",
+      "end_time": "2026-01-01T10:10:00.800000000Z",
+      "duration_ns": 800000000,
+      "status": "error",
+      "session_id": "sess-002",
+      "user_id": "user-7",
+      "environment": "production",
+      "release": "v1.4.0",
+      "tags": [],
+      "metadata": {},
+      "input_preview": "What is your refund policy?",
+      "span_count": 2,
+      "error_count": 2,
+      "llm_count": 1,
+      "models": [
+        "gpt-4o-mini"
+      ],
+      "scores": [
+        {
+          "score_id": "01900000-0000-7000-8000-000000000306",
+          "name": "note",
+          "value": {
+            "data_type": "text",
+            "value": "Needs retry with backoff."
+          },
+          "source": "human"
+        }
+      ]
+    },
+    {
+      "trace_id": "a1000000000000000000000000000002",
+      "root_span_id": "b100000000000021",
+      "has_root": true,
+      "name": "support-agent",
+      "start_time": "2026-01-01T10:05:00.000000000Z",
+      "end_time": "2026-01-01T10:05:02.500000000Z",
+      "duration_ns": 2500000000,
+      "status": "ok",
+      "session_id": "sess-001",
+      "user_id": "user-42",
+      "environment": "production",
+      "release": "v1.4.0",
+      "tags": [],
+      "metadata": {},
+      "input_preview": "Can I change the delivery address?",
+      "output_preview": "Yes. Send the new address and I will update the delivery.",
+      "span_count": 2,
+      "error_count": 0,
+      "llm_count": 1,
+      "input_tokens": 1500,
+      "output_tokens": 80,
+      "cache_read_tokens": 1200,
+      "total_tokens": 1580,
+      "cost_total": 0.00246,
+      "models": [
+        "claude-sonnet-4-5"
+      ],
+      "scores": [
+        {
+          "score_id": "01900000-0000-7000-8000-000000000304",
+          "name": "thumbs",
+          "value": {
+            "data_type": "boolean",
+            "value": true
+          },
+          "source": "end_user"
+        }
+      ]
+    },
+    {
+      "trace_id": "a1000000000000000000000000000005",
+      "root_span_id": "b100000000000051",
+      "has_root": true,
+      "name": "judge helpfulness",
+      "start_time": "2026-01-01T10:01:00.000000000Z",
+      "end_time": "2026-01-01T10:01:01.500000000Z",
+      "duration_ns": 1500000000,
+      "status": "ok",
+      "environment": "llmobs-eval",
+      "release": "v1.4.0",
+      "tags": [],
+      "metadata": {},
+      "input_preview": "Score the helpfulness of the support reply from 0 to 1.",
+      "output_preview": "0.9",
+      "span_count": 2,
+      "error_count": 0,
+      "llm_count": 1,
+      "input_tokens": 600,
+      "output_tokens": 50,
+      "total_tokens": 650,
+      "cost_total": 0.0008,
+      "models": [
+        "gpt-4o-mini"
+      ],
+      "scores": []
+    },
+    {
+      "trace_id": "a1000000000000000000000000000001",
+      "root_span_id": "b100000000000011",
+      "has_root": true,
+      "name": "support-agent",
+      "start_time": "2026-01-01T10:00:00.000000000Z",
+      "end_time": "2026-01-01T10:00:04.200000000Z",
+      "duration_ns": 4200000000,
+      "status": "ok",
+      "session_id": "sess-001",
+      "user_id": "user-42",
+      "environment": "production",
+      "release": "v1.4.0",
+      "tags": [
+        "support"
+      ],
+      "metadata": {},
+      "input_preview": "My order 1234 hasn't arrived.",
+      "output_preview": "Your order 1234 shipped and arrives tomorrow.",
+      "span_count": 4,
+      "error_count": 0,
+      "llm_count": 2,
+      "input_tokens": 2500,
+      "output_tokens": 100,
+      "cache_read_tokens": 2200,
+      "total_tokens": 2600,
+      "cost_total": 0.00306,
+      "models": [
+        "claude-sonnet-4-5"
+      ],
+      "scores": [
+        {
+          "score_id": "01900000-0000-7000-8000-000000000302",
+          "name": "helpfulness",
+          "value": {
+            "data_type": "numeric",
+            "value": 0.9
+          },
+          "source": "llm_judge"
+        }
+      ]
+    }
+  ],
+  "next_cursor": null
+}

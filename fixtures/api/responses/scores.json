@@ -1,0 +1,136 @@
+{
+  "data": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "score_id": "01900000-0000-7000-8000-000000000306",
+      "target": {
+        "type": "trace",
+        "trace_id": "a1000000000000000000000000000003"
+      },
+      "session_id": "sess-002",
+      "user_id": "user-7",
+      "name": "note",
+      "value": {
+        "data_type": "text",
+        "value": "Needs retry with backoff."
+      },
+      "source": "human",
+      "author_user_id": "01900000-0000-7000-8000-000000000100",
+      "created_at": "2026-01-01T10:11:00.000000000Z",
+      "updated_at": "2026-01-01T10:11:00.000000000Z",
+      "deleted": false,
+      "ingest_time": "2026-01-01T10:11:00.000000000Z"
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "score_id": "01900000-0000-7000-8000-000000000305",
+      "target": {
+        "type": "session",
+        "session_id": "sess-001"
+      },
+      "user_id": "user-42",
+      "name": "resolved",
+      "value": {
+        "data_type": "boolean",
+        "value": true
+      },
+      "source": "human",
+      "author_user_id": "01900000-0000-7000-8000-000000000100",
+      "created_at": "2026-01-01T10:08:00.000000000Z",
+      "updated_at": "2026-01-01T10:08:00.000000000Z",
+      "deleted": false,
+      "ingest_time": "2026-01-01T10:08:00.000000000Z"
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "score_id": "01900000-0000-7000-8000-000000000304",
+      "target": {
+        "type": "trace",
+        "trace_id": "a1000000000000000000000000000002"
+      },
+      "session_id": "sess-001",
+      "user_id": "user-42",
+      "name": "thumbs",
+      "value": {
+        "data_type": "boolean",
+        "value": true
+      },
+      "source": "end_user",
+      "created_at": "2026-01-01T10:07:00.000000000Z",
+      "updated_at": "2026-01-01T10:07:00.000000000Z",
+      "deleted": false,
+      "ingest_time": "2026-01-01T10:07:00.000000000Z"
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "score_id": "01900000-0000-7000-8000-000000000303",
+      "target": {
+        "type": "span",
+        "trace_id": "a1000000000000000000000000000001",
+        "span_id": "b100000000000014"
+      },
+      "session_id": "sess-001",
+      "user_id": "user-42",
+      "name": "tone",
+      "value": {
+        "data_type": "categorical",
+        "value": {
+          "label": "friendly",
+          "value": 1.0
+        }
+      },
+      "source": "llm_judge",
+      "created_at": "2026-01-01T10:04:30.000000000Z",
+      "updated_at": "2026-01-01T10:04:30.000000000Z",
+      "deleted": false,
+      "ingest_time": "2026-01-01T10:04:30.000000000Z"
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "score_id": "01900000-0000-7000-8000-000000000302",
+      "target": {
+        "type": "trace",
+        "trace_id": "a1000000000000000000000000000001"
+      },
+      "session_id": "sess-001",
+      "user_id": "user-42",
+      "name": "helpfulness",
+      "value": {
+        "data_type": "numeric",
+        "value": 0.9
+      },
+      "reason": "Resolved the question with tool data.",
+      "source": "llm_judge",
+      "evaluator_id": "01900000-0000-7000-8000-000000000201",
+      "rule_id": "01900000-0000-7000-8000-000000000202",
+      "metadata": {
+        "judge.trace_id": "a1000000000000000000000000000005"
+      },
+      "created_at": "2026-01-01T10:00:40.000000000Z",
+      "updated_at": "2026-01-01T10:01:02.000000000Z",
+      "deleted": false,
+      "ingest_time": "2026-01-01T10:01:02.000000000Z"
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "score_id": "01900000-0000-7000-8000-000000000301",
+      "target": {
+        "type": "trace",
+        "trace_id": "a1000000000000000000000000000001"
+      },
+      "session_id": "sess-001",
+      "user_id": "user-42",
+      "name": "helpfulness",
+      "value": {
+        "data_type": "numeric",
+        "value": 0.5
+      },
+      "source": "api",
+      "created_at": "2026-01-01T10:00:30.000000000Z",
+      "updated_at": "2026-01-01T10:00:30.000000000Z",
+      "deleted": false,
+      "ingest_time": "2026-01-01T10:00:30.000000000Z"
+    }
+  ],
+  "next_cursor": null
+}

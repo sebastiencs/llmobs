@@ -1,0 +1,70 @@
+{
+  "trace_id": "a1000000000000000000000000000005",
+  "span_id": "b100000000000052",
+  "parent_span_id": "b100000000000051",
+  "name": "chat gpt-4o-mini",
+  "span_kind": "llm",
+  "start_time": "2026-01-01T10:01:00.020000000Z",
+  "end_time": "2026-01-01T10:01:01.480000000Z",
+  "duration_ns": 1460000000,
+  "status": "ok",
+  "service_name": "support-bot",
+  "environment": "llmobs-eval",
+  "release": "v1.4.0",
+  "tags": [],
+  "metadata": {},
+  "provider": "openai",
+  "request_model": "gpt-4o-mini",
+  "response_model": "gpt-4o-mini",
+  "model": "gpt-4o-mini",
+  "operation": "chat",
+  "input_tokens": 600,
+  "output_tokens": 50,
+  "total_tokens": 650,
+  "cost_input": 0.0006,
+  "cost_output": 0.0002,
+  "cost_total": 0.0008,
+  "cost_source": "computed",
+  "input": {
+    "format": "messages",
+    "value": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "content": "Score the helpfulness of the support reply from 0 to 1."
+          }
+        ]
+      }
+    ]
+  },
+  "output": {
+    "format": "messages",
+    "value": [
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "content": "0.9"
+          }
+        ],
+        "finish_reason": "stop"
+      }
+    ]
+  },
+  "input_preview": "Score the helpfulness of the support reply from 0 to 1.",
+  "output_preview": "0.9",
+  "attributes": {},
+  "resource_attributes": {},
+  "events": [],
+  "links": [],
+  "media_refs": [],
+  "truncated": [],
+  "conventions": [
+    "genai"
+  ],
+  "ingest_time": "2026-01-01T10:01:01.980000000Z",
+  "schema_version": 1
+}

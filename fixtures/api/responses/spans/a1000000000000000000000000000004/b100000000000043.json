@@ -1,0 +1,80 @@
+{
+  "trace_id": "a1000000000000000000000000000004",
+  "span_id": "b100000000000043",
+  "parent_span_id": "b100000000000041",
+  "name": "chat gpt-4o-mini",
+  "span_kind": "llm",
+  "start_time": "2026-01-01T10:20:00.250000000Z",
+  "end_time": "2026-01-01T10:20:02.950000000Z",
+  "duration_ns": 2700000000,
+  "status": "ok",
+  "service_name": "support-bot",
+  "user_id": "user-42",
+  "environment": "staging",
+  "release": "v1.4.0",
+  "tags": [],
+  "metadata": {},
+  "provider": "openai",
+  "request_model": "gpt-4o-mini",
+  "response_model": "gpt-4o-mini",
+  "model": "gpt-4o-mini",
+  "operation": "chat",
+  "input_tokens": 850,
+  "output_tokens": 120,
+  "total_tokens": 970,
+  "cost_input": 0.00085,
+  "cost_output": 0.00048,
+  "cost_total": 0.00133,
+  "cost_source": "computed",
+  "ttft_ns": 600000000,
+  "input": {
+    "format": "messages",
+    "value": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "content": "What does this shipping label say?"
+          },
+          {
+            "type": "uri",
+            "modality": "image",
+            "mime_type": "image/png",
+            "uri": "media://497790947d4666760ce38f3c00e852c71fdb66cae849bae8e9ede352719e1581"
+          }
+        ]
+      }
+    ]
+  },
+  "output": {
+    "format": "messages",
+    "value": [
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "content": "It is addressed to warehouse 7."
+          }
+        ],
+        "finish_reason": "stop"
+      }
+    ]
+  },
+  "input_preview": "What does this shipping label say?",
+  "output_preview": "It is addressed to warehouse 7.",
+  "attributes": {},
+  "resource_attributes": {},
+  "events": [],
+  "links": [],
+  "media_refs": [
+    "497790947d4666760ce38f3c00e852c71fdb66cae849bae8e9ede352719e1581"
+  ],
+  "truncated": [],
+  "conventions": [
+    "genai"
+  ],
+  "ingest_time": "2026-01-01T10:20:03.450000000Z",
+  "schema_version": 1
+}

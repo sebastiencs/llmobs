@@ -1,0 +1,108 @@
+{
+  "trace": {
+    "trace_id": "a1000000000000000000000000000004",
+    "root_span_id": "b100000000000041",
+    "has_root": true,
+    "name": "describe-image",
+    "start_time": "2026-01-01T10:20:00.000000000Z",
+    "end_time": "2026-01-01T10:20:03.000000000Z",
+    "duration_ns": 3000000000,
+    "status": "ok",
+    "user_id": "user-42",
+    "environment": "staging",
+    "release": "v1.4.0",
+    "tags": [],
+    "metadata": {},
+    "input_preview": "What does this shipping label say?",
+    "output_preview": "It is addressed to warehouse 7.",
+    "span_count": 3,
+    "error_count": 0,
+    "llm_count": 1,
+    "input_tokens": 850,
+    "output_tokens": 120,
+    "total_tokens": 970,
+    "cost_total": 0.00133,
+    "models": [
+      "gpt-4o-mini"
+    ],
+    "scores": []
+  },
+  "spans": [
+    {
+      "depth": 0,
+      "detached": false,
+      "span": {
+        "trace_id": "a1000000000000000000000000000004",
+        "span_id": "b100000000000041",
+        "name": "describe-image",
+        "span_kind": "chain",
+        "start_time": "2026-01-01T10:20:00.000000000Z",
+        "end_time": "2026-01-01T10:20:03.000000000Z",
+        "duration_ns": 3000000000,
+        "status": "ok",
+        "service_name": "support-bot",
+        "user_id": "user-42",
+        "environment": "staging",
+        "release": "v1.4.0",
+        "tags": [],
+        "metadata": {},
+        "input_preview": "What does this shipping label say?",
+        "output_preview": "It is addressed to warehouse 7."
+      }
+    },
+    {
+      "depth": 1,
+      "detached": false,
+      "span": {
+        "trace_id": "a1000000000000000000000000000004",
+        "span_id": "b100000000000042",
+        "parent_span_id": "b100000000000041",
+        "name": "vector-search",
+        "span_kind": "retriever",
+        "start_time": "2026-01-01T10:20:00.010000000Z",
+        "end_time": "2026-01-01T10:20:00.210000000Z",
+        "duration_ns": 200000000,
+        "status": "ok",
+        "service_name": "support-bot",
+        "user_id": "user-42",
+        "environment": "staging",
+        "release": "v1.4.0",
+        "tags": [],
+        "metadata": {},
+        "input_preview": "shipping label",
+        "output_preview": "[{\"id\":\"doc-1\",\"score\":0.91,\"text\":\"Label: warehouse 7, dock B\"},{\"id\":\"doc-2\",\"score\":0.74,\"text\":\"Shipping label template\"}]"
+      }
+    },
+    {
+      "depth": 1,
+      "detached": false,
+      "span": {
+        "trace_id": "a1000000000000000000000000000004",
+        "span_id": "b100000000000043",
+        "parent_span_id": "b100000000000041",
+        "name": "chat gpt-4o-mini",
+        "span_kind": "llm",
+        "start_time": "2026-01-01T10:20:00.250000000Z",
+        "end_time": "2026-01-01T10:20:02.950000000Z",
+        "duration_ns": 2700000000,
+        "status": "ok",
+        "service_name": "support-bot",
+        "user_id": "user-42",
+        "environment": "staging",
+        "release": "v1.4.0",
+        "tags": [],
+        "metadata": {},
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "input_tokens": 850,
+        "output_tokens": 120,
+        "total_tokens": 970,
+        "cost_total": 0.00133,
+        "ttft_ns": 600000000,
+        "input_preview": "What does this shipping label say?",
+        "output_preview": "It is addressed to warehouse 7."
+      }
+    }
+  ],
+  "truncated": false
+}

@@ -1,0 +1,37 @@
+{
+  "trace_id": "a1000000000000000000000000000004",
+  "span_id": "b100000000000041",
+  "name": "describe-image",
+  "span_kind": "chain",
+  "start_time": "2026-01-01T10:20:00.000000000Z",
+  "end_time": "2026-01-01T10:20:03.000000000Z",
+  "duration_ns": 3000000000,
+  "status": "ok",
+  "service_name": "support-bot",
+  "user_id": "user-42",
+  "environment": "staging",
+  "release": "v1.4.0",
+  "tags": [],
+  "metadata": {},
+  "input": {
+    "format": "text",
+    "value": "What does this shipping label say?"
+  },
+  "output": {
+    "format": "text",
+    "value": "It is addressed to warehouse 7."
+  },
+  "input_preview": "What does this shipping label say?",
+  "output_preview": "It is addressed to warehouse 7.",
+  "attributes": {},
+  "resource_attributes": {},
+  "events": [],
+  "links": [],
+  "media_refs": [],
+  "truncated": [],
+  "conventions": [
+    "genai"
+  ],
+  "ingest_time": "2026-01-01T10:20:03.500000000Z",
+  "schema_version": 1
+}

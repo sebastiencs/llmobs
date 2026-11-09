@@ -1,0 +1,36 @@
+{
+  "user": {
+    "user_id": "user-42",
+    "first_seen": "2026-01-01T10:00:00.000000000Z",
+    "last_seen": "2026-01-01T10:20:03.000000000Z",
+    "trace_count": 3,
+    "session_count": 1,
+    "error_count": 0,
+    "total_tokens": 5150,
+    "cost_total": 0.00685
+  },
+  "sessions": [
+    {
+      "session_id": "sess-001",
+      "start_time": "2026-01-01T10:00:00.000000000Z",
+      "end_time": "2026-01-01T10:05:02.500000000Z",
+      "duration_ns": 302500000000,
+      "trace_count": 2,
+      "error_count": 0,
+      "total_tokens": 4180,
+      "cost_total": 0.005520000000000001,
+      "user_id": "user-42",
+      "scores": [
+        {
+          "score_id": "01900000-0000-7000-8000-000000000305",
+          "name": "resolved",
+          "value": {
+            "data_type": "boolean",
+            "value": true
+          },
+          "source": "human"
+        }
+      ]
+    }
+  ]
+}
