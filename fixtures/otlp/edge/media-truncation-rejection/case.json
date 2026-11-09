@@ -1,0 +1,15 @@
+{
+  "description": "Extracts a tiny PNG to a media reference, truncates an oversized attribute, leaves cost empty for an unknown model, and rejects an all-zero span id.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Media extraction",
+    "02 § Truncation",
+    "02 § Normalization rules",
+    "02 § Cost computation"
+  ],
+  "settings": {
+    "max_attribute_bytes": 1024,
+    "media_min_bytes": 32
+  },
+  "notes": "Payloads are measured after media extraction and stay under the 1024-byte limit. The rejected span has an all-zero span id."
+}
