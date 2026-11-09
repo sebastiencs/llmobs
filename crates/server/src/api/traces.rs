@@ -76,10 +76,8 @@ pub struct TraceSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release: Option<String>,
     /// Sorted distinct tags of every span.
-    #[serde(default)]
     pub tags: Vec<String>,
     /// Root metadata, filled with keys from later spans when absent.
-    #[serde(default)]
     pub metadata: BTreeMap<String, String>,
     /// Root input preview, or the first `llm` span's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -115,10 +113,8 @@ pub struct TraceSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_total: Option<f64>,
     /// Sorted distinct model names.
-    #[serde(default)]
     pub models: Vec<String>,
     /// Latest score of each name attached to this trace.
-    #[serde(default)]
     pub scores: Vec<ScoreBrief>,
 }
 
@@ -169,10 +165,8 @@ pub struct SpanSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release: Option<String>,
     /// Tags.
-    #[serde(default)]
     pub tags: Vec<String>,
     /// User metadata.
-    #[serde(default)]
     pub metadata: BTreeMap<String, String>,
     /// Normalized provider name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -313,10 +307,8 @@ pub struct SpanDetail {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release: Option<String>,
     /// Tags.
-    #[serde(default)]
     pub tags: Vec<String>,
     /// User metadata.
-    #[serde(default)]
     pub metadata: BTreeMap<String, String>,
     /// Normalized provider name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -388,10 +380,8 @@ pub struct SpanDetail {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_definitions: Option<Value>,
     /// Span attributes not consumed by normalization.
-    #[serde(default)]
     pub attributes: BTreeMap<String, String>,
     /// Resource attributes except `service.name`.
-    #[serde(default)]
     pub resource_attributes: BTreeMap<String, String>,
     /// Instrumentation scope name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -400,19 +390,14 @@ pub struct SpanDetail {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope_version: Option<String>,
     /// Span events.
-    #[serde(default)]
     pub events: Vec<SpanEventView>,
     /// Span links.
-    #[serde(default)]
     pub links: Vec<SpanLinkView>,
     /// SHA-256 hex of extracted media blobs.
-    #[serde(default)]
     pub media_refs: Vec<String>,
     /// Names of attributes truncated at ingest.
-    #[serde(default)]
     pub truncated: Vec<String>,
     /// Conventions detected on the span.
-    #[serde(default)]
     pub conventions: Vec<Convention>,
     /// Server receive time, nanoseconds since the Unix epoch. JSON is RFC 3339.
     #[serde(with = "llmobs_core::time_serde")]

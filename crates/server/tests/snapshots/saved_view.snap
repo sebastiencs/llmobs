@@ -1,0 +1,17 @@
+---
+source: crates/server/src/api/saved_views.rs
+expression: "serde_json::to_string_pretty(&view).unwrap()"
+---
+{
+  "id": "01900000-0000-7000-8000-000000000401",
+  "kind": "traces",
+  "name": "Errors",
+  "state": {
+    "filter": "status = 'error'",
+    "time_range": "last_24h"
+  },
+  "shared": true,
+  "is_default": true,
+  "created_at": "2026-01-01T10:00:00.000000000Z",
+  "updated_at": "2026-01-01T10:00:00.000000000Z"
+}

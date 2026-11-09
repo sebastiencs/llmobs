@@ -1,0 +1,34 @@
+---
+source: crates/server/src/api/metrics.rs
+expression: "serde_json::to_string_pretty(&response).unwrap()"
+---
+{
+  "from": "2026-01-01T10:00:00.000000000Z",
+  "to": "2026-01-01T11:00:00.000000000Z",
+  "bucket_ns": 600000000000,
+  "kpis": [
+    {
+      "metric": "traces",
+      "value": 4.0
+    }
+  ],
+  "series": [
+    {
+      "metric": "traces",
+      "points": [
+        {
+          "time": "2026-01-01T10:00:00.000000000Z",
+          "value": 2.0
+        }
+      ]
+    }
+  ],
+  "top_models": [
+    {
+      "model": "claude-sonnet-4-5",
+      "llm_count": 3,
+      "total_tokens": 3100,
+      "cost_total": 0.00576
+    }
+  ]
+}

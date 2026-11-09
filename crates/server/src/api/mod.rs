@@ -5,5 +5,11 @@
 
 pub mod account;
 pub mod common;
+pub mod metrics;
 pub mod payload;
+pub mod saved_views;
+pub mod schema;
+pub mod scores;
+pub mod sessions;
 pub mod traces;
+pub mod users;

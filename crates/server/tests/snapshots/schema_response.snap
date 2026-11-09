@@ -1,0 +1,28 @@
+---
+source: crates/server/src/api/schema.rs
+expression: "serde_json::to_string_pretty(&response).unwrap()"
+---
+{
+  "views": [
+    {
+      "name": "traces",
+      "description": "One row per trace.",
+      "columns": [
+        {
+          "name": "trace_id",
+          "column_type": "string",
+          "nullable": false,
+          "description": "Trace id, 16 bytes as lowercase hex."
+        }
+      ]
+    }
+  ],
+  "functions": [
+    {
+      "name": "score",
+      "signature": "score(name: string) -> float",
+      "description": "Latest numeric value of the named score.",
+      "in_filter": true
+    }
+  ]
+}

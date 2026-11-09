@@ -1,0 +1,72 @@
+---
+source: crates/server/src/api/sessions.rs
+expression: snap(&detail)
+---
+{
+  "session": {
+    "session_id": "sess-001",
+    "start_time": "2026-01-01T10:00:00.000000000Z",
+    "end_time": "2026-01-01T10:00:04.200000000Z",
+    "duration_ns": 4200000000,
+    "trace_count": 1,
+    "error_count": 0,
+    "total_tokens": 1240,
+    "cost_total": 0.0015,
+    "user_id": "user-42",
+    "scores": [
+      {
+        "score_id": "01900000-0000-7000-8000-000000000305",
+        "name": "resolved",
+        "value": {
+          "data_type": "boolean",
+          "value": true
+        },
+        "source": "human"
+      }
+    ]
+  },
+  "turns": [
+    {
+      "trace": {
+        "trace_id": "a1000000000000000000000000000001",
+        "has_root": true,
+        "name": "support-agent",
+        "start_time": "2026-01-01T10:00:00.000000000Z",
+        "end_time": "2026-01-01T10:00:04.200000000Z",
+        "duration_ns": 4200000000,
+        "status": "ok",
+        "session_id": "sess-001",
+        "user_id": "user-42",
+        "environment": "production",
+        "release": "v1.4.0",
+        "tags": [
+          "support"
+        ],
+        "metadata": {},
+        "input_preview": "My order 1234 hasn't arrived.",
+        "output_preview": "Your order 1234 shipped and arrives tomorrow.",
+        "span_count": 4,
+        "error_count": 0,
+        "llm_count": 2,
+        "input_tokens": 2500,
+        "output_tokens": 100,
+        "cache_read_tokens": 2200,
+        "total_tokens": 2600,
+        "cost_total": 0.00306,
+        "models": [
+          "claude-sonnet-4-5"
+        ],
+        "scores": []
+      },
+      "input": {
+        "format": "text",
+        "value": "My order 1234 hasn't arrived."
+      },
+      "output": {
+        "format": "text",
+        "value": "Your order 1234 shipped and arrives tomorrow."
+      }
+    }
+  ],
+  "truncated": false
+}

@@ -1,0 +1,40 @@
+---
+source: crates/server/src/api/users.rs
+expression: "serde_json::to_string_pretty(&detail).unwrap()"
+---
+{
+  "user": {
+    "user_id": "user-42",
+    "first_seen": "2026-01-01T10:00:00.000000000Z",
+    "last_seen": "2026-01-01T10:00:03.000000000Z",
+    "trace_count": 2,
+    "session_count": 1,
+    "error_count": 0,
+    "total_tokens": 2600,
+    "cost_total": 0.00306
+  },
+  "sessions": [
+    {
+      "session_id": "sess-001",
+      "start_time": "2026-01-01T10:00:00.000000000Z",
+      "end_time": "2026-01-01T10:00:04.200000000Z",
+      "duration_ns": 4200000000,
+      "trace_count": 2,
+      "error_count": 0,
+      "total_tokens": 2600,
+      "cost_total": 0.00306,
+      "user_id": "user-42",
+      "scores": [
+        {
+          "score_id": "01900000-0000-7000-8000-000000000305",
+          "name": "resolved",
+          "value": {
+            "data_type": "boolean",
+            "value": true
+          },
+          "source": "human"
+        }
+      ]
+    }
+  ]
+}
