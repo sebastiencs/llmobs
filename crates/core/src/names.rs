@@ -149,26 +149,82 @@ mod tests {
             ("attr", "EXPERIMENT_ID", attr::EXPERIMENT_ID),
             ("attr", "DATASET_ITEM_ID", attr::DATASET_ITEM_ID),
             ("metadata_key", "EXPERIMENT_ID", metadata_key::EXPERIMENT_ID),
-            ("metadata_key", "DATASET_ITEM_ID", metadata_key::DATASET_ITEM_ID),
-            ("metadata_key", "EVAL_TARGET_TRACE_ID", metadata_key::EVAL_TARGET_TRACE_ID),
-            ("metadata_key", "EVAL_TARGET_SPAN_ID", metadata_key::EVAL_TARGET_SPAN_ID),
+            (
+                "metadata_key",
+                "DATASET_ITEM_ID",
+                metadata_key::DATASET_ITEM_ID,
+            ),
+            (
+                "metadata_key",
+                "EVAL_TARGET_TRACE_ID",
+                metadata_key::EVAL_TARGET_TRACE_ID,
+            ),
+            (
+                "metadata_key",
+                "EVAL_TARGET_SPAN_ID",
+                metadata_key::EVAL_TARGET_SPAN_ID,
+            ),
             ("metadata_key", "EVAL_RULE_ID", metadata_key::EVAL_RULE_ID),
-            ("metadata_key", "EVAL_EXPERIMENT_ID", metadata_key::EVAL_EXPERIMENT_ID),
-            ("metadata_key", "EVAL_EVALUATOR_ID", metadata_key::EVAL_EVALUATOR_ID),
-            ("metadata_key", "NORMALIZE_ERROR", metadata_key::NORMALIZE_ERROR),
-            ("score_metadata_key", "JUDGE_TRACE_ID", score_metadata_key::JUDGE_TRACE_ID),
-            ("score_metadata_key", "JUDGE_MODEL", score_metadata_key::JUDGE_MODEL),
-            ("score_metadata_key", "JUDGE_INPUT_TOKENS", score_metadata_key::JUDGE_INPUT_TOKENS),
-            ("score_metadata_key", "JUDGE_OUTPUT_TOKENS", score_metadata_key::JUDGE_OUTPUT_TOKENS),
-            ("score_metadata_key", "JUDGE_COST_USD", score_metadata_key::JUDGE_COST_USD),
-            ("score_metadata_key", "JUDGE_LATENCY_MS", score_metadata_key::JUDGE_LATENCY_MS),
+            (
+                "metadata_key",
+                "EVAL_EXPERIMENT_ID",
+                metadata_key::EVAL_EXPERIMENT_ID,
+            ),
+            (
+                "metadata_key",
+                "EVAL_EVALUATOR_ID",
+                metadata_key::EVAL_EVALUATOR_ID,
+            ),
+            (
+                "metadata_key",
+                "NORMALIZE_ERROR",
+                metadata_key::NORMALIZE_ERROR,
+            ),
+            (
+                "score_metadata_key",
+                "JUDGE_TRACE_ID",
+                score_metadata_key::JUDGE_TRACE_ID,
+            ),
+            (
+                "score_metadata_key",
+                "JUDGE_MODEL",
+                score_metadata_key::JUDGE_MODEL,
+            ),
+            (
+                "score_metadata_key",
+                "JUDGE_INPUT_TOKENS",
+                score_metadata_key::JUDGE_INPUT_TOKENS,
+            ),
+            (
+                "score_metadata_key",
+                "JUDGE_OUTPUT_TOKENS",
+                score_metadata_key::JUDGE_OUTPUT_TOKENS,
+            ),
+            (
+                "score_metadata_key",
+                "JUDGE_COST_USD",
+                score_metadata_key::JUDGE_COST_USD,
+            ),
+            (
+                "score_metadata_key",
+                "JUDGE_LATENCY_MS",
+                score_metadata_key::JUDGE_LATENCY_MS,
+            ),
             ("environment", "EVAL", environment::EVAL),
             ("environment", "EVAL_EXTERNAL", environment::EVAL_EXTERNAL),
             ("environment", "EXPERIMENT", environment::EXPERIMENT),
             ("media", "URI_SCHEME", media::URI_SCHEME),
             ("media", "DROPPED_URI", media::DROPPED_URI),
-            ("marker", "TRUNCATED_STRING_SUFFIX_PREFIX", marker::TRUNCATED_STRING_SUFFIX_PREFIX),
-            ("marker", "TRUNCATED_MESSAGES_PREFIX", marker::TRUNCATED_MESSAGES_PREFIX),
+            (
+                "marker",
+                "TRUNCATED_STRING_SUFFIX_PREFIX",
+                marker::TRUNCATED_STRING_SUFFIX_PREFIX,
+            ),
+            (
+                "marker",
+                "TRUNCATED_MESSAGES_PREFIX",
+                marker::TRUNCATED_MESSAGES_PREFIX,
+            ),
         ];
         rows.iter()
             .map(|(module, name, value)| format!("{module}::{name} = \"{value}\""))
@@ -217,7 +273,10 @@ mod tests {
             media::DROPPED_URI,
         ];
         for value in branded {
-            assert!(value.starts_with(PRODUCT), "{value} does not start with {PRODUCT}");
+            assert!(
+                value.starts_with(PRODUCT),
+                "{value} does not start with {PRODUCT}"
+            );
         }
         assert!(marker::TRUNCATED_STRING_SUFFIX_PREFIX.contains(PRODUCT));
         assert!(marker::TRUNCATED_MESSAGES_PREFIX.contains(PRODUCT));

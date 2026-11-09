@@ -396,7 +396,11 @@ fn render(schema: &Schema) -> String {
         .fields()
         .iter()
         .map(|field| {
-            let nullability = if field.is_nullable() { "nullable" } else { "non-null" };
+            let nullability = if field.is_nullable() {
+                "nullable"
+            } else {
+                "non-null"
+            };
             format!("{}: {} [{nullability}]", field.name(), field.data_type())
         })
         .collect::<Vec<_>>()
@@ -408,7 +412,11 @@ mod tests {
     use super::*;
 
     fn assert_names(schema: &Schema, names: &[&str]) {
-        let actual: Vec<_> = schema.fields().iter().map(|field| field.name().as_str()).collect();
+        let actual: Vec<_> = schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect();
         assert_eq!(actual, names);
     }
 
@@ -540,10 +548,17 @@ mod tests {
     #[test]
     fn light_columns_exist_in_table_order() {
         let schema = spans_schema();
-        let names: Vec<_> = schema.fields().iter().map(|field| field.name().as_str()).collect();
+        let names: Vec<_> = schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect();
         let mut previous = 0;
         for (index, name) in SPANS_LIGHT_COLUMNS.iter().enumerate() {
-            let position = names.iter().position(|candidate| candidate == name).unwrap();
+            let position = names
+                .iter()
+                .position(|candidate| candidate == name)
+                .unwrap();
             if index > 0 {
                 assert!(position > previous, "{name} is out of table order");
             }

@@ -1,4 +1,4 @@
-/// Errors from parsing identifiers and stored enum values.
+/// Errors from parsing identifiers and stored values, and from building Arrow batches.
 ///
 /// Messages name the field and the reason. They never include payload content
 /// (prompts, completions, attribute values). Spec README § Cross-cutting conventions.
@@ -12,6 +12,11 @@ pub enum CoreError {
         /// Static reason. Never the rejected input.
         reason: &'static str,
     },
+    /// Arrow failed while building a record batch.
+    ///
+    /// Spec 03 § WAL payload. The message is Arrow's, which does not include payload content.
+    #[error(transparent)]
+    Arrow(#[from] arrow::error::ArrowError),
     /// A stored enum string is not one of the canonical spellings.
     ///
     /// `value` is an enum token, truncated to 64 characters.

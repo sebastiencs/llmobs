@@ -75,6 +75,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 thiserror = "2.0"
 hex = "0.4.3"
+bytes = "1.12"
 strum = { version = "0.28.0", features = ["derive"] }
 insta = { version = "1.49.0", features = ["json"] }
 anyhow = "1.0"
