@@ -1,0 +1,20 @@
+---
+source: crates/server/src/api/account.rs
+expression: "serde_json::to_string_pretty(&me).unwrap()"
+---
+{
+  "user": {
+    "id": "01900000-0000-7000-8000-000000000100",
+    "email": "ada@example.com",
+    "name": "Ada Example",
+    "is_instance_admin": true
+  },
+  "orgs": [
+    {
+      "id": "01900000-0000-7000-8000-000000000010",
+      "slug": "acme",
+      "name": "Acme",
+      "role": "owner"
+    }
+  ]
+}
