@@ -1,0 +1,12 @@
+---
+source: crates/core/src/enums.rs
+expression: snapshot_lines()
+---
+span_kind: [llm, embedding, tool, agent, chain, retriever, reranker, guardrail, evaluator, span]
+span_status: [unset, ok, error]
+payload_format: [messages, json, text]
+cost_source: [computed, reported, none]
+convention: [llmobs, genai, openinference, openllmetry, vercel, langfuse, laminar, google_adk]
+score_target_kind: [span, trace, session]
+score_data_type: [numeric, boolean, categorical, text]
+score_source: [api, sdk, human, end_user, llm_judge, check, webhook]

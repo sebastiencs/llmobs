@@ -26,7 +26,6 @@ pub enum CoreError {
 
 impl CoreError {
     /// Builds [`CoreError::UnknownVariant`], truncating `value` to 64 characters.
-    #[cfg(test)]
     pub(crate) fn unknown_variant(kind: &'static str, value: &str) -> Self {
         const MAX_CHARS: usize = 64;
         let value = if value.chars().count() > MAX_CHARS {
