@@ -446,7 +446,9 @@ check: fmt-check lint test deny
 
 ---
 
-## P10 — Agent instructions (`AGENTS.md` + `CLAUDE.md`)
+## P10 — Agent instructions (`AGENTS.md` + `CLAUDE.md`) — ✅ DONE (written by the planning session)
+
+`AGENTS.md` and the `CLAUDE.md` symlink already exist. Implementers: do **not** rewrite them; only fix them if a later sub-phase makes a statement in them false (e.g. a command name), and mention it in the report. The original brief is kept below for reference.
 
 **Goal:** any agent working on the repo (Claude, Cursor, Codex, …) gets the rules in one file.
 

@@ -1,62 +1,136 @@
-# llmobs
+# AGENTS.md
 
-llmobs is the working name of a Rust LLM observability platform. One binary serves traces on a single machine, stores columnar data with DataFusion and Parquet, and keeps metadata in SQLite.
+Instructions for any agent (Claude, Cursor, Codex, …) working in this repository. `CLAUDE.md` is a symlink to this file.
+
+## Project
+
+**llmobs** (working name) is an open-source LLM observability and evaluation platform, written in Rust. It competes with Langfuse, Phoenix, Opik, LangWatch, Helicone, Laminar and MLflow GenAI.
+
+What sets it apart is that it runs as **one binary on one machine**, while staying fast at volume:
+- OTLP ingestion;
+- a custom storage engine (WAL → memtable → Parquet files, queried with Apache DataFusion);
+- a SQLite metadata DB;
+- a React UI embedded in the binary;
+- Python and TypeScript SDKs built on OpenTelemetry.
+
+The project is unreleased. There are no users, no stored data and no API clients to keep compatible.
 
 ## Source of truth
 
-- `docs/mvp-decisions.md` (decisions D1…) and `docs/spec/` (numbered specs) define what to build.
-- `docs/research/competitors.md` explains why.
-- If code must deviate from the spec, update the spec and add a decision to the log in the same change.
+Read these before writing code, and follow them:
+
+| Document | What it is |
+|---|---|
+| `docs/mvp-decisions.md` | Every product/technical decision (D1, D2, …) and the MVP scope summary |
+| `docs/spec/README.md` → `docs/spec/01…12-*.md` | The technical specification: data model, ingestion, storage, metadata DB, query, evaluation, alerts, auth, API, SDK, UI, operations |
+| `docs/plans/` | Step-by-step implementation plans; do the sub-phase you were given, nothing more |
+| `docs/research/competitors.md` | Why the decisions were made (competitor features and code-level findings) |
+
+If the code has to deviate from the spec, update the spec **in the same change**, and add a decision to `docs/mvp-decisions.md` if the change is not a detail. If the spec is ambiguous or contradicts itself, stop and ask instead of guessing.
 
 ## Rules
 
-Observer has not been released. There are no external callers, on-disk formats, or wire protocols that must keep working. Change the code to the shape it should have.
+**No compatibility layers.** When a type, function, format, config key or protocol field changes, update every caller and delete the old path in the same change. No shims, aliases, `#[deprecated]` wrappers, versioned codecs, feature flags or dual read/write paths.
 
-Do not keep a compatibility layer. When a type, function, format, config key, or protocol field changes, update every caller and delete the old path in the same change. Do not add shims, aliases, deprecated wrappers, versioned codecs, feature flags, or dual read/write paths so old and new code coexist. Do not preserve an old on-disk layout, frame, or API just in case. Tests cover the current behavior only.
+**No unnecessary abstractions.**
+- Prefer concrete types and plain functions.
+- A trait needs at least two implementations (test doubles don't count unless the test truly can't use the real type).
+- No wrapper whose only job is to forward to the type it holds.
+- Add a generic, newtype or module split only when it removes real duplication or enforces a real invariant.
 
-Do not add an abstraction you do not need. Prefer a concrete type and a straight function. Add a trait, generic, newtype, or module split only when a second implementation exists or the split removes real duplication. One implementor means no trait. A parameter or a private function is enough when only call-site configuration changes. Do not introduce a wrapper whose only job is to forward to the type it holds.
+**No placeholders.** Don't add stub modules, empty types, `todo!()` functions or CLI subcommands for future work. Code is added together with its implementation and tests.
 
-Reference implementations live in `/home/sebastien/github/{lmnr,phoenix,langfuse,langwatch,helicone,opik,mlflow}`. Read them to compare designs. Never copy code from them.
+**Dependencies.**
+- Every version is declared once in the root `Cargo.toml` `[workspace.dependencies]`; crates use `dep = { workspace = true }`.
+- `datafusion`, `arrow`, `parquet` and `object_store` are a pinned family: never bump one without the others.
+- Look up real versions (`cargo search`, `cargo info`); never guess one.
 
-All dependency versions are declared in the root `[workspace.dependencies]`. Crates reference them with `{ workspace = true }`.
+**Errors.** Each library crate defines its own error enum(s) with `thiserror`. `anyhow` is only allowed in `llmobs-cli`.
 
-Each library crate defines its own error enum or enums with `thiserror`. `anyhow` is only allowed in `llmobs-cli`.
+**Safety and robustness.**
+- `unsafe` is forbidden workspace-wide.
+- No `unwrap()` / `expect()` outside tests, unless a comment next to it states the invariant that makes it infallible.
+- Never panic on input coming from the network or from disk; return an error.
 
-No `unwrap` or `expect` outside tests unless the invariant is documented in a comment next to the call.
+**Data conventions** (spec README § Cross-cutting conventions):
+- Time is `i64` nanoseconds since the Unix epoch, UTC.
+- Entity IDs are UUIDv7.
+- Trace IDs are 16 bytes and span IDs 8 bytes, written as lowercase hex in JSON.
+- Money is USD as `f64`.
 
-No `unsafe`. It is forbidden workspace-wide.
+**Privacy.** Logs and error messages never contain payload content (prompts, completions, attribute values), secrets, API keys or email addresses. Log IDs and sizes instead.
 
-Time is `i64` nanoseconds since the Unix epoch (UTC) at the storage boundary. IDs follow `docs/spec/README.md` §conventions.
+**Tests.**
+- Every behaviour change comes with tests.
+- Normalization uses golden fixtures in `fixtures/otlp/`.
+- Storage needs crash-recovery and concurrency tests.
+- Tests cover the current behaviour only.
 
-Logs never contain payload content (prompts, outputs, secrets).
+**Reference implementations.** The competitors' source code is checked out in `/home/sebastien/github/{lmnr,phoenix,langfuse,langwatch,helicone,opik,mlflow}`. Read it to compare designs and learn from their mistakes. Never copy code from it.
 
-Every behaviour change comes with tests.
-
-## Layout and ownership
+## Layout
 
 ```
-llmobs-core  ◄── llmobs-otel
-     ▲       ◄── llmobs-storage
-     │                 ▲
-     └── llmobs-server ┘ ──► llmobs-otel
-               ▲
-         llmobs-cli
+crates/
+  core/      llmobs-core     shared types, Arrow schemas, IDs, time, config            (spec 01)
+  otel/      llmobs-otel     OTLP decode, normalization, media, truncation, cost      (spec 02)
+  storage/   llmobs-storage  WAL, memtable, Parquet, catalog, compaction, deletion,
+                             DataFusion providers, filter DSL, SQL sandbox            (specs 03, 05)
+  server/    llmobs-server   API, auth, metadata DB, evaluation, alerts, email, MCP   (specs 04, 06–09)
+  cli/       llmobs-cli      the `llmobs` binary                                       (spec 09 § CLI)
+web/                         React UI (Vite, TanStack, shadcn/ui, pnpm)               (spec 11)
+sdks/python/                 Python SDK (uv)                                           (spec 10)
+sdks/typescript/             TypeScript SDK (pnpm)                                     (spec 10)
+fixtures/otlp/               OTLP fixtures shared by Rust golden tests and SDK tests  (spec 02 § Testing)
+tools/                       dev tools (fixture capture, benchmarks); not shipped
+docs/                        decisions, specs, plans, research
 ```
 
-`llmobs-otel` and `llmobs-storage` must not depend on each other. The server glues them together. Only `llmobs-server` and `llmobs-cli` may depend on `llmobs-server`. `llmobs-core` depends on no other workspace crate.
+**Crate dependency graph (enforced):**
+- `core` depends on no workspace crate.
+- `otel` and `storage` depend only on `core`. **They never depend on each other**, so they can be built in parallel; `server` connects them.
+- `server` depends on `core`, `otel` and `storage`; `cli` depends on `server` and `core`.
 
-A session only edits the directories its brief names. Changes to `llmobs-core` shared types go through the contract owner, the coordinating session.
+## Parallel work and ownership
+
+Several sessions may work at the same time, each in its own git worktree and branch.
+
+- **Only edit the directories your brief names.** If you need a change elsewhere, say so in your report instead of making it.
+- **`llmobs-core` is a shared contract.** Don't change its public types unless your brief allows it. Request the change, and the coordinating session makes it.
+- The same goes for the root `Cargo.toml`: add a dependency only when your work needs it. Never change existing pins unless your brief says so.
+- Keep changes on your own branch; don't merge other branches into it.
 
 ## Commands
 
-`just check` runs formatting, clippy (`-D warnings`), tests, and supply-chain checks. Also: `just fmt`, `just lint`, `just test`, `just deny`, `just run …`.
+Run everything through `just` (once the justfile exists):
 
-Required tools: rustup (the toolchain is pinned in `rust-toolchain.toml`), `just`, and `cargo-deny` (`cargo install cargo-deny --locked`). Later: `pnpm`, `uv`.
+| Command | What it does |
+|---|---|
+| `just check` | format check, clippy (`-D warnings`), tests, cargo-deny; **must pass before every commit** |
+| `just fmt` | format the Rust code |
+| `just lint` | clippy, warnings as errors |
+| `just test` | all Rust tests |
+| `just deny` | supply-chain checks (advisories, bans, sources; licenses deferred, D57) |
+| `just run <args>` | run the `llmobs` binary |
+
+Required tools:
+- `rustup` (the toolchain is pinned in `rust-toolchain.toml`)
+- `just`
+- `cargo-deny` (`cargo install cargo-deny --locked`)
+- later: `pnpm` (web, TS SDK) and `uv` (Python SDK)
 
 ## Naming
 
-Crate prefix `llmobs-`, binary `llmobs`, env prefix `LLMOBS_`, attribute namespace `llmobs.*`. All of these will be renamed mechanically when the product gets its real name (D46).
+Crates are prefixed `llmobs-`. The binary is `llmobs`, env vars use the `LLMOBS_` prefix, and span attributes use the `llmobs.*` namespace. API keys are `sk-llmobs-…`, `pk-llmobs-…` and `pat-llmobs-…`.
 
-## Commits
+All of these will be renamed mechanically once the product has its real name (D46). Keep the name in as few places as practical, e.g. one constant for the attribute prefix.
 
-Small commits with an imperative subject. Run `just check` before committing.
+## Commits and reports
+
+- Small commits with a short imperative subject (e.g. `Add WAL group commit`). One sub-phase gives one commit unless the plan says otherwise.
+- Don't commit generated artifacts (`target/`, `node_modules/`, `dist/`, `.venv/`).
+- When you finish, report:
+  - what was done;
+  - any deviation from the plan or spec, and why;
+  - the exact versions you chose for any new dependency;
+  - anything left undone or unverified.
