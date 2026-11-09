@@ -98,6 +98,13 @@ Competitor research: `research/competitors.md`.
 | D49 | Judge traces | Evaluator executions traced into the user's project under reserved environment `llmobs-eval`, hidden by default, linked from scores. |
 | D50 | Saved views | Saved list views and saved SQL queries are in the MVP. |
 | D51 | Ports | 8080 (UI/API/OTLP-HTTP/MCP), 4317 (OTLP gRPC), 4318 (OTLP HTTP). |
+| D52 | Repo layout | Cargo workspace with 5 crates: `llmobs-core`, `llmobs-otel`, `llmobs-storage`, `llmobs-server`, `llmobs-cli` (binary `llmobs`); `otel` and `storage` never depend on each other. Plus `web/`, `sdks/python`, `sdks/typescript`, `fixtures/otlp`, `tools/`. |
+| D53 | Parallel work | Contracts first (Phase 0, serial), then waves of parallel sessions; 3 concurrent sessions for now. |
+| D54 | Code name | `llmobs` everywhere in code (crates, binary, `LLMOBS_` env, `llmobs.*` attributes). |
+| D55 | Tooling | GitHub Actions CI; `uv` for Python; `pnpm` for TypeScript; `just` as task runner. |
+| D56 | Allocator | mimalloc as global allocator of the binary. |
+| D57 | Dependency licenses | cargo-deny runs advisories/bans/sources only; license check deferred until our license (D9) is decided. |
+| D58 | Agent instructions | `AGENTS.md` at the root (with `CLAUDE.md` symlink); `.cursor/rules` kept. |
 
 ## Open
 
