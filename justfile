@@ -36,3 +36,11 @@ run *args:
 
 # Everything CI runs for Rust
 check: fmt-check lint test deny
+
+# Validate OTLP fixtures
+fixtures-check:
+    cargo test -p llmobs-otel --test fixtures
+
+# Rewrite OTLP fixtures in canonical JSON formatting
+fixtures-fmt:
+    LLMOBS_FIXTURES_FMT=1 cargo test -p llmobs-otel --test fixtures -- canonical_formatting

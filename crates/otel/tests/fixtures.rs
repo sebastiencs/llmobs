@@ -1,0 +1,844 @@
+//! Validates every directory under `fixtures/otlp`.
+//!
+//! Passes with zero cases. `prices.json` and the layout are still checked.
+
+#[allow(unreachable_pub)]
+mod support;
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+use llmobs_core::enums::{CostSource, PayloadFormat, SpanKind};
+use llmobs_core::message::parse_messages;
+use llmobs_core::span::Span;
+use regex::{Regex, RegexBuilder};
+use sha2::{Digest, Sha256};
+use support::{
+    Case, FIXTURES_DIR, GROUPS, Origin, PriceRow, canonical_json, load_all_cases, load_prices,
+    sort_spans,
+};
+
+#[test]
+fn layout() {
+    finish(&layout_failures());
+}
+
+#[test]
+fn case_json() {
+    let mut failures = Vec::new();
+    for case in load_all_cases() {
+        let label = label(&case);
+        if case.meta.description.is_empty() {
+            failures.push(format!("{label}: description is empty"));
+        }
+        if case.meta.spec_refs.is_empty() {
+            failures.push(format!("{label}: spec_refs is empty"));
+        }
+        let captured = case.meta.origin == Origin::Captured;
+        if captured != case.meta.source.is_some() {
+            failures.push(format!(
+                "{label}: source must be present exactly when origin is captured"
+            ));
+        }
+    }
+    finish(&failures);
+}
+
+#[test]
+fn input_json() {
+    let mut failures = Vec::new();
+    for case in load_all_cases() {
+        if input_spans(&case).is_empty() {
+            failures.push(format!("{}: input.json has no spans", label(&case)));
+        }
+    }
+    finish(&failures);
+}
+
+#[test]
+fn expected_json() {
+    let mut failures = Vec::new();
+    for case in load_all_cases() {
+        check_expected(&case, &mut failures);
+    }
+    finish(&failures);
+}
+
+#[test]
+fn media() {
+    let mut failures = Vec::new();
+    for case in load_all_cases() {
+        check_media(&case, &mut failures);
+    }
+    finish(&failures);
+}
+
+#[test]
+fn costs() {
+    let rows = load_prices();
+    let mut failures = Vec::new();
+    for case in load_all_cases() {
+        for span in &case.expected.spans {
+            check_cost(&label(&case), span, &rows, &mut failures);
+        }
+    }
+    finish(&failures);
+}
+
+#[test]
+fn canonical_formatting() {
+    let rewrite = std::env::var_os("LLMOBS_FIXTURES_FMT").is_some_and(|value| value == "1");
+    let mut failures = Vec::new();
+    for path in json_files() {
+        match fs::read_to_string(&path) {
+            Ok(text) => check_canonical(&path, &text, rewrite, &mut failures),
+            Err(err) => failures.push(format!("{}: {err}", path.display())),
+        }
+    }
+    finish(&failures);
+}
+
+#[test]
+fn secret_scan() {
+    let mut failures = Vec::new();
+    let patterns = secret_patterns();
+    let email = must_regex(r"[A-Za-z0-9._%+\-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})");
+    for path in all_files() {
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(err) => {
+                failures.push(format!("{}: {err}", path.display()));
+                continue;
+            }
+        };
+        for pattern in &patterns {
+            if pattern.is_match(&text) {
+                failures.push(format!(
+                    "{}: secret pattern /{}/",
+                    path.display(),
+                    pattern.as_str()
+                ));
+            }
+        }
+        for hit in email.captures_iter(&text) {
+            let domain = hit.get(1).map(|group| group.as_str()).unwrap_or("");
+            if domain != "example.com" && domain != "example.org" {
+                failures.push(format!(
+                    "{}: email address at a domain other than example.com or example.org",
+                    path.display()
+                ));
+                break;
+            }
+        }
+    }
+    finish(&failures);
+}
+
+#[test]
+fn prices() {
+    let rows = load_prices();
+    let mut failures = Vec::new();
+    let mut compiled = Vec::new();
+    for row in &rows {
+        match compile_anchored(&row.match_pattern) {
+            Ok(pattern) => compiled.push(pattern),
+            Err(err) => failures.push(format!(
+                "prices.json: {}: pattern does not compile: {err}",
+                row.model_name
+            )),
+        }
+    }
+    if compiled.len() != rows.len() {
+        finish(&failures);
+        return;
+    }
+
+    let cases = load_all_cases();
+    for case in &cases {
+        for span in &case.expected.spans {
+            if span.cost_source != Some(CostSource::Computed) {
+                continue;
+            }
+            let Some(model) = model_of(span) else {
+                failures.push(format!(
+                    "{}: computed cost span {} has no model",
+                    label(case),
+                    span.span_id
+                ));
+                continue;
+            };
+            let matched = rows.iter().zip(compiled.iter()).any(|(row, pattern)| {
+                price_row_matches(
+                    row,
+                    pattern,
+                    model,
+                    span.provider.as_deref(),
+                    span.start_time,
+                )
+            });
+            if !matched {
+                failures.push(format!(
+                    "{}: no price row matches model {model}",
+                    label(case)
+                ));
+            }
+        }
+    }
+
+    let mut models = BTreeSet::new();
+    for case in &cases {
+        for span in &case.expected.spans {
+            if let Some(model) = &span.request_model {
+                models.insert(model.clone());
+            }
+            if let Some(model) = &span.response_model {
+                models.insert(model.clone());
+            }
+        }
+    }
+    for model in &models {
+        let mut hits: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+        for (row, pattern) in rows.iter().zip(compiled.iter()) {
+            if pattern.is_match(model) {
+                let key = row.provider.clone().unwrap_or_default();
+                hits.entry(key).or_default().push(row.model_name.as_str());
+            }
+        }
+        for (provider, names) in hits {
+            if names.len() > 1 {
+                let provider = if provider.is_empty() {
+                    "null".to_owned()
+                } else {
+                    provider
+                };
+                failures.push(format!(
+                    "prices.json: provider {provider} has {} rows matching model {model}: {}",
+                    names.len(),
+                    names.join(", ")
+                ));
+            }
+        }
+    }
+    finish(&failures);
+}
+
+fn layout_failures() -> Vec<String> {
+    let root = PathBuf::from(FIXTURES_DIR);
+    let mut failures = Vec::new();
+    if !root.join("README.md").is_file() {
+        failures.push(format!("{}: missing README.md", root.display()));
+    }
+    if !root.join("prices.json").is_file() {
+        failures.push(format!("{}: missing prices.json", root.display()));
+    }
+    let entries = match fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(err) => {
+            failures.push(format!("{}: {err}", root.display()));
+            return failures;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                failures.push(format!("{}: {err}", root.display()));
+                continue;
+            }
+        };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if entry.path().is_file() {
+            if name != "README.md" && name != "prices.json" {
+                failures.push(format!("unexpected top-level file {name}"));
+            }
+            continue;
+        }
+        if !GROUPS.contains(&name.as_str()) {
+            failures.push(format!("unknown fixture group {name}"));
+            continue;
+        }
+        check_group(&entry.path(), &name, &mut failures);
+    }
+    failures
+}
+
+fn check_group(dir: &Path, group: &str, failures: &mut Vec<String>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) => {
+            failures.push(format!("{group}: {err}"));
+            return;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                failures.push(format!("{group}: {err}"));
+                continue;
+            }
+        };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !entry.path().is_dir() {
+            failures.push(format!("{group}/{name} is not a case directory"));
+            continue;
+        }
+        let mut files = Vec::new();
+        let children = match fs::read_dir(entry.path()) {
+            Ok(children) => children,
+            Err(err) => {
+                failures.push(format!("{group}/{name}: {err}"));
+                continue;
+            }
+        };
+        for child in children {
+            let child = match child {
+                Ok(child) => child,
+                Err(err) => {
+                    failures.push(format!("{group}/{name}: {err}"));
+                    continue;
+                }
+            };
+            let child_name = child.file_name().to_string_lossy().into_owned();
+            if child.path().is_dir() {
+                failures.push(format!("{group}/{name}/{child_name} is a nested directory"));
+            }
+            files.push(child_name);
+        }
+        files.sort();
+        let expected = vec![
+            "case.json".to_owned(),
+            "expected.json".to_owned(),
+            "input.json".to_owned(),
+        ];
+        if files != expected {
+            failures.push(format!(
+                "{group}/{name}: expected case.json, input.json, expected.json; found {}",
+                files.join(", ")
+            ));
+        }
+    }
+}
+
+fn check_expected(case: &Case, failures: &mut Vec<String>) {
+    let label = label(case);
+    let mut sorted = case.expected.spans.clone();
+    sort_spans(&mut sorted);
+    if case.expected.spans != sorted {
+        failures.push(format!(
+            "{label}: spans are not sorted by (trace_id, start_time, span_id)"
+        ));
+    }
+    let input_ids = input_spans(case);
+    if case.expected.spans.len() + case.expected.rejected_spans as usize != input_ids.len() {
+        failures.push(format!(
+            "{label}: spans ({}) + rejected_spans ({}) != input spans ({})",
+            case.expected.spans.len(),
+            case.expected.rejected_spans,
+            input_ids.len()
+        ));
+    }
+    for span in &case.expected.spans {
+        if span.project_id != case.meta.context.project_id {
+            failures.push(format!(
+                "{label}: {} project_id != case context",
+                span.span_id
+            ));
+        }
+        if span.ingest_time != case.meta.context.ingest_time {
+            failures.push(format!(
+                "{label}: {} ingest_time != case context",
+                span.span_id
+            ));
+        }
+        let id = (span.trace_id.to_string(), span.span_id.to_string());
+        if !input_ids.contains(&id) {
+            failures.push(format!(
+                "{label}: expected span {}/{} is not in input.json",
+                id.0, id.1
+            ));
+        }
+        check_payload(&label, span, failures);
+    }
+}
+
+fn check_payload(label: &str, span: &Span, failures: &mut Vec<String>) {
+    check_pair(
+        label,
+        span,
+        "input",
+        &span.input,
+        &span.input_format,
+        failures,
+    );
+    check_pair(
+        label,
+        span,
+        "output",
+        &span.output,
+        &span.output_format,
+        failures,
+    );
+    if span.input_format == Some(PayloadFormat::Messages)
+        && let Some(input) = &span.input
+        && parse_messages(input).is_err()
+    {
+        failures.push(format!(
+            "{label}: {} input_format is messages but input does not parse",
+            span.span_id
+        ));
+    }
+    if span.output_format == Some(PayloadFormat::Messages)
+        && let Some(output) = &span.output
+        && parse_messages(output).is_err()
+    {
+        failures.push(format!(
+            "{label}: {} output_format is messages but output does not parse",
+            span.span_id
+        ));
+    }
+}
+
+fn check_pair(
+    label: &str,
+    span: &Span,
+    field: &str,
+    value: &Option<String>,
+    format: &Option<PayloadFormat>,
+    failures: &mut Vec<String>,
+) {
+    if value.is_some() != format.is_some() {
+        failures.push(format!(
+            "{label}: {} {field} and {field}_format must both be set or both be absent",
+            span.span_id
+        ));
+    }
+}
+
+fn check_media(case: &Case, failures: &mut Vec<String>) {
+    let label = label(case);
+    let media = &case.expected.media;
+    let hashes: Vec<&str> = media.iter().map(|item| item.sha256.as_str()).collect();
+    let mut sorted = hashes.clone();
+    sorted.sort_unstable();
+    if hashes != sorted {
+        failures.push(format!("{label}: media is not sorted by sha256"));
+    }
+    for item in media {
+        if !is_sha256(&item.sha256) {
+            failures.push(format!(
+                "{label}: media sha256 {} is not 64 lowercase hex characters",
+                item.sha256
+            ));
+        }
+        if item.size_bytes < case.meta.settings.media_min_bytes
+            || item.size_bytes > case.meta.settings.media_max_bytes
+        {
+            failures.push(format!(
+                "{label}: media {} size {} is outside [{}, {}]",
+                item.sha256,
+                item.size_bytes,
+                case.meta.settings.media_min_bytes,
+                case.meta.settings.media_max_bytes
+            ));
+        }
+    }
+    let listed: BTreeSet<&str> = hashes.iter().copied().collect();
+    let mut referenced = BTreeSet::new();
+    for span in &case.expected.spans {
+        for hash in &span.media_refs {
+            referenced.insert(hash.as_str());
+        }
+        for hash in media_uris(span) {
+            if !listed.contains(hash.as_str()) {
+                failures.push(format!(
+                    "{label}: {} contains media://{hash} which is not listed",
+                    span.span_id
+                ));
+            }
+        }
+    }
+    if listed != referenced {
+        failures.push(format!(
+            "{label}: media hashes {listed:?} != media_refs {referenced:?}"
+        ));
+    }
+    if media.is_empty() {
+        return;
+    }
+    let input_path = case.dir.join("input.json");
+    let text = match fs::read_to_string(&input_path) {
+        Ok(text) => text,
+        Err(err) => {
+            failures.push(format!("{}: {err}", input_path.display()));
+            return;
+        }
+    };
+    let found = decode_base64_runs(&text, case.meta.settings.media_min_bytes);
+    for item in media {
+        let size = item.size_bytes;
+        if !found
+            .iter()
+            .any(|(hash, len)| hash == &item.sha256 && *len == size)
+        {
+            failures.push(format!(
+                "{label}: media {} ({size} bytes) is not backed by base64 in input.json",
+                item.sha256
+            ));
+        }
+    }
+}
+
+fn check_cost(label: &str, span: &Span, rows: &[PriceRow], failures: &mut Vec<String>) {
+    match span.cost_source {
+        Some(CostSource::Computed) => check_computed(label, span, rows, failures),
+        Some(CostSource::None) => {
+            let priced = matches!(span.span_kind, SpanKind::Llm | SpanKind::Embedding);
+            let matched = model_of(span).is_some_and(|model| {
+                rows.iter().any(|row| {
+                    let Ok(pattern) = compile_anchored(&row.match_pattern) else {
+                        return false;
+                    };
+                    price_row_matches(
+                        row,
+                        &pattern,
+                        model,
+                        span.provider.as_deref(),
+                        span.start_time,
+                    )
+                })
+            });
+            if priced && matched {
+                failures.push(format!(
+                    "{label}: {} has cost_source none but a price row matches",
+                    span.span_id
+                ));
+            }
+            if span.cost_input.is_some() || span.cost_output.is_some() || span.cost_total.is_some()
+            {
+                failures.push(format!(
+                    "{label}: {} cost_source none must have null cost fields",
+                    span.span_id
+                ));
+            }
+        }
+        Some(CostSource::Reported) | None => {}
+    }
+}
+
+fn check_computed(label: &str, span: &Span, rows: &[PriceRow], failures: &mut Vec<String>) {
+    let Some(model) = model_of(span) else {
+        failures.push(format!(
+            "{label}: {} cost_source computed but model is absent",
+            span.span_id
+        ));
+        return;
+    };
+    let Some(row) = pick_price(rows, model, span.provider.as_deref(), span.start_time) else {
+        failures.push(format!(
+            "{label}: {} no price row for model {model}",
+            span.span_id
+        ));
+        return;
+    };
+    let Ok((input, output, total)) = recompute(span, row) else {
+        failures.push(format!(
+            "{label}: {} price row {} cannot price the token counts",
+            span.span_id, row.model_name
+        ));
+        return;
+    };
+    compare_cost(label, span, "cost_input", span.cost_input, input, failures);
+    compare_cost(
+        label,
+        span,
+        "cost_output",
+        span.cost_output,
+        output,
+        failures,
+    );
+    compare_cost(label, span, "cost_total", span.cost_total, total, failures);
+}
+
+fn compare_cost(
+    label: &str,
+    span: &Span,
+    field: &str,
+    actual: Option<f64>,
+    expected: f64,
+    failures: &mut Vec<String>,
+) {
+    let Some(actual) = actual else {
+        failures.push(format!(
+            "{label}: {} {field} is absent; recomputed {expected}",
+            span.span_id
+        ));
+        return;
+    };
+    if (actual - expected).abs() > 1e-12 {
+        failures.push(format!(
+            "{label}: {} {field} is {actual}, recomputed {expected}",
+            span.span_id
+        ));
+    }
+}
+
+fn recompute(span: &Span, row: &PriceRow) -> Result<(f64, f64, f64), ()> {
+    let input = span.input_tokens.unwrap_or(0) as f64;
+    let output = span.output_tokens.unwrap_or(0) as f64;
+    let cache_read = span.cache_read_tokens.unwrap_or(0) as f64;
+    let cache_write = span.cache_write_tokens.unwrap_or(0) as f64;
+    let reasoning = span.reasoning_tokens.unwrap_or(0) as f64;
+    let uncached = (input - cache_read - cache_write).max(0.0);
+    let non_reasoning = (output - reasoning).max(0.0);
+    if span.span_kind == SpanKind::Embedding {
+        let cost_input = charge(uncached, row.price_input)?;
+        let cost_input = cost_input / 1e6;
+        return Ok((cost_input, 0.0, cost_input));
+    }
+    let cost_input = charge(uncached, row.price_input)?
+        + charge(cache_read, row.price_cache_read)?
+        + charge(cache_write, row.price_cache_write)?;
+    let reasoning_price = row.price_reasoning.or(row.price_output);
+    let cost_output =
+        charge(non_reasoning, row.price_output)? + charge(reasoning, reasoning_price)?;
+    let cost_input = cost_input / 1e6;
+    let cost_output = cost_output / 1e6;
+    Ok((cost_input, cost_output, cost_input + cost_output))
+}
+
+fn charge(tokens: f64, price: Option<f64>) -> Result<f64, ()> {
+    if tokens == 0.0 {
+        return Ok(0.0);
+    }
+    price.map(|price| tokens * price).ok_or(())
+}
+
+fn pick_price<'a>(
+    rows: &'a [PriceRow],
+    model: &str,
+    provider: Option<&str>,
+    start_time: i64,
+) -> Option<&'a PriceRow> {
+    let mut matches: Vec<&PriceRow> = rows
+        .iter()
+        .filter(|row| {
+            let Ok(pattern) = compile_anchored(&row.match_pattern) else {
+                return false;
+            };
+            price_row_matches(row, &pattern, model, provider, start_time)
+        })
+        .collect();
+    matches.sort_by(|left, right| {
+        right
+            .valid_from
+            .cmp(&left.valid_from)
+            .then(right.match_pattern.len().cmp(&left.match_pattern.len()))
+    });
+    matches.first().copied()
+}
+
+fn price_row_matches(
+    row: &PriceRow,
+    pattern: &Regex,
+    model: &str,
+    provider: Option<&str>,
+    start_time: i64,
+) -> bool {
+    if row.valid_from > start_time {
+        return false;
+    }
+    if let Some(row_provider) = &row.provider
+        && Some(row_provider.as_str()) != provider
+    {
+        return false;
+    }
+    pattern.is_match(model)
+}
+
+fn model_of(span: &Span) -> Option<&str> {
+    span.response_model
+        .as_deref()
+        .or(span.request_model.as_deref())
+}
+
+fn input_spans(case: &Case) -> Vec<(String, String)> {
+    let mut ids = Vec::new();
+    for resource in &case.input.resource_spans {
+        for scope in &resource.scope_spans {
+            for span in &scope.spans {
+                ids.push((hex_encode(&span.trace_id), hex_encode(&span.span_id)));
+            }
+        }
+    }
+    ids
+}
+
+fn media_uris(span: &Span) -> Vec<String> {
+    let pattern = must_regex(r"media://([0-9a-f]{64})");
+    let mut hashes = Vec::new();
+    for text in [&span.input, &span.output, &span.system_instructions]
+        .into_iter()
+        .flatten()
+    {
+        for hit in pattern.captures_iter(text) {
+            if let Some(hash) = hit.get(1) {
+                hashes.push(hash.as_str().to_owned());
+            }
+        }
+    }
+    hashes
+}
+
+fn decode_base64_runs(text: &str, media_min_bytes: u64) -> Vec<(String, u64)> {
+    let min_chars = media_min_bytes.saturating_mul(4).div_ceil(3);
+    let Ok(pattern) = Regex::new(&format!(r"[A-Za-z0-9+/]{{{min_chars},}}={{0,2}}")) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for hit in pattern.find_iter(text) {
+        let Ok(bytes) = STANDARD.decode(hit.as_str()) else {
+            continue;
+        };
+        found.push((hex_encode(&Sha256::digest(&bytes)), bytes.len() as u64));
+    }
+    found
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn check_canonical(path: &Path, text: &str, rewrite: bool, failures: &mut Vec<String>) {
+    let value: serde_json::Value = match serde_json::from_str(text) {
+        Ok(value) => value,
+        Err(err) => {
+            failures.push(format!("{}: {err}", path.display()));
+            return;
+        }
+    };
+    let canonical = canonical_json(&value);
+    if text == canonical {
+        return;
+    }
+    if rewrite {
+        if let Err(err) = fs::write(path, &canonical) {
+            failures.push(format!("{}: {err}", path.display()));
+            return;
+        }
+        // `just fixtures-fmt` prints the paths it rewrote.
+        #[allow(clippy::print_stdout)]
+        {
+            println!("rewrote {}", path.display());
+        }
+        return;
+    }
+    failures.push(format!(
+        "{}: not canonical JSON; run just fixtures-fmt",
+        path.display()
+    ));
+}
+
+fn json_files() -> Vec<PathBuf> {
+    let root = PathBuf::from(FIXTURES_DIR);
+    let mut files = vec![root.join("prices.json")];
+    let Ok(groups) = fs::read_dir(&root) else {
+        return files;
+    };
+    for group in groups.flatten() {
+        if !group.path().is_dir() {
+            continue;
+        }
+        let Ok(cases) = fs::read_dir(group.path()) else {
+            continue;
+        };
+        for case in cases.flatten() {
+            if !case.path().is_dir() {
+                continue;
+            }
+            for name in ["case.json", "input.json", "expected.json"] {
+                let path = case.path().join(name);
+                if path.is_file() {
+                    files.push(path);
+                }
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+fn all_files() -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    collect_files(&PathBuf::from(FIXTURES_DIR), &mut files);
+    files.sort();
+    files
+}
+
+fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.path().is_dir() {
+            collect_files(&entry.path(), files);
+        } else if entry.path().is_file() {
+            files.push(entry.path());
+        }
+    }
+}
+
+fn secret_patterns() -> Vec<Regex> {
+    [
+        r"sk-[A-Za-z0-9_-]{20,}",
+        r"sk-ant-[A-Za-z0-9_-]{20,}",
+        r"AKIA[0-9A-Z]{16}",
+        r"ghp_[A-Za-z0-9]{36}",
+        r"xox[baprs]-[A-Za-z0-9-]{10,}",
+        r"Bearer [A-Za-z0-9._-]{20,}",
+    ]
+    .into_iter()
+    .map(must_regex)
+    .collect()
+}
+
+fn must_regex(pattern: &str) -> Regex {
+    match Regex::new(pattern) {
+        Ok(regex) => regex,
+        Err(err) => panic!("pattern {pattern} compiles: {err}"),
+    }
+}
+
+fn compile_anchored(pattern: &str) -> Result<Regex, regex::Error> {
+    RegexBuilder::new(&format!("^(?:{pattern})$"))
+        .case_insensitive(true)
+        .build()
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(DIGITS[(byte >> 4) as usize] as char);
+        out.push(DIGITS[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn label(case: &Case) -> String {
+    format!("{}/{}", case.group, case.name)
+}
+
+fn finish(failures: &[String]) {
+    assert!(
+        failures.is_empty(),
+        "fixture checks failed:\n{}",
+        failures.join("\n")
+    );
+}
