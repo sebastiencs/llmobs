@@ -1,0 +1,98 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+repository = "https://github.com/sebastiencs/llmobs"
+# license: intentionally omitted until D9 is decided
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+large_futures = "warn"
+needless_pass_by_value = "warn"
+redundant_clone = "warn"
+semicolon_if_nothing_returned = "warn"
+inefficient_to_string = "warn"
+
+[workspace.dependencies]
+# workspace crates
+llmobs-core = { path = "crates/core" }
+llmobs-otel = { path = "crates/otel" }
+llmobs-storage = { path = "crates/storage" }
+llmobs-server = { path = "crates/server" }
+
+# --- pinned families (must stay mutually compatible) ---
+# datafusion 55.2.0 depends on arrow/parquet 59.2 and object_store 0.13.2.
+# Those are caret-pinned here, not the newer arrow/parquet 60 or object_store 0.14.
+# `compression` is omitted from DataFusion's default features: it pulls xz, bzip2,
+# gzip, and zstd for DataFusion's own file readers. Parquet readers enable the
+# codecs we accept on the `parquet` pin below.
+datafusion = { version = "55.2", default-features = false, features = [
+    "nested_expressions",
+    "crypto_expressions",
+    "datetime_expressions",
+    "encoding_expressions",
+    "regex_expressions",
+    "string_expressions",
+    "unicode_expressions",
+    "parquet",
+    "recursive_protection",
+    "sql",
+] }
+arrow = "59.2"
+# parquet 59 has no `flate2` feature. `flate2-zlib-rs` is that release's deflate backend.
+parquet = { version = "59.2", default-features = false, features = [
+    "arrow",
+    "async",
+    "object_store",
+    "zstd",
+    "snap",
+    "lz4",
+    "flate2-zlib-rs",
+] }
+object_store = "0.13"
+
+# --- runtime basics ---
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "fs", "io-util"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+clap = { version = "4.6", features = ["derive", "env"] }
+mimalloc = { version = "0.1", default-features = false }
+uuid = { version = "1.29", features = ["v7", "serde"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2 # DataFusion/Arrow-heavy tests are unusably slow at opt-level 0
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only" # symbolized profiles and backtraces in production
+
+[profile.bench]
+inherits = "release"
+debug = true

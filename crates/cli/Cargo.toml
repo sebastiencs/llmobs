@@ -1,0 +1,18 @@
+[package]
+name = "llmobs-cli"
+description = "The llmobs binary"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+llmobs-core.workspace = true
+llmobs-server.workspace = true
+
+[[bin]]
+name = "llmobs"
+path = "src/main.rs"

@@ -1,0 +1,13 @@
+[package]
+name = "llmobs-otel"
+description = "OTLP decoding, convention detection, normalization, and cost"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+llmobs-core.workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "llmobs-server"
+description = "HTTP and gRPC API, auth, metadata DB, evaluation, and alerts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+llmobs-core.workspace = true
+llmobs-otel.workspace = true
+llmobs-storage.workspace = true
