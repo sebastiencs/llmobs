@@ -142,7 +142,7 @@ Traces are not sent by clients; they are **derived**. Each flush writes one *par
 | `name` | Utf8 | from root partial (`has_root`), else first non-null |
 | `root_span_id` | FixedSizeBinary(8) | from root partial |
 | `has_root` | Boolean | bool_or |
-| `status` | Utf8 | `error` if any partial has `error_count > 0`, else root status |
+| `status` | Utf8 | `error` if any partial has `error_count > 0`, else root status, else `unset` (no root seen yet) |
 | `session_id` | Utf8 | first non-null (root preferred) |
 | `user_id` | Utf8 | first non-null (root preferred) |
 | `environment` | Utf8 | first non-null |

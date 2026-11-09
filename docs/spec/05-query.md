@@ -112,6 +112,8 @@ Returns time series (bucket = `date_bin` over `start_time`, auto-sized for ~120 
 | evaluation cost | `sum(cost_total)` on `traces WHERE environment = 'llmobs-eval'` |
 | TTFT p50/p95 | spans `ttft_ns` |
 
+`group_by` splits the series that are not already split (traces, errors, error rate, trace latency, total cost, tokens, TTFT) by the group value; the response's `group` field carries it. With `group_by=model`, a trace-based series counts each trace once under every model in its `models` list. Series that are inherently split carry their own key in `group`: the model for LLM latency and cost by model, the score name for score averages.
+
 All series honor the filter DSL (applied to the view the series is computed on; filters on trace columns are applied to spans through a semi-join on `trace_id`). Results are cached for 10 s per `(project, params)`.
 
 ## Trace and span APIs

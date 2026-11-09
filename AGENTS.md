@@ -73,7 +73,8 @@ If the code has to deviate from the spec, update the spec **in the same change**
 ```
 crates/
   core/      llmobs-core     shared contracts: IDs, enums, names, messages, Span/Score,
-                             Arrow schemas + batch conversion (no config: D59)        (spec 01)
+                             Arrow schemas + batch conversion, OpenAPI schemas,
+                             no config (D59)                                          (spec 01)
   otel/      llmobs-otel     OTLP decode, normalization, media, truncation, cost      (spec 02)
   storage/   llmobs-storage  WAL, memtable, Parquet, catalog, compaction, deletion,
                              DataFusion providers, filter DSL, SQL sandbox            (specs 03, 05)
@@ -83,6 +84,7 @@ web/                         React UI (Vite, TanStack, shadcn/ui, pnpm)         
 sdks/python/                 Python SDK (uv)                                           (spec 10)
 sdks/typescript/             TypeScript SDK (pnpm)                                     (spec 10)
 fixtures/otlp/               OTLP fixtures shared by Rust golden tests and SDK tests  (spec 02 § Testing)
+fixtures/api/                example API responses (UI mocks), checked against the server types (spec 09)
 tools/                       dev tools (fixture capture, benchmarks); not shipped
 docs/                        decisions, specs, plans, research
 ```
