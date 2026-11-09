@@ -7,4 +7,5 @@
 pub mod enums;
 pub mod error;
 pub mod ids;
+pub mod message;
 pub mod names;

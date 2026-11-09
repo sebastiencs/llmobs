@@ -1,0 +1,70 @@
+---
+source: crates/core/src/message.rs
+expression: "serde_json::to_string_pretty(&messages).unwrap()"
+---
+[
+  {
+    "role": "system",
+    "parts": [
+      {
+        "type": "text",
+        "content": "You are a weather bot."
+      }
+    ]
+  },
+  {
+    "role": "user",
+    "name": "ada",
+    "parts": [
+      {
+        "type": "text",
+        "content": "What is the weather?"
+      },
+      {
+        "type": "uri",
+        "modality": "image",
+        "mime_type": "image/png",
+        "uri": "https://example.com/sky.png"
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "parts": [
+      {
+        "type": "reasoning",
+        "content": "Need a tool."
+      },
+      {
+        "type": "tool_call",
+        "id": "call_1",
+        "name": "get_weather",
+        "arguments": {
+          "city": "Paris"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "parts": [
+      {
+        "type": "tool_call_response",
+        "id": "call_1",
+        "response": {
+          "temp_c": 12
+        }
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "parts": [
+      {
+        "type": "text",
+        "content": "It is 12°C."
+      }
+    ],
+    "finish_reason": "stop"
+  }
+]
