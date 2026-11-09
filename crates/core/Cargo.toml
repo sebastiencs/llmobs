@@ -1,6 +1,6 @@
 [package]
 name = "llmobs-core"
-description = "Shared contracts: IDs, stored enums, messages, Span/Score, Arrow schemas"
+description = "Shared contracts: IDs, stored enums, messages, Span/Score, Arrow schemas, OpenAPI schemas"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,6 +15,7 @@ hex = { workspace = true }
 strum = { workspace = true }
 chrono = { workspace = true }
 arrow = { workspace = true }
+utoipa = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

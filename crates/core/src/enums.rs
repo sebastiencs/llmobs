@@ -29,6 +29,7 @@ macro_rules! stored_enum {
             strum::IntoStaticStr,
             strum::Display,
             strum::EnumIter,
+            utoipa::ToSchema,
         )]
         #[serde(rename_all = "snake_case")]
         #[strum(serialize_all = "snake_case")]
@@ -239,6 +240,7 @@ fn snapshot_lines() -> String {
 #[cfg(test)]
 mod tests {
     use strum::IntoEnumIterator;
+    use utoipa::PartialSchema;
 
     use super::*;
 
@@ -298,6 +300,17 @@ mod tests {
             prepend_module_to_snapshot => false,
         }, {
             insta::assert_snapshot!("enums", snapshot_lines());
+        });
+    }
+
+    #[test]
+    fn span_kind_schema_is_the_snake_case_enum() {
+        let schema = serde_json::to_string_pretty(&SpanKind::schema()).unwrap();
+        insta::with_settings!({
+            snapshot_path => "../tests/snapshots",
+            prepend_module_to_snapshot => false,
+        }, {
+            insta::assert_snapshot!("span_kind_schema", schema);
         });
     }
 }

@@ -1,0 +1,8 @@
+---
+source: crates/core/src/message.rs
+expression: "schema_pretty::<Role>()"
+---
+{
+  "type": "string",
+  "description": "Message speaker. Known values are `system`, `user`, `assistant`, and `tool`. Any other string is kept."
+}

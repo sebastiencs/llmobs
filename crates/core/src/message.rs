@@ -481,6 +481,267 @@ fn leftovers(map: &Map<String, Value>, known: &[&str]) -> Map<String, Value> {
     extra
 }
 
+fn string_schema(description: &'static str) -> utoipa::openapi::schema::ObjectBuilder {
+    utoipa::openapi::schema::ObjectBuilder::new()
+        .schema_type(utoipa::openapi::schema::Type::String)
+        .description(Some(description))
+}
+
+fn any_schema(description: &'static str) -> utoipa::openapi::schema::ObjectBuilder {
+    utoipa::openapi::schema::ObjectBuilder::new()
+        .schema_type(utoipa::openapi::schema::SchemaType::AnyValue)
+        .description(Some(description))
+}
+
+fn open_string_schema(
+    description: &'static str,
+) -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+    string_schema(description).into()
+}
+
+/// Object that keeps unmodelled fields (D65 `extra`).
+fn open_object(description: &'static str) -> utoipa::openapi::schema::ObjectBuilder {
+    utoipa::openapi::schema::ObjectBuilder::new()
+        .description(Some(description))
+        .additional_properties(Some(
+            utoipa::openapi::schema::AdditionalProperties::FreeForm(true),
+        ))
+}
+
+fn type_property(part_type: &'static str) -> utoipa::openapi::schema::ObjectBuilder {
+    string_schema("Part type.").enum_values(Some([Value::from(part_type)]))
+}
+
+type SchemaRef = utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>;
+
+fn known_part(
+    description: &'static str,
+    part_type: &'static str,
+    fields: Vec<(&'static str, SchemaRef, bool)>,
+) -> SchemaRef {
+    let mut builder = open_object(description)
+        .property("type", type_property(part_type))
+        .required("type");
+    for (name, schema, required) in fields {
+        builder = builder.property(name, schema);
+        if required {
+            builder = builder.required(name);
+        }
+    }
+    builder.into()
+}
+
+fn modality_schema() -> SchemaRef {
+    utoipa::openapi::Ref::from_schema_name(<Modality as utoipa::ToSchema>::name()).into()
+}
+
+/// The seven part components, in canonical order.
+fn part_components() -> [(&'static str, SchemaRef); 7] {
+    [
+        (
+            "TextPart",
+            known_part(
+                "Plain text.",
+                "text",
+                vec![("content", string_schema("The text.").into(), true)],
+            ),
+        ),
+        (
+            "ReasoningPart",
+            known_part(
+                "Model reasoning, separate from the user-visible text.",
+                "reasoning",
+                vec![("content", string_schema("The reasoning text.").into(), true)],
+            ),
+        ),
+        (
+            "ToolCallPart",
+            known_part(
+                "A tool or function call requested by the model.",
+                "tool_call",
+                vec![
+                    (
+                        "id",
+                        string_schema("Provider call id, when the source has one.").into(),
+                        false,
+                    ),
+                    ("name", string_schema("Tool name.").into(), true),
+                    ("arguments", any_schema("Arguments, as JSON.").into(), true),
+                ],
+            ),
+        ),
+        (
+            "ToolCallResponsePart",
+            known_part(
+                "The result of a tool call.",
+                "tool_call_response",
+                vec![
+                    (
+                        "id",
+                        string_schema("Provider call id, when the source has one.").into(),
+                        false,
+                    ),
+                    ("response", any_schema("Tool result, as JSON.").into(), true),
+                ],
+            ),
+        ),
+        (
+            "UriPart",
+            known_part(
+                "Media addressed by a URI, including `media://` after extraction.",
+                "uri",
+                vec![
+                    ("modality", modality_schema(), false),
+                    (
+                        "mime_type",
+                        string_schema("MIME type, when known.").into(),
+                        false,
+                    ),
+                    ("uri", string_schema("The URI.").into(), true),
+                ],
+            ),
+        ),
+        (
+            "BlobPart",
+            known_part(
+                "Inline base64 media, before extraction replaces it with a URI.",
+                "blob",
+                vec![
+                    ("modality", modality_schema(), false),
+                    (
+                        "mime_type",
+                        string_schema("MIME type, when known.").into(),
+                        false,
+                    ),
+                    ("content", string_schema("Base64 payload.").into(), true),
+                ],
+            ),
+        ),
+        (
+            "UnknownPart",
+            open_object("A part type this version does not model; render as JSON.")
+                .property(
+                    "type",
+                    string_schema("Part type, when the payload has one."),
+                )
+                .into(),
+        ),
+    ]
+}
+
+impl utoipa::PartialSchema for Role {
+    fn schema() -> SchemaRef {
+        open_string_schema(
+            "Message speaker. Known values are `system`, `user`, `assistant`, and `tool`. Any other string is kept.",
+        )
+    }
+}
+
+impl utoipa::ToSchema for Role {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("MessageRole")
+    }
+}
+
+impl utoipa::PartialSchema for Modality {
+    fn schema() -> SchemaRef {
+        open_string_schema(
+            "Media kind. Known values are `image`, `video`, and `audio`. Any other string is kept.",
+        )
+    }
+}
+
+impl utoipa::ToSchema for Modality {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("Modality")
+    }
+}
+
+impl utoipa::PartialSchema for Part {
+    fn schema() -> SchemaRef {
+        let mut one_of = utoipa::openapi::schema::OneOfBuilder::new().description(Some(
+            "One part of a canonical message. Spec 01 § Canonical message format.",
+        ));
+        for (name, _) in part_components() {
+            one_of = one_of.item(utoipa::openapi::Ref::from_schema_name(name));
+        }
+        one_of.into()
+    }
+}
+
+impl utoipa::ToSchema for Part {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("Part")
+    }
+
+    fn schemas(schemas: &mut Vec<(String, SchemaRef)>) {
+        for (name, schema) in part_components() {
+            schemas.push((name.to_owned(), schema));
+        }
+        schemas.push((
+            <Modality as utoipa::ToSchema>::name().into(),
+            <Modality as utoipa::PartialSchema>::schema(),
+        ));
+        <Modality as utoipa::ToSchema>::schemas(schemas);
+    }
+}
+
+impl utoipa::PartialSchema for Message {
+    fn schema() -> SchemaRef {
+        utoipa::openapi::schema::ObjectBuilder::new()
+            .description(Some(
+                "One message in a conversation. Spec 01 § Canonical message format.",
+            ))
+            .additional_properties(Some(
+                utoipa::openapi::schema::AdditionalProperties::FreeForm(true),
+            ))
+            .property(
+                "role",
+                utoipa::openapi::Ref::from_schema_name(<Role as utoipa::ToSchema>::name()),
+            )
+            .required("role")
+            .property(
+                "name",
+                string_schema("Optional speaker name. Omitted from JSON when absent."),
+            )
+            .property(
+                "parts",
+                utoipa::openapi::schema::ArrayBuilder::new()
+                    .description(Some(
+                        "Message parts. Always present; empty when the message has none.",
+                    ))
+                    .items(utoipa::openapi::Ref::from_schema_name(
+                        <Part as utoipa::ToSchema>::name(),
+                    )),
+            )
+            .required("parts")
+            .property(
+                "finish_reason",
+                string_schema("Why generation stopped. Omitted from JSON when absent."),
+            )
+            .into()
+    }
+}
+
+impl utoipa::ToSchema for Message {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("Message")
+    }
+
+    fn schemas(schemas: &mut Vec<(String, SchemaRef)>) {
+        schemas.push((
+            <Role as utoipa::ToSchema>::name().into(),
+            <Role as utoipa::PartialSchema>::schema(),
+        ));
+        <Role as utoipa::ToSchema>::schemas(schemas);
+        schemas.push((
+            <Part as utoipa::ToSchema>::name().into(),
+            <Part as utoipa::PartialSchema>::schema(),
+        ));
+        <Part as utoipa::ToSchema>::schemas(schemas);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -632,5 +893,37 @@ mod tests {
     fn non_object_part_is_unknown() {
         let part: Part = serde_json::from_str(r#""bare""#).unwrap();
         assert_eq!(part, Part::Unknown(Value::String("bare".to_owned())));
+    }
+
+    fn schema_pretty<T: utoipa::PartialSchema>() -> String {
+        serde_json::to_string_pretty(&T::schema()).unwrap()
+    }
+
+    #[test]
+    fn message_schemas_snapshot() {
+        assert_eq!(
+            <Role as utoipa::ToSchema>::name(),
+            std::borrow::Cow::Borrowed("MessageRole")
+        );
+        let mut registered = Vec::new();
+        <Part as utoipa::ToSchema>::schemas(&mut registered);
+        let mut components = Map::new();
+        for (name, schema) in registered {
+            components.insert(name, serde_json::to_value(schema).unwrap());
+        }
+        let part = serde_json::json!({
+            "schema": serde_json::to_value(<Part as utoipa::PartialSchema>::schema()).unwrap(),
+            "components": Value::Object(components),
+        });
+
+        insta::with_settings!({
+            snapshot_path => "../tests/snapshots",
+            prepend_module_to_snapshot => false,
+        }, {
+            insta::assert_snapshot!("role_schema", schema_pretty::<Role>());
+            insta::assert_snapshot!("modality_schema", schema_pretty::<Modality>());
+            insta::assert_snapshot!("part_schema", serde_json::to_string_pretty(&part).unwrap());
+            insta::assert_snapshot!("message_schema", schema_pretty::<Message>());
+        });
     }
 }

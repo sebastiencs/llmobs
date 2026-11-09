@@ -15,7 +15,7 @@ use crate::ids::{ProjectId, SpanId, TraceId};
 /// What a score is attached to.
 ///
 /// JSON is internally tagged: `{"type":"span","trace_id":"…","span_id":"…"}`. Spec 01 § Score `target`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ScoreTarget {
     /// One span. Both ids are required.
@@ -52,7 +52,7 @@ impl ScoreTarget {
 ///
 /// JSON is adjacently tagged: `{"data_type":"numeric","value":0.8}`. A categorical value is
 /// `{"data_type":"categorical","value":{"label":"correct","value":1.0}}`. Spec 01 § Score.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 #[serde(tag = "data_type", content = "value", rename_all = "snake_case")]
 pub enum ScoreValue {
     /// A finite number.
@@ -184,7 +184,7 @@ fn finite_f64(value: f64) -> Result<f64, &'static str> {
 /// One score row.
 ///
 /// Spec 01 § Score. JSON omits empty `Option` and `BTreeMap` fields. Instants are RFC 3339 (D64).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Score {
     /// Partition key. Spec 01 `project_id`.
     pub project_id: ProjectId,
@@ -227,14 +227,17 @@ pub struct Score {
     pub metadata: BTreeMap<String, String>,
     /// Creation time, nanoseconds since the Unix epoch. Spec 01 `created_at`.
     #[serde(with = "crate::time_serde")]
+    #[schema(value_type = String, format = DateTime)]
     pub created_at: i64,
     /// Last-writer-wins version, nanoseconds since the Unix epoch. Spec 01 `updated_at`.
     #[serde(with = "crate::time_serde")]
+    #[schema(value_type = String, format = DateTime)]
     pub updated_at: i64,
     /// Tombstone. Spec 01 `deleted`.
     pub deleted: bool,
     /// Server receive time, nanoseconds since the Unix epoch. Spec 01 `ingest_time`.
     #[serde(with = "crate::time_serde")]
+    #[schema(value_type = String, format = DateTime)]
     pub ingest_time: i64,
 }
 
@@ -401,5 +404,21 @@ mod tests {
             serde_json::to_string(&value).unwrap(),
             r#"{"data_type":"categorical","value":{"label":"unsure"}}"#
         );
+    }
+
+    fn schema_pretty<T: utoipa::PartialSchema>() -> String {
+        serde_json::to_string_pretty(&T::schema()).unwrap()
+    }
+
+    #[test]
+    fn score_schemas_snapshot() {
+        insta::with_settings!({
+            snapshot_path => "../tests/snapshots",
+            prepend_module_to_snapshot => false,
+        }, {
+            insta::assert_snapshot!("score_target_schema", schema_pretty::<ScoreTarget>());
+            insta::assert_snapshot!("score_value_schema", schema_pretty::<ScoreValue>());
+            insta::assert_snapshot!("score_schema", schema_pretty::<Score>());
+        });
     }
 }

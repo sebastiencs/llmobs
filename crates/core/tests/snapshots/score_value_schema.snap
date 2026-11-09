@@ -1,0 +1,107 @@
+---
+source: crates/core/src/score.rs
+expression: "schema_pretty::<ScoreValue>()"
+---
+{
+  "oneOf": [
+    {
+      "type": "object",
+      "description": "A finite number.",
+      "required": [
+        "value",
+        "data_type"
+      ],
+      "properties": {
+        "data_type": {
+          "type": "string",
+          "enum": [
+            "numeric"
+          ]
+        },
+        "value": {
+          "type": "number",
+          "format": "double",
+          "description": "A finite number."
+        }
+      }
+    },
+    {
+      "type": "object",
+      "description": "True or false. Stored numerically as 1 or 0.",
+      "required": [
+        "value",
+        "data_type"
+      ],
+      "properties": {
+        "data_type": {
+          "type": "string",
+          "enum": [
+            "boolean"
+          ]
+        },
+        "value": {
+          "type": "boolean",
+          "description": "True or false. Stored numerically as 1 or 0."
+        }
+      }
+    },
+    {
+      "type": "object",
+      "description": "A label and an optional numeric mapping.",
+      "required": [
+        "value",
+        "data_type"
+      ],
+      "properties": {
+        "data_type": {
+          "type": "string",
+          "enum": [
+            "categorical"
+          ]
+        },
+        "value": {
+          "type": "object",
+          "description": "A label and an optional numeric mapping.",
+          "required": [
+            "label"
+          ],
+          "properties": {
+            "label": {
+              "type": "string",
+              "description": "Category label. Stored in `value_str`."
+            },
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double",
+              "description": "Optional numeric mapping. Stored in `value_num`. Omitted from JSON when absent."
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "description": "Free text.",
+      "required": [
+        "value",
+        "data_type"
+      ],
+      "properties": {
+        "data_type": {
+          "type": "string",
+          "enum": [
+            "text"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "description": "Free text."
+        }
+      }
+    }
+  ],
+  "description": "The value carried by a score.\n\nJSON is adjacently tagged: `{\"data_type\":\"numeric\",\"value\":0.8}`. A categorical value is\n`{\"data_type\":\"categorical\",\"value\":{\"label\":\"correct\",\"value\":1.0}}`. Spec 01 § Score."
+}

@@ -1,0 +1,9 @@
+---
+source: crates/core/src/ids.rs
+expression: "schema_pretty::<ProjectId>()"
+---
+{
+  "type": "string",
+  "format": "uuid",
+  "description": "Project id. A UUID, created as UUIDv7 and parsed from any version.\n\nSpec README § Cross-cutting conventions. Stored as lowercase hyphenated text (spec 01 `project_id`)."
+}

@@ -1,0 +1,137 @@
+---
+source: crates/core/src/score.rs
+expression: "schema_pretty::<Score>()"
+---
+{
+  "type": "object",
+  "description": "One score row.\n\nSpec 01 § Score. JSON omits empty `Option` and `BTreeMap` fields. Instants are RFC 3339 (D64).",
+  "required": [
+    "project_id",
+    "score_id",
+    "target",
+    "name",
+    "value",
+    "source",
+    "created_at",
+    "updated_at",
+    "deleted",
+    "ingest_time"
+  ],
+  "properties": {
+    "author_user_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid",
+      "description": "Person who annotated, for `human` scores. Spec 01 `author_user_id`."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Creation time, nanoseconds since the Unix epoch. Spec 01 `created_at`."
+    },
+    "dataset_item_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid",
+      "description": "Dataset item the score belongs to. Spec 01 `dataset_item_id`."
+    },
+    "deleted": {
+      "type": "boolean",
+      "description": "Tombstone. Spec 01 `deleted`."
+    },
+    "evaluator_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid",
+      "description": "Evaluator that produced the score. Spec 01 `evaluator_id`."
+    },
+    "experiment_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid",
+      "description": "Experiment the score belongs to. Spec 01 `experiment_id`."
+    },
+    "ingest_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Server receive time, nanoseconds since the Unix epoch. Spec 01 `ingest_time`."
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Evaluator metadata. Values are strings. Spec 01 `metadata` and spec 06.",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "propertyNames": {
+        "type": "string"
+      }
+    },
+    "name": {
+      "type": "string",
+      "description": "Score name, for example `hallucination`. Spec 01 `name`."
+    },
+    "project_id": {
+      "$ref": "#/components/schemas/ProjectId",
+      "description": "Partition key. Spec 01 `project_id`."
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Explanation. Spec 01 `reason`."
+    },
+    "rule_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid",
+      "description": "Online rule that produced the score. Spec 01 `rule_id`."
+    },
+    "score_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Last-writer-wins key. Spec 01 `score_id`."
+    },
+    "session_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Session of a span or trace target, when known. Ignored for session targets. Spec 01 `session_id`."
+    },
+    "source": {
+      "$ref": "#/components/schemas/ScoreSource",
+      "description": "Who wrote the score. Spec 01 `source`."
+    },
+    "target": {
+      "$ref": "#/components/schemas/ScoreTarget",
+      "description": "Span, trace, or session this score is attached to. Spec 01 `target`."
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Last-writer-wins version, nanoseconds since the Unix epoch. Spec 01 `updated_at`."
+    },
+    "user_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "End-user id, when the writer knows it. Spec 01 `user_id`."
+    },
+    "value": {
+      "$ref": "#/components/schemas/ScoreValue",
+      "description": "The score value. Spec 01 `data_type`, `value_num`, `value_str`."
+    }
+  }
+}

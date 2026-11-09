@@ -1,0 +1,74 @@
+---
+source: crates/core/src/score.rs
+expression: "schema_pretty::<ScoreTarget>()"
+---
+{
+  "oneOf": [
+    {
+      "type": "object",
+      "description": "One span. Both ids are required.",
+      "required": [
+        "trace_id",
+        "span_id",
+        "type"
+      ],
+      "properties": {
+        "span_id": {
+          "$ref": "#/components/schemas/SpanId",
+          "description": "The span."
+        },
+        "trace_id": {
+          "$ref": "#/components/schemas/TraceId",
+          "description": "Trace that owns the span."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "span"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "description": "One trace.",
+      "required": [
+        "trace_id",
+        "type"
+      ],
+      "properties": {
+        "trace_id": {
+          "$ref": "#/components/schemas/TraceId",
+          "description": "The trace."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "trace"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "description": "One session.",
+      "required": [
+        "session_id",
+        "type"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "Session id."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "session"
+          ]
+        }
+      }
+    }
+  ],
+  "description": "What a score is attached to.\n\nJSON is internally tagged: `{\"type\":\"span\",\"trace_id\":\"…\",\"span_id\":\"…\"}`. Spec 01 § Score `target`."
+}

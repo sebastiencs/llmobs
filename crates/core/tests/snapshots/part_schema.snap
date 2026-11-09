@@ -1,0 +1,206 @@
+---
+source: crates/core/src/message.rs
+expression: "serde_json::to_string_pretty(&part).unwrap()"
+---
+{
+  "schema": {
+    "oneOf": [
+      {
+        "$ref": "#/components/schemas/TextPart"
+      },
+      {
+        "$ref": "#/components/schemas/ReasoningPart"
+      },
+      {
+        "$ref": "#/components/schemas/ToolCallPart"
+      },
+      {
+        "$ref": "#/components/schemas/ToolCallResponsePart"
+      },
+      {
+        "$ref": "#/components/schemas/UriPart"
+      },
+      {
+        "$ref": "#/components/schemas/BlobPart"
+      },
+      {
+        "$ref": "#/components/schemas/UnknownPart"
+      }
+    ],
+    "description": "One part of a canonical message. Spec 01 § Canonical message format."
+  },
+  "components": {
+    "TextPart": {
+      "type": "object",
+      "description": "Plain text.",
+      "required": [
+        "type",
+        "content"
+      ],
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "The text."
+        },
+        "type": {
+          "type": "string",
+          "description": "Part type.",
+          "enum": [
+            "text"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "ReasoningPart": {
+      "type": "object",
+      "description": "Model reasoning, separate from the user-visible text.",
+      "required": [
+        "type",
+        "content"
+      ],
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "The reasoning text."
+        },
+        "type": {
+          "type": "string",
+          "description": "Part type.",
+          "enum": [
+            "reasoning"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "ToolCallPart": {
+      "type": "object",
+      "description": "A tool or function call requested by the model.",
+      "required": [
+        "type",
+        "name",
+        "arguments"
+      ],
+      "properties": {
+        "arguments": {
+          "description": "Arguments, as JSON."
+        },
+        "id": {
+          "type": "string",
+          "description": "Provider call id, when the source has one."
+        },
+        "name": {
+          "type": "string",
+          "description": "Tool name."
+        },
+        "type": {
+          "type": "string",
+          "description": "Part type.",
+          "enum": [
+            "tool_call"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "ToolCallResponsePart": {
+      "type": "object",
+      "description": "The result of a tool call.",
+      "required": [
+        "type",
+        "response"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Provider call id, when the source has one."
+        },
+        "response": {
+          "description": "Tool result, as JSON."
+        },
+        "type": {
+          "type": "string",
+          "description": "Part type.",
+          "enum": [
+            "tool_call_response"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "UriPart": {
+      "type": "object",
+      "description": "Media addressed by a URI, including `media://` after extraction.",
+      "required": [
+        "type",
+        "uri"
+      ],
+      "properties": {
+        "mime_type": {
+          "type": "string",
+          "description": "MIME type, when known."
+        },
+        "modality": {
+          "$ref": "#/components/schemas/Modality"
+        },
+        "type": {
+          "type": "string",
+          "description": "Part type.",
+          "enum": [
+            "uri"
+          ]
+        },
+        "uri": {
+          "type": "string",
+          "description": "The URI."
+        }
+      },
+      "additionalProperties": true
+    },
+    "BlobPart": {
+      "type": "object",
+      "description": "Inline base64 media, before extraction replaces it with a URI.",
+      "required": [
+        "type",
+        "content"
+      ],
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "Base64 payload."
+        },
+        "mime_type": {
+          "type": "string",
+          "description": "MIME type, when known."
+        },
+        "modality": {
+          "$ref": "#/components/schemas/Modality"
+        },
+        "type": {
+          "type": "string",
+          "description": "Part type.",
+          "enum": [
+            "blob"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "UnknownPart": {
+      "type": "object",
+      "description": "A part type this version does not model; render as JSON.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Part type, when the payload has one."
+        }
+      },
+      "additionalProperties": true
+    },
+    "Modality": {
+      "type": "string",
+      "description": "Media kind. Known values are `image`, `video`, and `audio`. Any other string is kept."
+    }
+  }
+}

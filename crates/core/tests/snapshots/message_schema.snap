@@ -1,0 +1,33 @@
+---
+source: crates/core/src/message.rs
+expression: "schema_pretty::<Message>()"
+---
+{
+  "type": "object",
+  "description": "One message in a conversation. Spec 01 § Canonical message format.",
+  "required": [
+    "role",
+    "parts"
+  ],
+  "properties": {
+    "finish_reason": {
+      "type": "string",
+      "description": "Why generation stopped. Omitted from JSON when absent."
+    },
+    "name": {
+      "type": "string",
+      "description": "Optional speaker name. Omitted from JSON when absent."
+    },
+    "parts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/components/schemas/Part"
+      },
+      "description": "Message parts. Always present; empty when the message has none."
+    },
+    "role": {
+      "$ref": "#/components/schemas/MessageRole"
+    }
+  },
+  "additionalProperties": true
+}

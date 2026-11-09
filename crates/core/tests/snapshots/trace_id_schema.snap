@@ -1,0 +1,9 @@
+---
+source: crates/core/src/ids.rs
+expression: "schema_pretty::<TraceId>()"
+---
+{
+  "type": "string",
+  "description": "Trace id, 16 bytes as lowercase hex.",
+  "pattern": "^[0-9a-f]{32}$"
+}

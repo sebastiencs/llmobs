@@ -1,0 +1,20 @@
+---
+source: crates/core/src/enums.rs
+expression: schema
+---
+{
+  "type": "string",
+  "description": "Kind of work a span represents.\n\nSpec 01 § Span kinds. Stored in `spans.span_kind`.",
+  "enum": [
+    "llm",
+    "embedding",
+    "tool",
+    "agent",
+    "chain",
+    "retriever",
+    "reranker",
+    "guardrail",
+    "evaluator",
+    "span"
+  ]
+}

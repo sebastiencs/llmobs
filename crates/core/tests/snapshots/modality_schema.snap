@@ -1,0 +1,8 @@
+---
+source: crates/core/src/message.rs
+expression: "schema_pretty::<Modality>()"
+---
+{
+  "type": "string",
+  "description": "Media kind. Known values are `image`, `video`, and `audio`. Any other string is kept."
+}

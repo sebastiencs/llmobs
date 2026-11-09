@@ -213,6 +213,41 @@ impl<'de> Deserialize<'de> for SpanId {
     }
 }
 
+fn hex_id_schema(
+    description: &'static str,
+    pattern: &'static str,
+) -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+    utoipa::openapi::schema::ObjectBuilder::new()
+        .schema_type(utoipa::openapi::schema::Type::String)
+        .description(Some(description))
+        .pattern(Some(pattern))
+        .into()
+}
+
+impl utoipa::PartialSchema for TraceId {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        hex_id_schema("Trace id, 16 bytes as lowercase hex.", "^[0-9a-f]{32}$")
+    }
+}
+
+impl utoipa::ToSchema for TraceId {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("TraceId")
+    }
+}
+
+impl utoipa::PartialSchema for SpanId {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        hex_id_schema("Span id, 8 bytes as lowercase hex.", "^[0-9a-f]{16}$")
+    }
+}
+
+impl utoipa::ToSchema for SpanId {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("SpanId")
+    }
+}
+
 fn parse_hyphenated_uuid(input: &str, kind: &'static str) -> Result<uuid::Uuid, CoreError> {
     let bytes = input.as_bytes();
     let hyphenated = bytes.len() == 36
@@ -292,6 +327,24 @@ macro_rules! uuid_id {
                 deserialize_from_str(deserializer)
             }
         }
+
+        impl utoipa::PartialSchema for $name {
+            fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+                utoipa::openapi::schema::ObjectBuilder::new()
+                    .schema_type(utoipa::openapi::schema::Type::String)
+                    .format(Some(utoipa::openapi::schema::SchemaFormat::KnownFormat(
+                        utoipa::openapi::schema::KnownFormat::Uuid,
+                    )))
+                    .description(Some($doc))
+                    .into()
+            }
+        }
+
+        impl utoipa::ToSchema for $name {
+            fn name() -> std::borrow::Cow<'static, str> {
+                std::borrow::Cow::Borrowed(stringify!($name))
+            }
+        }
     };
 }
 
@@ -312,6 +365,8 @@ uuid_id!(
 
 #[cfg(test)]
 mod tests {
+    use utoipa::{PartialSchema, ToSchema};
+
     use super::*;
 
     const TRACE_HEX: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
@@ -447,5 +502,26 @@ mod tests {
             CoreError::UnknownVariant { value, .. } => assert_eq!(value.chars().count(), 64),
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    fn schema_pretty<T: PartialSchema>() -> String {
+        serde_json::to_string_pretty(&T::schema()).unwrap()
+    }
+
+    #[test]
+    fn id_schemas_snapshot() {
+        let org = serde_json::to_value(OrgId::schema()).unwrap();
+        assert_eq!(<OrgId as ToSchema>::name(), "OrgId");
+        assert_eq!(org["type"], "string");
+        assert_eq!(org["format"], "uuid");
+
+        insta::with_settings!({
+            snapshot_path => "../tests/snapshots",
+            prepend_module_to_snapshot => false,
+        }, {
+            insta::assert_snapshot!("trace_id_schema", schema_pretty::<TraceId>());
+            insta::assert_snapshot!("span_id_schema", schema_pretty::<SpanId>());
+            insta::assert_snapshot!("project_id_schema", schema_pretty::<ProjectId>());
+        });
     }
 }
