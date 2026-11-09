@@ -1,6 +1,6 @@
 //! Branded attribute names, reserved keys, and reserved values.
 //!
-//! Renaming the product (D46) means changing [`llmobs_name`]. Specs 02, 06, and 10.
+//! Renaming the product (D46) means changing [`llmobs_name`](crate::llmobs_name). Specs 02, 06, and 10.
 
 /// Product name used in every branded identifier.
 ///
@@ -15,7 +15,7 @@ macro_rules! llmobs_name {
     };
 }
 
-/// The product name. Equal to [`llmobs_name!`].
+/// The product name. Equal to [`llmobs_name`](crate::llmobs_name).
 pub const PRODUCT: &str = crate::llmobs_name!();
 
 /// Span attributes our SDKs emit and ingestion reads.

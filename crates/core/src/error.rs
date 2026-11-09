@@ -1,3 +1,8 @@
+//! Errors from parsing identifiers and stored values, and from building Arrow batches.
+//!
+//! Messages name the field and the reason. They never include payload content
+//! (prompts, completions, attribute values). Spec README § Cross-cutting conventions.
+
 /// Errors from parsing identifiers and stored values, and from building Arrow batches.
 ///
 /// Messages name the field and the reason. They never include payload content
