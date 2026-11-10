@@ -8,10 +8,12 @@ mod sessions;
 mod spans;
 mod traces;
 
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::common::{DFSchema, DFSchemaRef};
 use datafusion::datasource::{TableProvider, ViewTable, provider_as_source};
 use datafusion::error::DataFusionError;
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -128,8 +130,11 @@ impl ViewName {
 /// Sandboxed session with the base views registered.
 pub struct QueryContext {
     /// Later modules plan against this session. Tests read it too.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // filter, SQL and read queries use this from Q7 on
     session: SessionContext,
+    /// Unqualified schema of each registered view, taken from its logical plan.
+    #[allow(dead_code)] // parse_filter reads this
+    schemas: HashMap<ViewName, DFSchemaRef>,
 }
 
 impl std::fmt::Debug for QueryContext {
@@ -152,37 +157,73 @@ impl QueryContext {
     pub fn new(source: ProjectQuery, window: Option<TimeWindow>) -> Result<Self, RunError> {
         let state = session::session_state(source.runtime, source.target_partitions);
         let session = SessionContext::new_with_state(state);
-        register(
-            &session,
+        let mut schemas = HashMap::new();
+        schemas.insert(
             ViewName::Spans,
-            spans::spans_view(source.spans, window)?,
-        )?;
+            register(
+                &session,
+                ViewName::Spans,
+                spans::spans_view(source.spans, window)?,
+            )?,
+        );
         let traces_plan = traces::traces_view(source.traces, window)?;
-        register(
-            &session,
+        schemas.insert(
             ViewName::Sessions,
-            map_plan(sessions::sessions_from_traces(traces_plan.clone()))?,
-        )?;
-        register(&session, ViewName::Traces, traces_plan)?;
-        register(
-            &session,
+            register(
+                &session,
+                ViewName::Sessions,
+                map_plan(sessions::sessions_from_traces(traces_plan.clone()))?,
+            )?,
+        );
+        schemas.insert(
+            ViewName::Traces,
+            register(&session, ViewName::Traces, traces_plan)?,
+        );
+        schemas.insert(
             ViewName::Scores,
-            scores::scores_view(source.scores, window)?,
-        )?;
-        Ok(Self { session })
+            register(
+                &session,
+                ViewName::Scores,
+                scores::scores_view(source.scores, window)?,
+            )?,
+        );
+        Ok(Self { session, schemas })
     }
 
-    #[allow(dead_code)] // filter, SQL and read queries use this from Q6 on
+    #[allow(dead_code)] // filter, SQL and read queries use this from Q7 on
     pub(crate) fn session(&self) -> &SessionContext {
         &self.session
     }
+
+    /// Schema captured when `view` was registered.
+    ///
+    /// `new` registers spans, traces, sessions and scores. Those are the only
+    /// views the filter compiler asks for.
+    #[allow(dead_code, clippy::expect_used)]
+    pub(crate) fn view_schema(&self, view: ViewName) -> &DFSchemaRef {
+        self.schemas
+            .get(&view)
+            .expect("query views are registered with their schemas")
+    }
 }
 
-fn register(session: &SessionContext, name: ViewName, plan: LogicalPlan) -> Result<(), RunError> {
+fn register(
+    session: &SessionContext,
+    name: ViewName,
+    plan: LogicalPlan,
+) -> Result<DFSchemaRef, RunError> {
+    // The plan qualifies columns with the hidden scan name (`raw_spans`, …).
+    // Filters name the view's columns without that qualifier.
+    let schema = DFSchema::from_unqualified_fields(
+        plan.schema().fields().clone(),
+        plan.schema().metadata().clone(),
+    )
+    .map(Arc::new)
+    .map_err(RunError::Internal)?;
     session
         .register_table(name.as_str(), Arc::new(ViewTable::new(plan, None)))
-        .map(|_| ())
-        .map_err(RunError::Internal)
+        .map_err(RunError::Internal)?;
+    Ok(schema)
 }
 
 /// `CAST(duration_ns AS DOUBLE) / 1e6`.

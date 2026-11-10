@@ -4,6 +4,7 @@
 //!
 //! See `docs/spec/03-storage.md` and `docs/spec/05-query.md`.
 
+mod filter;
 mod query_error;
 mod query_text;
 mod views;
