@@ -4,6 +4,7 @@
 
 #![allow(dead_code)]
 
+mod params;
 mod validate;
 
 use std::collections::HashSet;
@@ -11,9 +12,11 @@ use std::collections::HashSet;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SQLOptions;
 use datafusion::sql::parser::Statement as DFStatement;
-use datafusion::sql::sqlparser::tokenizer::Token;
+use datafusion::sql::sqlparser::tokenizer::{Token, TokenWithSpan};
+use params::{bind_parameters, bind_placeholders, param_values};
+use serde_json::{Map, Value};
 
-use crate::query_error::{InvalidQuery, Position};
+use crate::query_error::{InvalidQuery, Position, RunError};
 use crate::query_text::{
     SQL_LIMITS, TextKind, cap_message, expect_end, parse_failure, parser, planning_failure,
     tokenize,
@@ -21,11 +24,38 @@ use crate::query_text::{
 use crate::views::QueryContext;
 use validate::validate_statement;
 
-/// Plan one console statement.
+/// Plan one console statement that has no parameters.
 ///
-/// Q11 inserts parameter binding between tokenization and parsing.
+/// `{name:Type}` is rewritten here; values are bound by [`prepare_sql`].
 pub(crate) async fn plan_sql(ctx: &QueryContext, text: &str) -> Result<LogicalPlan, InvalidQuery> {
+    let (tokens, _) = prepared_tokens(text)?;
+    plan_tokens(ctx, text, tokens).await
+}
+
+/// Plan `text`, substituting `{name:Type}` placeholders from `params`.
+pub(crate) async fn prepare_sql(
+    ctx: &QueryContext,
+    text: &str,
+    params: &Map<String, Value>,
+) -> Result<LogicalPlan, RunError> {
+    let (tokens, placeholders) = prepared_tokens(text)?;
+    let plan = plan_tokens(ctx, text, tokens).await?;
+    let values = param_values(&placeholders, params)?;
+    bind_parameters(plan, &placeholders, values)
+}
+
+fn prepared_tokens(
+    text: &str,
+) -> Result<(Vec<TokenWithSpan>, Vec<params::Placeholder>), InvalidQuery> {
     let tokens = tokenize(text, &SQL_LIMITS, TextKind::Sql)?;
+    bind_placeholders(tokens)
+}
+
+async fn plan_tokens(
+    ctx: &QueryContext,
+    text: &str,
+    tokens: Vec<TokenWithSpan>,
+) -> Result<LogicalPlan, InvalidQuery> {
     let mut parsed = parser(tokens);
     let start = parsed.peek_token();
     let statement = parsed
@@ -262,5 +292,284 @@ mod tests {
             }
             other => panic!("expected a second registration to fail, got {other:?}"),
         }
+    }
+
+    fn json_params(value: &Value) -> Map<String, Value> {
+        value.as_object().expect("json object").clone()
+    }
+
+    async fn column(text: &str, params: &Map<String, Value>, name: &str) -> Vec<String> {
+        let ctx = context();
+        let plan = prepare_sql(&ctx, text, params)
+            .await
+            .unwrap_or_else(|error| panic!("{text}: {error}"));
+        let frame = ctx
+            .session()
+            .execute_logical_plan(plan)
+            .await
+            .unwrap_or_else(|error| panic!("{text}: {error}"));
+        let batches = frame
+            .collect()
+            .await
+            .unwrap_or_else(|error| panic!("{text}: {error}"));
+        let mut values = Vec::new();
+        for batch in batches {
+            let array = batch
+                .column_by_name(name)
+                .unwrap_or_else(|| panic!("{text}: no column {name}"));
+            for row in 0..array.len() {
+                values.push(cell(array, row));
+            }
+        }
+        values
+    }
+
+    fn cell(array: &dyn datafusion::arrow::array::Array, row: usize) -> String {
+        use datafusion::arrow::array::{Int64Array, StringArray};
+        if array.is_null(row) {
+            return "NULL".to_string();
+        }
+        if let Some(values) = array.as_any().downcast_ref::<StringArray>() {
+            return values.value(row).to_string();
+        }
+        if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
+            return values.value(row).to_string();
+        }
+        panic!("column type {}", array.data_type());
+    }
+
+    async fn same(parameterized: &str, params: Value, literal: &str, name: &str) {
+        let mut bound = column(parameterized, &json_params(&params), name).await;
+        let mut plain = column(literal, &Map::new(), name).await;
+        bound.sort();
+        plain.sort();
+        assert_eq!(bound, plain, "{parameterized} vs {literal}");
+        assert!(!bound.is_empty(), "{parameterized} matched no rows");
+    }
+
+    #[tokio::test]
+    async fn each_parameter_kind_filters_rows() {
+        same(
+            "SELECT span_id FROM spans WHERE name = {n:String}",
+            serde_json::json!({"n": "support-agent"}),
+            "SELECT span_id FROM spans WHERE name = 'support-agent'",
+            "span_id",
+        )
+        .await;
+        same(
+            "SELECT trace_id FROM traces WHERE span_count >= {c:Int}",
+            serde_json::json!({"c": 2}),
+            "SELECT trace_id FROM traces WHERE span_count >= 2",
+            "trace_id",
+        )
+        .await;
+        same(
+            "SELECT trace_id FROM traces WHERE cost_total > {c:Float}",
+            serde_json::json!({"c": 0}),
+            "SELECT trace_id FROM traces WHERE cost_total > 0",
+            "trace_id",
+        )
+        .await;
+        same(
+            "SELECT trace_id FROM traces WHERE has_root = {r:Bool}",
+            serde_json::json!({"r": true}),
+            "SELECT trace_id FROM traces WHERE has_root = true",
+            "trace_id",
+        )
+        .await;
+
+        let instant = "2026-01-01T10:05:00Z";
+        let millis = chrono::DateTime::parse_from_rfc3339(instant)
+            .unwrap_or_else(|error| panic!("{instant}: {error}"))
+            .timestamp_millis();
+        let mut from_text = column(
+            "SELECT trace_id FROM traces WHERE start_time >= {t:Timestamp}",
+            &json_params(&serde_json::json!({"t": instant})),
+            "trace_id",
+        )
+        .await;
+        let mut from_millis = column(
+            "SELECT trace_id FROM traces WHERE start_time >= {t:Timestamp}",
+            &json_params(&serde_json::json!({"t": millis})),
+            "trace_id",
+        )
+        .await;
+        from_text.sort();
+        from_millis.sort();
+        assert_eq!(from_text, from_millis);
+        let all = column("SELECT trace_id FROM traces", &Map::new(), "trace_id").await;
+        assert!(!from_text.is_empty());
+        assert!(from_text.len() < all.len());
+    }
+
+    #[tokio::test]
+    async fn a_repeated_name_binds_once_and_two_types_fail() {
+        same(
+            "SELECT span_id FROM spans WHERE name = {n:String} OR name = {n:String}",
+            serde_json::json!({"n": "support-agent"}),
+            "SELECT span_id FROM spans WHERE name = 'support-agent'",
+            "span_id",
+        )
+        .await;
+        let plan = plan_sql(
+            &context(),
+            "SELECT span_id FROM spans WHERE name = {n:String} OR name = {n:String}",
+        )
+        .await
+        .expect("plan");
+        assert_eq!(plan.get_parameter_types().expect("types").len(), 1);
+
+        let error = prepare_sql(&context(), "SELECT {n:String}, {n:Int}", &Map::new())
+            .await
+            .expect_err("two types");
+        match error {
+            RunError::Invalid(error) => {
+                assert_eq!(error.message, "parameter `n` is declared with two types");
+            }
+            other => panic!("expected invalid query, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn bad_parameter_values_are_rejected() {
+        let cases = [
+            (
+                "SELECT name FROM spans WHERE name = {n:String}",
+                serde_json::json!({}),
+                "missing value for parameter n",
+            ),
+            (
+                "SELECT 1",
+                serde_json::json!({"n": 1}),
+                "unknown parameter n",
+            ),
+            (
+                "SELECT {c:Int} AS v",
+                serde_json::json!({"c": 1.5}),
+                "parameter c must be an integer",
+            ),
+            (
+                "SELECT {c:Int} AS v",
+                serde_json::json!({"c": "1"}),
+                "parameter c must be an integer",
+            ),
+            (
+                "SELECT {t:Timestamp} AS v",
+                serde_json::json!({"t": i64::MAX}),
+                "parameter t is out of range",
+            ),
+        ];
+        let mut mismatches = String::new();
+        for (text, params, message) in cases {
+            match prepare_sql(&context(), text, &json_params(&params)).await {
+                Err(RunError::InvalidRequest(actual)) if actual == message => {}
+                Err(error) => mismatches.push_str(&format!("{text}: {error}\n")),
+                Ok(_) => mismatches.push_str(&format!("{text}: planned\n")),
+            }
+        }
+        assert!(mismatches.is_empty(), "{mismatches}");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_parameter_type_points_at_the_type() {
+        let error = prepare_sql(&context(), "SELECT {x:Date}", &Map::new())
+            .await
+            .expect_err("date");
+        match error {
+            RunError::Invalid(error) => {
+                assert_eq!(
+                    error.message,
+                    "unknown parameter type `Date`; use String, Int, Float, Bool or Timestamp"
+                );
+                assert_eq!(error.position, at(1, 11));
+            }
+            other => panic!("expected invalid query, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_placeholders_are_rejected() {
+        for text in ["SELECT $1", "SELECT ?"] {
+            let error = prepare_sql(&context(), text, &Map::new())
+                .await
+                .expect_err(text);
+            match error {
+                RunError::Invalid(error) => {
+                    assert_eq!(error.message, "write parameters as {name:Type}");
+                    assert_eq!(error.position, at(1, 8), "{text}");
+                }
+                other => panic!("{text}: {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_string_literal_is_not_a_parameter() {
+        let values = column("SELECT '{n:String}' AS s", &Map::new(), "s").await;
+        assert_eq!(values, ["{n:String}"]);
+        match prepare_sql(
+            &context(),
+            "SELECT '{n:String}' AS s",
+            &json_params(&serde_json::json!({"n": "x"})),
+        )
+        .await
+        {
+            Err(RunError::InvalidRequest(message)) => {
+                assert_eq!(message, "unknown parameter n");
+            }
+            other => panic!("expected an unknown parameter, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_bare_parameter_keeps_its_declared_type() {
+        let values = column(
+            "SELECT {x:Int} AS v",
+            &json_params(&serde_json::json!({"x": 3})),
+            "v",
+        )
+        .await;
+        assert_eq!(values, ["3"]);
+    }
+
+    #[tokio::test]
+    async fn a_string_parameter_casts_to_the_column_type() {
+        same(
+            "SELECT trace_id FROM traces WHERE span_count = {s:String}",
+            serde_json::json!({"s": "2"}),
+            "SELECT trace_id FROM traces WHERE span_count = 2",
+            "trace_id",
+        )
+        .await;
+        match prepare_sql(
+            &context(),
+            "SELECT trace_id FROM traces WHERE span_count = {s:String}",
+            &json_params(&serde_json::json!({"s": "abc"})),
+        )
+        .await
+        {
+            Err(RunError::InvalidRequest(message)) => {
+                assert_eq!(message, "parameter s does not fit where it is used (Int64)");
+            }
+            other => panic!("expected a cast failure, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn limit_accepts_an_integer_parameter() {
+        let values = column(
+            "SELECT name FROM spans ORDER BY name LIMIT {n:Int}",
+            &json_params(&serde_json::json!({"n": 2})),
+            "name",
+        )
+        .await;
+        let expected = column(
+            "SELECT name FROM spans ORDER BY name LIMIT 2",
+            &Map::new(),
+            "name",
+        )
+        .await;
+        assert_eq!(values, expected);
+        assert_eq!(values.len(), 2);
     }
 }
