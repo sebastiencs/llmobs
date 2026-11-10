@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
+import tanstackRouter from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
@@ -27,7 +28,12 @@ function mockServiceWorker(): Plugin {
 }
 
 export default defineConfig(({ mode }) => ({
-  plugins: [mockServiceWorker(), react(), tailwindcss()],
+  plugins: [
+    mockServiceWorker(),
+    tanstackRouter({ target: "react", autoCodeSplitting: true }),
+    react(),
+    tailwindcss(),
+  ],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

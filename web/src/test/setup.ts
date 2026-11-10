@@ -10,6 +10,8 @@ beforeAll(() => {
 
 installMatchMedia();
 
+window.scrollTo = () => {};
+
 if (!Element.prototype.hasPointerCapture) {
   Element.prototype.hasPointerCapture = () => false;
 }

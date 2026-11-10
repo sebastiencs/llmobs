@@ -1,14 +1,16 @@
+import { QueryClientProvider } from "@tanstack/react-query";
+import { RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "@fontsource-variable/inter";
+import { createAppQueryClient } from "@/api/client";
 import {
   applyResolvedTheme,
   readStoredTheme,
   resolveTheme,
   ThemeProvider,
 } from "@/components/theme-provider";
-import { ThemeToggle } from "@/components/theme-toggle";
-import { PRODUCT_NAME } from "@/product";
+import { createAppRouter } from "@/router";
 import "./styles.css";
 
 async function main(): Promise<void> {
@@ -24,14 +26,16 @@ async function main(): Promise<void> {
     throw new Error("Missing #root");
   }
 
+  const queryClient = createAppQueryClient();
+  const router = createAppRouter({ queryClient });
+
   createRoot(root).render(
     <StrictMode>
-      <ThemeProvider>
-        <header className="flex h-14 items-center justify-between border-b px-4">
-          <span className="font-medium">{PRODUCT_NAME}</span>
-          <ThemeToggle />
-        </header>
-      </ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider>
+          <RouterProvider router={router} />
+        </ThemeProvider>
+      </QueryClientProvider>
     </StrictMode>,
   );
 }

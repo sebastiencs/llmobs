@@ -1,0 +1,7 @@
+{
+  "target": "react",
+  "autoCodeSplitting": true,
+  "quoteStyle": "double",
+  "semicolons": true,
+  "routeFileIgnorePattern": "\\.test\\."
+}

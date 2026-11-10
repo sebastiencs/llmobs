@@ -7,6 +7,8 @@ import type { paths } from "./schema.gen";
 export const api = createClient<paths>({
   baseUrl: window.location.origin,
   credentials: "same-origin",
+  // Read fetch at call time. The client is created at import, before tests install MSW.
+  fetch: (request: Request) => globalThis.fetch(request),
 });
 
 export const $api = createQueryHooks(api);
