@@ -5,6 +5,7 @@
 
 #![allow(dead_code)]
 
+mod scores;
 mod validate;
 
 use datafusion::arrow::datatypes::DataType;
@@ -19,6 +20,7 @@ use crate::query_text::{
     tokenize,
 };
 use crate::views::{QueryContext, ViewName};
+use scores::planning_schema;
 use validate::validate;
 
 /// Which view a filter expression is compiled against.
@@ -58,12 +60,21 @@ pub(crate) struct Filter {
     pub(crate) expr: Expr,
     /// True when the expression names the `environment` column.
     pub(crate) references_environment: bool,
+    /// Score names joined while applying, in index order.
+    pub(crate) scores: Vec<String>,
 }
 
 impl Filter {
-    /// Keep rows of `frame` that match. `frame` has this view's columns.
-    pub(crate) fn apply(self, frame: DataFrame) -> Result<DataFrame, DataFusionError> {
-        frame.filter(self.expr)
+    /// Keep rows of `frame` that match.
+    ///
+    /// Score calls join the latest row of that name from `scores` first. The
+    /// result has `frame`'s columns in their original order.
+    pub(crate) async fn apply(
+        self,
+        frame: DataFrame,
+        ctx: &QueryContext,
+    ) -> Result<DataFrame, DataFusionError> {
+        scores::apply(frame, ctx, self.view, &self.scores, self.expr).await
     }
 }
 
@@ -87,7 +98,8 @@ impl QueryContext {
             .map_err(|error| parse_failure(error, &parsed, text))?;
         expect_end(&mut parsed, text)?;
         let schema = self.view_schema(view.view_name());
-        let references_environment = validate(schema, &mut ast)?;
+        let validated = validate(view, schema, &mut ast)?;
+        let planning = planning_schema(schema, &validated.scores)?;
         let expr = self
             .session()
             .state()
@@ -96,11 +108,11 @@ impl QueryContext {
                     expr: ast,
                     alias: None,
                 },
-                schema,
+                &planning,
             )
             .map_err(|error| planning_failure(&error))?;
         let data_type = expr
-            .get_type(schema.as_ref())
+            .get_type(planning.as_ref())
             .map_err(|error| planning_failure(&error))?;
         if !matches!(data_type, DataType::Boolean | DataType::Null) {
             return Err(invalid(
@@ -111,7 +123,8 @@ impl QueryContext {
         Ok(Filter {
             view,
             expr,
-            references_environment,
+            references_environment: validated.references_environment,
+            scores: validated.scores,
         })
     }
 }
@@ -126,14 +139,21 @@ fn invalid(message: impl AsRef<str>, position: Option<Position>) -> InvalidQuery
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::num::NonZeroUsize;
+    use std::sync::Arc;
 
     use datafusion::arrow::array::{Array, AsArray, RecordBatch};
+    use datafusion::execution::runtime_env::RuntimeEnv;
     use llmobs_core::enums::{SpanKind, SpanStatus};
+    use llmobs_core::score::{Score, ScoreTarget};
     use llmobs_core::span::Span;
 
     use crate::query_error::Position;
-    use crate::test_support::{dataset_scores, dataset_spans, example_query, live_scores};
-    use crate::views::QueryContext;
+    use crate::test_support::{
+        dataset_scores, dataset_spans, example_query, live_scores, live_scores_table, spans_table,
+        traces_table,
+    };
+    use crate::views::{ProjectQuery, QueryContext};
 
     use super::FilterView;
 
@@ -160,7 +180,8 @@ mod tests {
             .await
             .unwrap_or_else(|error| panic!("{text}: {error}"));
         let filtered = filter
-            .apply(frame)
+            .apply(frame, ctx)
+            .await
             .unwrap_or_else(|error| panic!("{text}: {error}"));
         let batches = filtered
             .collect()
@@ -554,7 +575,6 @@ mod tests {
                 "a hex literal is not allowed in a filter",
                 at(1, 1),
             ),
-            ("score('x') > 0", "unknown function `score`", at(1, 1)),
             ("", "the filter is empty", None),
             (" \n\t", "the filter is empty", None),
         ];
@@ -593,5 +613,346 @@ mod tests {
         if let Err(payload) = joined {
             std::panic::resume_unwind(payload);
         }
+    }
+
+    fn trace_hex(target: &ScoreTarget) -> Option<String> {
+        match target {
+            ScoreTarget::Trace { trace_id } => Some(trace_id.to_hex()),
+            ScoreTarget::Span { .. } | ScoreTarget::Session { .. } => None,
+        }
+    }
+
+    fn span_hex(target: &ScoreTarget) -> Option<String> {
+        match target {
+            ScoreTarget::Span { span_id, .. } => Some(span_id.to_hex()),
+            ScoreTarget::Trace { .. } | ScoreTarget::Session { .. } => None,
+        }
+    }
+
+    fn session_of(target: &ScoreTarget) -> Option<&str> {
+        match target {
+            ScoreTarget::Session { session_id } => Some(session_id),
+            ScoreTarget::Trace { .. } | ScoreTarget::Span { .. } => None,
+        }
+    }
+
+    /// Latest live score of `name` on each trace, by `(updated_at, score_id)`.
+    fn latest_on_traces(name: &str) -> Vec<Score> {
+        let mut best: BTreeMap<String, Score> = BTreeMap::new();
+        for score in live_scores(&dataset_scores()) {
+            if score.name != name {
+                continue;
+            }
+            let Some(id) = trace_hex(&score.target) else {
+                continue;
+            };
+            let replace = best.get(&id).is_none_or(|current| {
+                (score.updated_at, &score.score_id) > (current.updated_at, &current.score_id)
+            });
+            if replace {
+                best.insert(id, score);
+            }
+        }
+        best.into_values().collect()
+    }
+
+    #[tokio::test]
+    async fn score_functions_read_the_latest_value() {
+        let ctx = context();
+        let rows = traces(&dataset_spans());
+        let all: BTreeSet<String> = rows.iter().map(|trace| trace.id.clone()).collect();
+        let helpful = latest_on_traces("helpfulness");
+        let matched: BTreeSet<String> = helpful
+            .iter()
+            .filter(|score| score.value.value_num().is_some_and(|value| value >= 0.5))
+            .filter_map(|score| trace_hex(&score.target))
+            .collect();
+        assert_eq!(
+            matching(
+                &ctx,
+                FilterView::Traces,
+                "score('helpfulness') >= 0.5",
+                "trace_id"
+            )
+            .await,
+            matched
+        );
+        let mut missing = all.clone();
+        for id in &matched {
+            missing.remove(id);
+        }
+        assert_eq!(
+            matching(
+                &ctx,
+                FilterView::Traces,
+                "score('helpfulness') IS NULL",
+                "trace_id"
+            )
+            .await,
+            missing
+        );
+
+        let present = matching(
+            &ctx,
+            FilterView::Traces,
+            "has_score('helpfulness')",
+            "trace_id",
+        )
+        .await;
+        let absent = matching(
+            &ctx,
+            FilterView::Traces,
+            "NOT has_score('helpfulness')",
+            "trace_id",
+        )
+        .await;
+        assert!(present.is_disjoint(&absent));
+        assert_eq!(
+            present.union(&absent).cloned().collect::<BTreeSet<_>>(),
+            all
+        );
+
+        let tone = live_scores(&dataset_scores())
+            .into_iter()
+            .find(|score| score.name == "tone")
+            .expect("tone");
+        assert_eq!(
+            matching(
+                &ctx,
+                FilterView::Spans,
+                "score_label('tone') = 'friendly'",
+                "span_id"
+            )
+            .await,
+            span_hex(&tone.target).into_iter().collect()
+        );
+        assert_eq!(
+            matching(&ctx, FilterView::Spans, "score('tone') > 0.5", "span_id").await,
+            span_hex(&tone.target).into_iter().collect()
+        );
+        let resolved = live_scores(&dataset_scores())
+            .into_iter()
+            .find(|score| score.name == "resolved")
+            .expect("resolved");
+        assert_eq!(
+            matching(
+                &ctx,
+                FilterView::Sessions,
+                "score('resolved') > 0.5",
+                "session_id"
+            )
+            .await,
+            session_of(&resolved.target)
+                .map(str::to_owned)
+                .into_iter()
+                .collect()
+        );
+    }
+
+    fn hand_score(id: &str, value: &str, updated: &str) -> Score {
+        let text = format!(
+            r#"{{
+                "project_id": "01900000-0000-7000-8000-000000000001",
+                "score_id": "{id}",
+                "target": {{"type": "trace", "trace_id": "a1000000000000000000000000000001"}},
+                "name": "q",
+                "value": {value},
+                "source": "api",
+                "created_at": "{updated}",
+                "updated_at": "{updated}",
+                "deleted": false,
+                "ingest_time": "{updated}"
+            }}"#
+        );
+        serde_json::from_str(&text).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    fn context_with_scores(scores: &[Score]) -> QueryContext {
+        let spans = dataset_spans();
+        QueryContext::new(
+            ProjectQuery {
+                spans: spans_table(&spans),
+                traces: traces_table(&spans),
+                scores: live_scores_table(scores),
+                runtime: Arc::new(RuntimeEnv::default()),
+                target_partitions: NonZeroUsize::new(2).expect("two partitions"),
+            },
+            None,
+        )
+        .expect("context")
+    }
+
+    const TRACE_1: &str = "a1000000000000000000000000000001";
+    const LOW_ID: &str = "01900000-0000-7000-8000-0000000000a1";
+    const HIGH_ID: &str = "01900000-0000-7000-8000-0000000000b2";
+    const EARLIER: &str = "2026-01-01T00:00:00.000000001Z";
+    const LATER: &str = "2026-01-01T00:00:00.000000002Z";
+
+    #[tokio::test]
+    async fn the_latest_score_wins() {
+        let numeric = |value: f64| format!(r#"{{"data_type":"numeric","value":{value}}}"#);
+        let by_time = context_with_scores(&[
+            hand_score(LOW_ID, &numeric(1.0), EARLIER),
+            hand_score(HIGH_ID, &numeric(2.0), LATER),
+        ]);
+        assert_eq!(
+            matching(&by_time, FilterView::Traces, "score('q') = 2", "trace_id").await,
+            BTreeSet::from([TRACE_1.to_owned()])
+        );
+        assert!(
+            matching(&by_time, FilterView::Traces, "score('q') = 1", "trace_id")
+                .await
+                .is_empty()
+        );
+
+        let by_id = context_with_scores(&[
+            hand_score(LOW_ID, &numeric(1.0), LATER),
+            hand_score(HIGH_ID, &numeric(9.0), LATER),
+        ]);
+        assert_eq!(
+            matching(&by_id, FilterView::Traces, "score('q') = 9", "trace_id").await,
+            BTreeSet::from([TRACE_1.to_owned()])
+        );
+
+        let categorical = context_with_scores(&[
+            hand_score(HIGH_ID, &numeric(1.0), EARLIER),
+            hand_score(
+                LOW_ID,
+                r#"{"data_type":"categorical","value":{"label":"good"}}"#,
+                LATER,
+            ),
+        ]);
+        assert_eq!(
+            matching(
+                &categorical,
+                FilterView::Traces,
+                "score('q') IS NULL AND score_label('q') = 'good'",
+                "trace_id"
+            )
+            .await,
+            BTreeSet::from([TRACE_1.to_owned()])
+        );
+    }
+
+    #[tokio::test]
+    async fn two_score_names_share_one_join_when_repeated() {
+        let ctx = context();
+        let either = ctx
+            .parse_filter(
+                FilterView::Traces,
+                "score('helpfulness') >= 0.5 OR score('thumbs') >= 0.5",
+            )
+            .expect("or");
+        assert_eq!(
+            either.scores,
+            vec!["helpfulness".to_owned(), "thumbs".to_owned()]
+        );
+        let frame = ctx.session().table("traces").await.expect("traces");
+        let columns: Vec<String> = frame
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect();
+        let filtered = either.apply(frame, &ctx).await.expect("apply");
+        let actual: Vec<String> = filtered
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect();
+        assert_eq!(actual, columns);
+        drop(filtered);
+
+        assert_eq!(
+            matching(
+                &ctx,
+                FilterView::Traces,
+                "score('helpfulness') >= 0.5 OR score('thumbs') >= 0.5",
+                "trace_id"
+            )
+            .await,
+            BTreeSet::from([
+                "a1000000000000000000000000000001".to_owned(),
+                "a1000000000000000000000000000002".to_owned(),
+            ])
+        );
+        assert!(
+            matching(
+                &ctx,
+                FilterView::Traces,
+                "score('helpfulness') >= 0.5 AND score('thumbs') >= 0.5",
+                "trace_id"
+            )
+            .await
+            .is_empty()
+        );
+        let repeated = ctx
+            .parse_filter(
+                FilterView::Traces,
+                "score('helpfulness') >= 0.5 AND score('helpfulness') < 1",
+            )
+            .expect("repeated");
+        assert_eq!(repeated.scores, vec!["helpfulness".to_owned()]);
+        assert_eq!(
+            matching(
+                &ctx,
+                FilterView::Traces,
+                "score('helpfulness') >= 0.5 AND score('helpfulness') < 1",
+                "trace_id"
+            )
+            .await,
+            BTreeSet::from(["a1000000000000000000000000000001".to_owned()])
+        );
+    }
+
+    #[test]
+    fn score_calls_that_are_not_one_literal_fail() {
+        let ctx = context();
+        let cases = [
+            (
+                FilterView::Spans,
+                "score(name) > 1",
+                "score() takes one string literal, the score name",
+                at(1, 1),
+            ),
+            (
+                FilterView::Spans,
+                "score('a', 'b') > 1",
+                "score() takes one string literal, the score name",
+                at(1, 1),
+            ),
+            (
+                FilterView::Scores,
+                "score('x') > 1",
+                "score functions are not available on the scores view",
+                at(1, 1),
+            ),
+            (
+                FilterView::Spans,
+                "__score_0_num > 1",
+                "unknown column `__score_0_num`",
+                at(1, 1),
+            ),
+        ];
+        for (view, text, message, position) in cases {
+            let error = ctx.parse_filter(view, text).expect_err(text);
+            assert_eq!(
+                (error.message.as_str(), error.position),
+                (message, position),
+                "{text}"
+            );
+        }
+        let mut calls = Vec::new();
+        for name in 'a'..='i' {
+            calls.push(format!("score('{name}') > 0"));
+        }
+        let text = calls.join(" OR ");
+        let column = text.find("score('i')").expect("ninth") as u32 + 1;
+        let error = ctx
+            .parse_filter(FilterView::Traces, &text)
+            .expect_err("nine names");
+        assert_eq!(error.message, "a filter can use at most 8 score names");
+        assert_eq!(error.position, at(1, column));
     }
 }

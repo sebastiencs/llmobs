@@ -16,24 +16,43 @@ use datafusion::sql::sqlparser::ast::{
     TimezoneInfo, UnaryOperator, Value,
 };
 
+use super::FilterView;
+use super::scores::MAX_SCORE_NAMES;
 use crate::query_error::{InvalidQuery, Position};
 use crate::query_text::cap_message;
 
-/// Accept `expr` for `schema`, rewriting casts in place.
-///
-/// The bool is true when a resolved column is `environment`.
-pub(crate) fn validate(schema: &DFSchema, expr: &mut Expr) -> Result<bool, InvalidQuery> {
+/// What [`validate`] rewrote while accepting an expression.
+pub(crate) struct Validated {
+    /// True when a resolved column is `environment`.
+    pub(crate) references_environment: bool,
+    /// Distinct score names, in order of first appearance.
+    pub(crate) scores: Vec<String>,
+}
+
+/// Accept `expr` for `schema`, rewriting casts and score calls in place.
+pub(crate) fn validate(
+    view: FilterView,
+    schema: &DFSchema,
+    expr: &mut Expr,
+) -> Result<Validated, InvalidQuery> {
     let mut walk = Walk {
+        view,
         schema,
         references_environment: false,
+        scores: Vec::new(),
     };
     walk.expr(expr)?;
-    Ok(walk.references_environment)
+    Ok(Validated {
+        references_environment: walk.references_environment,
+        scores: walk.scores,
+    })
 }
 
 struct Walk<'a> {
+    view: FilterView,
     schema: &'a DFSchema,
     references_environment: bool,
+    scores: Vec<String>,
 }
 
 impl Walk<'_> {
@@ -205,6 +224,9 @@ impl Walk<'_> {
 
     fn function(&mut self, expr: &mut Expr) -> Result<(), InvalidQuery> {
         let position = at(expr);
+        if self.rewrite_score(position, expr)? {
+            return Ok(());
+        }
         let Expr::Function(function) = expr else {
             return Ok(());
         };
@@ -220,9 +242,72 @@ impl Walk<'_> {
         }
         Ok(())
     }
+
+    /// Replace a score call with its internal column. User identifiers are
+    /// checked against the view before this runs, so `__score_0_num` typed by
+    /// a caller is still an unknown column.
+    fn rewrite_score(
+        &mut self,
+        position: Option<Position>,
+        expr: &mut Expr,
+    ) -> Result<bool, InvalidQuery> {
+        let rewritten = {
+            let Expr::Function(function) = &*expr else {
+                return Ok(false);
+            };
+            let Some(name) = bare_name(function) else {
+                return Ok(false);
+            };
+            if !matches!(name.as_str(), "score" | "score_label" | "has_score") {
+                return Ok(false);
+            }
+            ensure_plain_call(position, function)?;
+            let Some(score_name) = one_string_literal(function) else {
+                return Err(invalid(
+                    format!("{name}() takes one string literal, the score name"),
+                    position,
+                ));
+            };
+            if self.view == FilterView::Scores {
+                return Err(invalid(
+                    "score functions are not available on the scores view",
+                    position,
+                ));
+            }
+            let index = self.score_index(position, score_name)?;
+            let suffix = match name.as_str() {
+                "score" => "num",
+                "score_label" => "str",
+                _ => "present",
+            };
+            let column = Expr::Identifier(Ident::new(format!("__score_{index}_{suffix}")));
+            if name == "has_score" {
+                Expr::IsTrue(Box::new(column))
+            } else {
+                column
+            }
+        };
+        *expr = rewritten;
+        Ok(true)
+    }
+
+    fn score_index(
+        &mut self,
+        position: Option<Position>,
+        name: String,
+    ) -> Result<usize, InvalidQuery> {
+        if let Some(index) = self.scores.iter().position(|existing| existing == &name) {
+            return Ok(index);
+        }
+        if self.scores.len() == MAX_SCORE_NAMES {
+            return Err(invalid("a filter can use at most 8 score names", position));
+        }
+        self.scores.push(name);
+        Ok(self.scores.len() - 1)
+    }
 }
 
-fn function_shape(position: Option<Position>, function: &Function) -> Result<(), InvalidQuery> {
+fn ensure_plain_call(position: Option<Position>, function: &Function) -> Result<(), InvalidQuery> {
     if function.uses_odbc_syntax {
         return Err(forbid(position, "an ODBC function"));
     }
@@ -254,6 +339,37 @@ fn function_shape(position: Option<Position>, function: &Function) -> Result<(),
     if !list.clauses.is_empty() {
         return Err(forbid(position, "a function clause"));
     }
+    Ok(())
+}
+
+fn bare_name(function: &Function) -> Option<String> {
+    match function.name.0.as_slice() {
+        [ObjectNamePart::Identifier(ident)] => Some(ident.value.to_ascii_lowercase()),
+        _ => None,
+    }
+}
+
+fn one_string_literal(function: &Function) -> Option<String> {
+    let FunctionArguments::List(list) = &function.args else {
+        return None;
+    };
+    let [FunctionArg::Unnamed(FunctionArgExpr::Expr(expr))] = list.args.as_slice() else {
+        return None;
+    };
+    match expr {
+        Expr::Value(value) => match &value.value {
+            Value::SingleQuotedString(text) => Some(text.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn function_shape(position: Option<Position>, function: &Function) -> Result<(), InvalidQuery> {
+    ensure_plain_call(position, function)?;
+    let FunctionArguments::List(list) = &function.args else {
+        return Err(forbid(position, "a function call without parentheses"));
+    };
     let name = match function.name.0.as_slice() {
         [ObjectNamePart::Identifier(ident)] => ident.value.to_ascii_lowercase(),
         _ => return Err(forbid(position, "a qualified name")),
