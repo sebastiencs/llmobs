@@ -64,6 +64,21 @@ assert-clean:
     git diff --exit-code
     test -z "$(git status --porcelain --untracked-files=all)"
 
+# Install a packed TypeScript SDK into a scratch project and load it from ESM and CommonJS
+ts-smoke tarball:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tarball="$(realpath '{{tarball}}')"
+    expected="$(tar -xOzf "$tarball" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')"
+    dir="$(mktemp -d)"
+    trap 'rm -rf "$dir"' EXIT
+    cd "$dir"
+    npm init -y >/dev/null
+    npm install --no-audit --no-fund --ignore-scripts "$tarball" >/dev/null
+    EXPECTED="$expected" node --input-type=module -e 'import { VERSION } from "llmobs"; if (VERSION !== process.env.EXPECTED) { console.error(`ESM: VERSION ${VERSION}`); process.exit(1); }'
+    EXPECTED="$expected" node -e 'const { VERSION } = require("llmobs"); if (VERSION !== process.env.EXPECTED) { console.error(`CJS: VERSION ${VERSION}`); process.exit(1); }'
+    echo "llmobs ${expected} loads from ESM and CommonJS on Node $(node --version)"
+
 # Web dev server with mocked API (fixtures/api)
 web-dev: js-install
     pnpm --dir web run dev

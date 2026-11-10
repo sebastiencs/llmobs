@@ -54,9 +54,96 @@ jobs:
       - run: just deny
       - run: just assert-clean
 
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/js # zizmor: ignore[self-repository] actionlint 1.7.12 rejects the $/ form
+      - run: just check-web
+      - run: just assert-clean
+
+  ts-sdk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/js # zizmor: ignore[self-repository] actionlint 1.7.12 rejects the $/ form
+      - run: just check-ts
+      - run: just assert-clean
+
+  ts-sdk-min-node:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/js # zizmor: ignore[self-repository] actionlint 1.7.12 rejects the $/ form
+      - run: just js-install
+      - run: pnpm --dir sdks/typescript run build
+      - run: pnpm --dir sdks/typescript pack --pack-destination "$RUNNER_TEMP"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.12.0
+      - name: Load the packed SDK on Node 22.12
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tarballs=("$RUNNER_TEMP"/llmobs-*.tgz)
+          if (( ${#tarballs[@]} != 1 )); then
+            printf 'expected one tarball, found %s\n' "${#tarballs[@]}"
+            exit 1
+          fi
+          just ts-smoke "${tarballs[0]}"
+      # pnpm 11 requires Node >= 22.13. vitest 5.1.0 allows Node ^22.12.0.
+      - name: Test the TypeScript SDK on Node 22.12
+        working-directory: sdks/typescript
+        run: node node_modules/vitest/vitest.mjs run
+      - run: just assert-clean
+
+  python-sdk:
+    name: python-sdk (${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.15"]
+    env:
+      UV_PYTHON: ${{ matrix.python }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+          enable-cache: true
+          cache-dependency-glob: sdks/python/uv.lock
+      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
+        with:
+          tool: just@1.59.0
+      - run: just check-py
+      - run: just assert-clean
+
   ci-ok:
     if: always()
-    needs: [rust-lint, rust-test, rust-deny]
+    needs:
+      [
+        rust-lint,
+        rust-test,
+        rust-deny,
+        web,
+        ts-sdk,
+        ts-sdk-min-node,
+        python-sdk,
+      ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
