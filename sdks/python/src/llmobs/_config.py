@@ -143,7 +143,9 @@ def _resolve_api_key(value: object, source: Mapping[str, str]) -> str:
         return value
     raw = _read_env(source, ENV_API_KEY)
     if raw is None:
-        raise ConfigError("api_key: required")
+        raise ConfigError(
+            f"api_key: required; set {ENV_API_KEY}, or {ENV_ENABLED}=false to run without llmobs",
+        )
     if not raw.startswith(_KEY_PREFIX):
         raise ConfigError(f"{ENV_API_KEY}: must start with {_KEY_PREFIX}")
     return raw

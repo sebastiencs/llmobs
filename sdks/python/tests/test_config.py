@@ -248,8 +248,10 @@ def test_api_key_errors_do_not_echo_the_value() -> None:
     assert STORED_KEY not in repr(config)
     assert STORED_KEY not in str(config)
 
-    with pytest.raises(ConfigError, match="api_key: required"):
+    with pytest.raises(ConfigError, match="api_key: required") as missing:
         resolve_config(env={})
+    assert ENV_API_KEY in str(missing.value)
+    assert ENV_ENABLED in str(missing.value)
     with pytest.raises(ConfigError, match="api_key: must start with sk-llmobs-") as argument_error:
         resolve_config(api_key=BAD_KEY, env={})
     assert BAD_KEY not in str(argument_error.value)

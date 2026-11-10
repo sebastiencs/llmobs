@@ -179,7 +179,10 @@ function resolveApiKey(value: unknown, source: Env): string {
   }
   const raw = readEnv(source, ENV_API_KEY);
   if (raw === undefined) {
-    throw new ConfigError("apiKey", "required");
+    throw new ConfigError(
+      "apiKey",
+      `required; set ${ENV_API_KEY}, or ${ENV_ENABLED}=false to run without llmobs`,
+    );
   }
   if (!raw.startsWith(KEY_PREFIX)) {
     throw new ConfigError(ENV_API_KEY, `must start with ${KEY_PREFIX}`);

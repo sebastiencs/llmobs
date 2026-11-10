@@ -49,6 +49,26 @@ describe("defaults", () => {
     expect(config.release).toBeUndefined();
     expect(config.sampleRate).toBe(1);
   });
+
+  it("names both env vars when the key is missing", () => {
+    expect(() => resolve()).toThrow(ConfigError);
+    try {
+      resolve();
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      const configError = error as ConfigError;
+      expect(configError.option).toBe("apiKey");
+      expect(configError.message).toContain("LLMOBS_API_KEY");
+      expect(configError.message).toContain("LLMOBS_ENABLED");
+    }
+  });
+
+  it("disables from the env when no key is set", () => {
+    const config = resolve({}, { LLMOBS_ENABLED: "false" });
+    expect(config.enabled).toBe(false);
+    expect(config.apiKey).toBeUndefined();
+    expect(config.baseUrl).toBe("http://localhost:8080");
+  });
 });
 
 describe("precedence", () => {
@@ -256,7 +276,9 @@ describe("process.env", () => {
     try {
       expect(resolveConfig({ apiKey: KEY }).baseUrl).toBe("http://localhost:8080");
       expect(() => resolveConfig()).toThrow(ConfigError);
-      expect(() => resolveConfig()).toThrow("apiKey: required");
+      expect(() => resolveConfig()).toThrow(
+        "apiKey: required; set LLMOBS_API_KEY, or LLMOBS_ENABLED=false to run without llmobs",
+      );
     } finally {
       Object.defineProperty(globalThis, "process", { value: previous, configurable: true });
     }

@@ -640,3 +640,112 @@ check-ts: js-install
 - every place you had to interpret this plan or a spec.
 
 **Commit:** `docs: document web and SDK workflows` (plus any review fixes).
+
+---
+
+## S8 — SDK behaviour after the competitor review
+
+**Prerequisites:** S1–S7 merged.
+
+### Why
+
+After S7 the SDK spec was compared with the SDK code of Opik, LangWatch, Phoenix, MLflow and Helicone, and with what the Langfuse and Laminar servers accept. The direction holds (OTel tracing over OTLP/HTTP, REST for the rest, own provider, OpenInference reuse, minimal dependencies), but spec 10 is silent or self-contradictory on eight points. This sub-phase writes the answers into the spec and the decision log, and applies the two that touch code that already exists (the missing-key message and the Node engine range). Everything else is spec text that the SDK tracing tracks will implement later.
+
+This sub-phase does not change S1–S7 of this plan. Where S1–S7 say "Node ≥ 22", D77 as updated here (Node ≥ 22.12) wins.
+
+### Decisions
+
+| Topic | Decision | Who |
+|---|---|---|
+| Missing API key | Stays a `ConfigError` at `init()`: a misconfigured deployment fails at startup. `enabled=false` is how to run without llmobs. Nothing raises after `init()` returns. | user |
+| Baggage | Opt-in per call: `context(..., propagate=True)` / `withContext({ ..., propagate: true }, fn)`. Default is in-process span attributes only. | user |
+| TS process exit | `init()` registers one `beforeExit` listener that calls `shutdown()`. No signal handlers. `process.exit()`, signals and serverless handlers need an explicit `flush()`/`shutdown()`. | user |
+| Own provider vs. OTel-native libraries | The own provider is never registered globally. `tracer_provider()` / `tracerProvider()` exposes it; `aiTelemetry()` returns a `tracer` built from it. | plan |
+| Generator output | Yielded items joined into one string when all are strings, else a JSON list; `reduce_output` / `reduceOutput` overrides. | plan |
+| SDK identification | Tracer scope `llmobs` + SDK version; resource `telemetry.distro.name` / `telemetry.distro.version`. | plan |
+| Buffers | Spans: OTel `BatchSpanProcessor` queue (drops when full). Scores: at most 10 000 buffered, new scores dropped when full; dropped counts logged at warning level at most once per minute. | plan |
+| Node minimum | 22.12, the first release where `require()` of an ES module works without a flag, so CommonJS apps can load the ESM-only package. | plan |
+
+Not adopted, for the record in your report only: pytest/vitest test-runner helpers for CI gating (Phoenix, Opik). `assert_min` stays the MVP gate.
+
+### `docs/mvp-decisions.md`
+
+1. D77 row: replace `Node ≥ 22` with `Node ≥ 22.12 (first release with unflagged \`require()\` of ES modules)`. Keep the rest of the row.
+2. Add a row after D79:
+
+| D80 | SDK runtime behaviour | `init()` raises `ConfigError` for an invalid configuration, a missing API key included; after `init()` nothing raises into the app. The own `TracerProvider` is never registered globally; `tracer_provider()` exposes it and `aiTelemetry()` passes a tracer from it. Session/user go into W3C baggage only with `context(propagate=True)`. Exit: Python `atexit`, TypeScript `beforeExit`, no signal handlers. Generator output: joined strings or a JSON list, `reduce_output` overrides. Spans use scope `llmobs`; the resource carries `telemetry.distro.*`. Scores buffer up to 10 000, dropping new ones when full (spec 10). |
+
+### `docs/spec/10-sdk.md`
+
+Apply these edits. Keep the wording; fix only grammar or a broken reference, and list any change in your report.
+
+**E1 — Design rule 1**, replace the whole item with:
+
+> 1. **Own `TracerProvider` by default.** `init()` creates a dedicated provider + `BatchSpanProcessor` + OTLP exporter and never registers it as the global provider, so we don't hijack the app's existing OTel setup. `init(use_global_provider=True)` instead adds our processor/exporter to the global provider (for apps already using OTel that want one pipeline). `llmobs.tracer_provider()` (TS `llmobs.tracerProvider()`) returns the provider in use (a no-op provider before `init()` or when disabled), for libraries that emit OTel spans themselves and accept a provider or tracer (pydantic-ai, the Vercel AI SDK, …). Spans such libraries send to the global provider reach llmobs only with `use_global_provider=True`.
+
+**E2 — Design rule 4**, replace the whole item with:
+
+> 4. **Never break the app after `init()`.** `init()` raises `ConfigError` for an invalid configuration, a missing API key included (D80): a misconfigured deployment fails at startup, where it is noticed. Use `enabled=false` to run without llmobs. Decorators, context managers and `score()` used before `init()` or with `enabled=false` do nothing. After `init()` returns, nothing the SDK does raises into the app: exporter errors are logged at debug level, serialization failures fall back to `repr()`, and full buffers drop data (§ Lifecycle). The SDK has no required dependencies beyond `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http` and an HTTP client.
+
+**E3 — Configuration rule 11**, append one sentence:
+
+> A missing API key says how to fix it: `api_key: required; set LLMOBS_API_KEY, or LLMOBS_ENABLED=false to run without llmobs` (TS: `apiKey: …`).
+
+**E4 — new section `## Lifecycle`**, inserted between `## Configuration` and `## Python API`:
+
+> ## Lifecycle
+>
+> - **Exit.** Python: `init()` registers an `atexit` hook that calls `shutdown()`. TypeScript: where `process` exists, `init()` registers one `process.once("beforeExit", …)` listener that calls `shutdown()`; calling `init()` again does not add a second one. `beforeExit` fires when the event loop empties, not on `process.exit()` or a signal, and the SDK installs no signal handlers: apps that exit that way, and serverless handlers, `await llmobs.flush()` (or `shutdown()`) themselves (D80).
+> - **`flush()`** blocks (Python) or resolves (TS) when pending spans and scores are exported or the export timeout expires. **`shutdown()`** flushes, then stops the exporters; it is idempotent, and spans and scores after it are dropped.
+> - **Buffers.** Spans go through the OTel `BatchSpanProcessor` with its default queue size; when it is full, new spans are dropped (OTel behaviour). Scores are buffered up to 10 000; when full, new scores are dropped. Dropped counts are logged at warning level at most once per minute, with counts only.
+> - **Identification.** Spans created by the SDK use the instrumentation scope name `llmobs` and the SDK version as scope version (instrumentor spans keep their own scope). The provider's resource carries `telemetry.distro.name = "llmobs"` and `telemetry.distro.version = <SDK version>` (OTel semantic conventions), so the server can tell SDK versions apart. Storing the version server-side is not in the MVP; `scope_name` is stored (01).
+
+**E5 — Python example**, change the context line and its comment to:
+
+```python
+# Context: applied to every span started inside (contextvars), including instrumentor spans.
+# propagate=True also sends session/user to downstream services in W3C baggage.
+with llmobs.context(session_id="chat-42", user_id="u-17", tags=["beta"], metadata={"plan": "pro"}):
+    agent.run(...)
+```
+
+**E6 — Python implementation notes**, replace the `context()` bullet with:
+
+> - `context()` is implemented as a `SpanProcessor.on_start` hook reading a `ContextVar`, so instrumentor spans get the attributes too. `context(..., propagate=True)` also writes `session_id` and `user_id` to OTel **baggage** as `llmobs.session.id` and `llmobs.user.id`, so they cross service boundaries when the app uses W3C propagation. It is opt-in because baggage is sent as an HTTP header on every outgoing request, third-party APIs included (D80). Tags and metadata never go into baggage. The `on_start` hook reads the `ContextVar` first, then those two baggage keys, so a downstream service running the llmobs SDK picks them up without calling `context()`; a service on plain OTel adds OTel's baggage span processor (the keys are the attribute names the server reads, 02).
+
+and add after the `observe`/`span` bullet:
+
+> - Generators and async generators: the span starts when the generator body starts (first `next()` / `__anext__()`), is the current span only while the body runs (the OTel context is attached and detached around each step), and ends when the generator is exhausted, closed or raises. The output is the yielded items: one string when every item is a `str`, otherwise a JSON list; `observe(reduce_output=fn)` records `fn(items)` instead. Closing early (`break`, `close()`, `aclose()`) ends the span with status `ok` and the items yielded so far; an exception sets `error`. Items are kept only while `capture_content` is true, and the 1 MiB truncation applies to the recorded output.
+
+**E7 — TypeScript heading**: `Node ≥ 22` → `Node ≥ 22.12`.
+
+**E8 — TypeScript example**: no change. **TypeScript bullets**:
+- After the `AsyncLocalStorage` bullet add: `` `withContext({ ..., propagate: true }, fn)` writes baggage with the same rules as Python. `observe` applies the Python generator rules when the wrapped function returns a generator or async generator (`reduceOutput` option). ``
+- Replace the Vercel AI SDK bullet with:
+
+> - **Vercel AI SDK:** no instrumentor needed; the server normalizes `ai.*` attributes (02). The AI SDK sends spans to the global tracer unless it is given one, so `llmobs.aiTelemetry({ sessionId, userId, tags })` returns `{ isEnabled: true, tracer, metadata }` with a tracer from the llmobs provider, and users pass it as `experimental_telemetry`. With `useGlobalProvider: true`, a plain `experimental_telemetry: { isEnabled: true, metadata: { sessionId, userId } }` works too.
+
+Check after editing that spec 10 nowhere else says `init()` registers the global provider or that baggage is always written.
+
+### Code
+
+Python (`sdks/python/src/llmobs/_config.py`): the missing-key error becomes `ConfigError("api_key: required; set LLMOBS_API_KEY, or LLMOBS_ENABLED=false to run without llmobs")`. Build it from `ENV_API_KEY` and `ENV_ENABLED`, not literals. Nothing else in resolution changes.
+
+TypeScript (`sdks/typescript/src/config.ts`): `new ConfigError("apiKey", "required; set LLMOBS_API_KEY, or LLMOBS_ENABLED=false to run without llmobs")`, built from `ENV_API_KEY` and `ENV_ENABLED`. `error.option` stays `"apiKey"`.
+
+`sdks/typescript/package.json`: `"engines": { "node": ">=22.12" }`. `sdks/typescript/README.md`: `Node ≥ 22.12`. Search the repo (`rg -n "22\b|≥ 22|>=22"` in `docs/`, `sdks/`, `AGENTS.md`) and update any other statement of the TS SDK minimum, except S1–S7 of this plan.
+
+### Tests
+
+- Python `tests/test_config.py`: with no argument and an empty `env`, `resolve_config()` raises `ConfigError` whose message contains `LLMOBS_API_KEY` and `LLMOBS_ENABLED`; with `env={"LLMOBS_ENABLED": "false"}` and no key it returns a disabled config (keep the existing test if it already covers this). Update any test that matched the old message exactly.
+- TypeScript `src/config.test.ts`: the same two cases; `error.option === "apiKey"`.
+
+### Review
+
+1. `just check` passes.
+2. Re-read spec 10 top to bottom: the eight decisions above appear once each, and nothing contradicts them (global provider, baggage, exit, missing key, Node version).
+3. `rg -n "Node ≥ 22[^.]|>=22\"" docs sdks AGENTS.md` returns only lines in this plan file.
+
+**Report back:** every spec sentence you reworded; the files where you changed the Node minimum; anything in spec 10 that still conflicts with D80.
+
+**Commit:** `sdk: record runtime behaviour decisions and require Node 22.12`
