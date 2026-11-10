@@ -2,10 +2,11 @@
 default:
     @just --list
 
-# Format Rust, and the web and TypeScript SDK (Biome)
+# Format Rust, the web and TypeScript SDK (Biome), and the Python SDK (ruff)
 fmt:
     cargo fmt --all
     pnpm exec biome format --write .
+    cd sdks/python && uv run ruff format
 
 # Check formatting
 fmt-check:
@@ -46,8 +47,12 @@ js-install:
 check-web: js-install
     pnpm --dir web run check
 
+# Python SDK checks: format, lint, types, tests
+check-py:
+    cd sdks/python && uv sync --locked && uv run ruff format --check && uv run ruff check && uv run mypy && uv run pytest
+
 # Every check (D79); must pass before every commit
-check: check-rust check-web
+check: check-rust check-web check-py
 
 # Web dev server with mocked API (fixtures/api)
 web-dev: js-install
