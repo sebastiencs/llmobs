@@ -233,6 +233,19 @@ fn write_stream(
     Ok(())
 }
 
+/// Appends one framed record whose payload is not necessarily IPC.
+///
+/// Replay tests use this to build a checksum-valid record that `read_batch` rejects.
+#[cfg(test)]
+pub(crate) fn push_framed(buf: &mut Vec<u8>, seq: u64, payload: &[u8]) {
+    let len = u32::try_from(payload.len()).unwrap();
+    buf.extend_from_slice(&len.to_le_bytes());
+    buf.extend_from_slice(&checksum(seq, KIND_BATCH, payload).to_le_bytes());
+    buf.extend_from_slice(&seq.to_le_bytes());
+    buf.push(KIND_BATCH);
+    buf.extend_from_slice(payload);
+}
+
 fn checksum(seq: u64, kind: u8, payload: &[u8]) -> u32 {
     let mut crc = crc32c::crc32c(&seq.to_le_bytes());
     crc = crc32c::crc32c_append(crc, &[kind]);
@@ -439,11 +452,7 @@ mod tests {
     }
 
     fn push_record(buf: &mut Vec<u8>, seq: u64, payload: &[u8]) {
-        buf.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_le_bytes());
-        buf.extend_from_slice(&checksum(seq, KIND_BATCH, payload).to_le_bytes());
-        buf.extend_from_slice(&seq.to_le_bytes());
-        buf.push(KIND_BATCH);
-        buf.extend_from_slice(payload);
+        push_framed(buf, seq, payload);
     }
 
     #[test]

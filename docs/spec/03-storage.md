@@ -14,8 +14,8 @@ Configuration keys named in this spec (`wal.sync`, `flush.max_bytes`, …) live 
   meta.db                 SQLite, server metadata (04)
   catalog.db              SQLite, storage catalog (§4), synchronous=FULL
   wal/
-    spans/000000000042.wal
-    scores/000000000007.wal
+    spans/00000000000000000042.wal
+    scores/00000000000000000007.wal
   tmp/                    query spill files
   cache/                  S3 read cache (§6), only with an S3 object store
   objects/                only when object store = local
@@ -43,7 +43,7 @@ Because rows may sit in the day before or after their own date, day pruning (§6
 
 ## 1. Write-ahead log
 
-One WAL per table (`spans`, `scores`), each a sequence of segment files (max 64 MiB, then rotate).
+One WAL per table (`spans`, `scores`), each a sequence of segment files. A segment is named with the seq of its first record, zero-padded to 20 digits, plus `.wal`. Segments rotate at `storage.wal.segment_bytes` (default 64 MiB). Rotation happens between groups, so one group can make a segment larger than the limit.
 
 Record format. Every integer is little-endian. The checksum covers `seq` as 8 little-endian bytes, then `kind` as 1 byte, then the payload. A payload longer than 256 MiB is rejected.
 

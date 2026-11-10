@@ -3,7 +3,8 @@
 //! Messages name the table, segment, offset, sequence number, or size.
 //! They never include row content or attribute values.
 
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use arrow::error::ArrowError;
 
@@ -50,7 +51,7 @@ pub enum OpenError {
         path: PathBuf,
         /// The filesystem error.
         #[source]
-        source: std::io::Error,
+        source: io::Error,
     },
     /// A WAL segment is corrupt somewhere other than a torn tail.
     #[error("corrupt WAL table {table}, segment {segment}, offset {offset}")]
@@ -112,4 +113,38 @@ pub enum WalError {
     /// Arrow could not write the record batch.
     #[error("encoding WAL record")]
     Encode(#[source] ArrowError),
+    /// A record failed its checksum, ran backwards, or was not a batch of this table.
+    ///
+    /// `segment` is the file name. `offset` is the byte where the bad record starts.
+    #[error("corrupt WAL table {table}, segment {segment}, offset {offset}")]
+    Corrupt {
+        /// `spans` or `scores`.
+        table: &'static str,
+        /// Segment file name, for example `00000000000000000042.wal`.
+        segment: String,
+        /// Byte offset of the corrupt record.
+        offset: u64,
+    },
+    /// A segment file or its directory could not be read or written.
+    #[error("{action} {path}: {source}")]
+    Io {
+        /// What was being done, for example `syncing WAL segment`.
+        action: &'static str,
+        /// File or directory involved in the failed call.
+        path: PathBuf,
+        /// The filesystem error.
+        #[source]
+        source: io::Error,
+    },
+}
+
+impl WalError {
+    /// An I/O failure that names the action and the path.
+    pub(crate) fn io(action: &'static str, path: &Path, source: io::Error) -> Self {
+        Self::Io {
+            action,
+            path: path.to_path_buf(),
+            source,
+        }
+    }
 }
