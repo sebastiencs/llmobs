@@ -26,6 +26,12 @@ pub struct MetricsParams {
     /// Split series that are not already split.
     #[serde(default)]
     pub group_by: Option<MetricsGroupBy>,
+    /// Include traces from the evaluation environment. Default false. Spec 05 § Default exclusions.
+    #[serde(default)]
+    pub include_eval: bool,
+    /// Include experiment traces. Default false. Spec 05 § Default exclusions.
+    #[serde(default)]
+    pub include_experiments: bool,
 }
 
 /// Width of each metrics bucket.

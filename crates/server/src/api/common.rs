@@ -274,6 +274,18 @@ pub struct PageParams {
     pub cursor: Option<String>,
 }
 
+/// Query parameters of the session and user detail endpoints. Spec 05 § Default exclusions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, IntoParams)]
+#[serde(deny_unknown_fields)]
+pub struct ExclusionParams {
+    /// Include traces from the evaluation environment. Default false.
+    #[serde(default)]
+    pub include_eval: bool,
+    /// Include experiment traces. Default false.
+    #[serde(default)]
+    pub include_experiments: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use serde::Deserialize;

@@ -204,27 +204,9 @@ fn build() -> Built {
         "application/json",
     ));
 
-    let mut by_session: BTreeMap<String, Vec<TraceSummary>> = BTreeMap::new();
-    for trace in &visible {
-        if let Some(session_id) = &trace.session_id {
-            by_session
-                .entry(session_id.clone())
-                .or_default()
-                .push((*trace).clone());
-        }
-    }
-    let mut sessions: Vec<SessionSummary> = by_session
-        .iter()
-        .map(|(session_id, traces)| session_summary(session_id, traces, &scores))
-        .collect();
-    sessions.sort_by(|left, right| {
-        right
-            .start_time
-            .cmp(&left.start_time)
-            .then(right.session_id.cmp(&left.session_id))
-    });
+    let (sessions, session_details) = session_views(&visible, &groups, &scores);
     let sessions_file = "responses/sessions.json";
-    files.insert(sessions_file.to_owned(), page(sessions.clone()));
+    files.insert(sessions_file.to_owned(), page(sessions));
     manifest.push(example(
         "list_sessions",
         BTreeMap::new(),
@@ -232,25 +214,9 @@ fn build() -> Built {
         sessions_file,
         "application/json",
     ));
-
-    for (session_id, session_traces) in &by_session {
-        let mut turns: Vec<SessionTurn> = session_traces
-            .iter()
-            .map(|trace| turn(trace, &groups[&trace.trace_id]))
-            .collect();
-        turns.sort_by(|left, right| {
-            left.trace
-                .start_time
-                .cmp(&right.trace.start_time)
-                .then(left.trace.trace_id.cmp(&right.trace.trace_id))
-        });
-        let detail = SessionDetail {
-            session: session_summary(session_id, session_traces, &scores),
-            turns,
-            truncated: false,
-        };
+    for (session_id, detail) in &session_details {
         let file = format!("responses/sessions/{session_id}.json");
-        files.insert(file.clone(), canonical_json(&detail));
+        files.insert(file.clone(), canonical_json(detail));
         manifest.push(example(
             "get_session",
             params(&[("session_id", session_id)]),
@@ -260,25 +226,31 @@ fn build() -> Built {
         ));
     }
 
-    let mut by_user: BTreeMap<String, Vec<TraceSummary>> = BTreeMap::new();
-    for trace in &visible {
-        if let Some(user_id) = &trace.user_id {
-            by_user
-                .entry(user_id.clone())
-                .or_default()
-                .push((*trace).clone());
-        }
-    }
-    let mut users: Vec<EndUserSummary> = by_user
-        .iter()
-        .map(|(user_id, traces)| user_summary(user_id, traces))
-        .collect();
-    users.sort_by(|left, right| {
-        right
-            .last_seen
-            .cmp(&left.last_seen)
-            .then(right.user_id.cmp(&left.user_id))
-    });
+    let eval_traces: Vec<&TraceSummary> = traces.iter().collect();
+    let (eval_sessions, eval_session_details) = session_views(&eval_traces, &groups, &scores);
+    let sessions_eval_file = "responses/sessions-include-eval.json";
+    files.insert(sessions_eval_file.to_owned(), page(eval_sessions));
+    manifest.push(example(
+        "list_sessions",
+        BTreeMap::new(),
+        params(&[("include_eval", "true")]),
+        sessions_eval_file,
+        "application/json",
+    ));
+    let session_eval = eval_session_details
+        .get("sess-001")
+        .unwrap_or_else(|| panic!("sess-001"));
+    let session_eval_file = "responses/sessions/sess-001-include-eval.json";
+    files.insert(session_eval_file.to_owned(), canonical_json(session_eval));
+    manifest.push(example(
+        "get_session",
+        params(&[("session_id", "sess-001")]),
+        params(&[("include_eval", "true")]),
+        session_eval_file,
+        "application/json",
+    ));
+
+    let (users, user_details) = user_views(&visible, &groups, &scores);
     let users_file = "responses/users.json";
     files.insert(users_file.to_owned(), page(users));
     manifest.push(example(
@@ -288,27 +260,9 @@ fn build() -> Built {
         users_file,
         "application/json",
     ));
-
-    for (user_id, user_traces) in &by_user {
-        let mut sessions: Vec<SessionSummary> = user_traces
-            .iter()
-            .filter_map(|trace| trace.session_id.clone())
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .map(|session_id| session_summary(&session_id, &by_session[&session_id], &scores))
-            .collect();
-        sessions.sort_by(|left, right| {
-            right
-                .start_time
-                .cmp(&left.start_time)
-                .then(right.session_id.cmp(&left.session_id))
-        });
-        let detail = EndUserDetail {
-            user: user_summary(user_id, user_traces),
-            sessions,
-        };
+    for (user_id, detail) in &user_details {
         let file = format!("responses/users/{user_id}.json");
-        files.insert(file.clone(), canonical_json(&detail));
+        files.insert(file.clone(), canonical_json(detail));
         manifest.push(example(
             "get_user",
             params(&[("user_id", user_id)]),
@@ -317,6 +271,29 @@ fn build() -> Built {
             "application/json",
         ));
     }
+
+    let (eval_users, eval_user_details) = user_views(&eval_traces, &groups, &scores);
+    let users_eval_file = "responses/users-include-eval.json";
+    files.insert(users_eval_file.to_owned(), page(eval_users));
+    manifest.push(example(
+        "list_users",
+        BTreeMap::new(),
+        params(&[("include_eval", "true")]),
+        users_eval_file,
+        "application/json",
+    ));
+    let user_eval = eval_user_details
+        .get("user-42")
+        .unwrap_or_else(|| panic!("user-42"));
+    let user_eval_file = "responses/users/user-42-include-eval.json";
+    files.insert(user_eval_file.to_owned(), canonical_json(user_eval));
+    manifest.push(example(
+        "get_user",
+        params(&[("user_id", "user-42")]),
+        params(&[("include_eval", "true")]),
+        user_eval_file,
+        "application/json",
+    ));
 
     let mut score_rows: Vec<Score> = scores.into_iter().filter(|score| !score.deleted).collect();
     score_rows.sort_by(|left, right| {
@@ -399,6 +376,109 @@ fn build() -> Built {
             .then(left.file.cmp(&right.file))
     });
     Built { files, manifest }
+}
+
+fn session_views(
+    traces: &[&TraceSummary],
+    groups: &BTreeMap<TraceId, Vec<Span>>,
+    scores: &[Score],
+) -> (Vec<SessionSummary>, BTreeMap<String, SessionDetail>) {
+    let mut by_session: BTreeMap<String, Vec<TraceSummary>> = BTreeMap::new();
+    for trace in traces {
+        if let Some(session_id) = &trace.session_id {
+            by_session
+                .entry(session_id.clone())
+                .or_default()
+                .push((*trace).clone());
+        }
+    }
+    let mut list: Vec<SessionSummary> = by_session
+        .iter()
+        .map(|(session_id, session_traces)| session_summary(session_id, session_traces, scores))
+        .collect();
+    list.sort_by(|left, right| {
+        right
+            .start_time
+            .cmp(&left.start_time)
+            .then(right.session_id.cmp(&left.session_id))
+    });
+    let mut details = BTreeMap::new();
+    for (session_id, session_traces) in &by_session {
+        let mut turns: Vec<SessionTurn> = session_traces
+            .iter()
+            .map(|trace| turn(trace, &groups[&trace.trace_id]))
+            .collect();
+        turns.sort_by(|left, right| {
+            left.trace
+                .start_time
+                .cmp(&right.trace.start_time)
+                .then(left.trace.trace_id.cmp(&right.trace.trace_id))
+        });
+        details.insert(
+            session_id.clone(),
+            SessionDetail {
+                session: session_summary(session_id, session_traces, scores),
+                turns,
+                truncated: false,
+            },
+        );
+    }
+    (list, details)
+}
+
+fn user_views(
+    traces: &[&TraceSummary],
+    groups: &BTreeMap<TraceId, Vec<Span>>,
+    scores: &[Score],
+) -> (Vec<EndUserSummary>, BTreeMap<String, EndUserDetail>) {
+    let (session_list, _) = session_views(traces, groups, scores);
+    let sessions_by_id: BTreeMap<&str, &SessionSummary> = session_list
+        .iter()
+        .map(|session| (session.session_id.as_str(), session))
+        .collect();
+    let mut by_user: BTreeMap<String, Vec<TraceSummary>> = BTreeMap::new();
+    for trace in traces {
+        if let Some(user_id) = &trace.user_id {
+            by_user
+                .entry(user_id.clone())
+                .or_default()
+                .push((*trace).clone());
+        }
+    }
+    let mut list: Vec<EndUserSummary> = by_user
+        .iter()
+        .map(|(user_id, user_traces)| user_summary(user_id, user_traces))
+        .collect();
+    list.sort_by(|left, right| {
+        right
+            .last_seen
+            .cmp(&left.last_seen)
+            .then(right.user_id.cmp(&left.user_id))
+    });
+    let mut details = BTreeMap::new();
+    for (user_id, user_traces) in &by_user {
+        let mut sessions: Vec<SessionSummary> = user_traces
+            .iter()
+            .filter_map(|trace| trace.session_id.as_deref())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .map(|session_id| sessions_by_id[session_id].clone())
+            .collect();
+        sessions.sort_by(|left, right| {
+            right
+                .start_time
+                .cmp(&left.start_time)
+                .then(right.session_id.cmp(&left.session_id))
+        });
+        details.insert(
+            user_id.clone(),
+            EndUserDetail {
+                user: user_summary(user_id, user_traces),
+                sessions,
+            },
+        );
+    }
+    (list, details)
 }
 
 fn turn(trace: &TraceSummary, spans: &[Span]) -> SessionTurn {
@@ -690,12 +770,26 @@ fn example_scenarios() {
         .unwrap_or_else(|error| panic!("{error}"));
     let spans = fs::read_to_string(api_dir().join("responses/spans.json"))
         .unwrap_or_else(|error| panic!("{error}"));
-    let sessions = read_tree("responses/sessions");
     assert!(!listed.contains(TRACE_5));
     assert!(!spans.contains(TRACE_5));
     // T5 carries `sess-001` and `user-42`: the default exclusion must keep it out of the
-    // session turns and out of the session and user aggregates.
-    assert!(!sessions.contains(TRACE_5));
+    // session turns and out of the session and user aggregates. The include_eval files keep it.
+    for file in [
+        "responses/sessions.json",
+        "responses/sessions/sess-001.json",
+        "responses/sessions/sess-002.json",
+        "responses/users.json",
+        "responses/users/user-42.json",
+        "responses/users/user-7.json",
+    ] {
+        let text =
+            fs::read_to_string(api_dir().join(file)).unwrap_or_else(|error| panic!("{error}"));
+        assert!(!text.contains(TRACE_5), "{file}");
+    }
+    let included_session_detail =
+        fs::read_to_string(api_dir().join("responses/sessions/sess-001-include-eval.json"))
+            .unwrap_or_else(|error| panic!("{error}"));
+    assert!(included_session_detail.contains(TRACE_5));
     let session_list: Page<SessionSummary> = read_json(&api_dir().join("responses/sessions.json"));
     let session = session_list
         .data
@@ -710,6 +804,18 @@ fn example_scenarios() {
         .find(|session| session.session_id == "sess-002")
         .unwrap_or_else(|| panic!("sess-002"));
     assert_eq!(other.tags, Vec::<String>::new());
+    let included_sessions: Page<SessionSummary> =
+        read_json(&api_dir().join("responses/sessions-include-eval.json"));
+    let included_session = included_sessions
+        .data
+        .iter()
+        .find(|session| session.session_id == "sess-001")
+        .unwrap_or_else(|| panic!("sess-001 include_eval"));
+    assert_eq!(included_session.trace_count, 3);
+    assert_eq!(
+        included_session.tags,
+        ["beta".to_owned(), "eval".to_owned(), "refund".to_owned()]
+    );
     let user_list: Page<EndUserSummary> = read_json(&api_dir().join("responses/users.json"));
     let user = user_list
         .data
@@ -717,6 +823,14 @@ fn example_scenarios() {
         .find(|user| user.user_id == "user-42")
         .unwrap_or_else(|| panic!("user-42"));
     assert_eq!(user.trace_count, 3);
+    let included_users: Page<EndUserSummary> =
+        read_json(&api_dir().join("responses/users-include-eval.json"));
+    let included_user = included_users
+        .data
+        .iter()
+        .find(|user| user.user_id == "user-42")
+        .unwrap_or_else(|| panic!("user-42 include_eval"));
+    assert_eq!(included_user.trace_count, 4);
     let detail: EndUserDetail = read_json(&api_dir().join("responses/users/user-42.json"));
     assert_eq!(detail.sessions.len(), 1);
     assert_eq!(detail.sessions[0].trace_count, 2);
@@ -773,10 +887,4 @@ fn hex(bytes: &[u8]) -> String {
         out.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
     }
     out
-}
-
-fn read_tree(prefix: &str) -> String {
-    let mut files = BTreeMap::new();
-    collect_dir(&api_dir().join(prefix), prefix, &mut files);
-    files.into_values().collect()
 }

@@ -54,6 +54,18 @@
     "path_params": {
       "session_id": "sess-001"
     },
+    "query": {
+      "include_eval": "true"
+    },
+    "status": 200,
+    "content_type": "application/json",
+    "file": "responses/sessions/sess-001-include-eval.json"
+  },
+  {
+    "operation_id": "get_session",
+    "path_params": {
+      "session_id": "sess-001"
+    },
     "query": {},
     "status": 200,
     "content_type": "application/json",
@@ -288,6 +300,18 @@
     "path_params": {
       "user_id": "user-42"
     },
+    "query": {
+      "include_eval": "true"
+    },
+    "status": 200,
+    "content_type": "application/json",
+    "file": "responses/users/user-42-include-eval.json"
+  },
+  {
+    "operation_id": "get_user",
+    "path_params": {
+      "user_id": "user-42"
+    },
     "query": {},
     "status": 200,
     "content_type": "application/json",
@@ -332,6 +356,16 @@
   {
     "operation_id": "list_sessions",
     "path_params": {},
+    "query": {
+      "include_eval": "true"
+    },
+    "status": 200,
+    "content_type": "application/json",
+    "file": "responses/sessions-include-eval.json"
+  },
+  {
+    "operation_id": "list_sessions",
+    "path_params": {},
     "query": {},
     "status": 200,
     "content_type": "application/json",
@@ -362,6 +396,16 @@
     "status": 200,
     "content_type": "application/json",
     "file": "responses/traces.json"
+  },
+  {
+    "operation_id": "list_users",
+    "path_params": {},
+    "query": {
+      "include_eval": "true"
+    },
+    "status": 200,
+    "content_type": "application/json",
+    "file": "responses/users-include-eval.json"
   },
   {
     "operation_id": "list_users",

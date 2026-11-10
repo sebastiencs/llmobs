@@ -24,7 +24,7 @@ use utoipa::openapi::{Content, InfoBuilder, OpenApi, OpenApiBuilder, Ref, RefOr,
 use utoipa::{IntoParams, PartialSchema, ToSchema};
 
 use super::account::{AuthConfig, Me, Project};
-use super::common::{Limit, Page, PageParams, Problem, SortOrder, TimeParam};
+use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
 use super::metrics::{MetricsBucket, MetricsGroupBy, MetricsParams, MetricsResponse};
 use super::saved_views::{CreateSavedView, SavedView, SavedViewListParams, UpdateSavedView};
 use super::schema::SchemaResponse;
@@ -595,6 +595,7 @@ fn trace_paths(paths: PathsBuilder) -> PathsBuilder {
 
 fn session_paths(paths: PathsBuilder) -> PathsBuilder {
     let sessions = operation("list_sessions", "sessions", "List sessions")
+        .description(Some(EXCLUSIONS))
         .parameters(Some(with_query::<SessionListParams>(vec![project_param()])))
         .responses(responses(
             "200",
@@ -603,23 +604,23 @@ fn session_paths(paths: PathsBuilder) -> PathsBuilder {
         ))
         .build();
     let session = operation("get_session", "sessions", "Get a session")
-        .description(Some(
-            "Turns are the session's traces by start time, at most 1000. `input` and `output` are the root span's payloads, omitted when the trace has no root.",
-        ))
-        .parameters(Some(vec![
+        .description(Some(format!(
+            "{EXCLUSIONS} Turns are the session's traces by start time, at most 1000. `input` and `output` are the root span's payloads, omitted when the trace has no root."
+        )))
+        .parameters(Some(with_query::<ExclusionParams>(vec![
             project_param(),
             path_string("session_id", "Session id."),
-        ]))
+        ])))
         .responses(responses(
             "200",
             json_of::<SessionDetail>("The session and its turns."),
-            AUTH_ERRORS,
+            QUERY_ERRORS,
         ))
         .build();
     let users = operation("list_users", "users", "List users")
-        .description(Some(
-            "The filter runs on the `traces` view before traces are grouped by user.",
-        ))
+        .description(Some(format!(
+            "{EXCLUSIONS} The filter runs on the `traces` view before traces are grouped by user."
+        )))
         .parameters(Some(with_query::<UserListParams>(vec![project_param()])))
         .responses(responses(
             "200",
@@ -628,15 +629,17 @@ fn session_paths(paths: PathsBuilder) -> PathsBuilder {
         ))
         .build();
     let user = operation("get_user", "users", "Get a user")
-        .description(Some("Sessions are the user's 100 most recent."))
-        .parameters(Some(vec![
+        .description(Some(format!(
+            "{EXCLUSIONS} Sessions are the user's 100 most recent."
+        )))
+        .parameters(Some(with_query::<ExclusionParams>(vec![
             project_param(),
             path_string("user_id", "End-user id."),
-        ]))
+        ])))
         .responses(responses(
             "200",
             json_of::<EndUserDetail>("The user and recent sessions."),
-            AUTH_ERRORS,
+            QUERY_ERRORS,
         ))
         .build();
     paths
@@ -678,9 +681,9 @@ fn score_paths(paths: PathsBuilder) -> PathsBuilder {
         ))
         .build();
     let metrics = operation("get_metrics", "metrics", "Get metrics")
-        .description(Some(
-            "Series have one point per bucket. Latencies and TTFT are nanoseconds. Costs are USD. Results are cached for 10 seconds.",
-        ))
+        .description(Some(format!(
+            "{EXCLUSIONS} Series have one point per bucket. Latencies and TTFT are nanoseconds. Costs are USD. Results are cached for 10 seconds. The evaluation cost series always counts evaluation traces (spec 05 § Dashboard metrics)."
+        )))
         .parameters(Some(with_query::<MetricsParams>(vec![project_param()])))
         .responses(responses(
             "200",

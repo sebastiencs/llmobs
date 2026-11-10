@@ -1,0 +1,23 @@
+{
+  "data": [
+    {
+      "user_id": "user-42",
+      "first_seen": "2026-01-01T10:00:00.000000000Z",
+      "last_seen": "2026-01-01T10:20:03.000000000Z",
+      "trace_count": 4,
+      "session_count": 1,
+      "error_count": 0,
+      "total_tokens": 5800,
+      "cost_total": 0.00765
+    },
+    {
+      "user_id": "user-7",
+      "first_seen": "2026-01-01T10:10:00.000000000Z",
+      "last_seen": "2026-01-01T10:10:00.800000000Z",
+      "trace_count": 1,
+      "session_count": 1,
+      "error_count": 2
+    }
+  ],
+  "next_cursor": null
+}

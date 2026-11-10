@@ -1,0 +1,170 @@
+{
+  "session": {
+    "session_id": "sess-001",
+    "start_time": "2026-01-01T10:00:00.000000000Z",
+    "end_time": "2026-01-01T10:05:02.500000000Z",
+    "duration_ns": 302500000000,
+    "trace_count": 3,
+    "error_count": 0,
+    "total_tokens": 4830,
+    "cost_total": 0.00632,
+    "user_id": "user-42",
+    "tags": [
+      "beta",
+      "eval",
+      "refund"
+    ],
+    "scores": [
+      {
+        "score_id": "01900000-0000-7000-8000-000000000305",
+        "name": "resolved",
+        "value": {
+          "data_type": "boolean",
+          "value": true
+        },
+        "source": "human"
+      }
+    ]
+  },
+  "turns": [
+    {
+      "trace": {
+        "trace_id": "a1000000000000000000000000000001",
+        "root_span_id": "b100000000000011",
+        "has_root": true,
+        "name": "support-agent",
+        "start_time": "2026-01-01T10:00:00.000000000Z",
+        "end_time": "2026-01-01T10:00:04.200000000Z",
+        "duration_ns": 4200000000,
+        "status": "ok",
+        "session_id": "sess-001",
+        "user_id": "user-42",
+        "environment": "production",
+        "release": "v1.4.0",
+        "tags": [
+          "beta"
+        ],
+        "metadata": {},
+        "input_preview": "My order 1234 hasn't arrived.",
+        "output_preview": "Your order 1234 shipped and arrives tomorrow.",
+        "span_count": 4,
+        "error_count": 0,
+        "llm_count": 2,
+        "input_tokens": 2500,
+        "output_tokens": 100,
+        "cache_read_tokens": 2200,
+        "total_tokens": 2600,
+        "cost_total": 0.00306,
+        "models": [
+          "claude-sonnet-4-5"
+        ],
+        "scores": [
+          {
+            "score_id": "01900000-0000-7000-8000-000000000302",
+            "name": "helpfulness",
+            "value": {
+              "data_type": "numeric",
+              "value": 0.9
+            },
+            "source": "llm_judge"
+          }
+        ]
+      },
+      "input": {
+        "format": "text",
+        "value": "My order 1234 hasn't arrived."
+      },
+      "output": {
+        "format": "text",
+        "value": "Your order 1234 shipped and arrives tomorrow."
+      }
+    },
+    {
+      "trace": {
+        "trace_id": "a1000000000000000000000000000005",
+        "root_span_id": "b100000000000051",
+        "has_root": true,
+        "name": "judge helpfulness",
+        "start_time": "2026-01-01T10:01:00.000000000Z",
+        "end_time": "2026-01-01T10:01:01.500000000Z",
+        "duration_ns": 1500000000,
+        "status": "ok",
+        "session_id": "sess-001",
+        "user_id": "user-42",
+        "environment": "llmobs-eval",
+        "release": "v1.4.0",
+        "tags": [
+          "eval"
+        ],
+        "metadata": {},
+        "input_preview": "Score the helpfulness of the support reply from 0 to 1.",
+        "output_preview": "0.9",
+        "span_count": 2,
+        "error_count": 0,
+        "llm_count": 1,
+        "input_tokens": 600,
+        "output_tokens": 50,
+        "total_tokens": 650,
+        "cost_total": 0.0008,
+        "models": [
+          "gpt-4o-mini"
+        ],
+        "scores": []
+      }
+    },
+    {
+      "trace": {
+        "trace_id": "a1000000000000000000000000000002",
+        "root_span_id": "b100000000000021",
+        "has_root": true,
+        "name": "support-agent",
+        "start_time": "2026-01-01T10:05:00.000000000Z",
+        "end_time": "2026-01-01T10:05:02.500000000Z",
+        "duration_ns": 2500000000,
+        "status": "ok",
+        "session_id": "sess-001",
+        "user_id": "user-42",
+        "environment": "production",
+        "release": "v1.4.0",
+        "tags": [
+          "beta",
+          "refund"
+        ],
+        "metadata": {},
+        "input_preview": "Can I change the delivery address?",
+        "output_preview": "Yes. Send the new address and I will update the delivery.",
+        "span_count": 2,
+        "error_count": 0,
+        "llm_count": 1,
+        "input_tokens": 1500,
+        "output_tokens": 80,
+        "cache_read_tokens": 1200,
+        "total_tokens": 1580,
+        "cost_total": 0.00246,
+        "models": [
+          "claude-sonnet-4-5"
+        ],
+        "scores": [
+          {
+            "score_id": "01900000-0000-7000-8000-000000000304",
+            "name": "thumbs",
+            "value": {
+              "data_type": "boolean",
+              "value": true
+            },
+            "source": "end_user"
+          }
+        ]
+      },
+      "input": {
+        "format": "text",
+        "value": "Can I change the delivery address?"
+      },
+      "output": {
+        "format": "text",
+        "value": "Yes. Send the new address and I will update the delivery."
+      }
+    }
+  ],
+  "truncated": false
+}

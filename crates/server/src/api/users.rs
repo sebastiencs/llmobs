@@ -95,6 +95,12 @@ pub struct UserListParams {
     /// Opaque cursor from a previous page.
     #[serde(default)]
     pub cursor: Option<String>,
+    /// Include traces from the evaluation environment. Default false. Spec 05 § Default exclusions.
+    #[serde(default)]
+    pub include_eval: bool,
+    /// Include experiment traces. Default false. Spec 05 § Default exclusions.
+    #[serde(default)]
+    pub include_experiments: bool,
 }
 
 #[cfg(test)]

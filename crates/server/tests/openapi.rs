@@ -89,7 +89,9 @@ const QUERY_OR_BODY: &[&str] = &[
     "get_trace",
     "list_spans",
     "list_sessions",
+    "get_session",
     "list_users",
+    "get_user",
     "list_scores",
     "list_saved_views",
     "create_saved_view",
@@ -295,6 +297,7 @@ fn document_lint() {
     assert!(schemas.contains_key("MessageRole"));
     assert!(schemas.contains_key("OrgRole"));
     assert_nullability(schemas);
+    assert_exclusions(&document);
 }
 
 fn rendered_document() -> String {
@@ -397,6 +400,61 @@ fn check_property_names(schema: &Value, owner: &str) {
             }
         }
     }
+}
+
+fn assert_exclusions(document: &Value) {
+    const EXPECTED: &[&str] = &[
+        "get_metrics",
+        "get_session",
+        "get_user",
+        "list_sessions",
+        "list_spans",
+        "list_traces",
+        "list_users",
+        "stream_traces",
+    ];
+    const TEXT: &str = "Evaluation traces (`environment = llmobs-eval`) and experiment traces are excluded unless `include_eval` or `include_experiments` is set.";
+    let mut found = BTreeSet::new();
+    let Some(paths) = document["paths"].as_object() else {
+        panic!("paths");
+    };
+    for (path, item) in paths {
+        let Some(operations) = item.as_object() else {
+            continue;
+        };
+        for (method, operation) in operations {
+            if method == "parameters" {
+                continue;
+            }
+            let Some(operation) = operation.as_object() else {
+                continue;
+            };
+            let id = operation["operationId"].as_str().unwrap_or(path);
+            let names: HashSet<&str> = operation
+                .get("parameters")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|parameter| parameter["in"] == "query")
+                .filter_map(|parameter| parameter["name"].as_str())
+                .collect();
+            if !names.contains("include_eval") {
+                continue;
+            }
+            found.insert(id.to_owned());
+            assert!(
+                names.contains("include_experiments"),
+                "{id} is missing include_experiments"
+            );
+            let description = operation["description"].as_str().unwrap_or("");
+            assert!(
+                description.starts_with(TEXT),
+                "{id} description does not start with the exclusions text"
+            );
+        }
+    }
+    let expected: BTreeSet<String> = EXPECTED.iter().map(|id| (*id).to_owned()).collect();
+    assert_eq!(found, expected);
 }
 
 fn assert_nullability(schemas: &serde_json::Map<String, Value>) {

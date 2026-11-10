@@ -101,7 +101,7 @@ export interface paths {
         };
         /**
          * Get metrics
-         * @description Series have one point per bucket. Latencies and TTFT are nanoseconds. Costs are USD. Results are cached for 10 seconds.
+         * @description Evaluation traces (`environment = llmobs-eval`) and experiment traces are excluded unless `include_eval` or `include_experiments` is set. Series have one point per bucket. Latencies and TTFT are nanoseconds. Costs are USD. Results are cached for 10 seconds. The evaluation cost series always counts evaluation traces (spec 05 § Dashboard metrics).
          */
         get: operations["get_metrics"];
         put?: never;
@@ -189,7 +189,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List sessions */
+        /**
+         * List sessions
+         * @description Evaluation traces (`environment = llmobs-eval`) and experiment traces are excluded unless `include_eval` or `include_experiments` is set.
+         */
         get: operations["list_sessions"];
         put?: never;
         post?: never;
@@ -208,7 +211,7 @@ export interface paths {
         };
         /**
          * Get a session
-         * @description Turns are the session's traces by start time, at most 1000. `input` and `output` are the root span's payloads, omitted when the trace has no root.
+         * @description Evaluation traces (`environment = llmobs-eval`) and experiment traces are excluded unless `include_eval` or `include_experiments` is set. Turns are the session's traces by start time, at most 1000. `input` and `output` are the root span's payloads, omitted when the trace has no root.
          */
         get: operations["get_session"];
         put?: never;
@@ -345,7 +348,7 @@ export interface paths {
         };
         /**
          * List users
-         * @description The filter runs on the `traces` view before traces are grouped by user.
+         * @description Evaluation traces (`environment = llmobs-eval`) and experiment traces are excluded unless `include_eval` or `include_experiments` is set. The filter runs on the `traces` view before traces are grouped by user.
          */
         get: operations["list_users"];
         put?: never;
@@ -365,7 +368,7 @@ export interface paths {
         };
         /**
          * Get a user
-         * @description Sessions are the user's 100 most recent.
+         * @description Evaluation traces (`environment = llmobs-eval`) and experiment traces are excluded unless `include_eval` or `include_experiments` is set. Sessions are the user's 100 most recent.
          */
         get: operations["get_user"];
         put?: never;
@@ -2121,6 +2124,10 @@ export interface operations {
                 filter?: string;
                 /** @description Split series that are not already split. */
                 group_by?: components["schemas"]["MetricsGroupBy"];
+                /** @description Include traces from the evaluation environment. Default false. Spec 05 § Default exclusions. */
+                include_eval?: boolean;
+                /** @description Include experiment traces. Default false. Spec 05 § Default exclusions. */
+                include_experiments?: boolean;
             };
             header?: never;
             path: {
@@ -2632,6 +2639,10 @@ export interface operations {
                 limit?: components["schemas"]["Limit"];
                 /** @description Opaque cursor from a previous page. */
                 cursor?: string;
+                /** @description Include traces from the evaluation environment. Default false. Spec 05 § Default exclusions. */
+                include_eval?: boolean;
+                /** @description Include experiment traces. Default false. Spec 05 § Default exclusions. */
+                include_experiments?: boolean;
             };
             header?: never;
             path: {
@@ -2700,7 +2711,12 @@ export interface operations {
     };
     get_session: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Include traces from the evaluation environment. Default false. */
+                include_eval?: boolean;
+                /** @description Include experiment traces. Default false. */
+                include_experiments?: boolean;
+            };
             header?: never;
             path: {
                 /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
@@ -2719,6 +2735,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionDetail"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
             /** @description No credentials, or the credentials are invalid. */
@@ -3226,6 +3251,10 @@ export interface operations {
                 limit?: components["schemas"]["Limit"];
                 /** @description Opaque cursor from a previous page. */
                 cursor?: string;
+                /** @description Include traces from the evaluation environment. Default false. Spec 05 § Default exclusions. */
+                include_eval?: boolean;
+                /** @description Include experiment traces. Default false. Spec 05 § Default exclusions. */
+                include_experiments?: boolean;
             };
             header?: never;
             path: {
@@ -3294,7 +3323,12 @@ export interface operations {
     };
     get_user: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Include traces from the evaluation environment. Default false. */
+                include_eval?: boolean;
+                /** @description Include experiment traces. Default false. */
+                include_experiments?: boolean;
+            };
             header?: never;
             path: {
                 /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
@@ -3313,6 +3347,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EndUserDetail"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
             /** @description No credentials, or the credentials are invalid. */

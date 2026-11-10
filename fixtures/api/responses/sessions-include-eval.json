@@ -1,0 +1,43 @@
+{
+  "data": [
+    {
+      "session_id": "sess-002",
+      "start_time": "2026-01-01T10:10:00.000000000Z",
+      "end_time": "2026-01-01T10:10:00.800000000Z",
+      "duration_ns": 800000000,
+      "trace_count": 1,
+      "error_count": 2,
+      "user_id": "user-7",
+      "tags": [],
+      "scores": []
+    },
+    {
+      "session_id": "sess-001",
+      "start_time": "2026-01-01T10:00:00.000000000Z",
+      "end_time": "2026-01-01T10:05:02.500000000Z",
+      "duration_ns": 302500000000,
+      "trace_count": 3,
+      "error_count": 0,
+      "total_tokens": 4830,
+      "cost_total": 0.00632,
+      "user_id": "user-42",
+      "tags": [
+        "beta",
+        "eval",
+        "refund"
+      ],
+      "scores": [
+        {
+          "score_id": "01900000-0000-7000-8000-000000000305",
+          "name": "resolved",
+          "value": {
+            "data_type": "boolean",
+            "value": true
+          },
+          "source": "human"
+        }
+      ]
+    }
+  ],
+  "next_cursor": null
+}
