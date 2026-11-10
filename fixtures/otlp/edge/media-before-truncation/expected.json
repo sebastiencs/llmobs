@@ -1,0 +1,41 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "e2c0a1b3d4e5f60718293a4b5c6d7e8f",
+      "span_id": "a1b2c3d4e5f60718",
+      "name": "chat picture",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.400000000Z",
+      "status": "unset",
+      "service_name": "gallery",
+      "operation": "chat",
+      "cost_source": "none",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Look.\"},{\"type\":\"uri\",\"modality\":\"image\",\"mime_type\":\"image/png\",\"uri\":\"media://82d1f38fe47f6d97dffdfd277ee602598061d99203f5d453fdc86127ca556a88\"}]}]",
+      "input_format": "messages",
+      "input_preview": "Look.",
+      "attributes": {
+        "gen_ai.operation.name": "chat"
+      },
+      "scope_name": "example.genai",
+      "scope_version": "0.0.0",
+      "media_refs": [
+        "82d1f38fe47f6d97dffdfd277ee602598061d99203f5d453fdc86127ca556a88"
+      ],
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [
+    {
+      "sha256": "82d1f38fe47f6d97dffdfd277ee602598061d99203f5d453fdc86127ca556a88",
+      "mime_type": "image/png",
+      "size_bytes": 852
+    }
+  ],
+  "rejected_spans": 0
+}

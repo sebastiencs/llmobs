@@ -107,7 +107,7 @@ expression: snap(&detail)
     "service.version": "1.4.2",
     "telemetry.sdk.language": "python"
   },
-  "scope_name": "opentelemetry.instrumentation.anthropic",
+  "scope_name": "example.genai",
   "scope_version": "0.40.0",
   "events": [
     {

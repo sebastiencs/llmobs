@@ -1,0 +1,13 @@
+{
+  "description": "A payload over the attribute limit before media extraction is stored whole once the blob is replaced by a media reference.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Normalization rules / 14",
+    "02 § Media extraction"
+  ],
+  "settings": {
+    "max_attribute_bytes": 512,
+    "media_min_bytes": 32
+  },
+  "notes": "16x16 RGB PNG, zlib level 0, 852 bytes, sha256 82d1f38fe47f6d97dffdfd277ee602598061d99203f5d453fdc86127ca556a88. gen_ai.input.messages is 1269 bytes before extraction and 200 bytes after, with max_attribute_bytes 512."
+}

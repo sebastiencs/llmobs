@@ -1,0 +1,48 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "gallery"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "example.genai",
+            "version": "0.0.0"
+          },
+          "spans": [
+            {
+              "traceId": "e2c0a1b3d4e5f60718293a4b5c6d7e8f",
+              "spanId": "a1b2c3d4e5f60718",
+              "name": "chat picture",
+              "kind": 3,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225590400000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Look.\"},{\"type\":\"blob\",\"modality\":\"image\",\"mime_type\":\"image/png\",\"content\":\"iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAADG0lEQVR4AQEQA+/8AAAAAA8ACB4AEC0AGDwAIEsAKFoAMGkAOHgAQIcASJYAUKUAWLQAYMMAaNIAcOEAeAAADwgPDxAeDxgtDyA8DyhLDzBaDzhpD0B4D0iHD1CWD1ilD2C0D2jDD3DSD3jhD4AAAB4QDx4YHh4gLR4oPB4wSx44Wh5AaR5IeB5Qhx5Ylh5gpR5otB5wwx540h6A4R6IAAAtGA8tIB4tKC0tMDwtOEstQFotSGktUHgtWIctYJYtaKUtcLQteMMtgNItiOEtkAAAPCAPPCgePDAtPDg8PEBLPEhaPFBpPFh4PGCHPGiWPHClPHi0PIDDPIjSPJDhPJgAAEsoD0swHks4LUtAPEtIS0tQWktYaUtgeEtoh0twlkt4pUuAtEuIw0uQ0kuY4UugAABaMA9aOB5aQC1aSDxaUEtaWFpaYGlaaHhacIdaeJZagKVaiLRakMNamNJaoOFaqAAAaTgPaUAeaUgtaVA8aVhLaWBaaWhpaXB4aXiHaYCWaYilaZC0aZjDaaDSaajhabAAAHhAD3hIHnhQLXhYPHhgS3hoWnhwaXh4eHiAh3iIlniQpXiYtHigw3io0niw4Xi4AACHSA+HUB6HWC2HYDyHaEuHcFqHeGmHgHiHiIeHkJaHmKWHoLSHqMOHsNKHuOGHwAAAllAPllgelmAtlmg8lnBLlnhaloBploh4lpCHlpiWlqCllqi0lrDDlrjSlsDhlsgAAKVYD6VgHqVoLaVwPKV4S6WAWqWIaaWQeKWYh6WglqWopaWwtKW4w6XA0qXI4aXQAAC0YA+0aB60cC20eDy0gEu0iFq0kGm0mHi0oIe0qJa0sKW0uLS0wMO0yNK00OG02AAAw2gPw3Aew3gtw4A8w4hLw5Baw5hpw6B4w6iHw7CWw7ilw8C0w8jDw9DSw9jhw+AAANJwD9J4HtKALdKIPNKQS9KYWtKgadKoeNKwh9K4ltLApdLItNLQw9LY0tLg4dLoAADheA/hgB7hiC3hkDzhmEvhoFrhqGnhsHjhuIfhwJbhyKXh0LTh2MPh4NLh6OHh8BWzWRAvBZPTAAAAAElFTkSuQmCC\"}]}]"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

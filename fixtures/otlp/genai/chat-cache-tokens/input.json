@@ -32,7 +32,7 @@
       "scopeSpans": [
         {
           "scope": {
-            "name": "opentelemetry.instrumentation.anthropic",
+            "name": "example.genai",
             "version": "0.40.0"
           },
           "spans": [

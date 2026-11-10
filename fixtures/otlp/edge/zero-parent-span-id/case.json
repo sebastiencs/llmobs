@@ -1,0 +1,8 @@
+{
+  "description": "An all-zero parent span id is absent, while a real parent span id is kept.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Normalization rules / 15"
+  ],
+  "notes": "Both spans are chain spans with the llmobs convention and no tokens. The root parentSpanId is 0000000000000000."
+}
