@@ -915,18 +915,20 @@ fn sse(description: &str) -> Response {
 fn binary(description: &str) -> Response {
     ResponseBuilder::new()
         .description(description)
-        .content(
-            "application/octet-stream",
-            Content::new(Some(
-                ObjectBuilder::new()
-                    .schema_type(Type::String)
-                    .format(Some(SchemaFormat::KnownFormat(KnownFormat::Binary)))
-                    .description(Some(
-                        "Bytes of the blob. The response Content-Type is the blob's MIME type.",
-                    )),
-            )),
-        )
+        .content("application/octet-stream", media_bytes())
+        .content("image/png", media_bytes())
         .build()
+}
+
+fn media_bytes() -> Content {
+    Content::new(Some(
+        ObjectBuilder::new()
+            .schema_type(Type::String)
+            .format(Some(SchemaFormat::KnownFormat(KnownFormat::Binary)))
+            .description(Some(
+                "Bytes of the blob. The response Content-Type is the blob's MIME type.",
+            )),
+    ))
 }
 
 fn responses(status: &str, success: Response, errors: &[u16]) -> Responses {

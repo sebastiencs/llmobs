@@ -2,12 +2,13 @@
 
 mod support;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use llmobs_core::enums::PayloadFormat;
 use llmobs_core::ids::{SpanId, TraceId};
-use llmobs_core::message::Part;
+use llmobs_core::message::{Message, Part};
 use llmobs_core::score::{Score, ScoreTarget, ScoreValue};
 use llmobs_core::span::Span;
 use llmobs_server::api::account::{AuthConfig, Me, OrgRole, Project};
@@ -22,6 +23,7 @@ use llmobs_server::api::traces::{SpanDetail, SpanSummary, TraceDetail, TraceSumm
 use llmobs_server::api::users::{EndUserDetail, EndUserSummary};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use support::{
@@ -552,10 +554,19 @@ fn write_files(files: &BTreeMap<String, String>) {
     }
 }
 
+fn examples_write_requested() -> bool {
+    match std::env::var("LLMOBS_API_EXAMPLES_WRITE") {
+        Err(std::env::VarError::NotPresent) => false,
+        Ok(value) if value == "1" => true,
+        Ok(value) if value.is_empty() => false,
+        Ok(_) | Err(_) => panic!("set LLMOBS_API_EXAMPLES_WRITE=1 to write, or unset it"),
+    }
+}
+
 #[test]
 fn examples_are_up_to_date() {
     let expected = expected_files(&build());
-    if std::env::var_os("LLMOBS_API_EXAMPLES_WRITE").is_some() {
+    if examples_write_requested() {
         write_files(&expected);
         return;
     }
@@ -574,6 +585,276 @@ fn examples_are_up_to_date() {
             expected.contains_key(file),
             "{file} is stale; run `just api-examples`"
         );
+    }
+}
+
+#[test]
+fn examples_match_the_openapi_document() {
+    let manifest: Vec<Example> = read_json(&api_dir().join("manifest.json"));
+    let document = read_json::<Value>(&contract_document());
+    let registry = jsonschema::Registry::new()
+        .add(OPENAPI_URI, document.clone())
+        .unwrap_or_else(|error| panic!("openapi registry: {error}"))
+        .prepare()
+        .unwrap_or_else(|error| panic!("openapi registry: {error}"));
+    let mut failures = Vec::new();
+    for entry in &manifest {
+        if entry.content_type != "application/json" {
+            continue;
+        }
+        let Some(pointer) = schema_pointer(&document, entry, &mut failures) else {
+            continue;
+        };
+        let schema = serde_json::json!({ "$ref": format!("{OPENAPI_URI}#{pointer}") });
+        let validator = match jsonschema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .with_registry(&registry)
+            .offline()
+            .build(&schema)
+        {
+            Ok(validator) => validator,
+            Err(error) => {
+                failures.push(format!("{}: schema: {error}", entry.file));
+                continue;
+            }
+        };
+        let instance: Value = read_json(&api_dir().join(&entry.file));
+        for error in validator.iter_errors(&instance) {
+            failures.push(format!(
+                "{}: {}: {}",
+                entry.file,
+                error.instance_path(),
+                kind_label(error.kind())
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn manifest_matches_the_operations() {
+    let manifest: Vec<Example> = read_json(&api_dir().join("manifest.json"));
+    let document = read_json::<Value>(&contract_document());
+    let mut failures = Vec::new();
+    for entry in &manifest {
+        let Some((path_item, operation)) = get_operation(&document, &entry.operation_id) else {
+            failures.push(format!(
+                "{}: {} is not a GET operation",
+                entry.file, entry.operation_id
+            ));
+            continue;
+        };
+        let mut path_names = parameter_names(path_item, operation, "path");
+        // Examples omit `{project}`: the mock client fills that segment.
+        path_names.remove("project");
+        let declared: BTreeSet<&str> = entry.path_params.keys().map(String::as_str).collect();
+        if declared != path_names {
+            failures.push(format!(
+                "{}: path params {:?} != {:?}",
+                entry.file,
+                entry.path_params.keys().collect::<Vec<_>>(),
+                path_names
+            ));
+        }
+        let query_names = parameter_names(path_item, operation, "query");
+        for name in entry.query.keys() {
+            if !query_names.contains(name.as_str()) {
+                failures.push(format!(
+                    "{}: query {name} is not a parameter of {}",
+                    entry.file, entry.operation_id
+                ));
+            }
+        }
+        let status = entry.status.to_string();
+        let response = &operation["responses"][&status];
+        if response.is_null() {
+            failures.push(format!(
+                "{}: status {} is not declared on {}",
+                entry.file, entry.status, entry.operation_id
+            ));
+            continue;
+        }
+        let content = &response["content"];
+        if content.get(&entry.content_type).is_none() {
+            failures.push(format!(
+                "{}: {} is not declared for status {} of {}",
+                entry.file, entry.content_type, entry.status, entry.operation_id
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn every_fixture_file_is_used() {
+    let manifest: Vec<Example> = read_json(&api_dir().join("manifest.json"));
+    let used: BTreeSet<String> = manifest.into_iter().map(|entry| entry.file).collect();
+    let uris = media_uris(&dataset_spans());
+    let mut unused = Vec::new();
+    for file in files_under(&api_dir().join("static"), "static") {
+        if !used.contains(&file) {
+            unused.push(file);
+        }
+    }
+    for file in files_under(&api_dir().join("media"), "media") {
+        let stem = Path::new(&file)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("");
+        let referenced = used.contains(&file) || uris.iter().any(|uri| uri.contains(stem));
+        if !referenced {
+            unused.push(file);
+        }
+    }
+    assert!(
+        unused.is_empty(),
+        "unused fixture files: {}",
+        unused.join(", ")
+    );
+}
+
+fn contract_document() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("openapi.json")
+}
+
+const OPENAPI_URI: &str = "urn:llmobs:openapi";
+
+fn schema_pointer(document: &Value, entry: &Example, failures: &mut Vec<String>) -> Option<String> {
+    let Some((path, operation)) = operation_at(document, &entry.operation_id) else {
+        failures.push(format!(
+            "{}: operation {} is missing",
+            entry.file, entry.operation_id
+        ));
+        return None;
+    };
+    let status = entry.status.to_string();
+    let schema = &operation["responses"][&status]["content"][&entry.content_type]["schema"];
+    if schema.is_null() {
+        failures.push(format!(
+            "{}: no schema for {} {}",
+            entry.file, entry.status, entry.content_type
+        ));
+        return None;
+    }
+    Some(format!(
+        "/paths/{}/get/responses/{}/content/{}/schema",
+        uri_escape(&pointer_token(&path)),
+        uri_escape(&pointer_token(&status)),
+        uri_escape(&pointer_token(&entry.content_type))
+    ))
+}
+
+fn operation_at(document: &Value, operation_id: &str) -> Option<(String, Value)> {
+    let paths = document.get("paths")?.as_object()?;
+    for (path, item) in paths {
+        let operation = &item["get"];
+        if operation["operationId"] == operation_id {
+            return Some((path.clone(), operation.clone()));
+        }
+    }
+    None
+}
+
+fn get_operation<'a>(document: &'a Value, operation_id: &str) -> Option<(&'a Value, &'a Value)> {
+    let paths = document.get("paths")?.as_object()?;
+    for item in paths.values() {
+        let operation = &item["get"];
+        if operation["operationId"] == operation_id {
+            return Some((item, operation));
+        }
+    }
+    None
+}
+
+fn parameter_names<'a>(
+    path_item: &'a Value,
+    operation: &'a Value,
+    location: &str,
+) -> BTreeSet<&'a str> {
+    let mut names = BTreeSet::new();
+    for source in [path_item, operation] {
+        let Some(parameters) = source.get("parameters").and_then(Value::as_array) else {
+            continue;
+        };
+        for parameter in parameters {
+            if parameter["in"] == location
+                && let Some(name) = parameter["name"].as_str()
+            {
+                names.insert(name);
+            }
+        }
+    }
+    names
+}
+
+fn pointer_token(segment: &str) -> String {
+    segment.replace('~', "~0").replace('/', "~1")
+}
+
+fn uri_escape(segment: &str) -> String {
+    segment.replace('{', "%7B").replace('}', "%7D")
+}
+
+fn kind_label(kind: &jsonschema::error::ValidationErrorKind) -> String {
+    let debug = format!("{kind:?}");
+    debug
+        .split([' ', '{', '('])
+        .next()
+        .unwrap_or("error")
+        .to_owned()
+}
+
+fn media_uris(spans: &[Span]) -> Vec<String> {
+    let mut uris = Vec::new();
+    for span in spans {
+        for (format, payload) in [
+            (span.input_format, span.input.as_deref()),
+            (span.output_format, span.output.as_deref()),
+        ] {
+            if format != Some(PayloadFormat::Messages) {
+                continue;
+            }
+            let Some(payload) = payload else {
+                continue;
+            };
+            let Ok(messages) = serde_json::from_str::<Vec<Message>>(payload) else {
+                continue;
+            };
+            for message in messages {
+                for part in message.parts {
+                    if let Part::Uri { uri, .. } = part {
+                        uris.push(uri);
+                    }
+                }
+            }
+        }
+    }
+    uris
+}
+
+fn files_under(dir: &Path, prefix: &str) -> Vec<String> {
+    let mut files = Vec::new();
+    collect_names(dir, prefix, &mut files);
+    files.sort();
+    files
+}
+
+fn collect_names(dir: &Path, prefix: &str, files: &mut Vec<String>) {
+    if !dir.is_dir() {
+        return;
+    }
+    let entries = fs::read_dir(dir).unwrap_or_else(|error| panic!("{}: {error}", dir.display()));
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|error| panic!("{error}"));
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let relative = format!("{prefix}/{name}");
+        if path.is_dir() {
+            collect_names(&path, &relative, files);
+        } else {
+            files.push(relative);
+        }
     }
 }
 

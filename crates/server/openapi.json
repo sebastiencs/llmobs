@@ -290,6 +290,13 @@
                   "format": "binary",
                   "description": "Bytes of the blob. The response Content-Type is the blob's MIME type."
                 }
+              },
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "description": "Bytes of the blob. The response Content-Type is the blob's MIME type."
+                }
               }
             }
           },
@@ -297,6 +304,13 @@
             "description": "The requested byte range.",
             "content": {
               "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "description": "Bytes of the blob. The response Content-Type is the blob's MIME type."
+                }
+              },
+              "image/png": {
                 "schema": {
                   "type": "string",
                   "format": "binary",
@@ -3205,7 +3219,7 @@
           },
           "title": {
             "type": "string",
-            "description": "Short human-readable summary, the reason phrase of [`Self::status`]."
+            "description": "Short human-readable summary, the reason phrase of `status`."
           },
           "type": {
             "type": "string",
@@ -3548,7 +3562,7 @@
       },
       "ScoreBrief": {
         "type": "object",
-        "description": "The latest score of one name on a trace, span, session, or user row.\n\nSpec 09 § Response shapes.",
+        "description": "The latest score of one name on a trace or session row.\n\nSpec 09 § Response shapes.",
         "required": [
           "score_id",
           "name",

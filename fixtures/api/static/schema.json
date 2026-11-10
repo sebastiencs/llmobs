@@ -37,7 +37,7 @@
         {
           "name": "name",
           "column_type": "string",
-          "nullable": true,
+          "nullable": false,
           "description": "Name of the root span, else the earliest span."
         },
         {

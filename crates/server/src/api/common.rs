@@ -78,7 +78,7 @@ pub struct Problem {
     /// Problem type URI. Always `about:blank` in this version.
     #[serde(rename = "type")]
     pub problem_type: String,
-    /// Short human-readable summary, the reason phrase of [`Self::status`].
+    /// Short human-readable summary, the reason phrase of `status`.
     pub title: String,
     /// HTTP status code.
     pub status: u16,

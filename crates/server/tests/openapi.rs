@@ -121,7 +121,7 @@ const METHODS: &[&str] = &[
 fn contract_file_is_up_to_date() {
     let rendered = rendered_document();
     let path = contract_path();
-    if std::env::var_os("LLMOBS_OPENAPI_WRITE").is_some() {
+    if openapi_write_requested() {
         std::fs::write(&path, &rendered).unwrap();
         return;
     }
@@ -298,6 +298,19 @@ fn document_lint() {
     assert!(schemas.contains_key("OrgRole"));
     assert_nullability(schemas);
     assert_exclusions(&document);
+}
+
+fn openapi_write_requested() -> bool {
+    write_requested("LLMOBS_OPENAPI_WRITE")
+}
+
+fn write_requested(name: &str) -> bool {
+    match std::env::var(name) {
+        Err(std::env::VarError::NotPresent) => false,
+        Ok(value) if value == "1" => true,
+        Ok(value) if value.is_empty() => false,
+        Ok(_) | Err(_) => panic!("set {name}=1 to write, or unset it"),
+    }
 }
 
 fn rendered_document() -> String {

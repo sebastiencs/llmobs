@@ -40,7 +40,7 @@ pub struct SavedView {
     pub name: String,
     /// Opaque UI state: list-page URL params, or `{query, params}` for SQL.
     #[schema(value_type = Object)]
-    pub state: Value,
+    pub state: Map<String, Value>,
     /// Owner. Omitted when the view has no owner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_user_id: Option<Uuid>,
@@ -103,7 +103,7 @@ pub struct UpdateSavedView {
 /// Query parameters of `GET /api/v1/projects/{project}/saved-views`.
 ///
 /// Spec 09 § Observability data.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct SavedViewListParams {
     /// Return only this kind.
@@ -152,13 +152,20 @@ mod tests {
             id: Uuid::parse_str("01900000-0000-7000-8000-000000000401").unwrap(),
             kind: SavedViewKind::Traces,
             name: "Errors".to_owned(),
-            state: json!({"filter": "status = 'error'", "time_range": "last_24h"}),
+            state: serde_json::from_value(json!({
+                "filter": "status = 'error'",
+                "time_range": "last_24h"
+            }))
+            .unwrap(),
             owner_user_id: None,
             shared: true,
             is_default: true,
             created_at: AT,
             updated_at: AT,
         };
+        let mut raw = serde_json::to_value(&view).unwrap();
+        raw["state"] = json!([]);
+        assert!(serde_json::from_value::<SavedView>(raw).is_err());
 
         insta::with_settings!({
             snapshot_path => "../../tests/snapshots",

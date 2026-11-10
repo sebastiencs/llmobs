@@ -96,7 +96,7 @@ pub enum SessionSort {
 /// Query parameters of `GET /api/v1/projects/{project}/sessions`.
 ///
 /// Spec 09 § Observability data.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct SessionListParams {
     /// Filter DSL expression over the `sessions` view (spec 05).

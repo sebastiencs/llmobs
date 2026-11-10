@@ -22,7 +22,7 @@ use super::payload::Payload;
 /// Most spans a trace detail response includes. Spec 09 § Response shapes.
 pub const MAX_TRACE_SPANS: usize = 20_000;
 
-/// The latest score of one name on a trace, span, session, or user row.
+/// The latest score of one name on a trace or session row.
 ///
 /// Spec 09 § Response shapes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -719,7 +719,7 @@ pub enum SpanSort {
 /// Query parameters of `GET /api/v1/projects/{project}/traces`.
 ///
 /// Spec 09 § Observability data.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct TraceListParams {
     /// Filter DSL expression over the `traces` view (spec 05).
@@ -758,7 +758,7 @@ pub struct TraceListParams {
 /// Query parameters of `GET /api/v1/projects/{project}/traces/stream`.
 ///
 /// Spec 09 § Observability data.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct TraceStreamParams {
     /// Filter DSL expression over the light columns of the `traces` view (spec 05).
@@ -775,7 +775,7 @@ pub struct TraceStreamParams {
 /// Query parameters of `GET /api/v1/projects/{project}/traces/{trace_id}`.
 ///
 /// Spec 09 § Observability data.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct TraceDetailParams {
     /// Instant the client is looking at. RFC 3339 or epoch milliseconds.
@@ -786,7 +786,7 @@ pub struct TraceDetailParams {
 /// Query parameters of `GET /api/v1/projects/{project}/spans`.
 ///
 /// Spec 09 § Observability data.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct SpanListParams {
     /// Filter DSL expression over the `spans` view (spec 05).

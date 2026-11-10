@@ -813,7 +813,7 @@ export interface components {
              * @description HTTP status code.
              */
             status: number;
-            /** @description Short human-readable summary, the reason phrase of [`Self::status`]. */
+            /** @description Short human-readable summary, the reason phrase of `status`. */
             title: string;
             /** @description Problem type URI. Always `about:blank` in this version. */
             type: string;
@@ -1015,7 +1015,7 @@ export interface components {
             value: components["schemas"]["ScoreValue"];
         };
         /**
-         * @description The latest score of one name on a trace, span, session, or user row.
+         * @description The latest score of one name on a trace or session row.
          *
          *     Spec 09 § Response shapes.
          */
@@ -2053,6 +2053,7 @@ export interface operations {
                 };
                 content: {
                     "application/octet-stream": string;
+                    "image/png": string;
                 };
             };
             /** @description The requested byte range. */
@@ -2062,6 +2063,7 @@ export interface operations {
                 };
                 content: {
                     "application/octet-stream": string;
+                    "image/png": string;
                 };
             };
             /** @description No credentials, or the credentials are invalid. */

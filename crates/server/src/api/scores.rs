@@ -5,14 +5,14 @@
 use llmobs_core::enums::{ScoreSource, ScoreTargetKind};
 use llmobs_core::ids::{SpanId, TraceId};
 use serde::Deserialize;
-use utoipa::{IntoParams, ToSchema};
+use utoipa::IntoParams;
 
 use super::common::{Limit, TimeParam};
 
 /// Query parameters of `GET /api/v1/projects/{project}/scores`.
 ///
 /// `from` and `to` bound `created_at`. Spec 09 § Scores & annotations.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct ScoreListParams {
     /// Kind of target to return.

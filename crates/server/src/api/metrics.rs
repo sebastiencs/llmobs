@@ -10,7 +10,7 @@ use super::common::TimeParam;
 /// Query parameters of `GET /api/v1/projects/{project}/metrics`.
 ///
 /// Spec 05 § Dashboard metrics.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct MetricsParams {
     /// Inclusive range start. RFC 3339 or epoch milliseconds.

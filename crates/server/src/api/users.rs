@@ -70,7 +70,7 @@ pub enum UserSort {
 /// Query parameters of `GET /api/v1/projects/{project}/users`.
 ///
 /// The filter runs on the `traces` view before traces are grouped by user. Spec 09 § Observability data.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct UserListParams {
     /// Filter DSL expression over the `traces` view, applied before grouping (spec 05).
