@@ -1,11 +1,16 @@
 //! SQL console: validate, plan, bind, run and encode.
 //!
-//! Q11 binds parameters. Q12 runs the plan. Until then the tests are the callers.
+//! `{name:Type}` placeholders are bound before planning. [`QueryContext::sql_json`]
+//! runs the plan under a timeout and a row cap.
 
 #![allow(dead_code)]
 
+mod encode;
 mod params;
+mod run;
 mod validate;
+
+pub use run::{SQL_MAX_ROWS, SqlColumn, SqlJson, SqlRequest};
 
 use std::collections::HashSet;
 
@@ -324,8 +329,8 @@ mod tests {
         values
     }
 
-    fn cell(array: &dyn datafusion::arrow::array::Array, row: usize) -> String {
-        use datafusion::arrow::array::{Int64Array, StringArray};
+    fn cell(array: &dyn arrow::array::Array, row: usize) -> String {
+        use arrow::array::{Int64Array, StringArray};
         if array.is_null(row) {
             return "NULL".to_string();
         }

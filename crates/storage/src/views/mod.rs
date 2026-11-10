@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
-use datafusion::arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema};
 use datafusion::common::{DFSchema, DFSchemaRef};
 use datafusion::datasource::{TableProvider, ViewTable, provider_as_source};
 use datafusion::error::DataFusionError;
@@ -403,10 +403,10 @@ mod tests {
         if column.is_null(row) {
             return None;
         }
-        if let Some(values) = column.as_primitive_opt::<datafusion::arrow::datatypes::Int64Type>() {
+        if let Some(values) = column.as_primitive_opt::<arrow::datatypes::Int64Type>() {
             return values.value(row).into();
         }
-        let values = column.as_primitive::<datafusion::arrow::datatypes::TimestampNanosecondType>();
+        let values = column.as_primitive::<arrow::datatypes::TimestampNanosecondType>();
         Some(values.value(row))
     }
 
@@ -417,7 +417,7 @@ mod tests {
         }
         Some(
             column
-                .as_primitive::<datafusion::arrow::datatypes::Float64Type>()
+                .as_primitive::<arrow::datatypes::Float64Type>()
                 .value(row),
         )
     }

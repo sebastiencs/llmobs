@@ -474,7 +474,7 @@ mod tests {
         let batch = batches.first().expect("a batch");
         batch
             .column(0)
-            .as_primitive::<datafusion::arrow::datatypes::Int64Type>()
+            .as_primitive::<arrow::datatypes::Int64Type>()
             .value(0)
     }
 
