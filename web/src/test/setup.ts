@@ -1,7 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
-import { afterEach } from "vitest";
+import { afterAll, afterEach, beforeAll } from "vitest";
+import { server } from "../mocks/node";
 import { installMatchMedia, resetMatchMedia } from "./match-media";
+
+beforeAll(() => {
+  server.listen({ onUnhandledFrame: "error" });
+});
 
 installMatchMedia();
 
@@ -23,9 +28,14 @@ if (typeof globalThis.ResizeObserver === "undefined") {
 }
 
 afterEach(() => {
+  server.resetHandlers();
   cleanup();
   localStorage.clear();
   document.documentElement.className = "";
   document.documentElement.style.colorScheme = "";
   resetMatchMedia();
+});
+
+afterAll(() => {
+  server.close();
 });

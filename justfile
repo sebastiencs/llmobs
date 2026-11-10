@@ -53,6 +53,10 @@ check: check-rust check-web
 web-dev: js-install
     pnpm --dir web run dev
 
+# Web dev server proxied at the real API (no mocks)
+web-dev-server: js-install
+    pnpm --dir web run dev:server
+
 # Regenerate crates/server/openapi.json and web/src/api/schema.gen.ts
 openapi: js-install
     LLMOBS_OPENAPI_WRITE=1 cargo test -p llmobs-server --test openapi -- contract_file_is_up_to_date

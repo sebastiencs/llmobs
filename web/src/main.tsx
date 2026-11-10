@@ -11,20 +11,29 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { PRODUCT_NAME } from "@/product";
 import "./styles.css";
 
-applyResolvedTheme(resolveTheme(readStoredTheme()));
+async function main(): Promise<void> {
+  applyResolvedTheme(resolveTheme(readStoredTheme()));
 
-const root = document.getElementById("root");
-if (!root) {
-  throw new Error("Missing #root");
+  if (import.meta.env.DEV && import.meta.env.MODE !== "server") {
+    const { worker } = await import("./mocks/browser");
+    await worker.start({ onUnhandledFrame: "warn", quiet: false });
+  }
+
+  const root = document.getElementById("root");
+  if (!root) {
+    throw new Error("Missing #root");
+  }
+
+  createRoot(root).render(
+    <StrictMode>
+      <ThemeProvider>
+        <header className="flex h-14 items-center justify-between border-b px-4">
+          <span className="font-medium">{PRODUCT_NAME}</span>
+          <ThemeToggle />
+        </header>
+      </ThemeProvider>
+    </StrictMode>,
+  );
 }
 
-createRoot(root).render(
-  <StrictMode>
-    <ThemeProvider>
-      <header className="flex h-14 items-center justify-between border-b px-4">
-        <span className="font-medium">{PRODUCT_NAME}</span>
-        <ThemeToggle />
-      </header>
-    </ThemeProvider>
-  </StrictMode>,
-);
+void main();
