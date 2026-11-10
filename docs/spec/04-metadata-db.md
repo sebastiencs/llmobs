@@ -2,6 +2,8 @@
 
 `meta.db`, SQLite ≥ 3.45, `journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON`, `busy_timeout=5000`. Accessed through `sqlx` with one writer connection (serialized writes through a `Mutex`/queue) and a read pool. Migrations are embedded (`sqlx::migrate!`) and run at startup; downgrade is not supported (12 §Upgrades).
 
+`meta.db` belongs to `llmobs-server`. The storage engine keeps its own catalog in `catalog.db` (03 §4, D83): data files, WAL checkpoints, media index and its side of deletions. The two databases share no transaction; the only link is the deletion handoff (§ Deletion requests).
+
 The SQL is written in the common subset of SQLite and Postgres where practical (no `AUTOINCREMENT` except where noted, `TEXT` UUIDs, timestamps as `INTEGER` ns), to keep the later Postgres port mechanical.
 
 Conventions: `id TEXT PRIMARY KEY` (UUIDv7), `created_at`/`updated_at INTEGER` (ns), JSON columns are `TEXT` validated by the application.
@@ -124,34 +126,11 @@ CREATE TABLE llm_connections (
 );
 ```
 
-## Storage catalog
+## Deletion requests
+
+The storage catalog (data files, WAL checkpoints, media) is in `catalog.db` (03 §4). `meta.db` keeps the deletion requests: the API creates them here together with their cascades (03 §7), then hands each one to storage (`register_deletion`, idempotent by id) and sets `handed_over_at`. At startup the server re-registers every request whose `handed_over_at` is null. It sets `status = 'applied'` when storage reports the deletion applied.
 
 ```sql
-CREATE TABLE data_files (
-  id TEXT PRIMARY KEY,
-  table_name TEXT NOT NULL,           -- 'spans' | 'traces' | 'scores'
-  project_id TEXT NOT NULL,
-  day TEXT NOT NULL,                  -- 'YYYY-MM-DD'
-  level INTEGER NOT NULL,             -- 0 | 1
-  path TEXT NOT NULL,                 -- relative to object store root
-  size_bytes INTEGER NOT NULL, row_count INTEGER NOT NULL,
-  min_time INTEGER NOT NULL, max_time INTEGER NOT NULL,
-  min_ingest_time INTEGER NOT NULL, max_ingest_time INTEGER NOT NULL,
-  fully_merged INTEGER NOT NULL DEFAULT 0,
-  state TEXT NOT NULL DEFAULT 'active',  -- 'active' | 'obsolete' | 'quarantined'
-  created_at INTEGER NOT NULL, obsoleted_at INTEGER
-);
-CREATE INDEX data_files_lookup ON data_files(table_name, project_id, day) WHERE state = 'active';
-CREATE INDEX data_files_gc ON data_files(obsoleted_at) WHERE state = 'obsolete';
-
-CREATE TABLE table_state (table_name TEXT PRIMARY KEY, flushed_seq INTEGER NOT NULL);
-
-CREATE TABLE media (
-  project_id TEXT NOT NULL, sha256 TEXT NOT NULL,
-  mime_type TEXT NOT NULL, size_bytes INTEGER NOT NULL, first_seen_at INTEGER NOT NULL,
-  PRIMARY KEY (project_id, sha256)
-);
-
 CREATE TABLE deletions (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL, project_id TEXT,
@@ -161,6 +140,7 @@ CREATE TABLE deletions (
   requested_by TEXT,                  -- user id or api key id
   created_at INTEGER NOT NULL,        -- cut-off
   status TEXT NOT NULL DEFAULT 'pending',  -- 'pending' | 'applied' | 'failed'
+  handed_over_at INTEGER,             -- set once storage has registered it
   applied_at INTEGER, error TEXT
 );
 CREATE TABLE deletion_traces (deletion_id TEXT NOT NULL REFERENCES deletions(id) ON DELETE CASCADE,

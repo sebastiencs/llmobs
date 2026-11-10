@@ -1,6 +1,6 @@
 # 05 — Query: filter DSL, SQL console, search, metrics
 
-Everything compiles to DataFusion plans over the project-scoped providers of 03 §6.
+Everything compiles to DataFusion plans over the project-scoped providers of 03 §6. Those providers expose the stored schemas (binary IDs, `project_id`); the views below are built on top of them by the query layer (`llmobs-storage` `filter/` and `sql/` modules, D89), which also rewrites hex-literal ID comparisons to binary ones and adds the default exclusions.
 
 ## Logical views exposed to users
 
