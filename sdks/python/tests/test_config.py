@@ -267,6 +267,32 @@ def test_base_url_strips_trailing_slashes() -> None:
     assert config.base_url == "https://host/prefix"
 
 
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("http://[::1]:8080", "http://[::1]:8080"),
+        ("HTTPS://X.example/", "HTTPS://X.example"),
+    ],
+)
+def test_base_url_accepts_bracketed_hosts_and_keeps_scheme_case(url: str, expected: str) -> None:
+    assert resolve_config(api_key=KEY, base_url=url, env={}).base_url == expected
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://[::1", "http://::1]", "http://[zz]", "http://a]b", "http://", "http://:8080"],
+)
+def test_base_url_rejects_a_bad_host(url: str) -> None:
+    with pytest.raises(ConfigError, match="must be an absolute http or https URL") as caught:
+        resolve_config(api_key=KEY, base_url=url, env={})
+    assert url not in str(caught.value)
+
+
+def test_base_url_unclosed_ipv6_is_a_config_error() -> None:
+    with pytest.raises(ConfigError, match="base_url: must be an absolute http or https URL"):
+        resolve_config(api_key=KEY, base_url="http://[::1", env={})
+
+
 def test_base_url_allows_an_empty_query_or_fragment() -> None:
     query = resolve_config(api_key=KEY, base_url="http://host/?", env={})
     fragment = resolve_config(api_key=KEY, base_url="http://host/#", env={})
@@ -293,6 +319,25 @@ def test_sample_rate_accepts_a_unit_interval(rate: float) -> None:
 def test_sample_rate_rejects_bad_numbers(rate: float) -> None:
     with pytest.raises(ConfigError, match="sample_rate: must be a number between 0 and 1"):
         resolve_config(api_key=KEY, sample_rate=rate, env={})
+
+
+@pytest.mark.parametrize("raw", ["1", "0", "0.25", ".5", "1.", "0.0", " 0.5 "])
+def test_sample_rate_env_accepts_a_plain_decimal(raw: str) -> None:
+    assert resolve_config(api_key=KEY, env={ENV_SAMPLE_RATE: raw}).sample_rate == float(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["+0.5", "-0", "5e-1", "0x1", "0b1", "0o1", "0.2_5", "\u0661", "Infinity", "NaN", "1.5"],
+)
+def test_sample_rate_env_rejects_other_spellings(raw: str) -> None:
+    with pytest.raises(ConfigError, match=f"{ENV_SAMPLE_RATE}: must be a number between 0 and 1"):
+        resolve_config(api_key=KEY, env={ENV_SAMPLE_RATE: raw})
+
+
+def test_sample_rate_rejects_an_overflowing_integer() -> None:
+    with pytest.raises(ConfigError, match="sample_rate: must be a number between 0 and 1"):
+        resolve_config(api_key=KEY, sample_rate=10**400, env={})
 
 
 def test_sample_rate_rejects_a_bad_env_value() -> None:
@@ -358,5 +403,17 @@ def test_mask_must_be_callable() -> None:
 
 
 def test_env_none_reads_os_environ(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        ENV_API_KEY,
+        ENV_BASE_URL,
+        ENV_ENVIRONMENT,
+        ENV_RELEASE,
+        ENV_CAPTURE_CONTENT,
+        ENV_SAMPLE_RATE,
+        ENV_ENABLED,
+        ENV_GIT_COMMIT,
+        ENV_SOURCE_VERSION,
+    ):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv(ENV_API_KEY, KEY)
     assert resolve_config().api_key == KEY

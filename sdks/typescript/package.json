@@ -27,7 +27,6 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
-    "@biomejs/biome": "2.6.4",
     "@types/node": "26.6.6",
     "publint": "0.3.25",
     "tsdown": "0.23.4",

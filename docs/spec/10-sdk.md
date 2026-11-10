@@ -32,8 +32,8 @@ TypeScript spells the options in camelCase (`apiKey`, `baseUrl`, `captureContent
 3. `enabled` is resolved first. When it is false, no other option is read or validated: the config holds the defaults and the SDK runs in no-op mode.
 4. Booleans from env accept `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off`, case-insensitive.
 5. `api_key` is required and must start with `sk-llmobs-`. It never appears in error messages, `repr`/`toString`/`inspect` output, or JSON serialization of the config.
-6. `base_url` must be an absolute `http` or `https` URL without query or fragment. A path is allowed (reverse-proxy prefix); trailing slashes are removed.
-7. `sample_rate` must be a finite number in `[0, 1]`.
+6. `base_url` must be an absolute `http` or `https` URL without query or fragment. A path is allowed (reverse-proxy prefix); trailing slashes are removed. A bracketed host must contain only hex digits, `:` and `.`; brackets anywhere else are rejected.
+7. `sample_rate` must be a finite number in `[0, 1]`. From `LLMOBS_SAMPLE_RATE` it must also be a plain ASCII decimal (`1`, `0.25`, `.5`, `1.`): no sign, exponent, digit separators, hex, or non-ASCII digits.
 8. `environment` must not be the reserved evaluation environment (`llmobs-eval`, D49).
 9. `release` falls back to `GIT_COMMIT`, then `SOURCE_VERSION` (Python only), when neither the argument nor `LLMOBS_RELEASE` is set.
 10. `instrument` must be a list of non-empty strings (a bare string is rejected); names are checked when instrumentation is added. `mask` must be callable.

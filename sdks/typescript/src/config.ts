@@ -201,8 +201,11 @@ function resolveBaseUrl(value: unknown, source: Env): string {
   return checkBaseUrl(raw, ENV_BASE_URL);
 }
 
+const SAMPLE_RATE_ENV = /^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$/;
+const BRACKET_HOST = /^\[[0-9A-Fa-f:.]+\](?::[0-9]*)?$/;
+
 function checkBaseUrl(value: unknown, name: string): string {
-  if (typeof value !== "string" || !isAbsoluteHttpUrl(value)) {
+  if (typeof value !== "string" || !hasHttpAuthority(value)) {
     throw new ConfigError(name, "must be an absolute http or https URL");
   }
   const hash = value.indexOf("#");
@@ -216,10 +219,23 @@ function checkBaseUrl(value: unknown, name: string): string {
   return value.replace(/\/+$/, "");
 }
 
-/** True for `http(s)://host...` with a non-empty host. No DOM `URL` in this build. */
-function isAbsoluteHttpUrl(value: string): boolean {
+/** `http(s)://` plus a host. No DOM `URL` in this build. */
+function hasHttpAuthority(value: string): boolean {
   const match = /^(https?):\/\/([^/?#]+)/i.exec(value);
-  return match !== null && match[2] !== undefined && match[2] !== "";
+  const authority = match?.[2];
+  if (authority === undefined || authority === "") {
+    return false;
+  }
+  const at = authority.lastIndexOf("@");
+  const host = at === -1 ? authority : authority.slice(at + 1);
+  if (host.startsWith("[")) {
+    return BRACKET_HOST.test(host);
+  }
+  if (host.includes("[") || host.includes("]")) {
+    return false;
+  }
+  const name = host.split(":", 1)[0];
+  return name !== undefined && name !== "";
 }
 
 function resolveEnvironment(value: unknown, source: Env): string | undefined {
@@ -260,6 +276,9 @@ function resolveSampleRate(value: unknown, source: Env): number {
   const raw = readEnv(source, ENV_SAMPLE_RATE);
   if (raw === undefined) {
     return 1;
+  }
+  if (!SAMPLE_RATE_ENV.test(raw)) {
+    throw new ConfigError(ENV_SAMPLE_RATE, "must be a number between 0 and 1");
   }
   return checkSampleRate(Number(raw), ENV_SAMPLE_RATE);
 }

@@ -5,10 +5,10 @@ The rules are spec 10 § Configuration, items 1-11. ``init()`` will be the calle
 
 import math
 import os
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urlsplit
 
 _ENV_PREFIX = "LLMOBS_"
 ENV_API_KEY = f"{_ENV_PREFIX}API_KEY"
@@ -160,15 +160,34 @@ def _resolve_base_url(value: object, source: Mapping[str, str]) -> str:
     return _check_base_url(raw, ENV_BASE_URL)
 
 
+_BASE_URL = re.compile(r"^(https?)://([^/?#]+)", re.IGNORECASE)
+_BRACKET_HOST = re.compile(r"^\[[0-9A-Fa-f:.]+\](?::[0-9]*)?$")
+_SAMPLE_RATE_ENV = re.compile(r"^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$")
+
+
 def _check_base_url(value: object, name: str) -> str:
-    if not isinstance(value, str):
+    if not isinstance(value, str) or not _http_authority(value):
         raise ConfigError(f"{name}: must be an absolute http or https URL")
-    parsed = urlsplit(value)
-    if parsed.scheme not in {"http", "https"} or parsed.netloc == "":
-        raise ConfigError(f"{name}: must be an absolute http or https URL")
-    if parsed.query != "" or parsed.fragment != "":
+    hash_at = value.find("#")
+    before_hash = value if hash_at == -1 else value[:hash_at]
+    query_at = before_hash.find("?")
+    query = "" if query_at == -1 else before_hash[query_at + 1 :]
+    fragment = "" if hash_at == -1 else value[hash_at + 1 :]
+    if query != "" or fragment != "":
         raise ConfigError(f"{name}: must not include a query or fragment")
     return value.rstrip("/")
+
+
+def _http_authority(value: str) -> bool:
+    match = _BASE_URL.match(value)
+    if match is None:
+        return False
+    host = match.group(2).rsplit("@", 1)[-1]
+    if host.startswith("["):
+        return _BRACKET_HOST.fullmatch(host) is not None
+    if "[" in host or "]" in host:
+        return False
+    return host.split(":", 1)[0] != ""
 
 
 def _resolve_environment(value: object, source: Mapping[str, str]) -> str | None:
@@ -206,9 +225,11 @@ def _resolve_sample_rate(value: object, source: Mapping[str, str]) -> float:
     raw = _read_env(source, ENV_SAMPLE_RATE)
     if raw is None:
         return 1.0
+    if _SAMPLE_RATE_ENV.fullmatch(raw) is None:
+        raise ConfigError(f"{ENV_SAMPLE_RATE}: must be a number between 0 and 1")
     try:
         number = float(raw)
-    except ValueError:
+    except (ValueError, OverflowError):
         raise ConfigError(
             f"{ENV_SAMPLE_RATE}: must be a number between 0 and 1",
         ) from None
@@ -218,7 +239,11 @@ def _resolve_sample_rate(value: object, source: Mapping[str, str]) -> float:
 def _check_sample_rate(value: object, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigError(f"{name}: must be a number between 0 and 1")
-    return _check_unit(float(value), name)
+    try:
+        number = float(value)
+    except OverflowError:
+        raise ConfigError(f"{name}: must be a number between 0 and 1") from None
+    return _check_unit(number, name)
 
 
 def _check_unit(number: float, name: str) -> float:

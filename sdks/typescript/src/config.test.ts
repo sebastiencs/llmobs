@@ -90,6 +90,19 @@ describe("precedence", () => {
     expect(value).toBe(argument);
   });
 
+  it.each([
+    ["baseUrl", "LLMOBS_BASE_URL", "http://env.example", "http://localhost:8080"],
+    ["environment", "LLMOBS_ENVIRONMENT", "staging", undefined],
+    ["release", "LLMOBS_RELEASE", "env", undefined],
+    ["captureContent", "LLMOBS_CAPTURE_CONTENT", false, true],
+    ["sampleRate", "LLMOBS_SAMPLE_RATE", 0.5, 1],
+    ["enabled", "LLMOBS_ENABLED", false, true],
+  ])("%s prefers the env var over the default", (option, envName, expected, fallback) => {
+    const config = resolve({ apiKey: KEY }, { [envName]: String(expected) });
+    expect(config[option as keyof Config]).toBe(expected);
+    expect(config[option as keyof Config]).not.toBe(fallback);
+  });
+
   it("treats a blank env value as unset", () => {
     for (const blank of ["", "   ", "\n\t"]) {
       const config = resolve(
@@ -170,7 +183,23 @@ describe("baseUrl", () => {
     expect(config.baseUrl).toBe("https://host/prefix");
   });
 
-  it("allows an empty query or fragment, matching urlsplit", () => {
+  it.each([
+    ["http://[::1]:8080", "http://[::1]:8080"],
+    ["HTTPS://X.example/", "HTTPS://X.example"],
+  ])("accepts %s", (baseUrl, expected) => {
+    expect(resolve({ apiKey: KEY, baseUrl }).baseUrl).toBe(expected);
+  });
+
+  it.each(["http://[::1", "http://::1]", "http://[zz]", "http://a]b", "http://", "http://:8080"])(
+    "rejects the host %s",
+    (baseUrl) => {
+      expect(message({ apiKey: KEY, baseUrl })).toBe(
+        "baseUrl: must be an absolute http or https URL",
+      );
+    },
+  );
+
+  it("allows an empty query or fragment", () => {
     expect(resolve({ apiKey: KEY, baseUrl: "http://host/?" }).baseUrl).toBe("http://host/?");
     expect(resolve({ apiKey: KEY, baseUrl: "http://host/#" }).baseUrl).toBe("http://host/#");
   });
@@ -181,6 +210,21 @@ describe("baseUrl", () => {
       const text = message({ apiKey: KEY, baseUrl });
       expect(text.startsWith("baseUrl:")).toBe(true);
       expect(text).not.toContain(baseUrl);
+    },
+  );
+});
+
+describe("sampleRate from the env", () => {
+  it.each(["1", "0", "0.25", ".5", "1.", "0.0", " 0.5 "])("accepts %j", (raw) => {
+    expect(resolve({ apiKey: KEY }, { LLMOBS_SAMPLE_RATE: raw }).sampleRate).toBe(Number(raw));
+  });
+
+  it.each(["+0.5", "-0", "5e-1", "0x1", "0b1", "0o1", "0.2_5", "١", "Infinity", "NaN", "1.5"])(
+    "rejects %j",
+    (raw) => {
+      expect(message({ apiKey: KEY }, { LLMOBS_SAMPLE_RATE: raw })).toBe(
+        "LLMOBS_SAMPLE_RATE: must be a number between 0 and 1",
+      );
     },
   );
 });
@@ -255,17 +299,22 @@ describe("instrument and mask", () => {
 
 describe("process.env", () => {
   it("reads the default env from globalThis.process", () => {
-    const previous = process.env.LLMOBS_BASE_URL;
+    const previousKey = process.env.LLMOBS_API_KEY;
+    const previousUrl = process.env.LLMOBS_BASE_URL;
     process.env.LLMOBS_API_KEY = KEY;
     process.env.LLMOBS_BASE_URL = "https://from-process.example";
     try {
       expect(resolveConfig().baseUrl).toBe("https://from-process.example");
     } finally {
-      delete process.env.LLMOBS_API_KEY;
-      if (previous === undefined) {
+      if (previousKey === undefined) {
+        delete process.env.LLMOBS_API_KEY;
+      } else {
+        process.env.LLMOBS_API_KEY = previousKey;
+      }
+      if (previousUrl === undefined) {
         delete process.env.LLMOBS_BASE_URL;
       } else {
-        process.env.LLMOBS_BASE_URL = previous;
+        process.env.LLMOBS_BASE_URL = previousUrl;
       }
     }
   });
