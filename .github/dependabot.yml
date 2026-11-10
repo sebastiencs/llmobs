@@ -1,7 +1,10 @@
 version: 2
 updates:
   - package-ecosystem: github-actions
-    directory: /
+    # Composite actions are only scanned in directories listed here.
+    directories:
+      - /
+      - /.github/actions/*
     schedule:
       interval: weekly
       day: monday
@@ -21,6 +24,19 @@ updates:
 
   - package-ecosystem: cargo
     directory: /
+    ignore:
+      # DataFusion picks the arrow, parquet and object_store majors. A major of these moves
+      # only with a DataFusion major, and that PR is completed by hand (AGENTS.md
+      # § Dependencies). Arrow 60 renamed the map entry fields to `key`/`value`; see
+      # docs/plans/maintenance/01-first-dependabot-batch.md before that upgrade.
+      - dependency-name: "arrow"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "arrow-*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "parquet"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "object_store"
+        update-types: ["version-update:semver-major"]
     schedule:
       interval: weekly
       day: monday
@@ -52,6 +68,11 @@ updates:
 
   - package-ecosystem: npm
     directory: /
+    ignore:
+      # openapi-typescript 7.13.0 declares typescript ^5.x and uses the JS compiler API,
+      # which TypeScript 7 does not ship. Remove when openapi-typescript supports it.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     schedule:
       interval: weekly
       day: monday

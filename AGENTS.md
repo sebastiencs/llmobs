@@ -42,9 +42,10 @@ If the code has to deviate from the spec, update the spec **in the same change**
 
 **Dependencies.**
 - Every version is declared once in the root `Cargo.toml` `[workspace.dependencies]`; crates use `dep = { workspace = true }`.
-- `datafusion`, `arrow`, `parquet` and `object_store` are a pinned family: never bump one without the others. Dependabot PRs follow the same rules; the DataFusion family arrives as one PR.
+- `datafusion`, `arrow`, `parquet` and `object_store` are a pinned family: never bump one without the others. DataFusion picks the majors. Dependabot ignores arrow-side majors; a DataFusion major PR is completed by hand with the arrow, parquet and object_store versions that release requires. `cargo deny` fails on two versions of a family crate.
 - Look up real versions (`cargo search`, `cargo info`); never guess one.
 - JS packages use exact versions and respect `minimumReleaseAge`; Python dev tools are pinned by `uv.lock`.
+- `typescript` stays on 5.x while `openapi-typescript` requires it (`.github/dependabot.yml` ignores TypeScript majors).
 
 **Errors.** Each library crate defines its own error enum(s) with `thiserror`. `anyhow` is only allowed in `llmobs-cli`.
 
