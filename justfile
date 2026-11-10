@@ -53,9 +53,10 @@ check: check-rust check-web
 web-dev: js-install
     pnpm --dir web run dev
 
-# Regenerate crates/server/openapi.json
-openapi:
+# Regenerate crates/server/openapi.json and web/src/api/schema.gen.ts
+openapi: js-install
     LLMOBS_OPENAPI_WRITE=1 cargo test -p llmobs-server --test openapi -- contract_file_is_up_to_date
+    pnpm --dir web run gen:api
 
 # Regenerate fixtures/api responses and manifest
 api-examples:
