@@ -56,9 +56,9 @@ datafusion = { version = "55.2", default-features = false, features = [
     "recursive_protection",
     "sql",
 ] }
-arrow = { version = "59.2", default-features = false }
+arrow = { version = "60.1", default-features = false }
 # parquet 59 has no `flate2` feature. `flate2-zlib-rs` is that release's deflate backend.
-parquet = { version = "59.2", default-features = false, features = [
+parquet = { version = "60.1", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
