@@ -99,6 +99,31 @@ pub enum QueryError {
     DataFusion(#[from] datafusion::error::DataFusionError),
 }
 
+/// Inserting a batch into a memtable failed.
+///
+/// The message names the column. It never includes row content.
+#[derive(Debug, thiserror::Error)]
+pub enum MemtableError {
+    /// A timestamp cannot be turned into a UTC day.
+    #[error("time column is outside the supported range")]
+    TimeOutOfRange,
+    /// The table's time column is absent.
+    #[error("batch is missing column {column}")]
+    MissingColumn {
+        /// Column name, for example `start_time`.
+        column: &'static str,
+    },
+    /// The time column is not nanosecond timestamps, or it contains a null.
+    #[error("column {column} has an unexpected type or a null")]
+    BadColumn {
+        /// Column name.
+        column: &'static str,
+    },
+    /// Filtering or concatenating batches failed.
+    #[error("building a memtable batch")]
+    Arrow(#[source] ArrowError),
+}
+
 /// A WAL codec, segment, or replay failure.
 ///
 /// Callers outside the WAL map this into [`OpenError`] or [`AppendError`].

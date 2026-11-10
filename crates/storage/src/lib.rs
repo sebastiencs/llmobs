@@ -19,4 +19,5 @@ pub mod config;
 pub mod error;
 
 pub(crate) mod hooks;
+pub(crate) mod memtable;
 pub(crate) mod wal;

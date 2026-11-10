@@ -2307,6 +2307,7 @@ dependencies = [
  "arrow",
  "async-trait",
  "bytesize",
+ "chrono",
  "crc32c",
  "datafusion",
  "humantime-serde",
