@@ -19,6 +19,28 @@ multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true # path deps between workspace crates
 highlight = "all"
+# The DataFusion family is pinned together (AGENTS.md § Dependencies): two versions of any
+# of these crates in the graph means the family is split. cargo-deny has no wildcard for
+# crate names, so every arrow sub-crate is listed.
+deny = [
+    { crate = "datafusion", deny-multiple-versions = true },
+    { crate = "arrow", deny-multiple-versions = true },
+    { crate = "arrow-arith", deny-multiple-versions = true },
+    { crate = "arrow-array", deny-multiple-versions = true },
+    { crate = "arrow-buffer", deny-multiple-versions = true },
+    { crate = "arrow-cast", deny-multiple-versions = true },
+    { crate = "arrow-csv", deny-multiple-versions = true },
+    { crate = "arrow-data", deny-multiple-versions = true },
+    { crate = "arrow-ipc", deny-multiple-versions = true },
+    { crate = "arrow-json", deny-multiple-versions = true },
+    { crate = "arrow-ord", deny-multiple-versions = true },
+    { crate = "arrow-row", deny-multiple-versions = true },
+    { crate = "arrow-schema", deny-multiple-versions = true },
+    { crate = "arrow-select", deny-multiple-versions = true },
+    { crate = "arrow-string", deny-multiple-versions = true },
+    { crate = "parquet", deny-multiple-versions = true },
+    { crate = "object_store", deny-multiple-versions = true },
+]
 
 [sources]
 unknown-registry = "deny"
