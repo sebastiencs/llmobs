@@ -703,6 +703,13 @@ fn example_scenarios() {
         .find(|session| session.session_id == "sess-001")
         .unwrap_or_else(|| panic!("sess-001"));
     assert_eq!(session.trace_count, 2);
+    assert_eq!(session.tags, ["beta".to_owned(), "refund".to_owned()]);
+    let other = session_list
+        .data
+        .iter()
+        .find(|session| session.session_id == "sess-002")
+        .unwrap_or_else(|| panic!("sess-002"));
+    assert_eq!(other.tags, Vec::<String>::new());
     let user_list: Page<EndUserSummary> = read_json(&api_dir().join("responses/users.json"));
     let user = user_list
         .data

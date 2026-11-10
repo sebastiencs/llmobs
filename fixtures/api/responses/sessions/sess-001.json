@@ -9,6 +9,10 @@
     "total_tokens": 4180,
     "cost_total": 0.005520000000000001,
     "user_id": "user-42",
+    "tags": [
+      "beta",
+      "refund"
+    ],
     "scores": [
       {
         "score_id": "01900000-0000-7000-8000-000000000305",
@@ -37,7 +41,7 @@
         "environment": "production",
         "release": "v1.4.0",
         "tags": [
-          "support"
+          "beta"
         ],
         "metadata": {},
         "input_preview": "My order 1234 hasn't arrived.",
@@ -88,7 +92,10 @@
         "user_id": "user-42",
         "environment": "production",
         "release": "v1.4.0",
-        "tags": [],
+        "tags": [
+          "beta",
+          "refund"
+        ],
         "metadata": {},
         "input_preview": "Can I change the delivery address?",
         "output_preview": "Yes. Send the new address and I will update the delivery.",

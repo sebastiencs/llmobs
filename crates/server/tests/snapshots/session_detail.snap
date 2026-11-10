@@ -13,6 +13,9 @@ expression: snap(&detail)
     "total_tokens": 1240,
     "cost_total": 0.0015,
     "user_id": "user-42",
+    "tags": [
+      "support"
+    ],
     "scores": [
       {
         "score_id": "01900000-0000-7000-8000-000000000305",

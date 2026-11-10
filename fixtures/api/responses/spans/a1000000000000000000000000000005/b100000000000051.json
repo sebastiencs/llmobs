@@ -12,7 +12,9 @@
   "user_id": "user-42",
   "environment": "llmobs-eval",
   "release": "v1.4.0",
-  "tags": [],
+  "tags": [
+    "eval"
+  ],
   "metadata": {},
   "attributes": {
     "llmobs.eval.evaluator_id": "01900000-0000-7000-8000-000000000201",

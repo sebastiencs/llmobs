@@ -101,7 +101,10 @@
       "user_id": "user-42",
       "environment": "production",
       "release": "v1.4.0",
-      "tags": [],
+      "tags": [
+        "beta",
+        "refund"
+      ],
       "metadata": {},
       "input_preview": "Can I change the delivery address?",
       "output_preview": "Yes. Send the new address and I will update the delivery.",
@@ -141,7 +144,9 @@
       "user_id": "user-42",
       "environment": "llmobs-eval",
       "release": "v1.4.0",
-      "tags": [],
+      "tags": [
+        "eval"
+      ],
       "metadata": {},
       "input_preview": "Score the helpfulness of the support reply from 0 to 1.",
       "output_preview": "0.9",
@@ -171,7 +176,7 @@
       "environment": "production",
       "release": "v1.4.0",
       "tags": [
-        "support"
+        "beta"
       ],
       "metadata": {},
       "input_preview": "My order 1234 hasn't arrived.",

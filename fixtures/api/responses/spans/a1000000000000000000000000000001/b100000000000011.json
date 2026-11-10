@@ -13,7 +13,7 @@
   "environment": "production",
   "release": "v1.4.0",
   "tags": [
-    "support"
+    "beta"
   ],
   "metadata": {},
   "input": {

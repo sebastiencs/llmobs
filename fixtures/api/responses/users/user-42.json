@@ -20,6 +20,10 @@
       "total_tokens": 4180,
       "cost_total": 0.005520000000000001,
       "user_id": "user-42",
+      "tags": [
+        "beta",
+        "refund"
+      ],
       "scores": [
         {
           "score_id": "01900000-0000-7000-8000-000000000305",

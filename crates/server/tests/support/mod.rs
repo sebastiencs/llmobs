@@ -191,6 +191,13 @@ pub(crate) fn session_summary(
         total_tokens: sum_i64(ordered.iter().map(|trace| trace.total_tokens)),
         cost_total: sum_f64(ordered.iter().map(|trace| trace.cost_total)),
         user_id: ordered.iter().find_map(|trace| trace.user_id.clone()),
+        tags: {
+            let mut tags = BTreeSet::new();
+            for trace in &ordered {
+                tags.extend(trace.tags.iter().cloned());
+            }
+            tags.into_iter().collect()
+        },
         scores: session_scores(session_id, scores),
     }
 }

@@ -170,7 +170,10 @@
       "user_id": "user-42",
       "environment": "production",
       "release": "v1.4.0",
-      "tags": [],
+      "tags": [
+        "beta",
+        "refund"
+      ],
       "metadata": {},
       "input_preview": "Can I change the delivery address?",
       "output_preview": "Yes. Send the new address and I will update the delivery."
@@ -265,7 +268,7 @@
       "environment": "production",
       "release": "v1.4.0",
       "tags": [
-        "support"
+        "beta"
       ],
       "metadata": {},
       "input_preview": "My order 1234 hasn't arrived.",

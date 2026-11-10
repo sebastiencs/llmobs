@@ -13,7 +13,7 @@
     "environment": "production",
     "release": "v1.4.0",
     "tags": [
-      "support"
+      "beta"
     ],
     "metadata": {},
     "input_preview": "My order 1234 hasn't arrived.",
@@ -60,7 +60,7 @@
         "environment": "production",
         "release": "v1.4.0",
         "tags": [
-          "support"
+          "beta"
         ],
         "metadata": {},
         "input_preview": "My order 1234 hasn't arrived.",

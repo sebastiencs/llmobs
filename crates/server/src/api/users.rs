@@ -132,6 +132,7 @@ mod tests {
                 total_tokens: Some(2600),
                 cost_total: Some(0.00306),
                 user_id: Some("user-42".to_owned()),
+                tags: vec!["support".to_owned()],
                 scores: vec![ScoreBrief {
                     score_id: Uuid::parse_str("01900000-0000-7000-8000-000000000305").unwrap(),
                     name: "resolved".to_owned(),

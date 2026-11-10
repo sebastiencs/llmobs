@@ -3750,6 +3750,7 @@
           "duration_ns",
           "trace_count",
           "error_count",
+          "tags",
           "scores"
         ],
         "properties": {
@@ -3788,6 +3789,13 @@
             "type": "string",
             "format": "date-time",
             "description": "Earliest trace start, nanoseconds since the Unix epoch. JSON is RFC 3339."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Sorted distinct union of the session's trace tags."
           },
           "total_tokens": {
             "type": "integer",

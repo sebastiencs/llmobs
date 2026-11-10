@@ -14,7 +14,7 @@
     "environment": "production",
     "release": "v1.4.0",
     "tags": [
-      "support"
+      "beta"
     ],
     "input": "My order 1234 hasn't arrived.",
     "input_format": "text",
@@ -151,6 +151,10 @@
     "user_id": "user-42",
     "environment": "production",
     "release": "v1.4.0",
+    "tags": [
+      "beta",
+      "refund"
+    ],
     "input": "Can I change the delivery address?",
     "input_format": "text",
     "output": "Yes. Send the new address and I will update the delivery.",
@@ -370,6 +374,9 @@
     "user_id": "user-42",
     "environment": "llmobs-eval",
     "release": "v1.4.0",
+    "tags": [
+      "eval"
+    ],
     "attributes": {
       "llmobs.eval.evaluator_id": "01900000-0000-7000-8000-000000000201",
       "llmobs.eval.target_trace_id": "a1000000000000000000000000000001"

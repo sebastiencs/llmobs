@@ -12,7 +12,9 @@
     "user_id": "user-42",
     "environment": "llmobs-eval",
     "release": "v1.4.0",
-    "tags": [],
+    "tags": [
+      "eval"
+    ],
     "metadata": {},
     "input_preview": "Score the helpfulness of the support reply from 0 to 1.",
     "output_preview": "0.9",
@@ -46,7 +48,9 @@
         "user_id": "user-42",
         "environment": "llmobs-eval",
         "release": "v1.4.0",
-        "tags": [],
+        "tags": [
+          "eval"
+        ],
         "metadata": {}
       }
     },

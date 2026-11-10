@@ -1173,6 +1173,8 @@ export interface components {
              * @description Earliest trace start, nanoseconds since the Unix epoch. JSON is RFC 3339.
              */
             start_time: string;
+            /** @description Sorted distinct union of the session's trace tags. */
+            tags: string[];
             /**
              * Format: int64
              * @description Sum of trace token totals. Omitted when every trace omitted the field.

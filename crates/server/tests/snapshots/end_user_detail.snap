@@ -24,6 +24,9 @@ expression: "serde_json::to_string_pretty(&detail).unwrap()"
       "total_tokens": 2600,
       "cost_total": 0.00306,
       "user_id": "user-42",
+      "tags": [
+        "support"
+      ],
       "scores": [
         {
           "score_id": "01900000-0000-7000-8000-000000000305",

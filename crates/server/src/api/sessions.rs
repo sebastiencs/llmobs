@@ -1,7 +1,6 @@
 //! Session response types.
 //!
-//! Spec 09 § Observability data and § Response shapes. The sessions list does not show tags, so
-//! [`SessionSummary`] has none.
+//! Spec 09 § Observability data and § Response shapes.
 
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -43,6 +42,8 @@ pub struct SessionSummary {
     /// End-user id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
+    /// Sorted distinct union of the session's trace tags.
+    pub tags: Vec<String>,
     /// Latest score of each name attached to this session.
     pub scores: Vec<ScoreBrief>,
 }
@@ -155,6 +156,7 @@ mod tests {
                 total_tokens: Some(1240),
                 cost_total: Some(0.0015),
                 user_id: Some("user-42".to_owned()),
+                tags: vec!["support".to_owned()],
                 scores: vec![ScoreBrief {
                     score_id: Uuid::parse_str("01900000-0000-7000-8000-000000000305").unwrap(),
                     name: "resolved".to_owned(),
