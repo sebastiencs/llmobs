@@ -522,7 +522,7 @@ async fn run(
                     %err,
                     "WAL group failed"
                 );
-                fail_group(prepared);
+                fail_group(&shared, prepared);
                 fail_queued(&shared, &mut rx, table, segment.name(), first_seq, last_seq);
                 break;
             }
@@ -534,7 +534,7 @@ async fn run(
                     last_seq,
                     "WAL group failed"
                 );
-                fail_group(prepared);
+                fail_group(&shared, prepared);
                 fail_queued(&shared, &mut rx, table, &segment_label, first_seq, last_seq);
                 break;
             }
@@ -556,7 +556,7 @@ async fn run(
                 "WAL group failed"
             );
             discard_unacked(written);
-            fail_group(prepared);
+            fail_group(&shared, prepared);
             fail_queued(&shared, &mut rx, table, &segment_label, first_seq, last_seq);
             break;
         }
@@ -632,7 +632,10 @@ fn publish(table: Table, shared: &WriterShared, published: &Published) {
     });
 }
 
-fn fail_group(prepared: Vec<Prepared>) {
+fn fail_group(shared: &WriterShared, prepared: Vec<Prepared>) {
+    // Set the flag before the acks, so a caller that observes `WalFailed`
+    // also observes `failed`.
+    shared.failed.store(true, Ordering::Release);
     for item in prepared {
         let _ = item.ack.send(Err(AppendError::WalFailed));
     }

@@ -8,6 +8,9 @@ mod replay;
 mod segment;
 pub(crate) mod writer;
 
+pub(crate) use replay::replay;
+pub(crate) use segment::SegmentWriter;
+
 use std::fs::File;
 use std::io;
 use std::path::Path;
@@ -85,6 +88,12 @@ pub(crate) fn sample_span_batch() -> arrow::array::RecordBatch {
 /// One span per start time, for memtable tests.
 #[cfg(test)]
 pub(crate) fn spans_at(starts: &[i64]) -> arrow::array::RecordBatch {
+    spans_named(starts, "root")
+}
+
+/// [`spans_at`] with a chosen span name.
+#[cfg(test)]
+pub(crate) fn spans_named(starts: &[i64], name: &str) -> arrow::array::RecordBatch {
     use std::collections::BTreeMap;
 
     use llmobs_core::batch::spans_to_record_batch;
@@ -109,7 +118,7 @@ pub(crate) fn spans_at(starts: &[i64]) -> arrow::array::RecordBatch {
                 trace_id,
                 span_id: SpanId::from_bytes(span_bytes).unwrap(),
                 parent_span_id: None,
-                name: "root".to_owned(),
+                name: name.to_owned(),
                 span_kind: SpanKind::Span,
                 start_time: *start,
                 end_time: start.saturating_add(100),

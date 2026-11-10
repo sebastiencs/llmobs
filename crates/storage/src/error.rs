@@ -91,6 +91,25 @@ pub enum AppendError {
     ShuttingDown,
 }
 
+/// Shutdown failed, or a later maintenance call failed.
+///
+/// M1 only returns this from [`crate::Storage::shutdown`].
+#[derive(Debug, thiserror::Error)]
+pub enum StorageError {
+    /// The table's writer stopped after a WAL error.
+    #[error("WAL writer for {table} failed")]
+    WalFailed {
+        /// `spans` or `scores`.
+        table: &'static str,
+    },
+    /// The table's writer task panicked.
+    #[error("WAL writer for {table} panicked")]
+    WriterPanicked {
+        /// `spans` or `scores`.
+        table: &'static str,
+    },
+}
+
 /// `Storage::query` failed.
 #[derive(Debug, thiserror::Error)]
 pub enum QueryError {
