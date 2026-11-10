@@ -47,7 +47,7 @@ Type notation in this document: "Utf8 (dict)" means a `Utf8` column in memory th
 | `parent_span_id` | FixedSizeBinary(8), nullable | P | Null ⇒ root of the trace *as received*. |
 | `name` | Utf8 | P | |
 | `span_kind` | Utf8 (dict) | P | Enum above. |
-| `start_time` | Timestamp(ns, UTC) | P | Partition day derived from this. |
+| `start_time` | Timestamp(ns, UTC) | P | The partition day is the trace's anchor day, the UTC date of this or the day before or after (03 § Trace anchor). |
 | `end_time` | Timestamp(ns, UTC) | P | |
 | `duration_ns` | Int64 | P | `end - start`. |
 | `status` | Utf8 (dict) | P | `unset` \| `ok` \| `error`. |
@@ -133,7 +133,9 @@ After media extraction, `blob` parts become `{"type": "uri", "modality": …, "m
 
 ## Trace (columnar table `traces`)
 
-Traces are not sent by clients; they are **derived**. Each flush writes one *partial* summary row per `(project_id, trace_id)` present in the flushed batch; queries merge partials with `GROUP BY trace_id`; compaction collapses partials into one row. This is the same idea as ClickHouse's AggregatingMergeTree.
+Traces are not sent by clients; they are **derived**. Each flush writes one *partial* summary row per `(project_id, trace_id)` present in the flushed batch; queries merge partials with `GROUP BY trace_id`. This is the same idea as ClickHouse's AggregatingMergeTree. `traces` files are always computed from `spans` files (D88, 03 §3): when compaction merges a trace's spans into one file, its partials are recomputed from them and collapse into one row, and duplicate spans stop counting twice.
+
+Rows of `spans` and `traces` are partitioned by the trace's **anchor day** (03 § Trace anchor), so all rows of a trace that crosses midnight share one partition (D86).
 
 | Column | Type | Merge rule |
 |---|---|---|
@@ -162,6 +164,8 @@ Traces are not sent by clients; they are **derived**. Each flush writes one *par
 | `partial_count` | Int32 | sum (1 per partial; = 1 after full compaction) |
 
 `duration_ns` is computed at query time as `end_time - start_time`.
+
+**Order.** "First non-null" and the choice among several root partials (or root spans) follow `(start_time, span_id)` ascending, inside a partial and when partials are merged. Results never depend on the order in which spans were flushed.
 
 **Root semantics.** The root is the span with null `parent_span_id`. If an application's root span is not exported (e.g. a parent span from an un-instrumented HTTP server), the trace has `has_root = false` and the UI shows the earliest span as the entry point.
 
@@ -203,7 +207,7 @@ Score **definitions** (name, type, allowed categories, numeric range, descriptio
 
 ## Media blob
 
-Object `media/<project_id>/<sha256>` in the object store; metadata row in SQLite `media` (content type, size, first_seen). Referenced from payloads as `media://<sha256>`; served at `GET /api/v1/projects/{p}/media/{sha256}` (auth required, `Cache-Control: private, immutable`).
+Object `media/<project_id>/<sha256>` in the object store; metadata row in the storage catalog's `media` table (03 §9: content type, size, first_seen). Referenced from payloads as `media://<sha256>`; served at `GET /api/v1/projects/{p}/media/{sha256}` (auth required, `Cache-Control: private, immutable`).
 
 ## Normalization version
 

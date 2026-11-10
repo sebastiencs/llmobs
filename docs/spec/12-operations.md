@@ -45,7 +45,7 @@ A file lock (`flock` on `<data_dir>/LOCK`) prevents two processes from opening t
 
 ## Process lifecycle
 
-- **Startup:** lock data dir → load config → open SQLite + migrations → verify encryption key → load catalog → replay WAL → start background tasks → bind ports → `/readyz` = 200.
+- **Startup:** lock data dir → load config → open `meta.db` + migrations → verify encryption key → open storage (`catalog.db` + migrations, load catalog, replay WAL; ingestion cannot start before this ends) → start background tasks → bind ports → `/readyz` = 200.
 - **Shutdown (SIGTERM/SIGINT):** stop accepting connections, drain in-flight requests (≤ 20 s), flush memtables (best effort ≤ 30 s), stop workers (leases expire and are re-queued), close SQLite.
 - `/healthz`: process alive. `/readyz`: WAL writable, SQLite reachable, object store reachable (cached 10 s), free disk above threshold.
 
@@ -69,7 +69,7 @@ Deferred to just before release (D38). Placeholder decisions: Prometheus `/metri
 
 ## Backups (documented procedure, D37)
 
-What to back up: `meta.db`, the object store (`objects/` or the bucket), `secret.key` (or the env key). The WAL does not need backing up if the snapshot is taken after a flush.
+What to back up: `meta.db` and `catalog.db` (taken together, in the same pause), the object store (`objects/` or the bucket), `secret.key` (or the env key). The WAL does not need backing up if the snapshot is taken after a flush.
 
 **Procedure (local disk mode):**
 
@@ -79,19 +79,19 @@ llmobs admin backup --to /backups/llmobs-$(date +%F)   # online, consistent
 
 1. Forces a memtable flush (so WAL content is in Parquet).
 2. Pauses compaction / deletion rewrites / retention (they create and obsolete files).
-3. `VACUUM INTO` a consistent copy of `meta.db`.
-4. Copies (or hard-links, when on the same filesystem) all active data files listed in the copied catalog + media objects.
+3. `VACUUM INTO` consistent copies of `meta.db` and `catalog.db`.
+4. Copies (or hard-links, when on the same filesystem) all active data files listed in the copied `catalog.db` + media objects.
 5. Resumes background tasks. Writes a manifest with checksums.
 
 **S3 mode:** run `llmobs admin backup --meta-only --to …` (steps 1–3, 5) and rely on bucket versioning / replication for objects; deleted-file cleanup by GC respects a configurable `gc.object_retention` so a metadata backup stays restorable for that period.
 
-**Restore:** stop the server, replace `meta.db` and objects, start (orphans are GC'd).
+**Restore:** stop the server, replace `meta.db`, `catalog.db` and objects, start. Objects the restored catalog doesn't list stay in the store; `llmobs admin gc-orphans` lists the object store and deletes them (the regular GC never lists the bucket, 03 §5).
 
 **GDPR and backups:** deleted data persists in backups until they expire; the docs recommend a backup retention ≤ 30 days and, on restore, re-applying the `deletions` recorded after the backup date (`llmobs admin reapply-deletions --since <date>` replays them from the current `deletions` audit table).
 
 ## Upgrades
 
-- Semantic versioning. Minor/patch upgrades: replace the binary/image, restart; SQLite migrations run automatically (forward-only); a pre-migration copy `meta.db.pre-<version>` is kept for the last upgrade.
+- Semantic versioning. Minor/patch upgrades: replace the binary/image, restart; SQLite migrations run automatically (forward-only); pre-migration copies `meta.db.pre-<version>` and `catalog.db.pre-<version>` are kept for the last upgrade.
 - Parquet schema changes are additive only (03 §3); normalization changes bump `schema_version` without rewriting data.
 - WAL format carries a version byte in each segment header; a new binary reads the previous WAL version (replays it before writing the new format).
 - Downgrades are not supported (documented: restore the pre-upgrade backup).

@@ -51,7 +51,7 @@ Gateway/proxy, prompt registry, playground, annotation queues, custom dashboards
                     │             judge workers · alert evaluator · mailer · trace-completion detector    │
                     └──────────────────────────┬──────────────────────────────────────────────────────────┘
                                                ▼
-                        data dir:  meta.db (SQLite) · wal/ · object store (local dir or S3):
+                        data dir:  meta.db · catalog.db (SQLite) · wal/ · object store (local dir or S3):
                                    tables/{spans,traces,scores}/… · media/…
 ```
 

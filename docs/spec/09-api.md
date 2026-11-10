@@ -171,7 +171,7 @@ Implemented with the `rmcp` crate. Output sizes are capped (`max_chars`) to prot
 |---|---|
 | `llmobs serve [--config llmobs.toml]` | run the server |
 | `llmobs admin create-user / reset-password / list-users / rotate-encryption-key / check` | local admin on the data dir (works offline, server may be running) |
-| `llmobs admin compact --project … --day …` · `llmobs admin wal-inspect` | maintenance |
+| `llmobs admin compact --project … --day …` · `llmobs admin wal-inspect` · `llmobs admin gc-orphans` | maintenance; `gc-orphans` lists the object store and deletes objects the catalog doesn't know (after a restore, 12 § Backups) |
 | `llmobs login --url …` · `llmobs logout` | PAT login |
 | `llmobs query "<sql>" --project … [--format table\|csv\|json]` | SQL console from the terminal |
 | `llmobs traces list [--filter …]` · `llmobs traces get <id>` | inspect traces |

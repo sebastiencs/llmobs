@@ -79,8 +79,8 @@ crates/
                              Arrow schemas + batch conversion, OpenAPI schemas,
                              no config (D59)                                          (spec 01)
   otel/      llmobs-otel     OTLP decode, normalization, media, truncation, cost      (spec 02)
-  storage/   llmobs-storage  WAL, memtable, Parquet, catalog, compaction, deletion,
-                             DataFusion providers, filter DSL, SQL sandbox            (specs 03, 05)
+  storage/   llmobs-storage  WAL, memtable, Parquet, catalog (catalog.db), compaction,
+                             deletion, DataFusion providers, filter DSL, SQL sandbox  (specs 03, 05)
   server/    llmobs-server   API, auth, metadata DB, evaluation, alerts, email, MCP   (specs 04, 06–09)
   cli/       llmobs-cli      the `llmobs` binary                                       (spec 09 § CLI)
 web/                         React UI (Vite, TanStack, shadcn/ui, pnpm)               (spec 11)

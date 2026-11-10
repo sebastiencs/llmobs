@@ -136,7 +136,11 @@ These rules resolve ambiguities in the tables above. They were fixed while writi
 12. **`provider`** is lowercased and mapped through an alias table owned by `llmobs-otel` (`openai.chat`, `openai.responses` → `openai`; `anthropic.messages` → `anthropic`; …). Unknown values are kept lowercased.
 13. **`conventions`** are listed in precedence order (§ Convention detection), without duplicates.
 14. **Truncation of strings:** cut at the largest UTF-8 character boundary ≤ the limit, then append the marker. The stored value is therefore slightly longer than the limit. Payloads are measured **after** media extraction.
-15. **Rejected spans:** a span whose trace ID or span ID is missing, of the wrong length or all zeros is rejected (counted in `partial_success.rejected_spans`). The other spans of the request are still accepted. An all-zero `parentSpanId` is treated as absent.
+15. **Rejected spans:** a span is rejected (counted in `partial_success.rejected_spans`) when:
+    - its trace ID or span ID is missing, of the wrong length or all zeros;
+    - its `start_time` is before 2000-01-01T00:00:00Z, before `ingest_time − retention_days` of its project (when the project has a retention), or more than 1 day after `ingest_time` (D85). The ingest context carries the project's `retention_days`.
+
+    The other spans of the request are still accepted. An all-zero `parentSpanId` is treated as absent.
 16. **Finish reason of a message built from flat attributes** (Vercel `doGenerate`/`doStream`): the first element of `gen_ai.response.finish_reasons` when present, else `ai.response.finishReason`. GenAI wins by the precedence of § Convention detection. Both source attributes are consumed attributes (rule 2).
 
 ## Media extraction
@@ -149,7 +153,7 @@ Applied to `input`, `output`, `system_instructions` after message conversion and
    - provider shapes that survived as raw JSON: OpenAI `image_url.url` data URI, `input_audio.data`, Anthropic `source: {type: base64, media_type, data}`, Gemini `inline_data` / `inlineData {mime_type, data}`.
 2. Skip if decoded size < `media.min_bytes` (default 4 KiB) — tiny blobs stay inline.
 3. Decode base64, compute SHA-256, sniff MIME if missing (magic bytes; fall back to declared).
-4. `PUT media/<project_id>/<sha256>` if absent (local: atomic write + rename; S3: `PutObject` with `If-None-Match: *`). Insert/ignore `media` row in SQLite.
+4. Store the blob through `llmobs-storage` (03 §9): it writes `media/<project_id>/<sha256>` durably if absent and records the `media` row in its catalog.
 5. Replace with `{"type":"uri","modality":…,"mime_type":…,"uri":"media://<sha256>"}` (or for raw JSON shapes, replace the base64 string by `media://<sha256>`).
 6. Append the hash to `media_refs`.
 
