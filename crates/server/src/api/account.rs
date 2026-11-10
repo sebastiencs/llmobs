@@ -112,7 +112,7 @@ pub enum OrgRole {
 
 /// A project the caller can see.
 ///
-/// Spec 04 `projects` and spec 09 § Orgs, projects.
+/// Spec 04 `projects` and spec 09 § Orgs, projects, members, keys.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Project {
     /// Project id.
@@ -154,6 +154,34 @@ mod tests {
             email: "ada@example.com".to_owned(),
             name: Some("Ada Example".to_owned()),
             is_instance_admin: true,
+        }
+    }
+
+    #[test]
+    fn enum_spellings() {
+        let policies = [
+            (SignupPolicy::Open, "open"),
+            (SignupPolicy::InviteOnly, "invite_only"),
+            (SignupPolicy::Disabled, "disabled"),
+        ];
+        for (policy, spelling) in policies {
+            let json = serde_json::to_value(policy).unwrap();
+            assert_eq!(json, spelling);
+            assert_eq!(
+                serde_json::from_value::<SignupPolicy>(json).unwrap(),
+                policy
+            );
+        }
+        let roles = [
+            (OrgRole::Owner, "owner"),
+            (OrgRole::Admin, "admin"),
+            (OrgRole::Member, "member"),
+            (OrgRole::Viewer, "viewer"),
+        ];
+        for (role, spelling) in roles {
+            let json = serde_json::to_value(role).unwrap();
+            assert_eq!(json, spelling);
+            assert_eq!(serde_json::from_value::<OrgRole>(json).unwrap(), role);
         }
     }
 

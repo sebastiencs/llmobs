@@ -137,6 +137,8 @@
       "end_time": "2026-01-01T10:01:01.500000000Z",
       "duration_ns": 1500000000,
       "status": "ok",
+      "session_id": "sess-001",
+      "user_id": "user-42",
       "environment": "llmobs-eval",
       "release": "v1.4.0",
       "tags": [],

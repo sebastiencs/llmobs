@@ -139,8 +139,8 @@ Root `Cargo.toml` `[workspace.dependencies]`: `utoipa = { version = "6.0.0", fea
 
 | Type | How | Schema |
 |---|---|---|
-| `TraceId` | manual `PartialSchema` + `ToSchema` | `string`, `pattern: ^[0-9a-f]{32}$`, description "Trace id, 16 bytes as lowercase hex." |
-| `SpanId` | manual | `string`, `pattern: ^[0-9a-f]{16}$` |
+| `TraceId` | manual `PartialSchema` + `ToSchema` | `string`, `pattern: ^[0-9a-fA-F]{32}$` (the parser accepts either case), description saying responses are lowercase and the all-zero id is invalid |
+| `SpanId` | manual | `string`, `pattern: ^[0-9a-fA-F]{16}$`, same description |
 | `ProjectId`, `OrgId` (the `uuid_id!` macro) | manual, in the macro | `string`, `format: uuid` |
 | every `stored_enum!` enum | add `utoipa::ToSchema` to the macro's derive list | string enum of the snake_case values (utoipa reads `rename_all`) |
 | `Role` (component name **`MessageRole`**), `Modality` (message) | manual | `string`; description lists the known values and says other strings are kept. The Rust type stays `llmobs_core::message::Role`; only the schema name is `MessageRole`, because the org role owns no `Role` component either (see O3) |
@@ -314,7 +314,7 @@ Rules (spec 09 § Response shapes):
 2. Index children by `parent_span_id`. A span is a **root** when `parent_span_id` is `None` (`detached: false`) or names a span not in the set (`detached: true`).
 3. Sort roots, and each node's children, by `(start_time, span_id)`.
 4. Emit in pre-order with an explicit stack (no recursion: a 20 000-deep chain must not overflow the stack). `depth` = 0 for roots, parent depth + 1 below.
-5. Spans never reached (they sit in a parent cycle, including a self-parent) are then emitted, in `(start_time, span_id)` order, each as a root with `detached: true` followed by its own unreached subtree; a span is never emitted twice.
+5. Spans never reached (they sit in a parent cycle, including a self-parent) are then emitted, cycle members first, each group in `(start_time, span_id)` order, each as a root with `detached: true` followed by its own unreached subtree; a span is never emitted twice. Cycle members go first so that a child of a cycle member that starts earlier than it stays under it.
 
 ### Params (`IntoParams`, query)
 
@@ -487,7 +487,7 @@ Document:
 | second project | id `01900000-0000-7000-8000-000000000002`, slug `playground`, name `Playground`, no retention |
 | user | id `01900000-0000-7000-8000-000000000100`, `ada@example.com`, `Ada Example`, instance admin, org owner |
 | trace ids | `a1000000000000000000000000000001` … `…006` |
-| span ids | `b10000000000000` + trace digit + span digit, e.g. T1 S2 = `b100000000000012` |
+| span ids | `b1000000000000` + trace digit + span digit, e.g. T1 S2 = `b100000000000012` |
 | missing parent of T6 | `b1000000000000ff` |
 | PNG blob | sha256 `497790947d4666760ce38f3c00e852c71fdb66cae849bae8e9ede352719e1581` (the 1×1 PNG of `fixtures/otlp/edge/media-truncation-rejection`) |
 
@@ -510,7 +510,7 @@ A JSON array of `llmobs_core::Span` (exactly the format of the OTLP fixtures' `e
 | T4 `…004` user `user-42`, no session, environment `staging` | S1 | — | chain `describe-image` | 20:00.000 → 20:03.000 | ok | — | input text "What does this shipping label say?", output text "It is addressed to warehouse 7."  |
 | | S2 | S1 | retriever `vector-search` | 20:00.010 → 20:00.210 | ok | — | input text "shipping label", output json array of 2 documents `{id, score, text}` |
 | | S3 | S1 | llm `chat gpt-4o-mini` | 20:00.250 → 20:02.950, ttft 600 ms | ok | 850/120/—; total 970; 0.00085 / 0.00048 / 0.00133 | input [user with text part + `uri` part `{modality: image, mime_type: image/png, uri: media://<png sha256>}`], output text; `media_refs` = [png sha256] |
-| T5 `…005` environment `llmobs-eval` (use the core constant's value) | S1 | — | evaluator `judge helpfulness` | 01:00.000 → 01:01.500 | ok | — | attributes `llmobs.eval.target_trace_id` = T1, `llmobs.eval.evaluator_id` = `01900000-0000-7000-8000-000000000201` (attribute names from `llmobs_core::names`) |
+| T5 `…005` environment `llmobs-eval` (use the core constant's value), session `sess-001`, user `user-42` (so the default exclusion changes the session and user aggregates) | S1 | — | evaluator `judge helpfulness` | 01:00.000 → 01:01.500 | ok | — | attributes `llmobs.eval.target_trace_id` = T1, `llmobs.eval.evaluator_id` = `01900000-0000-7000-8000-000000000201` (attribute names from `llmobs_core::names`) |
 | | S2 | S1 | llm `chat gpt-4o-mini` | 01:00.020 → 01:01.480 | ok | 600/50/—; total 650; 0.0006 / 0.0002 / 0.0008 | messages in/out |
 | T6 `…006` no session, no user | S1 | `b1000000000000ff` (missing) | llm `chat claude-sonnet-4-5` | 30:00.000 → 30:02.000 | ok | 400/100/—; total 500; 0.0012 / 0.0015 / 0.0027 | messages in/out |
 

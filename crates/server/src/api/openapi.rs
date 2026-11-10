@@ -301,7 +301,7 @@ fn trace_paths(paths: PathsBuilder) -> PathsBuilder {
         ))
         .parameters(Some(with_query::<TraceDetailParams>(vec![
             project_param(),
-            path_ref("trace_id", "TraceId", "Trace id, 16 bytes as lowercase hex."),
+            path_ref("trace_id", "TraceId", "Trace id, 16 bytes as hex."),
         ])))
         .responses(responses(
             "200",
@@ -315,7 +315,7 @@ fn trace_paths(paths: PathsBuilder) -> PathsBuilder {
         ))
         .parameters(Some(vec![
             project_param(),
-            path_ref("trace_id", "TraceId", "Trace id, 16 bytes as lowercase hex."),
+            path_ref("trace_id", "TraceId", "Trace id, 16 bytes as hex."),
         ]))
         .responses(responses(
             "200",
@@ -326,12 +326,8 @@ fn trace_paths(paths: PathsBuilder) -> PathsBuilder {
     let span = operation("get_span", "spans", "Get a span")
         .parameters(Some(vec![
             project_param(),
-            path_ref(
-                "trace_id",
-                "TraceId",
-                "Trace id, 16 bytes as lowercase hex.",
-            ),
-            path_ref("span_id", "SpanId", "Span id, 8 bytes as lowercase hex."),
+            path_ref("trace_id", "TraceId", "Trace id, 16 bytes as hex."),
+            path_ref("span_id", "SpanId", "Span id, 8 bytes as hex."),
         ]))
         .responses(responses(
             "200",
@@ -571,7 +567,11 @@ fn media_paths(paths: PathsBuilder) -> PathsBuilder {
     )
 }
 
-const EXCLUSIONS: &str = "Evaluation traces (`environment = llmobs-eval`) and experiment traces are excluded unless `include_eval` or `include_experiments` is set.";
+const EXCLUSIONS: &str = concat!(
+    "Evaluation traces (`environment = ",
+    llmobs_core::llmobs_name!("-eval"),
+    "`) and experiment traces are excluded unless `include_eval` or `include_experiments` is set."
+);
 
 fn operation(id: &str, tag_name: &str, summary: &str) -> OperationBuilder {
     OperationBuilder::new()

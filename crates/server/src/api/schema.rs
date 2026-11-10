@@ -96,7 +96,7 @@ pub struct FunctionSchema {
 
 /// Views and functions the filter builder and SQL console show.
 ///
-/// `GET /api/projects/{project_id}/schema`. Spec 05 and spec 09 § Schema.
+/// `GET /api/v1/projects/{project}/schema`. Spec 05 and spec 09 § Observability data.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct SchemaResponse {
     /// Logical views.

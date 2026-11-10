@@ -7,7 +7,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use super::common::TimeParam;
 
-/// Query parameters of `GET /api/projects/{project_id}/metrics`.
+/// Query parameters of `GET /api/v1/projects/{project}/metrics`.
 ///
 /// Spec 05 § Dashboard metrics.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
@@ -207,7 +207,8 @@ pub enum MetricName {
     CostByModel,
     /// `avg(value_num)` per score name. `group` is the score name.
     ScoreAvg,
-    /// `sum(cost_total)` on traces with environment `llmobs-eval`, USD. `group` is absent.
+    /// `sum(cost_total)` on evaluation traces (the reserved evaluation environment, spec 06), USD.
+    /// `group` is absent.
     EvalCost,
 }
 

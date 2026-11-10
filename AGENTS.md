@@ -105,7 +105,7 @@ Several sessions may work at the same time, each in its own git worktree and bra
 
 ## Commands
 
-Run everything through `just` (once the justfile exists):
+Run everything through `just`:
 
 | Command | What it does |
 |---|---|

@@ -57,7 +57,8 @@ where
     T: FromStr<Err = CoreError>,
     D: Deserializer<'de>,
 {
-    let input = <&str>::deserialize(deserializer)?;
+    // Owned, not `&str`: `serde_json::from_value` and escaped strings cannot lend a `&str`.
+    let input = String::deserialize(deserializer)?;
     input.parse().map_err(serde::de::Error::custom)
 }
 
@@ -226,7 +227,11 @@ fn hex_id_schema(
 
 impl utoipa::PartialSchema for TraceId {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-        hex_id_schema("Trace id, 16 bytes as lowercase hex.", "^[0-9a-f]{32}$")
+        hex_id_schema(
+            "Trace id, 16 bytes as hex. Responses use lowercase; requests may use either case. \
+             All zeros is invalid.",
+            "^[0-9a-fA-F]{32}$",
+        )
     }
 }
 
@@ -238,7 +243,11 @@ impl utoipa::ToSchema for TraceId {
 
 impl utoipa::PartialSchema for SpanId {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-        hex_id_schema("Span id, 8 bytes as lowercase hex.", "^[0-9a-f]{16}$")
+        hex_id_schema(
+            "Span id, 8 bytes as hex. Responses use lowercase; requests may use either case. \
+             All zeros is invalid.",
+            "^[0-9a-fA-F]{16}$",
+        )
     }
 }
 
@@ -461,6 +470,21 @@ mod tests {
         let parsed: ProjectId = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, project);
         assert_eq!(parsed.to_string(), project.to_string());
+    }
+
+    #[test]
+    fn deserializes_from_owned_and_escaped_strings() {
+        let value = serde_json::Value::String(TRACE_HEX.to_owned());
+        assert_eq!(
+            serde_json::from_value::<TraceId>(value).unwrap(),
+            TRACE_HEX.parse::<TraceId>().unwrap()
+        );
+        // `\u0030` is `0`: the same id with escaped characters.
+        let escaped = r#""\u0030\u0030f067aa0ba902b7""#;
+        assert_eq!(
+            serde_json::from_str::<SpanId>(escaped).unwrap(),
+            SPAN_HEX.parse::<SpanId>().unwrap()
+        );
     }
 
     #[test]

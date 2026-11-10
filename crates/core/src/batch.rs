@@ -201,10 +201,8 @@ impl SpanColumns {
     }
 
     fn append(&mut self, span: &Span) -> Result<(), CoreError> {
-        debug_assert_eq!(span.input.is_some(), span.input_format.is_some());
-        debug_assert_eq!(span.output.is_some(), span.output_format.is_some());
-        debug_assert!(span.end_time >= span.start_time);
-
+        // No assertions on the producer's invariants (payload with its format, end after
+        // start): spans can be read back from disk, and input must never panic (AGENTS.md).
         append_str(&mut self.project_id, &span.project_id.to_string());
         self.trace_id.append_value(span.trace_id.as_bytes())?;
         self.span_id.append_value(span.span_id.as_bytes())?;
@@ -213,8 +211,9 @@ impl SpanColumns {
         append_str(&mut self.span_kind, span.span_kind.as_str());
         self.start_time.append_value(span.start_time);
         self.end_time.append_value(span.end_time);
+        // Saturating, like the API's `duration_ns`: extreme instants must not overflow.
         self.duration_ns
-            .append_value(span.end_time - span.start_time);
+            .append_value(span.end_time.saturating_sub(span.start_time));
         append_str(&mut self.status, span.status.as_str());
         append_opt(&mut self.status_message, span.status_message.as_deref());
         append_opt(&mut self.service_name, span.service_name.as_deref());
@@ -658,7 +657,7 @@ mod tests {
     use std::io::Cursor;
 
     use arrow::array::{Array, AsArray, RecordBatch};
-    use arrow::datatypes::{Float64Type, Int64Type, UInt16Type};
+    use arrow::datatypes::{Float64Type, Int64Type, TimestampNanosecondType, UInt16Type};
     use arrow::ipc::reader::StreamReader;
     use arrow::ipc::writer::StreamWriter;
     use bytes::Bytes;
@@ -680,6 +679,21 @@ mod tests {
         let scores = scores_to_record_batch(&[]).unwrap();
         assert_eq!(scores.num_rows(), 0);
         assert_eq!(scores.schema(), scores_schema());
+    }
+
+    #[test]
+    fn out_of_order_and_extreme_instants_do_not_panic() {
+        let mut reversed = minimal_span();
+        reversed.end_time = reversed.start_time - 5;
+        let mut extreme = minimal_span();
+        extreme.start_time = i64::MIN;
+        extreme.end_time = i64::MAX;
+        let mut unformatted = minimal_span();
+        unformatted.input = Some("hi".to_owned());
+        let batch = spans_to_record_batch(&[reversed, extreme, unformatted]).unwrap();
+        assert_eq!(i64_at(&batch, schema::spans::DURATION_NS, 0), -5);
+        assert_eq!(i64_at(&batch, schema::spans::DURATION_NS, 1), i64::MAX);
+        assert_eq!(batch.num_rows(), 3);
     }
 
     #[test]
@@ -807,6 +821,44 @@ mod tests {
     }
 
     #[test]
+    fn score_batch_writes_every_optional_column() {
+        let full = full_score();
+        let batch = scores_to_record_batch(std::slice::from_ref(&full)).unwrap();
+        assert_eq!(batch.schema(), scores_schema());
+        let uuid_text = |id: Option<Uuid>| id.unwrap().hyphenated().to_string();
+        assert_eq!(
+            utf8(&batch, schema::scores::PROJECT_ID, 0),
+            Some("018f6b4e-7c1a-7c1a-8c1a-000000000001")
+        );
+        assert_eq!(
+            utf8(&batch, schema::scores::SCORE_ID, 0),
+            Some("018f6b4e-7c1a-7c1a-8c1a-0000000000ab")
+        );
+        assert_eq!(utf8(&batch, schema::scores::USER_ID, 0), Some("user-7"));
+        assert_eq!(utf8(&batch, schema::scores::NAME, 0), Some("accuracy"));
+        assert_eq!(utf8(&batch, schema::scores::REASON, 0), Some("matches"));
+        assert_eq!(utf8(&batch, schema::scores::SOURCE, 0), Some("human"));
+        for (column, id) in [
+            (schema::scores::EVALUATOR_ID, full.evaluator_id),
+            (schema::scores::RULE_ID, full.rule_id),
+            (schema::scores::EXPERIMENT_ID, full.experiment_id),
+            (schema::scores::DATASET_ITEM_ID, full.dataset_item_id),
+            (schema::scores::AUTHOR_USER_ID, full.author_user_id),
+        ] {
+            let text = uuid_text(id);
+            assert_eq!(utf8(&batch, column, 0), Some(text.as_str()), "{column}");
+        }
+        for (column, expected) in [
+            (schema::scores::CREATED_AT, full.created_at),
+            (schema::scores::UPDATED_AT, full.updated_at),
+            (schema::scores::INGEST_TIME, full.ingest_time),
+        ] {
+            assert_eq!(column_ts(&batch, column), expected, "{column}");
+        }
+        assert!(bool_at(&batch, schema::scores::DELETED, 0));
+    }
+
+    #[test]
     fn arrow_ipc_round_trip() {
         let spans = spans_to_record_batch(&[minimal_span(), full_span()]).unwrap();
         assert_eq!(spans, ipc_round_trip(&spans));
@@ -845,6 +897,36 @@ mod tests {
         println!("converted {} spans in {elapsed:?}", batch.num_rows());
     }
 
+    fn column_ts(batch: &RecordBatch, name: &str) -> i64 {
+        column(batch, name)
+            .as_primitive::<TimestampNanosecondType>()
+            .value(0)
+    }
+
+    /// A score with every optional field set. Its `score_id` is parsed from upper case to check
+    /// the column is written lower case.
+    fn full_score() -> Score {
+        let mut score = score(
+            ScoreTarget::Trace { trace_id: trace() },
+            ScoreValue::Numeric(0.25),
+            None,
+        );
+        score.score_id = "018F6B4E-7C1A-7C1A-8C1A-0000000000AB".parse().unwrap();
+        score.user_id = Some("user-7".to_owned());
+        score.reason = Some("matches".to_owned());
+        score.source = crate::enums::ScoreSource::Human;
+        score.evaluator_id = Some("018f6b4e-7c1a-7c1a-8c1a-0000000000e1".parse().unwrap());
+        score.rule_id = Some("018f6b4e-7c1a-7c1a-8c1a-0000000000e2".parse().unwrap());
+        score.experiment_id = Some("018f6b4e-7c1a-7c1a-8c1a-0000000000e3".parse().unwrap());
+        score.dataset_item_id = Some("018f6b4e-7c1a-7c1a-8c1a-0000000000e4".parse().unwrap());
+        score.author_user_id = Some("018f6b4e-7c1a-7c1a-8c1a-0000000000e5".parse().unwrap());
+        score.created_at = 1_767_261_600_000_000_000;
+        score.updated_at = 1_767_261_601_000_000_000;
+        score.ingest_time = 1_767_261_602_000_000_000;
+        score.deleted = true;
+        score
+    }
+
     fn sample_scores() -> Vec<Score> {
         vec![
             score(
@@ -870,6 +952,7 @@ mod tests {
                 },
                 Some("from-target"),
             ),
+            full_score(),
         ]
     }
 

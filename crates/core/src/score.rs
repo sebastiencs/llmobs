@@ -153,7 +153,6 @@ impl<'de> Deserialize<'de> for ScoreValue {
                             Some(number) => Some(number.as_f64().ok_or_else(|| {
                                 de::Error::custom("categorical value must be a number")
                             })?),
-                            // the match above is exhaustive for get
                         };
                         Ok(ScoreValue::Categorical {
                             label,
@@ -225,17 +224,17 @@ pub struct Score {
     /// Evaluator metadata. Values are strings. Spec 01 `metadata` and spec 06.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, String>,
-    /// Creation time, nanoseconds since the Unix epoch. Spec 01 `created_at`.
+    /// Creation time: `i64` nanoseconds in Rust, an RFC 3339 string in JSON (D64). Spec 01 `created_at`.
     #[serde(with = "crate::time_serde")]
     #[schema(value_type = String, format = DateTime)]
     pub created_at: i64,
-    /// Last-writer-wins version, nanoseconds since the Unix epoch. Spec 01 `updated_at`.
+    /// Last-writer-wins version: `i64` nanoseconds in Rust, an RFC 3339 string in JSON (D64). Spec 01 `updated_at`.
     #[serde(with = "crate::time_serde")]
     #[schema(value_type = String, format = DateTime)]
     pub updated_at: i64,
     /// Tombstone. Spec 01 `deleted`.
     pub deleted: bool,
-    /// Server receive time, nanoseconds since the Unix epoch. Spec 01 `ingest_time`.
+    /// Server receive time: `i64` nanoseconds in Rust, an RFC 3339 string in JSON (D64). Spec 01 `ingest_time`.
     #[serde(with = "crate::time_serde")]
     #[schema(value_type = String, format = DateTime)]
     pub ingest_time: i64,

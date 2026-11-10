@@ -127,6 +127,8 @@ We adopt the OTel GenAI semantic-conventions JSON schema for `gen_ai.input.messa
 ]
 ```
 
+A `tool_call` without arguments omits `arguments` (as in the GenAI schema). An explicit JSON `null` on an optional field (`name`, `finish_reason`, `id`, `modality`, `mime_type`) is preserved as-is.
+
 After media extraction, `blob` parts become `{"type": "uri", "modality": …, "mime_type": …, "uri": "media://<sha256>"}`. Unknown part types are preserved verbatim; the UI renders them as JSON.
 
 ## Trace (columnar table `traces`)

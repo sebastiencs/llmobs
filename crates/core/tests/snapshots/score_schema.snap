@@ -29,7 +29,7 @@ expression: "schema_pretty::<Score>()"
     "created_at": {
       "type": "string",
       "format": "date-time",
-      "description": "Creation time, nanoseconds since the Unix epoch. Spec 01 `created_at`."
+      "description": "Creation time: `i64` nanoseconds in Rust, an RFC 3339 string in JSON (D64). Spec 01 `created_at`."
     },
     "dataset_item_id": {
       "type": [
@@ -62,7 +62,7 @@ expression: "schema_pretty::<Score>()"
     "ingest_time": {
       "type": "string",
       "format": "date-time",
-      "description": "Server receive time, nanoseconds since the Unix epoch. Spec 01 `ingest_time`."
+      "description": "Server receive time: `i64` nanoseconds in Rust, an RFC 3339 string in JSON (D64). Spec 01 `ingest_time`."
     },
     "metadata": {
       "type": "object",
@@ -120,7 +120,7 @@ expression: "schema_pretty::<Score>()"
     "updated_at": {
       "type": "string",
       "format": "date-time",
-      "description": "Last-writer-wins version, nanoseconds since the Unix epoch. Spec 01 `updated_at`."
+      "description": "Last-writer-wins version: `i64` nanoseconds in Rust, an RFC 3339 string in JSON (D64). Spec 01 `updated_at`."
     },
     "user_id": {
       "type": [

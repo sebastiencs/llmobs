@@ -392,6 +392,13 @@ mod tests {
     }
 
     #[test]
+    fn span_deserializes_from_a_json_value() {
+        let span = full_span();
+        let value = serde_json::to_value(&span).unwrap();
+        assert_eq!(serde_json::from_value::<Span>(value).unwrap(), span);
+    }
+
+    #[test]
     fn span_json_snapshots() {
         insta::with_settings!({
             snapshot_path => "../tests/snapshots",

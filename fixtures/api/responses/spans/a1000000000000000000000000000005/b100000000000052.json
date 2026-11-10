@@ -9,6 +9,8 @@
   "duration_ns": 1460000000,
   "status": "ok",
   "service_name": "support-bot",
+  "session_id": "sess-001",
+  "user_id": "user-42",
   "environment": "llmobs-eval",
   "release": "v1.4.0",
   "tags": [],

@@ -46,6 +46,24 @@ pub(crate) fn dataset_scores() -> Vec<Score> {
     read_json(&api_dir().join("dataset/scores.json"))
 }
 
+/// The live scores: last writer wins per `score_id` (greatest `updated_at`, then
+/// `ingest_time`), and a winning tombstone (`deleted`) removes the score. Spec 01 § Score.
+pub(crate) fn live_scores(scores: Vec<Score>) -> Vec<Score> {
+    let mut latest: BTreeMap<uuid::Uuid, Score> = BTreeMap::new();
+    for score in scores {
+        let newer = latest.get(&score.score_id).is_none_or(|current| {
+            (score.updated_at, score.ingest_time) > (current.updated_at, current.ingest_time)
+        });
+        if newer {
+            latest.insert(score.score_id, score);
+        }
+    }
+    latest
+        .into_values()
+        .filter(|score| !score.deleted)
+        .collect()
+}
+
 /// One complete trace. `spans` must all belong to it and must not be empty.
 pub(crate) fn trace_summary(spans: &[Span], scores: &[Score]) -> TraceSummary {
     let ordered = by_start(spans);

@@ -79,12 +79,11 @@ expression: "serde_json::to_string_pretty(&part).unwrap()"
       "description": "A tool or function call requested by the model.",
       "required": [
         "type",
-        "name",
-        "arguments"
+        "name"
       ],
       "properties": {
         "arguments": {
-          "description": "Arguments, as JSON."
+          "description": "Arguments, as JSON. Absent for a call without arguments."
         },
         "id": {
           "type": "string",
@@ -189,11 +188,12 @@ expression: "serde_json::to_string_pretty(&part).unwrap()"
     },
     "UnknownPart": {
       "type": "object",
-      "description": "A part type this version does not model; render as JSON.",
+      "description": "A part type this version does not model; render as JSON. Its `type` is never one of the modelled types, so exactly one `Part` branch matches a valid part. Parts that are not objects, or modelled types missing a required field, are kept verbatim by the server but are outside this schema.",
       "properties": {
         "type": {
           "type": "string",
-          "description": "Part type, when the payload has one."
+          "description": "Part type, when the payload has one.",
+          "pattern": "^(?!(text|reasoning|tool_call|tool_call_response|uri|blob)$)"
         }
       },
       "additionalProperties": true

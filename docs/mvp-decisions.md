@@ -111,7 +111,7 @@ Competitor research: `research/competitors.md`.
 | D62 | Arrow string columns | In memory every string column is `Utf8`; "(dict)" in spec 01 means Parquet dictionary encoding, not an Arrow `Dictionary` type. |
 | D63 | Contract tests | `insta` snapshot tests lock schemas, enums, names and serde formats of `llmobs-core`. |
 | D64 | JSON timestamps | Instants are `i64` ns in Rust/Arrow and RFC 3339 UTC strings with 9 fractional digits and `Z` in JSON (fixtures, API). Durations (`ttft_ns`, `duration_ns`) stay JSON integers. |
-| D65 | Message extra fields | Canonical message parts and messages keep unmodelled fields in an `extra` map (typed part preserved, exact JSON round-trip); `Unknown` only for unknown/invalid part types. |
+| D65 | Message extra fields | Canonical message parts and messages keep unmodelled fields in an `extra` map (typed part preserved, exact JSON round-trip, explicit `null`s on optional fields included); `Unknown` only for unknown/invalid part types. Tool-call `arguments` is optional. |
 | D66 | OTLP fixture format | `fixtures/otlp/<group>/<case>/{case.json, input.json, expected.json}`; input in standard OTLP/JSON; expected = `llmobs_core::Span` JSON + extracted media + rejected count; canonical pretty JSON; validated by a test in `llmobs-otel`. |
 | D67 | Fixture prices | Fixtures use a fixed, fictitious test price table (`fixtures/otlp/prices.json`), never the embedded LiteLLM snapshot. |
 | D68 | Normalization clarifications | Spec 02 § Normalization rules (map value encoding, consumed-attribute retention, tokens/cost only on llm/embedding, previews, system messages, tool arguments, truncation, rejection, …), pinned by the four hand-written fixtures. |

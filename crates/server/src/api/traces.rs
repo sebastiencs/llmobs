@@ -1,6 +1,6 @@
 //! Trace and span response types.
 //!
-//! Spec 09 § Traces and § Response shapes. `duration_ns` and `model` are computed here;
+//! Spec 09 § Observability data and § Response shapes. `duration_ns` and `model` are computed here;
 //! [`llmobs_core::span::Span`] does not store them (D60).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -39,7 +39,7 @@ pub struct ScoreBrief {
 
 /// One row of the trace list.
 ///
-/// Spec 01 § Trace and spec 09 § Traces.
+/// Spec 01 § Trace and spec 09 § Observability data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct TraceSummary {
     /// Trace id.
@@ -597,8 +597,11 @@ pub fn build_tree(spans: Vec<SpanSummary>) -> Vec<TreeSpan> {
     }
     walk(&mut stack, &mut slots, &mut emitted, &children, &mut out);
 
+    // What is left sits on a cycle or below one. Start from the cycle members only, so a
+    // descendant of a cycle member stays under it even when it starts earlier. The final
+    // `!in_cycle` group is empty by construction; it keeps the "every span once" guarantee.
     let mut rest: Vec<usize> = (0..slots.len()).filter(|&index| !emitted[index]).collect();
-    rest.sort_by_key(|&index| keys[index]);
+    rest.sort_by_key(|&index| (!in_cycle[index], keys[index]));
     for index in rest {
         if emitted[index] {
             continue;
@@ -681,7 +684,7 @@ fn walk(
 
 /// Sort key for trace lists.
 ///
-/// Spec 09 § Traces.
+/// Spec 09 § Observability data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TraceSort {
@@ -698,7 +701,7 @@ pub enum TraceSort {
 
 /// Sort key for span lists.
 ///
-/// Spec 09 § Traces.
+/// Spec 09 § Observability data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SpanSort {
@@ -713,9 +716,9 @@ pub enum SpanSort {
     TotalTokens,
 }
 
-/// Query parameters of `GET /api/projects/{project_id}/traces`.
+/// Query parameters of `GET /api/v1/projects/{project}/traces`.
 ///
-/// Spec 09 § Traces.
+/// Spec 09 § Observability data.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceListParams {
@@ -752,9 +755,9 @@ pub struct TraceListParams {
     pub include_experiments: bool,
 }
 
-/// Query parameters of `GET /api/projects/{project_id}/traces/stream`.
+/// Query parameters of `GET /api/v1/projects/{project}/traces/stream`.
 ///
-/// Spec 09 § Traces.
+/// Spec 09 § Observability data.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceStreamParams {
@@ -769,9 +772,9 @@ pub struct TraceStreamParams {
     pub include_experiments: bool,
 }
 
-/// Query parameters of `GET /api/projects/{project_id}/traces/{trace_id}`.
+/// Query parameters of `GET /api/v1/projects/{project}/traces/{trace_id}`.
 ///
-/// Spec 09 § Traces.
+/// Spec 09 § Observability data.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceDetailParams {
@@ -780,9 +783,9 @@ pub struct TraceDetailParams {
     pub around: Option<TimeParam>,
 }
 
-/// Query parameters of `GET /api/projects/{project_id}/spans`.
+/// Query parameters of `GET /api/v1/projects/{project}/spans`.
 ///
-/// Spec 09 § Traces.
+/// Spec 09 § Observability data.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SpanListParams {
@@ -1115,6 +1118,22 @@ mod tests {
             assert_eq!(
                 shape(nodes),
                 vec![(1, 0, true), (2, 0, true), (3, 0, true), (4, 1, false)]
+            );
+        });
+    }
+
+    #[test]
+    fn build_tree_keeps_an_early_child_under_its_cycle_member() {
+        // 1 ↔ 2 is a cycle. 3 is 1's child and starts before both.
+        let input = vec![
+            summary(1, Some(2), 1),
+            summary(2, Some(1), 2),
+            summary(3, Some(1), 0),
+        ];
+        assert_tree(input, |nodes| {
+            assert_eq!(
+                shape(nodes),
+                vec![(1, 0, true), (3, 1, false), (2, 0, true)]
             );
         });
     }

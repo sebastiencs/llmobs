@@ -1956,7 +1956,7 @@
           {
             "name": "trace_id",
             "in": "path",
-            "description": "Trace id, 16 bytes as lowercase hex.",
+            "description": "Trace id, 16 bytes as hex.",
             "required": true,
             "schema": {
               "$ref": "#/components/schemas/TraceId"
@@ -2063,7 +2063,7 @@
           {
             "name": "trace_id",
             "in": "path",
-            "description": "Trace id, 16 bytes as lowercase hex.",
+            "description": "Trace id, 16 bytes as hex.",
             "required": true,
             "schema": {
               "$ref": "#/components/schemas/TraceId"
@@ -2072,7 +2072,7 @@
           {
             "name": "span_id",
             "in": "path",
-            "description": "Span id, 8 bytes as lowercase hex.",
+            "description": "Span id, 8 bytes as hex.",
             "required": true,
             "schema": {
               "$ref": "#/components/schemas/SpanId"
@@ -2154,7 +2154,7 @@
           {
             "name": "trace_id",
             "in": "path",
-            "description": "Trace id, 16 bytes as lowercase hex.",
+            "description": "Trace id, 16 bytes as hex.",
             "required": true,
             "schema": {
               "$ref": "#/components/schemas/TraceId"
@@ -2622,7 +2622,7 @@
       },
       "CreateSavedView": {
         "type": "object",
-        "description": "Body of `POST /api/projects/{project_id}/saved-views`.\n\nSpec 09 § Saved views.",
+        "description": "Body of `POST /api/v1/projects/{project}/saved-views`.\n\nSpec 09 § Observability data.",
         "required": [
           "kind",
           "name",
@@ -2699,7 +2699,7 @@
       },
       "EndUserSummary": {
         "type": "object",
-        "description": "One row of the end-user list.\n\n`first_seen` is the minimum trace `start_time` and `last_seen` the maximum `end_time`.\n`error_count` is the sum of the traces' `error_count`. Spec 09 § Users.",
+        "description": "One row of the end-user list.\n\n`first_seen` is the minimum trace `start_time` and `last_seen` the maximum `end_time`.\n`error_count` is the sum of the traces' `error_count`. Spec 09 § Observability data.",
         "required": [
           "user_id",
           "first_seen",
@@ -3311,7 +3311,7 @@
       },
       "Project": {
         "type": "object",
-        "description": "A project the caller can see.\n\nSpec 04 `projects` and spec 09 § Orgs, projects.",
+        "description": "A project the caller can see.\n\nSpec 04 `projects` and spec 09 § Orgs, projects, members, keys.",
         "required": [
           "id",
           "org_id",
@@ -3410,7 +3410,7 @@
       },
       "SavedView": {
         "type": "object",
-        "description": "A saved list view or SQL query.\n\nSpec 04 `saved_views` and spec 09 § Saved views.",
+        "description": "A saved list view or SQL query.\n\nSpec 04 `saved_views` and spec 09 § Observability data.",
         "required": [
           "id",
           "kind",
@@ -3504,7 +3504,7 @@
       },
       "SchemaResponse": {
         "type": "object",
-        "description": "Views and functions the filter builder and SQL console show.\n\n`GET /api/projects/{project_id}/schema`. Spec 05 and spec 09 § Schema.",
+        "description": "Views and functions the filter builder and SQL console show.\n\n`GET /api/v1/projects/{project}/schema`. Spec 05 and spec 09 § Observability data.",
         "required": [
           "views",
           "functions"
@@ -3553,7 +3553,7 @@
           "created_at": {
             "type": "string",
             "format": "date-time",
-            "description": "Creation time, nanoseconds since the Unix epoch. Spec 01 `created_at`."
+            "description": "Creation time: `i64` nanoseconds in Rust, an RFC 3339 string in JSON (D64). Spec 01 `created_at`."
           },
           "dataset_item_id": {
             "type": [
@@ -3586,7 +3586,7 @@
           "ingest_time": {
             "type": "string",
             "format": "date-time",
-            "description": "Server receive time, nanoseconds since the Unix epoch. Spec 01 `ingest_time`."
+            "description": "Server receive time: `i64` nanoseconds in Rust, an RFC 3339 string in JSON (D64). Spec 01 `ingest_time`."
           },
           "metadata": {
             "type": "object",
@@ -3644,7 +3644,7 @@
           "updated_at": {
             "type": "string",
             "format": "date-time",
-            "description": "Last-writer-wins version, nanoseconds since the Unix epoch. Spec 01 `updated_at`."
+            "description": "Last-writer-wins version: `i64` nanoseconds in Rust, an RFC 3339 string in JSON (D64). Spec 01 `updated_at`."
           },
           "user_id": {
             "type": [
@@ -3959,7 +3959,7 @@
       },
       "SessionSort": {
         "type": "string",
-        "description": "Sort key for session lists.\n\nSpec 09 § Sessions.",
+        "description": "Sort key for session lists.\n\nSpec 09 § Observability data.",
         "enum": [
           "start_time",
           "end_time",
@@ -3969,7 +3969,7 @@
       },
       "SessionSummary": {
         "type": "object",
-        "description": "One row of the session list.\n\nSpec 01 § Session and spec 09 § Sessions.",
+        "description": "One row of the session list.\n\nSpec 01 § Session and spec 09 § Observability data.",
         "required": [
           "session_id",
           "start_time",
@@ -4501,8 +4501,8 @@
       },
       "SpanId": {
         "type": "string",
-        "description": "Span id, 8 bytes as lowercase hex.",
-        "pattern": "^[0-9a-f]{16}$"
+        "description": "Span id, 8 bytes as hex. Responses use lowercase; requests may use either case. All zeros is invalid.",
+        "pattern": "^[0-9a-fA-F]{16}$"
       },
       "SpanKind": {
         "type": "string",
@@ -4568,7 +4568,7 @@
       },
       "SpanSort": {
         "type": "string",
-        "description": "Sort key for span lists.\n\nSpec 09 § Traces.",
+        "description": "Sort key for span lists.\n\nSpec 09 § Observability data.",
         "enum": [
           "start_time",
           "duration",
@@ -4853,12 +4853,11 @@
         "description": "A tool or function call requested by the model.",
         "required": [
           "type",
-          "name",
-          "arguments"
+          "name"
         ],
         "properties": {
           "arguments": {
-            "description": "Arguments, as JSON."
+            "description": "Arguments, as JSON. Absent for a call without arguments."
           },
           "id": {
             "type": "string",
@@ -4931,8 +4930,8 @@
       },
       "TraceId": {
         "type": "string",
-        "description": "Trace id, 16 bytes as lowercase hex.",
-        "pattern": "^[0-9a-f]{32}$"
+        "description": "Trace id, 16 bytes as hex. Responses use lowercase; requests may use either case. All zeros is invalid.",
+        "pattern": "^[0-9a-fA-F]{32}$"
       },
       "TracePage": {
         "type": "object",
@@ -4960,7 +4959,7 @@
       },
       "TraceSort": {
         "type": "string",
-        "description": "Sort key for trace lists.\n\nSpec 09 § Traces.",
+        "description": "Sort key for trace lists.\n\nSpec 09 § Observability data.",
         "enum": [
           "start_time",
           "duration",
@@ -4970,7 +4969,7 @@
       },
       "TraceSummary": {
         "type": "object",
-        "description": "One row of the trace list.\n\nSpec 01 § Trace and spec 09 § Traces.",
+        "description": "One row of the trace list.\n\nSpec 01 § Trace and spec 09 § Observability data.",
         "required": [
           "trace_id",
           "has_root",
@@ -5203,18 +5202,19 @@
       },
       "UnknownPart": {
         "type": "object",
-        "description": "A part type this version does not model; render as JSON.",
+        "description": "A part type this version does not model; render as JSON. Its `type` is never one of the modelled types, so exactly one `Part` branch matches a valid part. Parts that are not objects, or modelled types missing a required field, are kept verbatim by the server but are outside this schema.",
         "properties": {
           "type": {
             "type": "string",
-            "description": "Part type, when the payload has one."
+            "description": "Part type, when the payload has one.",
+            "pattern": "^(?!(text|reasoning|tool_call|tool_call_response|uri|blob)$)"
           }
         },
         "additionalProperties": true
       },
       "UpdateSavedView": {
         "type": "object",
-        "description": "Body of `PATCH /api/projects/{project_id}/saved-views/{id}`.\n\nOmitted fields are left unchanged. Spec 09 § Saved views.",
+        "description": "Body of `PATCH /api/v1/projects/{project}/saved-views/{id}`.\n\nOmitted fields are left unchanged. Spec 09 § Observability data.",
         "properties": {
           "is_default": {
             "type": [
@@ -5238,7 +5238,10 @@
             "description": "Visible to every member of the project."
           },
           "state": {
-            "type": "object",
+            "type": [
+              "object",
+              "null"
+            ],
             "description": "Opaque UI state: list-page URL params, or `{query, params}` for SQL."
           }
         },
@@ -5306,7 +5309,7 @@
       },
       "UserSort": {
         "type": "string",
-        "description": "Sort key for user lists.\n\nSpec 09 § Users.",
+        "description": "Sort key for user lists.\n\nSpec 09 § Observability data.",
         "enum": [
           "last_seen",
           "trace_count",

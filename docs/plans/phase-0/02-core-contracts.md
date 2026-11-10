@@ -244,7 +244,7 @@ pub enum Modality { Image, Video, Audio, Other(String) }
 pub enum Part {
     Text { content: String },
     Reasoning { content: String },
-    ToolCall { id: Option<String>, name: String, arguments: serde_json::Value },
+    ToolCall { id: Option<String>, name: String, arguments: Option<serde_json::Value> },   // None = no `arguments` key (D65)
     ToolCallResponse { id: Option<String>, response: serde_json::Value },
     Uri { modality: Option<Modality>, mime_type: Option<String>, uri: String },
     Blob { modality: Option<Modality>, mime_type: Option<String>, content: String }, // base64
@@ -365,7 +365,7 @@ pub struct SpanLink  { pub trace_id: TraceId, pub span_id: SpanId, pub attribute
   - `Option` fields: `#[serde(default, skip_serializing_if = "Option::is_none")]`.
   - `Vec`/`BTreeMap` fields: `#[serde(default, skip_serializing_if = "…::is_empty")]`.
   - Fixtures then only contain meaningful fields.
-- Payload invariant (documented on the fields, not enforced by the type): `input.is_some() == input_format.is_some()`, and the same for output. `debug_assert!`-check it in C7's conversion.
+- Payload invariant (documented on the fields, not enforced by the type): `input.is_some() == input_format.is_some()`, and the same for output. C7's conversion does not check it: spans can be read back from disk, and nothing may panic on disk input (AGENTS.md).
 - No constructor, builder or `Default` derive: a struct literal is the API.
 - Exception: provide `#[cfg(test)]`-only test helpers in `span.rs` (`fn minimal_span() -> Span`). Tests in other crates write their own literals.
 
@@ -502,7 +502,6 @@ Add the `CoreError::Arrow` variant now.
 - **Maps:** a `MapBuilder<StringBuilder, StringBuilder>` with field names matching C6. Keys in `BTreeMap` order.
 - **Lists of structs** (`events`, `links`): a `ListBuilder<StructBuilder>`, or build child arrays directly and assemble `ListArray`/`StructArray` with offsets. Choose the simpler one and verify the resulting `DataType` equals the schema's exactly (field names and nullability included).
 - An empty slice returns an empty batch with the right schema.
-- `debug_assert!` the payload invariant from C5.
 
 **Tests:**
 - **Exact schema:** for a mixed batch (minimal + full spans), `batch.schema() == spans_schema()`. Same for scores.

@@ -27,8 +27,9 @@ pub fn serialize<S: Serializer>(ns: &i64, serializer: S) -> Result<S::Ok, S::Err
 ///
 /// Returns a serde error when `text` is not RFC 3339 or the instant does not fit in `i64` nanoseconds.
 pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
-    let text = <&str>::deserialize(deserializer)?;
-    parse_rfc3339(text).map_err(serde::de::Error::custom)
+    // Owned, not `&str`: `serde_json::from_value` and escaped strings cannot lend a `&str`.
+    let text = String::deserialize(deserializer)?;
+    parse_rfc3339(&text).map_err(serde::de::Error::custom)
 }
 
 pub(crate) fn format_rfc3339(ns: i64) -> Result<String, &'static str> {
@@ -58,6 +59,16 @@ mod tests {
     struct Instant {
         #[serde(with = "crate::time_serde")]
         t: i64,
+    }
+
+    #[test]
+    fn deserializes_from_a_json_value() {
+        let value = serde_json::json!({"t": "2026-01-01T00:00:00.000000001Z"});
+        let instant: Instant = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            instant.t,
+            parse_rfc3339("2026-01-01T00:00:00.000000001Z").unwrap()
+        );
     }
 
     #[test]

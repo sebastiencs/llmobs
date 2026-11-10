@@ -25,8 +25,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use support::{
-    api_dir, canonical_json, dataset_scores, dataset_spans, is_default_visible, read_json,
-    session_summary, trace_summary, user_summary,
+    api_dir, canonical_json, dataset_scores, dataset_spans, is_default_visible, live_scores,
+    read_json, session_summary, trace_summary, user_summary,
 };
 
 const ORG: &str = "01900000-0000-7000-8000-000000000010";
@@ -110,7 +110,7 @@ fn summaries(groups: &BTreeMap<TraceId, Vec<Span>>, scores: &[Score]) -> Vec<Tra
 }
 
 fn build() -> Built {
-    let scores = dataset_scores();
+    let scores = live_scores(dataset_scores());
     let groups = group_spans(dataset_spans());
     let traces = summaries(&groups, &scores);
     let visible: Vec<&TraceSummary> = traces
@@ -691,11 +691,28 @@ fn example_scenarios() {
     let spans = fs::read_to_string(api_dir().join("responses/spans.json"))
         .unwrap_or_else(|error| panic!("{error}"));
     let sessions = read_tree("responses/sessions");
-    let users = read_tree("responses/users");
     assert!(!listed.contains(TRACE_5));
     assert!(!spans.contains(TRACE_5));
+    // T5 carries `sess-001` and `user-42`: the default exclusion must keep it out of the
+    // session turns and out of the session and user aggregates.
     assert!(!sessions.contains(TRACE_5));
-    assert!(!users.contains(TRACE_5));
+    let session_list: Page<SessionSummary> = read_json(&api_dir().join("responses/sessions.json"));
+    let session = session_list
+        .data
+        .iter()
+        .find(|session| session.session_id == "sess-001")
+        .unwrap_or_else(|| panic!("sess-001"));
+    assert_eq!(session.trace_count, 2);
+    let user_list: Page<EndUserSummary> = read_json(&api_dir().join("responses/users.json"));
+    let user = user_list
+        .data
+        .iter()
+        .find(|user| user.user_id == "user-42")
+        .unwrap_or_else(|| panic!("user-42"));
+    assert_eq!(user.trace_count, 3);
+    let detail: EndUserDetail = read_json(&api_dir().join("responses/users/user-42.json"));
+    assert_eq!(detail.sessions.len(), 1);
+    assert_eq!(detail.sessions[0].trace_count, 2);
     let included = fs::read_to_string(api_dir().join("responses/traces-include-eval.json"))
         .unwrap_or_else(|error| panic!("{error}"));
     assert!(included.contains(TRACE_5));

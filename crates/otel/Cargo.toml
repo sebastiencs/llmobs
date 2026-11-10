@@ -14,7 +14,6 @@ llmobs-core.workspace = true
 
 [dev-dependencies]
 base64.workspace = true
-llmobs-core.workspace = true
 opentelemetry-proto.workspace = true
 regex.workspace = true
 serde.workspace = true

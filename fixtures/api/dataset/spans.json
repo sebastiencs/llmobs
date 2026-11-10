@@ -366,6 +366,8 @@
     "end_time": "2026-01-01T10:01:01.500000000Z",
     "status": "ok",
     "service_name": "support-bot",
+    "session_id": "sess-001",
+    "user_id": "user-42",
     "environment": "llmobs-eval",
     "release": "v1.4.0",
     "attributes": {
@@ -389,6 +391,8 @@
     "end_time": "2026-01-01T10:01:01.480000000Z",
     "status": "ok",
     "service_name": "support-bot",
+    "session_id": "sess-001",
+    "user_id": "user-42",
     "environment": "llmobs-eval",
     "release": "v1.4.0",
     "provider": "openai",

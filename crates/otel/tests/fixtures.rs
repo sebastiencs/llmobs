@@ -325,6 +325,13 @@ fn check_group(dir: &Path, group: &str, failures: &mut Vec<String>) {
 
 fn check_expected(case: &Case, failures: &mut Vec<String>) {
     let label = label(case);
+    check_spans_are_exact(case, &label, failures);
+    let mut ids = BTreeSet::new();
+    for span in &case.expected.spans {
+        if !ids.insert((span.trace_id, span.span_id)) {
+            failures.push(format!("{label}: span {} appears twice", span.span_id));
+        }
+    }
     let mut sorted = case.expected.spans.clone();
     sort_spans(&mut sorted);
     if case.expected.spans != sorted {
@@ -415,6 +422,45 @@ fn check_pair(
             "{label}: {} {field} and {field}_format must both be set or both be absent",
             span.span_id
         ));
+    }
+}
+
+/// Each expected span must be exactly what `Span` serializes back to.
+///
+/// `Span` ignores unknown keys, so a misspelled optional key (`cache_write_token`) would
+/// otherwise parse as `None` and pass. Comparing text also pins key order and the
+/// 9-digit timestamps (D64), which parsing alone accepts.
+fn check_spans_are_exact(case: &Case, label: &str, failures: &mut Vec<String>) {
+    let path = case.dir.join("expected.json");
+    let raw: serde_json::Value = match fs::read_to_string(&path)
+        .map_err(|err| err.to_string())
+        .and_then(|text| serde_json::from_str(&text).map_err(|err| err.to_string()))
+    {
+        Ok(value) => value,
+        Err(err) => {
+            failures.push(format!("{label}: expected.json: {err}"));
+            return;
+        }
+    };
+    let Some(raw_spans) = raw.get("spans").and_then(serde_json::Value::as_array) else {
+        failures.push(format!("{label}: expected.json has no spans array"));
+        return;
+    };
+    for (raw_span, span) in raw_spans.iter().zip(&case.expected.spans) {
+        let reserialized = match serde_json::to_value(span) {
+            Ok(value) => value,
+            Err(err) => {
+                failures.push(format!("{label}: span {}: {err}", span.span_id));
+                continue;
+            }
+        };
+        if canonical_json(raw_span) != canonical_json(&reserialized) {
+            failures.push(format!(
+                "{label}: span {} differs from its `Span` serialization (unknown or misspelled \
+                 key, key order, or timestamp precision)",
+                span.span_id
+            ));
+        }
     }
 }
 

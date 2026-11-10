@@ -103,7 +103,7 @@ mod schema_drift {
             Part::ToolCall {
                 id: Some("c1".to_owned()),
                 name: "lookup".to_owned(),
-                arguments: serde_json::json!({"q": 1}),
+                arguments: Some(serde_json::json!({"q": 1})),
                 extra: Map::new(),
             },
             Part::ToolCallResponse {
@@ -132,6 +132,24 @@ mod schema_drift {
                     .get("UnknownPart")
                     .expect("UnknownPart component");
                 assert!(unknown["properties"]["type"].get("enum").is_none());
+                let pattern = unknown["properties"]["type"]["pattern"]
+                    .as_str()
+                    .expect("UnknownPart type has a pattern");
+                for known in [
+                    "text",
+                    "reasoning",
+                    "tool_call",
+                    "tool_call_response",
+                    "uri",
+                    "blob",
+                ] {
+                    assert!(
+                        pattern.contains(&format!("|{known}|"))
+                            || pattern.contains(&format!("({known}|"))
+                            || pattern.contains(&format!("|{known})")),
+                        "UnknownPart pattern does not exclude {known}"
+                    );
+                }
                 continue;
             }
             let tag = json["type"].as_str().expect("known part has type");

@@ -1,6 +1,6 @@
 //! Saved list views and SQL queries.
 //!
-//! Spec 04 `saved_views` and spec 09 § Saved views.
+//! Spec 04 `saved_views` and spec 09 § Observability data.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -29,7 +29,7 @@ pub enum SavedViewKind {
 
 /// A saved list view or SQL query.
 ///
-/// Spec 04 `saved_views` and spec 09 § Saved views.
+/// Spec 04 `saved_views` and spec 09 § Observability data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct SavedView {
     /// Saved view id.
@@ -58,9 +58,9 @@ pub struct SavedView {
     pub updated_at: i64,
 }
 
-/// Body of `POST /api/projects/{project_id}/saved-views`.
+/// Body of `POST /api/v1/projects/{project}/saved-views`.
 ///
-/// Spec 09 § Saved views.
+/// Spec 09 § Observability data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSavedView {
@@ -79,9 +79,9 @@ pub struct CreateSavedView {
     pub is_default: bool,
 }
 
-/// Body of `PATCH /api/projects/{project_id}/saved-views/{id}`.
+/// Body of `PATCH /api/v1/projects/{project}/saved-views/{id}`.
 ///
-/// Omitted fields are left unchanged. Spec 09 § Saved views.
+/// Omitted fields are left unchanged. Spec 09 § Observability data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateSavedView {
@@ -90,7 +90,7 @@ pub struct UpdateSavedView {
     pub name: Option<String>,
     /// Opaque UI state: list-page URL params, or `{query, params}` for SQL.
     #[serde(default)]
-    #[schema(value_type = Object)]
+    #[schema(value_type = Option<Object>)]
     pub state: Option<Map<String, Value>>,
     /// Visible to every member of the project.
     #[serde(default)]
@@ -100,9 +100,9 @@ pub struct UpdateSavedView {
     pub is_default: Option<bool>,
 }
 
-/// Query parameters of `GET /api/projects/{project_id}/saved-views`.
+/// Query parameters of `GET /api/v1/projects/{project}/saved-views`.
 ///
-/// Spec 09 § Saved views.
+/// Spec 09 § Observability data.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SavedViewListParams {

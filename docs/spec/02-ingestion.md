@@ -40,7 +40,7 @@ A span may carry several conventions at once (e.g. Vercel AI SDK emits both `ai.
 
 `llmobs.*` > OTel GenAI (`gen_ai.*` current) > OpenInference > Vercel AI SDK (`ai.*`) > OpenLLMetry (`gen_ai.prompt.N.*`, `traceloop.*`) > Langfuse (`langfuse.*`) > Laminar (`lmnr.*`) > generic fallbacks.
 
-The first convention that yields a non-empty value for a field wins. Attributes used to build a normalized field are removed from `attributes` (to avoid storing payloads twice) **except** small scalar attributes (< 256 bytes), which are kept for SQL access.
+The first convention that yields a non-empty value for a field wins. Attributes used to build a normalized field are removed from `attributes` (to avoid storing payloads twice) **except** small attributes (encoded value ≤ 256 bytes, see rule 2 below), which are kept for SQL access.
 
 ## Mapping tables
 

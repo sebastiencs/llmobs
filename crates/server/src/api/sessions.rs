@@ -1,6 +1,6 @@
 //! Session response types.
 //!
-//! Spec 09 § Sessions and § Response shapes. The sessions list does not show tags, so
+//! Spec 09 § Observability data and § Response shapes. The sessions list does not show tags, so
 //! [`SessionSummary`] has none.
 
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,7 @@ pub const MAX_SESSION_TRACES: usize = 1_000;
 
 /// One row of the session list.
 ///
-/// Spec 01 § Session and spec 09 § Sessions.
+/// Spec 01 § Session and spec 09 § Observability data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct SessionSummary {
     /// Session id.
@@ -77,7 +77,7 @@ pub struct SessionDetail {
 
 /// Sort key for session lists.
 ///
-/// Spec 09 § Sessions.
+/// Spec 09 § Observability data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionSort {
@@ -92,9 +92,9 @@ pub enum SessionSort {
     CostTotal,
 }
 
-/// Query parameters of `GET /api/projects/{project_id}/sessions`.
+/// Query parameters of `GET /api/v1/projects/{project}/sessions`.
 ///
-/// Spec 09 § Sessions.
+/// Spec 09 § Observability data.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SessionListParams {

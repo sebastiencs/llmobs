@@ -1,6 +1,6 @@
 //! Score list parameters.
 //!
-//! The response is [`llmobs_core::score::Score`]. Spec 09 § Scores.
+//! The response is [`llmobs_core::score::Score`]. Spec 09 § Scores & annotations.
 
 use llmobs_core::enums::{ScoreSource, ScoreTargetKind};
 use llmobs_core::ids::{SpanId, TraceId};
@@ -9,9 +9,9 @@ use utoipa::{IntoParams, ToSchema};
 
 use super::common::{Limit, TimeParam};
 
-/// Query parameters of `GET /api/projects/{project_id}/scores`.
+/// Query parameters of `GET /api/v1/projects/{project}/scores`.
 ///
-/// `from` and `to` bound `created_at`. Spec 09 § Scores.
+/// `from` and `to` bound `created_at`. Spec 09 § Scores & annotations.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ScoreListParams {

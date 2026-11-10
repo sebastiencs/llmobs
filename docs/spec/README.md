@@ -107,7 +107,7 @@ These were made while writing the spec and approved afterwards; S3, S4 and S7 we
 | Topic | Convention |
 |---|---|
 | IDs of entities | UUIDv7, serialized as lowercase hyphenated strings. Public-facing short prefix in API where useful (`org_`, `prj_`… not stored). |
-| Trace / span IDs | OTel: 16-byte trace ID, 8-byte span ID; hex lowercase in JSON; `FixedSizeBinary` in Arrow. |
+| Trace / span IDs | OTel: 16-byte trace ID, 8-byte span ID; hex in JSON (lowercase on output, either case accepted on input); `FixedSizeBinary` in Arrow. |
 | Time | Nanoseconds since Unix epoch, UTC. Arrow `Timestamp(Nanosecond, "UTC")`. JSON: RFC 3339 with ns precision. |
 | Money | USD as `f64`. Price table stores USD per 1M units. |
 | JSON in columns | UTF-8 strings containing JSON (`input`, `output`, attribute values). |

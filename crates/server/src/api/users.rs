@@ -1,6 +1,6 @@
 //! End-user response types.
 //!
-//! Spec 09 § Users and § Response shapes.
+//! Spec 09 § Observability data and § Response shapes.
 
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -14,7 +14,7 @@ pub const MAX_USER_SESSIONS: usize = 100;
 /// One row of the end-user list.
 ///
 /// `first_seen` is the minimum trace `start_time` and `last_seen` the maximum `end_time`.
-/// `error_count` is the sum of the traces' `error_count`. Spec 09 § Users.
+/// `error_count` is the sum of the traces' `error_count`. Spec 09 § Observability data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct EndUserSummary {
     /// End-user id.
@@ -54,7 +54,7 @@ pub struct EndUserDetail {
 
 /// Sort key for user lists.
 ///
-/// Spec 09 § Users.
+/// Spec 09 § Observability data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum UserSort {
@@ -67,9 +67,9 @@ pub enum UserSort {
     CostTotal,
 }
 
-/// Query parameters of `GET /api/projects/{project_id}/users`.
+/// Query parameters of `GET /api/v1/projects/{project}/users`.
 ///
-/// The filter runs on the `traces` view before traces are grouped by user. Spec 09 § Users.
+/// The filter runs on the `traces` view before traces are grouped by user. Spec 09 § Observability data.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UserListParams {

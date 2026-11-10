@@ -75,8 +75,8 @@ impl Serialize for Role {
 
 impl<'de> Deserialize<'de> for Role {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let role = <&str>::deserialize(deserializer)?;
-        Ok(Self::from(role))
+        let role = String::deserialize(deserializer)?;
+        Ok(Self::from(role.as_str()))
     }
 }
 
@@ -126,8 +126,8 @@ impl Serialize for Modality {
 
 impl<'de> Deserialize<'de> for Modality {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let modality = <&str>::deserialize(deserializer)?;
-        Ok(Self::from(modality))
+        let modality = String::deserialize(deserializer)?;
+        Ok(Self::from(modality.as_str()))
     }
 }
 
@@ -160,7 +160,9 @@ pub enum Part {
         /// Tool name.
         name: String,
         /// Arguments, as JSON. A JSON string is kept as a string when it is not an object.
-        arguments: Value,
+        /// `None` when the source has no `arguments` key (a call without arguments); an
+        /// explicit JSON `null` is `Some(Value::Null)`.
+        arguments: Option<Value>,
         /// Unmodelled fields.
         extra: Map<String, Value>,
     },
@@ -273,14 +275,14 @@ fn part_from_value(value: Value) -> Part {
 fn text_part(map: &Map<String, Value>) -> Result<Part, ()> {
     Ok(Part::Text {
         content: require_string(map, "content")?,
-        extra: leftovers(map, &["type", "content"]),
+        extra: leftovers(map, &["type", "content"], &[]),
     })
 }
 
 fn reasoning_part(map: &Map<String, Value>) -> Result<Part, ()> {
     Ok(Part::Reasoning {
         content: require_string(map, "content")?,
-        extra: leftovers(map, &["type", "content"]),
+        extra: leftovers(map, &["type", "content"], &[]),
     })
 }
 
@@ -288,8 +290,8 @@ fn tool_call_part(map: &Map<String, Value>) -> Result<Part, ()> {
     Ok(Part::ToolCall {
         id: optional_string(map, "id")?,
         name: require_string(map, "name")?,
-        arguments: require_present(map, "arguments")?,
-        extra: leftovers(map, &["type", "id", "name", "arguments"]),
+        arguments: map.get("arguments").cloned(),
+        extra: leftovers(map, &["type", "name", "arguments"], &["id"]),
     })
 }
 
@@ -297,7 +299,7 @@ fn tool_response_part(map: &Map<String, Value>) -> Result<Part, ()> {
     Ok(Part::ToolCallResponse {
         id: optional_string(map, "id")?,
         response: require_present(map, "response")?,
-        extra: leftovers(map, &["type", "id", "response"]),
+        extra: leftovers(map, &["type", "response"], &["id"]),
     })
 }
 
@@ -306,7 +308,7 @@ fn uri_part(map: &Map<String, Value>) -> Result<Part, ()> {
         modality: optional_modality(map, "modality")?,
         mime_type: optional_string(map, "mime_type")?,
         uri: require_string(map, "uri")?,
-        extra: leftovers(map, &["type", "modality", "mime_type", "uri"]),
+        extra: leftovers(map, &["type", "uri"], &["modality", "mime_type"]),
     })
 }
 
@@ -315,7 +317,7 @@ fn blob_part(map: &Map<String, Value>) -> Result<Part, ()> {
         modality: optional_modality(map, "modality")?,
         mime_type: optional_string(map, "mime_type")?,
         content: require_string(map, "content")?,
-        extra: leftovers(map, &["type", "modality", "mime_type", "content"]),
+        extra: leftovers(map, &["type", "content"], &["modality", "mime_type"]),
     })
 }
 
@@ -340,7 +342,7 @@ fn message_from_value(value: Value) -> Result<Message, &'static str> {
         name,
         parts,
         finish_reason,
-        extra: leftovers(&map, &["role", "name", "parts", "finish_reason"]),
+        extra: leftovers(&map, &["role", "parts"], &["name", "finish_reason"]),
     })
 }
 
@@ -371,7 +373,9 @@ fn part_to_value(part: &Part) -> Value {
                 fields.push(("id", Value::String(id.clone())));
             }
             fields.push(("name", Value::String(name.clone())));
-            fields.push(("arguments", arguments.clone()));
+            if let Some(arguments) = arguments {
+                fields.push(("arguments", arguments.clone()));
+            }
             object(&fields, extra)
         }
         Part::ToolCallResponse {
@@ -473,10 +477,20 @@ fn require_present(map: &Map<String, Value>, key: &str) -> Result<Value, ()> {
     map.get(key).cloned().ok_or(())
 }
 
-fn leftovers(map: &Map<String, Value>, known: &[&str]) -> Map<String, Value> {
+/// Fields not modelled by the typed part or message.
+///
+/// `modelled` keys are always taken by the typed value. `optional` keys are taken only when
+/// they hold a non-null value: an explicit `null` stays in `extra` so it is written back and
+/// the JSON round-trips exactly (D65).
+fn leftovers(map: &Map<String, Value>, modelled: &[&str], optional: &[&str]) -> Map<String, Value> {
     let mut extra = map.clone();
-    for key in known {
+    for key in modelled {
         extra.shift_remove(*key);
+    }
+    for key in optional {
+        if !matches!(extra.get(*key), Some(Value::Null)) {
+            extra.shift_remove(*key);
+        }
     }
     extra
 }
@@ -513,6 +527,11 @@ fn type_property(part_type: &'static str) -> utoipa::openapi::schema::ObjectBuil
 }
 
 type SchemaRef = utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>;
+
+/// Matches any `type` except the modelled part types (ECMA-262 regex, as JSON Schema uses).
+/// Keeps `UnknownPart` disjoint from the known parts, so `Part`'s `oneOf` has one match.
+const UNKNOWN_PART_TYPE_PATTERN: &str =
+    "^(?!(text|reasoning|tool_call|tool_call_response|uri|blob)$)";
 
 fn known_part(
     description: &'static str,
@@ -566,7 +585,12 @@ fn part_components() -> [(&'static str, SchemaRef); 7] {
                         false,
                     ),
                     ("name", string_schema("Tool name.").into(), true),
-                    ("arguments", any_schema("Arguments, as JSON.").into(), true),
+                    (
+                        "arguments",
+                        any_schema("Arguments, as JSON. Absent for a call without arguments.")
+                            .into(),
+                        false,
+                    ),
                 ],
             ),
         ),
@@ -619,12 +643,18 @@ fn part_components() -> [(&'static str, SchemaRef); 7] {
         ),
         (
             "UnknownPart",
-            open_object("A part type this version does not model; render as JSON.")
-                .property(
-                    "type",
-                    string_schema("Part type, when the payload has one."),
-                )
-                .into(),
+            open_object(
+                "A part type this version does not model; render as JSON. Its `type` is never one \
+                 of the modelled types, so exactly one `Part` branch matches a valid part. Parts \
+                 that are not objects, or modelled types missing a required field, are kept \
+                 verbatim by the server but are outside this schema.",
+            )
+            .property(
+                "type",
+                string_schema("Part type, when the payload has one.")
+                    .pattern(Some(UNKNOWN_PART_TYPE_PATTERN)),
+            )
+            .into(),
         ),
     ]
 }
@@ -866,6 +896,57 @@ mod tests {
             messages_to_json(&[message]),
             r#"[{"role":"system","parts":[]}]"#
         );
+    }
+
+    #[test]
+    fn tool_call_without_arguments_stays_typed() {
+        let part = round_trip_part(r#"{"type":"tool_call","id":"c1","name":"get_time"}"#);
+        assert!(matches!(
+            part,
+            Part::ToolCall {
+                arguments: None,
+                ..
+            }
+        ));
+
+        let part = round_trip_part(r#"{"type":"tool_call","name":"get_time","arguments":null}"#);
+        assert!(matches!(
+            part,
+            Part::ToolCall {
+                arguments: Some(Value::Null),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn explicit_nulls_round_trip() {
+        let input = json(
+            r#"{"role":"assistant","name":null,"parts":[{"type":"tool_call","id":null,"name":"f","arguments":{}},{"type":"uri","modality":null,"mime_type":null,"uri":"https://example.com/a.png"}],"finish_reason":null}"#,
+        );
+        let message: Message = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(message.name, None);
+        assert_eq!(message.finish_reason, None);
+        assert!(matches!(message.parts[0], Part::ToolCall { id: None, .. }));
+        assert!(matches!(
+            message.parts[1],
+            Part::Uri {
+                modality: None,
+                mime_type: None,
+                ..
+            }
+        ));
+        assert_eq!(serde_json::to_value(&message).unwrap(), input);
+    }
+
+    #[test]
+    fn role_and_modality_deserialize_from_owned_and_escaped_strings() {
+        let role: Role = serde_json::from_value(Value::String("user".to_owned())).unwrap();
+        assert_eq!(role, Role::User);
+        let role: Role = serde_json::from_str(r#""us\u0065r""#).unwrap();
+        assert_eq!(role, Role::User);
+        let modality: Modality = serde_json::from_value(Value::String("image".to_owned())).unwrap();
+        assert_eq!(modality, Modality::Image);
     }
 
     #[test]
