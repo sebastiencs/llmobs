@@ -58,6 +58,12 @@ check-ts: js-install
 # Every check (D79); must pass before every commit
 check: check-rust check-web check-py check-ts
 
+# Fail if the working tree changed (generated files, snapshot or fixture writes)
+assert-clean:
+    git status --porcelain --untracked-files=all
+    git diff --exit-code
+    test -z "$(git status --porcelain --untracked-files=all)"
+
 # Web dev server with mocked API (fixtures/api)
 web-dev: js-install
     pnpm --dir web run dev
