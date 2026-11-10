@@ -51,8 +51,12 @@ check-web: js-install
 check-py:
     cd sdks/python && uv sync --locked && uv run ruff format --check && uv run ruff check && uv run mypy && uv run pytest
 
+# TypeScript SDK checks: lint, types, tests, package
+check-ts: js-install
+    pnpm --dir sdks/typescript run check
+
 # Every check (D79); must pass before every commit
-check: check-rust check-web check-py
+check: check-rust check-web check-py check-ts
 
 # Web dev server with mocked API (fixtures/api)
 web-dev: js-install
