@@ -8,6 +8,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 coverage/
+*.tsbuildinfo
+web/src/routeTree.gen.ts
 .env
 .env.*
 !.env.example

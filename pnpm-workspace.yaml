@@ -1,0 +1,9 @@
+packages:
+  - web
+
+# Minutes. D74: packages younger than 7 days are not installed.
+minimumReleaseAge: 10080
+
+# pnpm 11 replaced onlyBuiltDependencies with allowBuilds.
+allowBuilds:
+  esbuild: true
