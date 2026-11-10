@@ -1176,7 +1176,6 @@ dependencies = [
 name = "llmobs-server"
 version = "0.0.0"
 dependencies = [
- "chrono",
  "insta",
  "llmobs-core",
  "llmobs-otel",

@@ -24,7 +24,6 @@ macro_rules! stored_enum {
             Eq,
             Hash,
             serde::Serialize,
-            serde::Deserialize,
             strum::EnumString,
             strum::IntoStaticStr,
             strum::Display,
@@ -50,6 +49,17 @@ macro_rules! stored_enum {
             /// Returns [`CoreError::UnknownVariant`] when `value` is not a variant.
             pub fn parse(value: &str) -> Result<Self, CoreError> {
                 value.parse().map_err(|_| CoreError::unknown_variant($kind, value))
+            }
+        }
+
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                // Owned, not `&str`: `serde_json::from_value` cannot lend a `&str`.
+                let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+                Self::parse(&value).map_err(serde::de::Error::custom)
             }
         }
     };
@@ -274,6 +284,16 @@ mod tests {
         check(ScoreTargetKind::parse, ScoreTargetKind::as_str);
         check(ScoreDataType::parse, ScoreDataType::as_str);
         check(ScoreSource::parse, ScoreSource::as_str);
+    }
+
+    #[test]
+    fn deserialize_error_truncates_the_rejected_token() {
+        let json = format!("\"{}\"", "x".repeat(200));
+        let message = serde_json::from_str::<SpanKind>(&json)
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("span_kind"), "{message}");
+        assert_eq!(message.matches('x').count(), 64, "{message}");
     }
 
     #[test]

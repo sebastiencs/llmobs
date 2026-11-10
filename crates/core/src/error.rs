@@ -34,6 +34,19 @@ pub enum CoreError {
     },
 }
 
+/// An RFC 3339 timestamp could not be parsed into nanoseconds.
+///
+/// Messages are static and never include the input.
+#[derive(Debug, thiserror::Error)]
+pub enum TimeError {
+    /// The text is not a strict RFC 3339 timestamp.
+    #[error("invalid RFC 3339 timestamp")]
+    Invalid,
+    /// The instant does not fit in `i64` nanoseconds since the Unix epoch.
+    #[error("timestamp out of range")]
+    OutOfRange,
+}
+
 impl CoreError {
     /// Builds [`CoreError::UnknownVariant`], truncating `value` to 64 characters.
     pub(crate) fn unknown_variant(kind: &'static str, value: &str) -> Self {

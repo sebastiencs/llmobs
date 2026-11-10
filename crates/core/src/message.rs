@@ -427,12 +427,20 @@ fn message_to_value(message: &Message) -> Value {
     object(&fields, &message.extra)
 }
 
+/// Builds a JSON object with modelled fields first, then the remaining `extra` entries.
+///
+/// A modelled field that has a value always wins; an explicit `null` is written back only
+/// while the modelled field is `None`. Key order is the modelled fields, then `extra` in
+/// its stored order (spec 01 § Canonical message format).
 fn object(fields: &[(&str, Value)], extra: &Map<String, Value>) -> Value {
     let mut map = Map::new();
     for (key, value) in fields {
         map.insert((*key).to_owned(), value.clone());
     }
     for (key, value) in extra {
+        if map.contains_key(key) {
+            continue;
+        }
         map.insert(key.clone(), value.clone());
     }
     Value::Object(map)
@@ -481,7 +489,8 @@ fn require_present(map: &Map<String, Value>, key: &str) -> Result<Value, ()> {
 ///
 /// `modelled` keys are always taken by the typed value. `optional` keys are taken only when
 /// they hold a non-null value: an explicit `null` stays in `extra` so it is written back and
-/// the JSON round-trips exactly (D65).
+/// the JSON round-trips exactly (D65). A modelled field that has a value always wins; an
+/// explicit `null` is written back only while the modelled field is `None`.
 fn leftovers(map: &Map<String, Value>, modelled: &[&str], optional: &[&str]) -> Map<String, Value> {
     let mut extra = map.clone();
     for key in modelled {
@@ -937,6 +946,39 @@ mod tests {
             }
         ));
         assert_eq!(serde_json::to_value(&message).unwrap(), input);
+    }
+
+    #[test]
+    fn typed_name_wins_over_null_in_extra() {
+        let mut message: Message =
+            serde_json::from_str(r#"{"role":"user","name":null,"parts":[]}"#).unwrap();
+        message.name = Some("x".to_owned());
+        assert_eq!(
+            serde_json::to_string(&message).unwrap(),
+            r#"{"role":"user","name":"x","parts":[]}"#
+        );
+    }
+
+    #[test]
+    fn typed_part_fields_win_over_extra() {
+        let mut extra = Map::new();
+        extra.insert("type".to_owned(), Value::String("blob".to_owned()));
+        extra.insert("modality".to_owned(), Value::Null);
+        let part = Part::Uri {
+            modality: Some(Modality::Image),
+            mime_type: None,
+            uri: "media://abc".to_owned(),
+            extra,
+        };
+        let value = serde_json::to_value(&part).unwrap();
+        let object = value.as_object().unwrap();
+        assert_eq!(object.get("type").and_then(Value::as_str), Some("uri"));
+        assert_eq!(
+            object.get("modality").and_then(Value::as_str),
+            Some("image")
+        );
+        assert_eq!(object.keys().filter(|key| *key == "type").count(), 1);
+        assert_eq!(object.keys().filter(|key| *key == "modality").count(), 1);
     }
 
     #[test]

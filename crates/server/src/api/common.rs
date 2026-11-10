@@ -4,6 +4,7 @@
 
 use std::borrow::Cow;
 
+use llmobs_core::time_serde::parse_rfc3339;
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, SchemaType};
@@ -242,8 +243,7 @@ fn parse_time(text: &str) -> Result<i64, &'static str> {
         let millis: i64 = text.parse().map_err(|_| TIME_ERROR)?;
         return millis.checked_mul(1_000_000).ok_or(TIME_ERROR);
     }
-    let parsed = chrono::DateTime::parse_from_rfc3339(text).map_err(|_| TIME_ERROR)?;
-    parsed.timestamp_nanos_opt().ok_or(TIME_ERROR)
+    parse_rfc3339(text).map_err(|_| TIME_ERROR)
 }
 
 /// Sort direction. Default is descending.
@@ -346,6 +346,16 @@ mod tests {
         );
         assert_eq!(parse_time_query("from=1767261600000"), ten);
         assert_eq!(parse_time_query("from=-1000"), -1_000_000_000);
+    }
+
+    #[test]
+    fn time_param_rejects_ten_fractional_digits() {
+        let bad = "2026-01-01T00:00:00.1234567890Z";
+        let message = serde_urlencoded::from_str::<TimeQuery>(&format!("from={bad}"))
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains(TIME_ERROR), "{message}");
+        assert!(!message.contains(bad), "{message}");
     }
 
     #[test]
