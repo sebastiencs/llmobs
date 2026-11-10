@@ -1,6 +1,6 @@
 //! The `sessions` view, one row per `session_id` aggregated from `traces`.
 
-use datafusion::arrow::datatypes::DataType;
+use arrow::datatypes::DataType;
 use datafusion::common::ScalarValue;
 use datafusion::error::DataFusionError;
 use datafusion::functions::expr_fn::coalesce;
@@ -111,9 +111,9 @@ fn epoch() -> Expr {
 mod tests {
     use std::sync::Arc;
 
+    use arrow::array::{Array, AsArray, RecordBatch};
+    use arrow::datatypes::{DataType, Field, TimeUnit};
     use chrono::{DateTime, SecondsFormat, Utc};
-    use datafusion::arrow::array::{Array, AsArray, RecordBatch};
-    use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
     use datafusion::execution::runtime_env::RuntimeEnv;
     use llmobs_core::ids::{SpanId, TraceId};
     use llmobs_core::span::Span;
@@ -155,10 +155,10 @@ mod tests {
         if column.is_null(row) {
             return None;
         }
-        if let Some(values) = column.as_primitive_opt::<datafusion::arrow::datatypes::Int64Type>() {
+        if let Some(values) = column.as_primitive_opt::<arrow::datatypes::Int64Type>() {
             return Some(values.value(row));
         }
-        let values = column.as_primitive::<datafusion::arrow::datatypes::TimestampNanosecondType>();
+        let values = column.as_primitive::<arrow::datatypes::TimestampNanosecondType>();
         Some(values.value(row))
     }
 
@@ -169,7 +169,7 @@ mod tests {
         }
         Some(
             column
-                .as_primitive::<datafusion::arrow::datatypes::Float64Type>()
+                .as_primitive::<arrow::datatypes::Float64Type>()
                 .value(row),
         )
     }

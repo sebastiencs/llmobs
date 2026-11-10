@@ -11,7 +11,7 @@ mod traces;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema};
 use datafusion::datasource::{TableProvider, ViewTable, provider_as_source};
 use datafusion::error::DataFusionError;
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -246,8 +246,8 @@ pub(crate) fn map_plan(
 mod tests {
     use std::collections::BTreeMap;
 
+    use arrow::array::{Array, AsArray, RecordBatch};
     use chrono::{DateTime, SecondsFormat, Utc};
-    use datafusion::arrow::array::{Array, AsArray, RecordBatch};
     use llmobs_core::time_serde::parse_rfc3339;
     use serde_json::{Value, json};
 
@@ -294,10 +294,10 @@ mod tests {
         if column.is_null(row) {
             return None;
         }
-        if let Some(values) = column.as_primitive_opt::<datafusion::arrow::datatypes::Int64Type>() {
+        if let Some(values) = column.as_primitive_opt::<arrow::datatypes::Int64Type>() {
             return values.value(row).into();
         }
-        let values = column.as_primitive::<datafusion::arrow::datatypes::TimestampNanosecondType>();
+        let values = column.as_primitive::<arrow::datatypes::TimestampNanosecondType>();
         Some(values.value(row))
     }
 
@@ -308,7 +308,7 @@ mod tests {
         }
         Some(
             column
-                .as_primitive::<datafusion::arrow::datatypes::Float64Type>()
+                .as_primitive::<arrow::datatypes::Float64Type>()
                 .value(row),
         )
     }
