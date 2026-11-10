@@ -1,24 +1,22 @@
 //! Read path over one project's memtable.
 //!
-//! [`ProjectQuery`] carries the raw providers, a per-query runtime and
+//! [`crate::ProjectQuery`] carries the raw providers, a per-query runtime and
 //! `target_partitions`. It does not build a DataFusion session: the query
 //! layer does that and registers the user-facing views (spec 03 §6, D89, D91).
 //!
 //! M1 scans the memtable only. Days are exact. M3 widens span days by one
-//! (spec 03 § Trace anchor) and adds the `traces` provider.
+//! (spec 03 § Trace anchor) and adds the `traces` provider; until then
+//! `Storage::query` hands out an empty one.
 
 mod scores;
 mod spans;
 
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use chrono::{Datelike, NaiveDate};
-use datafusion::catalog::TableProvider;
 use datafusion::common::ScalarValue;
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{Between, BinaryExpr, Expr, Operator};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_datasource::memory::MemorySourceConfig;
@@ -72,28 +70,6 @@ impl TimeBounds {
         self.min = Some(0);
         self.max = Some(-1);
     }
-}
-
-/// Raw providers for one project, all bound to the same read snapshot.
-///
-/// `traces` is not here yet. M3 adds it; until then the query layer adds the
-/// field when it lands first. Nothing in `spans` or `scores` is registered:
-/// a caller that wants SQL builds its own session and registers them.
-#[derive(Debug)]
-pub struct ProjectQuery {
-    /// Spans in the stored schema, for this project only.
-    pub spans: Arc<dyn TableProvider>,
-    /// Scores in the stored schema, for this project only.
-    ///
-    /// The scan returns the latest version of each `score_id`.
-    pub scores: Arc<dyn TableProvider>,
-    /// Per-query DataFusion runtime.
-    ///
-    /// M1 uses the default runtime. M6 installs the memory pool and the spill
-    /// directory on this value.
-    pub runtime: Arc<RuntimeEnv>,
-    /// DataFusion `target_partitions` for the session the query layer builds.
-    pub target_partitions: NonZeroUsize,
 }
 
 /// Inclusive bounds of `column` from the top-level conjuncts of `filters`.

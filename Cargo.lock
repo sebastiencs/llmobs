@@ -2311,6 +2311,7 @@ dependencies = [
  "crc32c",
  "datafusion",
  "datafusion-datasource",
+ "hex",
  "humantime-serde",
  "llmobs-core",
  "proptest",

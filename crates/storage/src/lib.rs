@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow::array::{Array, RecordBatch, StringArray};
+use datafusion::datasource::MemTable;
 use llmobs_core::ids::ProjectId;
 
 use crate::config::StorageConfig;
@@ -39,13 +40,23 @@ use crate::wal::{SegmentWriter, replay};
 pub mod config;
 pub mod error;
 pub mod query;
+mod query_error;
+mod query_text;
+mod views;
 
-pub use query::ProjectQuery;
+pub use query_error::{InvalidQuery, Position, RunError};
+pub use views::{
+    ColumnInfo, ColumnKind, FunctionInfo, ProjectQuery, QueryContext, TimeWindow, ViewColumns,
+    ViewName, function_catalog, view_catalog,
+};
 
 pub(crate) mod hooks;
 pub(crate) mod memtable;
 pub(crate) mod read_state;
 pub(crate) mod wal;
+
+#[cfg(test)]
+mod test_support;
 
 /// One acknowledged append.
 ///
@@ -195,8 +206,14 @@ impl Storage {
             Arc::clone(&state.scores),
             partitions,
         ));
+        // M1 has no `traces` provider: M3 adds it. Until then the view is empty.
+        let traces = Arc::new(MemTable::try_new(
+            llmobs_core::schema::traces_schema(),
+            vec![vec![]],
+        )?);
         Ok(ProjectQuery {
             spans,
+            traces,
             scores,
             runtime: Arc::new(datafusion::execution::runtime_env::RuntimeEnv::default()),
             target_partitions: self.target_partitions,
