@@ -17,9 +17,18 @@ use llmobs_core::span::Span;
 use regex::{Regex, RegexBuilder};
 use sha2::{Digest, Sha256};
 use support::{
-    Case, FIXTURES_DIR, GROUPS, Origin, PriceRow, canonical_json, load_all_cases, load_prices,
-    sort_spans,
+    Case, FIXTURES_DIR, GROUPS, Origin, PriceRow, canonical_json, check_otlp_json, load_all_cases,
+    load_prices, sort_spans,
 };
+
+/// `input.json` size cap from `fixtures/otlp/README.md`.
+const MAX_INPUT_BYTES: u64 = 256 * 1024;
+/// Fixture spans sit in the 10 seconds before the case ingest time.
+const SPAN_WINDOW_NS: i64 = 10_000_000_000;
+/// Group directories. `_` is allowed (`google_adk`).
+const GROUP_NAME: &str = r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$";
+/// Case directories. Kebab-case, so `_` is not allowed.
+const CASE_NAME: &str = r"^[a-z0-9]+(?:-[a-z0-9]+)*$";
 
 #[test]
 fn layout() {
@@ -28,8 +37,9 @@ fn layout() {
 
 #[test]
 fn case_json() {
-    let mut failures = Vec::new();
-    for case in load_all_cases() {
+    let loaded = load_all_cases();
+    let mut failures = loaded.failures;
+    for case in loaded.cases {
         let label = label(&case);
         if case.meta.description.is_empty() {
             failures.push(format!("{label}: description is empty"));
@@ -43,25 +53,49 @@ fn case_json() {
                 "{label}: source must be present exactly when origin is captured"
             ));
         }
+        check_media_bounds(&case, &mut failures);
     }
     finish(&failures);
 }
 
 #[test]
 fn input_json() {
-    let mut failures = Vec::new();
-    for case in load_all_cases() {
+    let loaded = load_all_cases();
+    let mut failures = loaded.failures;
+    for case in loaded.cases {
+        let case_label = label(&case);
         if input_spans(&case).is_empty() {
-            failures.push(format!("{}: input.json has no spans", label(&case)));
+            failures.push(format!("{case_label}: input.json has no spans"));
         }
+        match fs::metadata(case.dir.join("input.json")) {
+            Ok(meta) => {
+                if let Some(failure) = input_size_failure(&case_label, meta.len()) {
+                    failures.push(failure);
+                }
+            }
+            Err(err) => failures.push(format!("{case_label}: input.json: {err}")),
+        }
+        let text = match fs::read_to_string(case.dir.join("input.json")) {
+            Ok(text) => text,
+            Err(err) => {
+                failures.push(format!("{case_label}: input.json: {err}"));
+                continue;
+            }
+        };
+        match serde_json::from_str(&text) {
+            Ok(value) => failures.extend(check_otlp_json(&case_label, &value)),
+            Err(err) => failures.push(format!("{case_label}: input.json: {err}")),
+        }
+        check_input_times(&case, &mut failures);
     }
     finish(&failures);
 }
 
 #[test]
 fn expected_json() {
-    let mut failures = Vec::new();
-    for case in load_all_cases() {
+    let loaded = load_all_cases();
+    let mut failures = loaded.failures;
+    for case in loaded.cases {
         check_expected(&case, &mut failures);
     }
     finish(&failures);
@@ -69,8 +103,9 @@ fn expected_json() {
 
 #[test]
 fn media() {
-    let mut failures = Vec::new();
-    for case in load_all_cases() {
+    let loaded = load_all_cases();
+    let mut failures = loaded.failures;
+    for case in loaded.cases {
         check_media(&case, &mut failures);
     }
     finish(&failures);
@@ -78,9 +113,10 @@ fn media() {
 
 #[test]
 fn costs() {
+    let loaded = load_all_cases();
     let rows = load_prices();
-    let mut failures = Vec::new();
-    for case in load_all_cases() {
+    let mut failures = loaded.failures;
+    for case in loaded.cases {
         for span in &case.expected.spans {
             check_cost(&label(&case), span, &rows, &mut failures);
         }
@@ -156,7 +192,9 @@ fn prices() {
         return;
     }
 
-    let cases = load_all_cases();
+    let loaded = load_all_cases();
+    failures.extend(loaded.failures);
+    let cases = loaded.cases;
     for case in &cases {
         for span in &case.expected.spans {
             if span.cost_source != Some(CostSource::Computed) {
@@ -266,6 +304,11 @@ fn layout_failures() -> Vec<String> {
 }
 
 fn check_group(dir: &Path, group: &str, failures: &mut Vec<String>) {
+    if !name_matches(GROUP_NAME, group) {
+        failures.push(format!(
+            "{group}: group directory name must match {GROUP_NAME} (lowercase, '_' or '-' allowed)"
+        ));
+    }
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(err) => {
@@ -273,6 +316,7 @@ fn check_group(dir: &Path, group: &str, failures: &mut Vec<String>) {
             return;
         }
     };
+    let mut case_directories = 0;
     for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
@@ -285,6 +329,12 @@ fn check_group(dir: &Path, group: &str, failures: &mut Vec<String>) {
         if !entry.path().is_dir() {
             failures.push(format!("{group}/{name} is not a case directory"));
             continue;
+        }
+        case_directories += 1;
+        if !name_matches(CASE_NAME, &name) {
+            failures.push(format!(
+                "{group}/{name}: case directory name must match {CASE_NAME} (kebab-case)"
+            ));
         }
         let mut files = Vec::new();
         let children = match fs::read_dir(entry.path()) {
@@ -320,6 +370,11 @@ fn check_group(dir: &Path, group: &str, failures: &mut Vec<String>) {
                 files.join(", ")
             ));
         }
+    }
+    if case_directories == 0 {
+        failures.push(format!(
+            "{group}: create a group directory only when it contains a case"
+        ));
     }
 }
 
@@ -361,6 +416,15 @@ fn check_expected(case: &Case, failures: &mut Vec<String>) {
                 span.span_id
             ));
         }
+        check_span_window(
+            &label,
+            &span.span_id.to_string(),
+            span.start_time,
+            span.end_time,
+            case.meta.context.ingest_time,
+            failures,
+        );
+        check_kind_costs(&label, span, failures);
         let id = (span.trace_id.to_string(), span.span_id.to_string());
         if !input_ids.contains(&id) {
             failures.push(format!(
@@ -472,6 +536,12 @@ fn check_media(case: &Case, failures: &mut Vec<String>) {
     sorted.sort_unstable();
     if hashes != sorted {
         failures.push(format!("{label}: media is not sorted by sha256"));
+    }
+    let mut seen = BTreeSet::new();
+    for hash in &hashes {
+        if !seen.insert(*hash) {
+            failures.push(format!("{label}: media sha256 {hash} is duplicated"));
+        }
     }
     for item in media {
         if !is_sha256(&item.sha256) {
@@ -711,6 +781,106 @@ fn model_of(span: &Span) -> Option<&str> {
         .or(span.request_model.as_deref())
 }
 
+fn check_media_bounds(case: &Case, failures: &mut Vec<String>) {
+    if case.meta.settings.media_min_bytes > case.meta.settings.media_max_bytes {
+        failures.push(format!(
+            "{}: media_min_bytes {} is greater than media_max_bytes {}",
+            label(case),
+            case.meta.settings.media_min_bytes,
+            case.meta.settings.media_max_bytes
+        ));
+    }
+}
+
+fn input_size_failure(case_label: &str, len: u64) -> Option<String> {
+    if len > MAX_INPUT_BYTES {
+        Some(format!(
+            "{case_label}: input.json is {len} bytes, above 256 KiB"
+        ))
+    } else {
+        None
+    }
+}
+
+fn check_input_times(case: &Case, failures: &mut Vec<String>) {
+    let case_label = label(case);
+    let ingest = case.meta.context.ingest_time;
+    for resource in &case.input.resource_spans {
+        for scope in &resource.scope_spans {
+            for span in &scope.spans {
+                let span_id = hex_encode(&span.span_id);
+                let (Some(start), Some(end)) = (
+                    i64::try_from(span.start_time_unix_nano).ok(),
+                    i64::try_from(span.end_time_unix_nano).ok(),
+                ) else {
+                    failures.push(format!(
+                        "{case_label}: span {span_id} has a timestamp that does not fit in i64"
+                    ));
+                    continue;
+                };
+                check_span_window(&case_label, &span_id, start, end, ingest, failures);
+            }
+        }
+    }
+}
+
+fn check_span_window(
+    label: &str,
+    span_id: &str,
+    start: i64,
+    end: i64,
+    ingest: i64,
+    failures: &mut Vec<String>,
+) {
+    if start < ingest - SPAN_WINDOW_NS {
+        failures.push(format!(
+            "{label}: span {span_id} starts before ingest_time - 10s"
+        ));
+    }
+    if start >= ingest {
+        failures.push(format!(
+            "{label}: span {span_id} starts at or after ingest_time"
+        ));
+    }
+    if end >= ingest {
+        failures.push(format!(
+            "{label}: span {span_id} ends at or after ingest_time"
+        ));
+    }
+}
+
+fn check_kind_costs(label: &str, span: &Span, failures: &mut Vec<String>) {
+    let carries_usage = span.input_tokens.is_some()
+        || span.output_tokens.is_some()
+        || span.cache_read_tokens.is_some()
+        || span.cache_write_tokens.is_some()
+        || span.reasoning_tokens.is_some()
+        || span.total_tokens.is_some()
+        || span.cost_input.is_some()
+        || span.cost_output.is_some()
+        || span.cost_total.is_some()
+        || span.cost_source.is_some();
+    if !matches!(span.span_kind, SpanKind::Llm | SpanKind::Embedding) && carries_usage {
+        failures.push(format!(
+            "{label}: {} is {} so token fields, cost fields and cost_source must be absent",
+            span.span_id,
+            span.span_kind.as_str()
+        ));
+    }
+    if span.cost_source.is_none()
+        && (span.cost_input.is_some() || span.cost_output.is_some() || span.cost_total.is_some())
+    {
+        failures.push(format!(
+            "{label}: {} has no cost_source but a cost field is set",
+            span.span_id
+        ));
+    }
+}
+
+fn name_matches(pattern: &str, name: &str) -> bool {
+    must_regex(pattern).is_match(name)
+}
+
 fn input_spans(case: &Case) -> Vec<(String, String)> {
     let mut ids = Vec::new();
     for resource in &case.input.resource_spans {
@@ -887,4 +1057,204 @@ fn finish(failures: &[String]) {
         "fixture checks failed:\n{}",
         failures.join("\n")
     );
+}
+
+#[test]
+fn non_llm_span_cannot_carry_tokens_or_cost() {
+    let mut span = bare_span("tool");
+    span.input_tokens = Some(1);
+    let mut failures = Vec::new();
+    check_kind_costs("edge/sample", &span, &mut failures);
+    assert_eq!(
+        failures,
+        vec![
+            "edge/sample: bbbbbbbbbbbbbbbb is tool so token fields, cost fields and cost_source must be absent"
+                .to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn span_without_cost_source_cannot_carry_a_cost() {
+    let mut span = bare_span("llm");
+    span.cost_total = Some(1.0);
+    let mut failures = Vec::new();
+    check_kind_costs("edge/sample", &span, &mut failures);
+    assert_eq!(
+        failures,
+        vec!["edge/sample: bbbbbbbbbbbbbbbb has no cost_source but a cost field is set".to_owned()]
+    );
+}
+
+#[test]
+fn duplicate_media_sha256_fails() {
+    let mut case = empty_case();
+    let hash = "ab".repeat(32);
+    case.expected.media = vec![
+        support::ExpectedMedia {
+            sha256: hash.clone(),
+            mime_type: "image/png".to_owned(),
+            size_bytes: 1,
+        },
+        support::ExpectedMedia {
+            sha256: hash.clone(),
+            mime_type: "image/png".to_owned(),
+            size_bytes: 1,
+        },
+    ];
+    let mut failures = Vec::new();
+    check_media(&case, &mut failures);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure == &format!("edge/sample: media sha256 {hash} is duplicated")),
+        "{failures:?}"
+    );
+}
+
+#[test]
+fn media_min_bytes_above_max_fails() {
+    let mut case = empty_case();
+    case.meta.settings.media_min_bytes = 32;
+    case.meta.settings.media_max_bytes = 8;
+    let mut failures = Vec::new();
+    check_media_bounds(&case, &mut failures);
+    assert_eq!(
+        failures,
+        vec!["edge/sample: media_min_bytes 32 is greater than media_max_bytes 8".to_owned()]
+    );
+}
+
+#[test]
+fn input_over_256_kib_fails() {
+    assert!(input_size_failure("edge/sample", MAX_INPUT_BYTES).is_none());
+    assert_eq!(
+        input_size_failure("edge/sample", MAX_INPUT_BYTES + 1).as_deref(),
+        Some("edge/sample: input.json is 262145 bytes, above 256 KiB")
+    );
+}
+
+#[test]
+fn span_outside_the_ingest_window_fails() {
+    let ingest = 1_000_000_000_000;
+    let mut failures = Vec::new();
+    check_span_window(
+        "edge/sample",
+        "span",
+        ingest - SPAN_WINDOW_NS - 1,
+        ingest - 1,
+        ingest,
+        &mut failures,
+    );
+    assert_eq!(
+        failures,
+        vec!["edge/sample: span span starts before ingest_time - 10s".to_owned()]
+    );
+
+    failures.clear();
+    check_span_window("edge/sample", "span", ingest, ingest, ingest, &mut failures);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("starts at or after ingest_time"))
+    );
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("ends at or after ingest_time"))
+    );
+
+    failures.clear();
+    check_span_window(
+        "edge/sample",
+        "span",
+        ingest - SPAN_WINDOW_NS,
+        ingest - 1,
+        ingest,
+        &mut failures,
+    );
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
+#[test]
+fn directory_names_match_the_readme() {
+    assert!(name_matches(GROUP_NAME, "google_adk"));
+    assert!(!name_matches(CASE_NAME, "google_adk"));
+    assert!(name_matches(CASE_NAME, "chat-cache-tokens"));
+
+    let root = std::env::temp_dir().join(format!("llmobs-otlp-names-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Bad_Name")).unwrap_or_else(|err| panic!("{err}"));
+    let mut failures = Vec::new();
+    check_group(&root, "Google", &mut failures);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("group directory name"))
+    );
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("kebab-case"))
+    );
+
+    let empty = root.join("empty");
+    fs::create_dir_all(&empty).unwrap_or_else(|err| panic!("{err}"));
+    failures.clear();
+    check_group(&empty, "edge", &mut failures);
+    assert_eq!(
+        failures,
+        vec!["edge: create a group directory only when it contains a case".to_owned()]
+    );
+    fs::remove_dir_all(&root).unwrap_or_else(|err| panic!("{err}"));
+}
+
+fn bare_span(kind: &str) -> Span {
+    serde_json::from_value(serde_json::json!({
+        "project_id": "01900000-0000-7000-8000-000000000001",
+        "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "span_id": "bbbbbbbbbbbbbbbb",
+        "name": "step",
+        "span_kind": kind,
+        "start_time": "2025-12-31T23:59:50.000000000Z",
+        "end_time": "2025-12-31T23:59:51.000000000Z",
+        "status": "unset",
+        "ingest_time": "2026-01-01T00:00:00.000000000Z",
+        "schema_version": 1
+    }))
+    .unwrap_or_else(|err| panic!("{err}"))
+}
+
+fn empty_case() -> Case {
+    use support::{CaseMeta, Context, Expected, Origin, Settings};
+    let project_id = support::DEFAULT_PROJECT_ID
+        .parse()
+        .unwrap_or_else(|err| panic!("{err}"));
+    Case {
+        group: "edge".to_owned(),
+        name: "sample".to_owned(),
+        dir: PathBuf::from("/no/such/llmobs-fixture"),
+        meta: CaseMeta {
+            description: "sample".to_owned(),
+            origin: Origin::HandWritten,
+            source: None,
+            spec_refs: vec!["02".to_owned()],
+            settings: Settings {
+                max_attribute_bytes: 8,
+                media_min_bytes: 1,
+                media_max_bytes: 10,
+            },
+            context: Context {
+                project_id,
+                ingest_time: 0,
+            },
+            notes: None,
+        },
+        input: Default::default(),
+        expected: Expected {
+            spans: Vec::new(),
+            media: Vec::new(),
+            rejected_spans: 0,
+        },
+    }
 }

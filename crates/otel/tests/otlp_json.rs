@@ -65,6 +65,50 @@ fn otlp_json_uses_hex_ids_string_ints_and_integer_enums() {
     assert_eq!(reason, &Value::StringValue("stop".to_owned()));
 }
 
+#[test]
+fn otlp_json_decodes_kvlist_bytes_and_both_int_forms() {
+    let request = r#"{
+      "resourceSpans": [{
+        "scopeSpans": [{
+          "spans": [{
+            "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+            "spanId": "00f067aa0ba902b7",
+            "name": "values",
+            "attributes": [
+              { "key": "nested", "value": { "kvlistValue": { "values": [
+                { "key": "inner", "value": { "stringValue": "ok" } }
+              ] } } },
+              { "key": "blob", "value": { "bytesValue": "aGVsbG8=" } },
+              { "key": "from-string", "value": { "intValue": "42" } },
+              { "key": "from-number", "value": { "intValue": 42 } }
+            ]
+          }]
+        }]
+      }]
+    }"#;
+    let request: ExportTraceServiceRequest = match serde_json::from_str(request) {
+        Ok(request) => request,
+        Err(err) => panic!("pinned decoder rejected a standard AnyValue form: {err}"),
+    };
+    let span = &request.resource_spans[0].scope_spans[0].spans[0];
+
+    let Value::KvlistValue(nested) = attribute(span, "nested") else {
+        panic!("nested is a kvlist");
+    };
+    let inner = nested.values[0]
+        .value
+        .as_ref()
+        .and_then(|value| value.value.as_ref());
+    assert_eq!(inner, Some(&Value::StringValue("ok".to_owned())));
+
+    assert_eq!(
+        attribute(span, "blob"),
+        &Value::BytesValue(b"hello".to_vec())
+    );
+    assert_eq!(attribute(span, "from-string"), &Value::IntValue(42));
+    assert_eq!(attribute(span, "from-number"), &Value::IntValue(42));
+}
+
 fn attribute<'a>(span: &'a opentelemetry_proto::tonic::trace::v1::Span, key: &str) -> &'a Value {
     let item = span
         .attributes

@@ -38,6 +38,8 @@ When `settings` or `context` omit a field, the defaults are:
 - `project_id` = `"01900000-0000-7000-8000-000000000001"`
 - `ingest_time` = `"2026-01-01T00:00:00.000000000Z"`
 
+Every span starts and ends before the case's `ingest_time`, and starts no earlier than 10 seconds before it. With the default ingest time, spans start at `2025-12-31T23:59:50Z` or later and end before `2026-01-01T00:00:00Z`.
+
 ## input.json
 
 One OTLP `ExportTraceServiceRequest` in the standard OTLP/JSON encoding (OTLP spec, "JSON Protobuf Encoding"):
