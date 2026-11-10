@@ -8,7 +8,10 @@ mod query_error;
 mod views;
 
 pub use query_error::RunError;
-pub use views::{ProjectQuery, QueryContext, TimeWindow, ViewName};
+pub use views::{
+    ColumnInfo, ColumnKind, FunctionInfo, ProjectQuery, QueryContext, TimeWindow, ViewColumns,
+    ViewName, function_catalog, view_catalog,
+};
 
 #[cfg(test)]
 mod test_support;

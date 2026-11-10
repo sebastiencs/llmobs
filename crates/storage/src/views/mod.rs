@@ -1,5 +1,6 @@
 //! User-facing views over the stored providers (D91, D101).
 
+mod catalog;
 mod hex;
 mod scores;
 mod session;
@@ -20,6 +21,9 @@ use datafusion::prelude::{SessionContext, cast, encode};
 use crate::query_error::RunError;
 
 // Q6 reads this limit when it tokenizes caller text.
+pub use catalog::{
+    ColumnInfo, ColumnKind, FunctionInfo, ViewColumns, function_catalog, view_catalog,
+};
 #[allow(unused_imports)]
 pub(crate) use session::PARSER_RECURSION_LIMIT;
 
