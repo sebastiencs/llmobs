@@ -45,13 +45,13 @@ Because rows may sit in the day before or after their own date, day pruning (§6
 
 One WAL per table (`spans`, `scores`), each a sequence of segment files (max 64 MiB, then rotate).
 
-Record format:
+Record format. Every integer is little-endian. The checksum covers `seq` as 8 little-endian bytes, then `kind` as 1 byte, then the payload. A payload longer than 256 MiB is rejected.
 
 ```
 u32  payload_len
 u32  crc32c(seq || kind || payload)
 u64  seq            monotonically increasing per table
-u8   kind           1 = row batch, 2 = reserved
+u8   kind           1 = row batch; any other value, including the reserved 2, is invalid
 [..] payload        Arrow IPC stream (one RecordBatch, table schema, already normalized),
                     with LZ4-frame body compression
 ```

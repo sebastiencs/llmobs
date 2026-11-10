@@ -5,6 +5,8 @@
 
 use std::path::PathBuf;
 
+use arrow::error::ArrowError;
+
 /// A `[storage]` value failed a parse or a bound check.
 ///
 /// The message names the field and the rule. It never includes the rejected input.
@@ -99,6 +101,15 @@ pub enum QueryError {
 /// A WAL codec, segment, or replay failure.
 ///
 /// Callers outside the WAL map this into [`OpenError`] or [`AppendError`].
-/// Variants are added by the sub-phase that first produces them.
 #[derive(Debug, thiserror::Error)]
-pub enum WalError {}
+pub enum WalError {
+    /// The IPC payload is not one batch of the table's schema.
+    #[error("invalid WAL payload: {reason}")]
+    InvalidPayload {
+        /// Static reason. Never row content.
+        reason: &'static str,
+    },
+    /// Arrow could not write the record batch.
+    #[error("encoding WAL record")]
+    Encode(#[source] ArrowError),
+}
