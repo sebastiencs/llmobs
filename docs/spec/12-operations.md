@@ -19,13 +19,15 @@ Sources, later overriding earlier: built-in defaults → `llmobs.toml` (`--confi
 | `ingest.max_request_bytes` | | 10 MiB |
 | `ingest.max_attribute_bytes` | | 8 MiB |
 | `media.min_bytes` / `media.max_bytes` | | 4 KiB / 32 MiB |
-| `wal.sync` | | `always` |
-| `flush.max_bytes` / `flush.max_age` | | 256 MiB / 120 s |
-| `memtable.hard_limit` | | 1 GiB |
-| `compaction.target_file_size` / `compaction.threads` | | 512 MiB / cores/4 |
-| `query.max_memory` | | 2 GiB |
-| `cache.parquet_metadata_bytes` | | 512 MiB |
-| `deletion.max_delay` | | 24 h |
+| `storage.wal.sync` | | `"always"` (or a duration such as `"5ms"`: fsync at most that often) |
+| `storage.flush.max_bytes` / `storage.flush.max_age` | | `"256MiB"` / `"120s"` |
+| `storage.memtable.hard_limit` | | `"1GiB"` |
+| `storage.compaction.target_file_size` / `storage.compaction.threads` | | `"512MiB"` / cores/4 |
+| `storage.query.max_memory` | | `"2GiB"` |
+| `storage.query.metadata_cache_bytes` | | `"512MiB"` |
+| `storage.deletion.max_delay` | | `"24h"` |
+
+The storage engine's settings form the `[storage]` section, with one sub-table per area (`wal`, `flush`, `memtable`, `compaction`, `query`, `gc`, `deletion`, `anchor`); spec 03 names them without the `storage.` prefix. Sizes are strings with a binary unit (`"256MiB"`, `"1GiB"`) and durations are strings with a unit (`"2ms"`, `"120s"`, `"24h"`) (D90). The full list, with defaults, is the `StorageConfig` doc in `llmobs-storage`.
 | `eval.workers` | | 16 |
 | `log.format` / `log.level` | `LLMOBS_LOG` | `pretty` on TTY else `json` / `info` |
 | `telemetry.enabled` | `LLMOBS_TELEMETRY` | decided with the license (anonymous usage ping, opt-out) |

@@ -38,7 +38,7 @@ Top-level design of the storage track (Wave 1, track A1). It settles what specs 
 
 ```
 llmobs-server ──append_spans / append_scores──▶ llmobs-storage ──▶ WAL, memtable, files
-              ──query(project) → SessionContext──▶   providers: spans, traces, scores
+              ──query(project) → context + providers──▶  providers: spans, traces, scores
               ──register_deletion / deletion_status──▶  tombstones, rewriter
               ──apply_retention(project, keep_from)──▶  partition drops
               ──put_media / get_media──▶            media blobs
@@ -47,7 +47,7 @@ llmobs-storage/src/filter, src/sql (A2) ──▶ DataFusion Expr / validated Lo
 
 - Storage is **policy-free**: it never reads `meta.db`. Retention days, project lifecycle and deletion scopes come in through API calls.
 - The server publishes live events after `append_spans` returns, using the batch it already has. Storage has no pub/sub.
-- A2 produces DataFusion `Expr`s and validated plans. A1's providers accept any `Expr` DataFusion pushes down. The only contract between them is the views' schemas (`llmobs-core` + spec 05) and the `SessionContext` that `Storage::query` returns. A2 can start right away and test against in-memory tables.
+- A2 builds the user-facing views of spec 05 over A1's providers (D89): hex IDs, hidden `project_id`, `sessions`, the hex-to-binary literal rewrite, default exclusions. It also produces DataFusion `Expr`s and validated plans from the DSL and SQL. A1's providers expose the stored schemas (`llmobs-core`) and accept any `Expr` DataFusion pushes down. The contract between them is those schemas and the `ProjectQuery` that `Storage::query` returns. A2 can start right away and test against in-memory tables.
 
 ## Public API
 
@@ -67,9 +67,10 @@ impl Storage {
     pub async fn append_spans(&self, project: ProjectId, batch: RecordBatch) -> Result<AppendReceipt, AppendError>;
     pub async fn append_scores(&self, project: ProjectId, batch: RecordBatch) -> Result<AppendReceipt, AppendError>;
 
-    /// A context with `spans`, `traces` and `scores` registered for one project, bound to
-    /// one read snapshot, with the query's memory cap and timeout.
-    pub fn query(&self, project: ProjectId, options: QueryOptions) -> Result<SessionContext, QueryError>;
+    /// A `SessionContext` configured for one query (memory cap, parallelism) and the
+    /// project's providers (`spans`, `traces`, `scores`), all bound to one read snapshot.
+    /// Nothing is registered by name: the query layer registers its views (D89).
+    pub fn query(&self, project: ProjectId, options: QueryOptions) -> Result<ProjectQuery, QueryError>;
 
     /// Idempotent by `deletion.id`. Rows in scope are hidden from every query once this returns.
     pub async fn register_deletion(&self, deletion: Deletion) -> Result<(), DeletionError>;
@@ -143,13 +144,13 @@ The milestone plans may merge or split modules when the code shows a better cut.
 - **One flush task per table**, triggered by size, age, shutdown or a full hard limit. It freezes `active` under the table lock and writes the frozen batches without holding the lock.
 - **One committer.** Every change to the set of files (flush, compaction, deletion rewrite, retention, project drop, GC) is a `CatalogEdit` applied by the committer. It runs the SQLite transaction, checks the edit's preconditions, and publishes the new `ReadState`, all under one mutex, so commits and snapshots are totally ordered (G8).
 - **Background jobs** (compaction, deletion rewriter, retention, GC, media GC) are tokio tasks with bounded parallelism. CPU-heavy work (sorting, Parquet encoding) runs on `spawn_blocking` or a dedicated pool, never on the async workers. A job **claims** its input files in memory before reading them, so compaction and the rewriter never pick the same file. Claims don't survive a restart and need not: an unfinished job is simply redone.
-- **Readers** load the current `ReadState` (`arc-swap`): an `Arc` of the in-memory catalog, the memtable batches (`active` and `frozen`, as `Arc<RecordBatch>` lists) and the tombstone sets. All three come from the same publish, so a row is seen exactly once: either in a memtable or in a file, never both, never neither (G7).
+- **Readers** load the current `ReadState` (an `Arc` behind a `std::sync::RwLock`, locked only to clone the `Arc`): an `Arc` of the in-memory catalog, the memtable batches (`active` and `frozen`, as `Arc<RecordBatch>` lists) and the tombstone sets. All three come from the same publish, so a row is seen exactly once: either in a memtable or in a file, never both, never neither (G7).
 
 ## Durability
 
 Invariants the tests check (§ Testing):
 
-1. **Acknowledged means durable.** With `wal.sync = always`, an acknowledged batch survives a crash and a power loss. With `every_ms(N)`, it survives a crash; a power loss can lose the last N ms.
+1. **Acknowledged means durable.** With `wal.sync = "always"`, an acknowledged batch survives a crash and a power loss. With a duration (`"5ms"`), it survives a crash; a power loss can lose the last interval.
 2. **A file is durable before it is active.**
    - Local disk: `objects.rs` writes to a temp file in the target directory, calls `sync_all`, renames it into place and fsyncs the directory. `object_store` 0.13's `LocalFileSystem` does none of this (checked); it is used for reads only, until the family moves to an object_store version with fsync.
    - S3: the PUT or multipart upload has completed.
@@ -226,6 +227,8 @@ The M3 plan decides, with the S1 results and the cost of the anchor's startup re
 ## Trace-list spike (S1)
 
 The `traces` view is the least proven part of this design. Laminar merges partials on read as we plan to; Phoenix, Opik and Langfuse aggregate from spans instead, and Langfuse dropped partials. It is also the UI's main path. S1 measures it before M3 builds on it.
+
+The detailed plan is `02-s1-trace-list-benchmark.md`. It adds a one-day query (Q6), an informational "wrong pushdown" variant, and a measurement of the anchor's startup cost to what follows.
 
 **What it is:** a throwaway prototype, run alongside M1, by one agent. It lives on its own branch and is **never merged**. Only the results document is. It uses DataFusion 55 directly, not `llmobs-storage`.
 
@@ -324,14 +327,15 @@ Tables (migrations owned by `llmobs-storage`, `sqlx::migrate!` like the server's
 
 ## Configuration
 
-`StorageConfig`. Defaults are spec 03's unless stated here.
+`StorageConfig`, the `[storage]` section (D90). Sizes are strings with a binary unit (`"256MiB"`), durations strings with a unit (`"120s"`). Defaults are spec 03's unless stated here. Each milestone adds the fields it uses, and no earlier (AGENTS.md § No placeholders).
 
-- `data_dir`, `object_store` (`local` or `s3://bucket/prefix`; credentials from the standard AWS environment), `min_free_bytes`;
-- `wal`: `sync`, `segment_bytes`, `group_max_bytes`, `group_max_wait`;
-- `memtable`: `flush_max_bytes`, `flush_max_age`, `hard_limit`;
+- top level: `data_dir`, `object_store` (`local` or `s3://bucket/prefix`; credentials from the standard AWS environment), `min_free_bytes`;
+- `wal`: `sync` (`"always"` or a duration), `segment_bytes`, `group_max_bytes`, `group_max_wait`, `skip_corrupt`;
+- `flush`: `max_bytes`, `max_age`, `upload_concurrency` (default 8, D84);
+- `memtable`: `hard_limit`;
 - `compaction`: `threads`, `target_file_size`, `l0_max_files`, `l0_max_bytes`, `l0_max_age`, `close_delay`, `size_ratio`, `max_memory`;
 - `query`: `max_memory_total`, `max_memory`, `target_partitions`, `metadata_cache_bytes`, `read_cache_bytes` (S3 mode only), `trace_lookback`, `admission_wait`;
-- `gc.grace`, `deletion.max_delay`, `anchor.window`, `flush.upload_concurrency` (default 8, D84).
+- `gc.grace`, `deletion.max_delay`, `anchor.window`.
 
 ## Testing
 

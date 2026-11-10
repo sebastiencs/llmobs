@@ -2,6 +2,8 @@
 
 The columnar store holds three tables: `spans`, `traces` (derived partial summaries) and `scores` (01). It is a small LSM-style engine: **WAL → memtable → L0 Parquet files → L1 Parquet files**, with a catalog in its own SQLite file and DataFusion as the query engine.
 
+Configuration keys named in this spec (`wal.sync`, `flush.max_bytes`, …) live under the `[storage]` section of the server config (12, D90).
+
 `llmobs-storage` is policy-free: it never reads `meta.db`. Retention days, project lifecycle and deletion scopes reach it through its API (D83). The design behind this spec, with its public API and milestones, is `docs/plans/a1-storage/00-design.md`; the research behind it is `docs/research/storage/`.
 
 ## Layout on disk / object store
@@ -60,7 +62,7 @@ u8   kind           1 = row batch, 2 = reserved
 3. inserts the batches into the active memtable in `seq` order and publishes a new read state (§4);
 4. completes every ack.
 
-This gives one fsync per group, so throughput is bounded by disk bandwidth, not fsync latency. Because one task both writes the WAL and fills the memtable, memtable order equals WAL order, and an acknowledged write is visible to the next query. Config `wal.sync = always | every_ms(N)` (default `always`; `every_ms` trades durability for speed and is documented: a power loss can lose the last N ms, a process crash loses nothing).
+This gives one fsync per group, so throughput is bounded by disk bandwidth, not fsync latency. Because one task both writes the WAL and fills the memtable, memtable order equals WAL order, and an acknowledged write is visible to the next query. Config `wal.sync = "always" | "<duration>"` (default `"always"`). A duration such as `"5ms"` acknowledges after the write and fsyncs at most that often; it trades durability for speed and is documented: a power loss can lose the last interval, a process crash loses nothing.
 
 The `wal/<table>/` directory is fsynced when a segment is created or deleted.
 
@@ -207,7 +209,7 @@ FileMeta { id, path, level, size, footer_size, rows, min_time, max_time,
            min_ingest_time, max_ingest_time, fully_merged, deletions_applied_seq }
 ```
 
-**Read state.** Readers load one `ReadState` (`arc-swap`): the in-memory catalog, the memtable batches (`active` and `frozen` of both tables, as `Arc<RecordBatch>` lists) and the tombstone sets (§7), all from the same publish. A row is therefore seen exactly once, in a memtable or in a file.
+**Read state.** Readers load one `ReadState` (an `Arc` behind a `std::sync::RwLock`, held only to clone the `Arc`): the in-memory catalog, the memtable batches (`active` and `frozen` of both tables, as `Arc<RecordBatch>` lists) and the tombstone sets (§7), all from the same publish. A row is therefore seen exactly once, in a memtable or in a file.
 
 **Committer.** Every change to the set of files is a catalog edit applied by one committer, which runs the SQLite transaction and publishes the new `ReadState` under one mutex, so commits and snapshots are totally ordered. This covers flush, compaction, deletion rewrite, retention, project drop and GC. An edit has:
 - the files to add, whose paths must be in `staged_objects`;
@@ -245,7 +247,7 @@ Runs in a background task with bounded parallelism (`compaction.threads`, defaul
 
 ## 6. Query path
 
-`llmobs-storage` builds a DataFusion `SessionContext` per request. It registers the project's tables as custom `TableProvider`s bound to one `ReadState` (catalog, memtable and tombstones, §4). Because the provider is constructed for a single project, the user cannot name another project's data. A dropped project (§7) gets empty tables.
+For each request, `llmobs-storage` builds a DataFusion `SessionContext` and the project's `TableProvider`s, all bound to one `ReadState` (catalog, memtable and tombstones, §4). The providers expose the stored Arrow schemas of 01 (binary IDs, `project_id`). They don't register themselves: the query layer (05) registers the user-facing views over them (hex IDs, hidden `project_id`, `sessions`, default exclusions, D89). Because each provider is constructed for a single project, the user cannot name another project's data. A dropped project (§7) gets empty tables.
 
 ### `SpansProvider::scan(projection, filters, limit)`
 
