@@ -46,6 +46,6 @@ Session and user ids match `[a-z0-9-]+` so they can be file names. Trace 5 uses 
 }
 ```
 
-`project` is never in `path_params`. Mocks match any project. `get_media` points at `media/<sha256>.png` with content type `image/png`.
+`project` is never in `path_params`. The web mocks read `manifest.json`, match any `project`, and pick the query entry with the largest matching subset. `get_media` points at `media/<sha256>.png` with content type `image/png`.
 
 `just check` loads these files in `crates/server/tests/api_examples.rs`. Hand-written JSON has to deserialize into its Rust type and serialize back to the same bytes, so keep the field order and the omitted empty fields. Spans stay sorted by `(trace_id, start_time, span_id)`, span ids are unique within a trace, every score target exists in the dataset, and every `media_refs` entry matches the SHA-256 of `media/<sha>.png`. Session and user ids stay `[a-z0-9-]+`. The manifest names every read operation except the two SSE streams, and every `file` exists.

@@ -1,18 +1,20 @@
 import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
 
-import { type Config, ConfigError, type ConfigOptions, resolveConfig } from "./config.js";
+import { type Config, ConfigError, type LlmobsOptions, resolveConfig } from "./config.js";
 
 const KEY = "sk-llmobs-test-key";
 const STORED_KEY = "sk-llmobs-super-secret-key-42";
 
-function resolve(options: Record<string, unknown> = {}): Config {
-  return resolveConfig(options as ConfigOptions);
+type Env = Record<string, string | undefined>;
+
+function resolve(options: Record<string, unknown> = {}, env: Env = {}): Config {
+  return resolveConfig(options as LlmobsOptions, env);
 }
 
-function message(options: Record<string, unknown>): string {
+function message(options: Record<string, unknown> = {}, env: Env = {}): string {
   try {
-    resolve(options);
+    resolve(options, env);
   } catch (error) {
     expect(error).toBeInstanceOf(ConfigError);
     return error instanceof Error ? error.message : String(error);
@@ -22,7 +24,7 @@ function message(options: Record<string, unknown>): string {
 
 describe("defaults", () => {
   it("fills the spec defaults when only the key is set", () => {
-    const config = resolve({ apiKey: KEY, env: {} });
+    const config = resolve({ apiKey: KEY });
     expect(config).toMatchObject({
       enabled: true,
       baseUrl: "http://localhost:8080",
@@ -37,12 +39,10 @@ describe("defaults", () => {
   });
 
   it("disables without reading the other options", () => {
-    const config = resolve({
-      enabled: false,
-      apiKey: 1,
-      sampleRate: 4,
-      env: { LLMOBS_SAMPLE_RATE: "nope", GIT_COMMIT: "abc123", SOURCE_VERSION: "src" },
-    });
+    const config = resolve(
+      { enabled: false, apiKey: 1, sampleRate: 4 },
+      { LLMOBS_SAMPLE_RATE: "nope", GIT_COMMIT: "abc123", SOURCE_VERSION: "src" },
+    );
     expect(config.enabled).toBe(false);
     expect(config.apiKey).toBeUndefined();
     expect(config.baseUrl).toBe("http://localhost:8080");
@@ -65,22 +65,22 @@ describe("precedence", () => {
     if (option !== "apiKey") {
       env.LLMOBS_API_KEY = KEY;
     }
-    const config = resolve({ apiKey: KEY, [option]: argument, env });
+    const config = resolve({ apiKey: KEY, [option]: argument }, env);
     const value = option === "apiKey" ? config.apiKey : config[option as keyof Config];
     expect(value).toBe(argument);
   });
 
   it("treats a blank env value as unset", () => {
     for (const blank of ["", "   ", "\n\t"]) {
-      const config = resolve({
-        apiKey: KEY,
-        env: {
+      const config = resolve(
+        { apiKey: KEY },
+        {
           LLMOBS_BASE_URL: blank,
           LLMOBS_ENVIRONMENT: blank,
           LLMOBS_RELEASE: blank,
           LLMOBS_SAMPLE_RATE: blank,
         },
-      });
+      );
       expect(config.baseUrl).toBe("http://localhost:8080");
       expect(config.environment).toBeUndefined();
       expect(config.release).toBeUndefined();
@@ -89,24 +89,24 @@ describe("precedence", () => {
   });
 
   it("does not trim an explicit argument", () => {
-    expect(message({ apiKey: `  ${KEY}`, env: {} })).toBe("apiKey: must start with sk-llmobs-");
+    expect(message({ apiKey: `  ${KEY}` })).toBe("apiKey: must start with sk-llmobs-");
   });
 });
 
 describe("enabled", () => {
   it("lets an explicit false win over LLMOBS_ENABLED=true", () => {
-    const config = resolve({ enabled: false, env: { LLMOBS_ENABLED: "true" } });
+    const config = resolve({ enabled: false }, { LLMOBS_ENABLED: "true" });
     expect(config.enabled).toBe(false);
   });
 
   it("stops at an invalid enabled before reading the key", () => {
-    expect(message({ enabled: "maybe", apiKey: 1, env: {} })).toBe("enabled: must be a boolean");
+    expect(message({ enabled: "maybe", apiKey: 1 })).toBe("enabled: must be a boolean");
   });
 
   it.each(["true", "false", "1", "0", "yes", "no", "on", "off", "TRUE", "Off"])(
     "accepts the env spelling %s",
     (spelling) => {
-      const config = resolve({ apiKey: KEY, env: { LLMOBS_CAPTURE_CONTENT: spelling } });
+      const config = resolve({ apiKey: KEY }, { LLMOBS_CAPTURE_CONTENT: spelling });
       expect(config.captureContent).toBe(
         ["true", "1", "yes", "on"].includes(spelling.toLowerCase()),
       );
@@ -114,7 +114,7 @@ describe("enabled", () => {
   );
 
   it("names the env var when the spelling is unknown", () => {
-    expect(message({ apiKey: KEY, env: { LLMOBS_CAPTURE_CONTENT: "maybe" } })).toBe(
+    expect(message({ apiKey: KEY }, { LLMOBS_CAPTURE_CONTENT: "maybe" })).toBe(
       "LLMOBS_CAPTURE_CONTENT: must be a boolean",
     );
   });
@@ -122,7 +122,7 @@ describe("enabled", () => {
 
 describe("secrecy", () => {
   it("keeps the key off enumerable surfaces", () => {
-    const config = resolve({ apiKey: STORED_KEY, env: {} });
+    const config = resolve({ apiKey: STORED_KEY });
     expect(JSON.stringify(config)).not.toContain(STORED_KEY);
     expect(inspect(config)).not.toContain(STORED_KEY);
     expect(JSON.stringify({ ...config })).not.toContain(STORED_KEY);
@@ -133,27 +133,32 @@ describe("secrecy", () => {
   it("never echoes a bad key or URL", () => {
     const badKey = "sk-other-super-secret";
     const badUrl = "ftp://user:secret-token@evil.example/path?q=1#frag";
-    expect(message({ apiKey: badKey, env: {} })).toBe("apiKey: must start with sk-llmobs-");
-    expect(message({ apiKey: badKey, env: {} })).not.toContain(badKey);
-    expect(message({ env: { LLMOBS_API_KEY: badKey } })).toBe(
+    expect(message({ apiKey: badKey })).toBe("apiKey: must start with sk-llmobs-");
+    expect(message({ apiKey: badKey })).not.toContain(badKey);
+    expect(message({}, { LLMOBS_API_KEY: badKey })).toBe(
       "LLMOBS_API_KEY: must start with sk-llmobs-",
     );
-    expect(message({ env: { LLMOBS_API_KEY: badKey } })).not.toContain(badKey);
-    expect(message({ apiKey: KEY, baseUrl: badUrl, env: {} })).not.toContain("evil.example");
-    expect(message({ apiKey: KEY, baseUrl: badUrl, env: {} })).not.toContain("secret-token");
+    expect(message({}, { LLMOBS_API_KEY: badKey })).not.toContain(badKey);
+    expect(message({ apiKey: KEY, baseUrl: badUrl })).not.toContain("evil.example");
+    expect(message({ apiKey: KEY, baseUrl: badUrl })).not.toContain("secret-token");
   });
 });
 
 describe("baseUrl", () => {
   it("strips trailing slashes", () => {
-    const config = resolve({ apiKey: KEY, baseUrl: "https://host/prefix///", env: {} });
+    const config = resolve({ apiKey: KEY, baseUrl: "https://host/prefix///" });
     expect(config.baseUrl).toBe("https://host/prefix");
+  });
+
+  it("allows an empty query or fragment, matching urlsplit", () => {
+    expect(resolve({ apiKey: KEY, baseUrl: "http://host/?" }).baseUrl).toBe("http://host/?");
+    expect(resolve({ apiKey: KEY, baseUrl: "http://host/#" }).baseUrl).toBe("http://host/#");
   });
 
   it.each(["ftp://example.com", "localhost:8080", "http://host/?q=1", "http://host/#f"])(
     "rejects %s",
     (baseUrl) => {
-      const text = message({ apiKey: KEY, baseUrl, env: {} });
+      const text = message({ apiKey: KEY, baseUrl });
       expect(text.startsWith("baseUrl:")).toBe(true);
       expect(text).not.toContain(baseUrl);
     },
@@ -162,20 +167,20 @@ describe("baseUrl", () => {
 
 describe("sampleRate", () => {
   it.each([0, 1, 0.25])("accepts %s", (sampleRate) => {
-    expect(resolve({ apiKey: KEY, sampleRate, env: {} }).sampleRate).toBe(sampleRate);
+    expect(resolve({ apiKey: KEY, sampleRate }).sampleRate).toBe(sampleRate);
   });
 
   it.each([-0.1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, true, "0.5"])(
     "rejects %s",
     (sampleRate) => {
-      expect(message({ apiKey: KEY, sampleRate, env: {} })).toBe(
+      expect(message({ apiKey: KEY, sampleRate })).toBe(
         "sampleRate: must be a number between 0 and 1",
       );
     },
   );
 
   it("rejects a non-numeric env value", () => {
-    expect(message({ apiKey: KEY, env: { LLMOBS_SAMPLE_RATE: "abc" } })).toBe(
+    expect(message({ apiKey: KEY }, { LLMOBS_SAMPLE_RATE: "abc" })).toBe(
       "LLMOBS_SAMPLE_RATE: must be a number between 0 and 1",
     );
   });
@@ -183,49 +188,48 @@ describe("sampleRate", () => {
 
 describe("environment and release", () => {
   it("rejects the reserved environment without echoing it", () => {
-    const text = message({ apiKey: KEY, environment: "llmobs-eval", env: {} });
+    const text = message({ apiKey: KEY, environment: "llmobs-eval" });
     expect(text).toBe("environment: is reserved");
-    expect(message({ apiKey: KEY, env: { LLMOBS_ENVIRONMENT: "llmobs-eval" } })).toBe(
+    expect(message({ apiKey: KEY }, { LLMOBS_ENVIRONMENT: "llmobs-eval" })).toBe(
       "LLMOBS_ENVIRONMENT: is reserved",
     );
   });
 
   it("uses the release argument, then LLMOBS_RELEASE, and ignores git env vars", () => {
     expect(
-      resolve({
-        apiKey: KEY,
-        release: "argument",
-        env: { LLMOBS_RELEASE: "named", GIT_COMMIT: "abc", SOURCE_VERSION: "source" },
-      }).release,
+      resolve(
+        { apiKey: KEY, release: "argument" },
+        { LLMOBS_RELEASE: "named", GIT_COMMIT: "abc", SOURCE_VERSION: "source" },
+      ).release,
     ).toBe("argument");
-    expect(
-      resolve({ apiKey: KEY, env: { LLMOBS_RELEASE: "named", GIT_COMMIT: "abc" } }).release,
-    ).toBe("named");
-    expect(
-      resolve({ apiKey: KEY, env: { GIT_COMMIT: "abc", SOURCE_VERSION: "source" } }).release,
-    ).toBe(undefined);
+    expect(resolve({ apiKey: KEY }, { LLMOBS_RELEASE: "named", GIT_COMMIT: "abc" }).release).toBe(
+      "named",
+    );
+    expect(resolve({ apiKey: KEY }, { GIT_COMMIT: "abc", SOURCE_VERSION: "source" }).release).toBe(
+      undefined,
+    );
   });
 });
 
 describe("instrument and mask", () => {
   it("copies instrument into a frozen list", () => {
     const names = ["openai"];
-    const config = resolve({ apiKey: KEY, instrument: names, env: {} });
+    const config = resolve({ apiKey: KEY, instrument: names });
     names.push("extra");
     expect(config.instrument).toEqual(["openai"]);
     expect(Object.isFrozen(config.instrument)).toBe(true);
   });
 
   it.each(["openai", ["", "x"], [1]])("rejects %j", (instrument) => {
-    expect(message({ apiKey: KEY, instrument, env: {} })).toBe(
+    expect(message({ apiKey: KEY, instrument })).toBe(
       "instrument: must be a list of non-empty strings",
     );
   });
 
   it("accepts a function mask and rejects anything else", () => {
     const mask = (value: unknown) => value;
-    expect(resolve({ apiKey: KEY, mask, env: {} }).mask).toBe(mask);
-    expect(message({ apiKey: KEY, mask: 1, env: {} })).toBe("mask: must be callable");
+    expect(resolve({ apiKey: KEY, mask }).mask).toBe(mask);
+    expect(message({ apiKey: KEY, mask: 1 })).toBe("mask: must be callable");
   });
 });
 
@@ -250,8 +254,9 @@ describe("process.env", () => {
     const previous = globalThis.process;
     Object.defineProperty(globalThis, "process", { value: undefined, configurable: true });
     try {
-      expect(resolve({ apiKey: KEY }).baseUrl).toBe("http://localhost:8080");
-      expect(message({})).toBe("apiKey: required");
+      expect(resolveConfig({ apiKey: KEY }).baseUrl).toBe("http://localhost:8080");
+      expect(() => resolveConfig()).toThrow(ConfigError);
+      expect(() => resolveConfig()).toThrow("apiKey: required");
     } finally {
       Object.defineProperty(globalThis, "process", { value: previous, configurable: true });
     }

@@ -5,13 +5,14 @@
   "description": "TypeScript SDK for llmobs.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "engines": {
     "node": ">=22"
   },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "default": "./dist/index.js"
     }
   },
   "files": [
@@ -21,7 +22,8 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "build": "tsdown",
-    "check": "biome check . && pnpm typecheck && pnpm test && pnpm build && publint && attw --pack . --profile esm-only"
+    "check:package": "publint && attw --pack . --profile esm-only",
+    "check": "biome check . && pnpm typecheck && pnpm test && pnpm build && pnpm check:package"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",

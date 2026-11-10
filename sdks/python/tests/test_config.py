@@ -265,6 +265,13 @@ def test_base_url_strips_trailing_slashes() -> None:
     assert config.base_url == "https://host/prefix"
 
 
+def test_base_url_allows_an_empty_query_or_fragment() -> None:
+    query = resolve_config(api_key=KEY, base_url="http://host/?", env={})
+    fragment = resolve_config(api_key=KEY, base_url="http://host/#", env={})
+    assert query.base_url == "http://host/?"
+    assert fragment.base_url == "http://host/#"
+
+
 @pytest.mark.parametrize(
     "url",
     ["ftp://example.com/traces", "localhost:8080", "http://h/?q=1", "http://h/#f"],

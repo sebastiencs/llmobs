@@ -44,6 +44,7 @@ If the code has to deviate from the spec, update the spec **in the same change**
 - Every version is declared once in the root `Cargo.toml` `[workspace.dependencies]`; crates use `dep = { workspace = true }`.
 - `datafusion`, `arrow`, `parquet` and `object_store` are a pinned family: never bump one without the others.
 - Look up real versions (`cargo search`, `cargo info`); never guess one.
+- JS packages use exact versions and respect `minimumReleaseAge`; Python dev tools are pinned by `uv.lock`.
 
 **Errors.** Each library crate defines its own error enum(s) with `thiserror`. `anyhow` is only allowed in `llmobs-cli`.
 
@@ -65,6 +66,7 @@ If the code has to deviate from the spec, update the spec **in the same change**
 - Normalization uses golden fixtures in `fixtures/otlp/`.
 - Storage needs crash-recovery and concurrency tests.
 - Tests cover the current behaviour only.
+- UI tests use the MSW mocks from `fixtures/api/`; a page test overrides an endpoint with `server.use` instead of mocking modules.
 
 **Reference implementations.** The competitors' source code is checked out in `/home/sebastien/github/{lmnr,phoenix,langfuse,langwatch,helicone,opik,mlflow}`. Read it to compare designs and learn from their mistakes. Never copy code from it.
 
@@ -109,18 +111,27 @@ Run everything through `just`:
 
 | Command | What it does |
 |---|---|
-| `just check` | format check, clippy (`-D warnings`), tests, cargo-deny; **must pass before every commit** |
-| `just fmt` | format the Rust code |
+| `just check` | Rust, web, Python SDK, and TypeScript SDK (D79); **must pass before every commit** |
+| `just check-rust` | format check, clippy (`-D warnings`), tests, cargo-deny |
+| `just check-web` | web lint, types, tests, production build |
+| `just check-py` | Python SDK format, lint, types, tests |
+| `just check-ts` | TypeScript SDK lint, types, tests, package exports |
+| `just fmt` | format Rust, the web and TypeScript SDK (Biome), and the Python SDK (ruff) |
 | `just lint` | clippy, warnings as errors |
 | `just test` | all Rust tests |
 | `just deny` | supply-chain checks (advisories, bans, sources; licenses deferred, D57) |
+| `just openapi` | regenerate `crates/server/openapi.json` and `web/src/api/schema.gen.ts` |
+| `just web-dev` | web dev server with the API mocked from `fixtures/api` |
+| `just web-dev-server` | web dev server proxied at the real API |
 | `just run <args>` | run the `llmobs` binary |
 
 Required tools:
 - `rustup` (the toolchain is pinned in `rust-toolchain.toml`)
 - `just`
 - `cargo-deny` (`cargo install cargo-deny --locked`)
-- later: `pnpm` (web, TS SDK) and `uv` (Python SDK)
+- Node (version in `.node-version`)
+- `pnpm` (version in the root `package.json` `packageManager`)
+- `uv`
 
 ## Naming
 

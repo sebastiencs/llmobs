@@ -45,7 +45,7 @@ export interface Config {
   readonly mask: ((value: unknown) => unknown) | undefined;
 }
 
-export interface ConfigOptions {
+export interface LlmobsOptions {
   apiKey?: string;
   baseUrl?: string;
   environment?: string;
@@ -55,7 +55,6 @@ export interface ConfigOptions {
   instrument?: readonly string[];
   mask?: (value: unknown) => unknown;
   enabled?: boolean;
-  env?: Env;
 }
 
 interface ResolvedFields {
@@ -71,9 +70,9 @@ interface ResolvedFields {
 }
 
 /** Resolve SDK options. An explicit argument wins, then the env var, then the default. */
-export function resolveConfig(options: ConfigOptions = {}): Config {
+export function resolveConfig(options: LlmobsOptions = {}, env?: Env): Config {
   const raw = options as Record<string, unknown>;
-  const source = raw.env === undefined ? defaultEnv() : (raw.env as Env);
+  const source = env ?? defaultEnv();
   const enabled = resolveBool("enabled", ENV_ENABLED, raw.enabled, source, true);
   if (!enabled) {
     return finish(disabled());
@@ -203,7 +202,12 @@ function checkBaseUrl(value: unknown, name: string): string {
   if (typeof value !== "string" || !isAbsoluteHttpUrl(value)) {
     throw new ConfigError(name, "must be an absolute http or https URL");
   }
-  if (value.includes("?") || value.includes("#")) {
+  const hash = value.indexOf("#");
+  const beforeHash = hash === -1 ? value : value.slice(0, hash);
+  const query = beforeHash.indexOf("?");
+  const queryValue = query === -1 ? "" : beforeHash.slice(query + 1);
+  const fragment = hash === -1 ? "" : value.slice(hash + 1);
+  if (queryValue !== "" || fragment !== "") {
     throw new ConfigError(name, "must not include a query or fragment");
   }
   return value.replace(/\/+$/, "");

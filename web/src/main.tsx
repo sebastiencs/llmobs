@@ -17,8 +17,25 @@ async function main(): Promise<void> {
   applyResolvedTheme(resolveTheme(readStoredTheme()));
 
   if (import.meta.env.DEV && import.meta.env.MODE !== "server") {
+    const { isCommonAssetRequest } = await import("msw");
+    const { HttpNetworkFrame } = await import("msw/experimental");
     const { worker } = await import("./mocks/browser");
-    await worker.start({ onUnhandledFrame: "warn", quiet: false });
+    await worker.start({
+      quiet: false,
+      // The document request for `/` is not an API call. Warn on anything else
+      // that the fixtures do not cover. Common assets stay quiet, as with "warn".
+      onUnhandledFrame({ frame, defaults }) {
+        if (!(frame instanceof HttpNetworkFrame)) {
+          defaults.warn();
+          return;
+        }
+        const { request } = frame.data;
+        if (request.mode === "navigate" || isCommonAssetRequest(request)) {
+          return;
+        }
+        defaults.warn();
+      },
+    });
   }
 
   const root = document.getElementById("root");

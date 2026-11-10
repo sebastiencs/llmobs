@@ -1,7 +1,9 @@
 # Python SDK
 
-The `llmobs` package is a uv project: a thin layer over OpenTelemetry.
+The `llmobs` package (MIT) is the Python SDK. Spec: `docs/spec/10-sdk.md`.
 
-Its license is MIT, independent of the server license. See `docs/spec/10-sdk.md`.
+What exists now is configuration resolution in `llmobs._config`. `init()` and tracing are not implemented yet.
 
-Scaffolded in Phase 0 step 5.
+Python ≥ 3.11 (D77). Develop on 3.11 (`.python-version`).
+
+Checks: `just check-py` (ruff format, ruff, mypy, pytest).
