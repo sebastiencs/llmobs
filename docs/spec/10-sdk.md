@@ -24,7 +24,22 @@ Both SDKs are thin layers over OpenTelemetry: tracing goes out as OTLP/HTTP (pro
 | `mask` | — | optional callable applied to every input/output/metadata value before export |
 | `enabled` | `LLMOBS_ENABLED` | `true` (no-op mode when false) |
 
-## Python API (`pip install llmobs`, extras `llmobs[openai]`, `[anthropic]`, `[langchain]`, `[llama-index]`, `[litellm]`, `[google-genai]`, `[bedrock]`, `[openai-agents]`, `[crewai]`, `[dspy]`, `[all]`)
+TypeScript spells the options in camelCase (`apiKey`, `baseUrl`, `captureContent`, `sampleRate`); the env vars are the same.
+
+**Resolution rules (D78).** Both SDKs resolve the configuration the same way:
+1. An explicit argument wins over the env var, which wins over the default. An argument set to `None`/`undefined` counts as not given.
+2. Env values are trimmed; an empty value counts as unset.
+3. `enabled` is resolved first. When it is false, no other option is read or validated: the config holds the defaults and the SDK runs in no-op mode.
+4. Booleans from env accept `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off`, case-insensitive.
+5. `api_key` is required and must start with `sk-llmobs-`. It never appears in error messages, `repr`/`toString`/`inspect` output, or JSON serialization of the config.
+6. `base_url` must be an absolute `http` or `https` URL without query or fragment. A path is allowed (reverse-proxy prefix); trailing slashes are removed.
+7. `sample_rate` must be a finite number in `[0, 1]`.
+8. `environment` must not be the reserved evaluation environment (`llmobs-eval`, D49).
+9. `release` falls back to `GIT_COMMIT`, then `SOURCE_VERSION` (Python only), when neither the argument nor `LLMOBS_RELEASE` is set.
+10. `instrument` must be a list of non-empty strings (a bare string is rejected); names are checked when instrumentation is added. `mask` must be callable.
+11. An invalid value raises a `ConfigError` naming the option or env var, never its value. Resolution stops at the first problem.
+
+## Python API (`pip install llmobs`; Python ≥ 3.11; extras `llmobs[openai]`, `[anthropic]`, `[langchain]`, `[llama-index]`, `[litellm]`, `[google-genai]`, `[bedrock]`, `[openai-agents]`, `[crewai]`, `[dspy]`, `[all]`)
 
 ```python
 import llmobs
@@ -104,7 +119,7 @@ result.assert_min("exact", 0.8)           # raises for CI gating
 
 `evaluate` follows the protocol in 06 §Experiments; async tasks are supported (`await llmobs.aevaluate(...)`). Task exceptions are recorded per item and do not abort the run.
 
-## TypeScript API (`npm i llmobs`; Node ≥ 18, Bun, Deno; edge runtimes via the fetch-based exporter)
+## TypeScript API (`npm i llmobs`; ESM only; Node ≥ 22, Bun, Deno; edge runtimes via the fetch-based exporter)
 
 ```ts
 import * as llmobs from "llmobs";
