@@ -2,7 +2,7 @@
 //!
 //! Spec 09. Handlers are not implemented yet; this module is the contract.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use llmobs_core::enums::{ScoreSource, ScoreTargetKind};
 use llmobs_core::score::Score;
@@ -13,7 +13,8 @@ use utoipa::openapi::path::{
 use utoipa::openapi::request_body::RequestBodyBuilder;
 use utoipa::openapi::response::{Response, ResponseBuilder, Responses, ResponsesBuilder};
 use utoipa::openapi::schema::{
-    Components, ComponentsBuilder, KnownFormat, ObjectBuilder, Schema, SchemaFormat,
+    AdditionalProperties, AllOfBuilder, ArrayItems, Components, ComponentsBuilder, KnownFormat,
+    ObjectBuilder, Schema, SchemaFormat, SchemaType, Type,
 };
 use utoipa::openapi::security::{
     ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder, SecurityRequirement, SecurityScheme,
@@ -148,7 +149,7 @@ fn is_ref(schema: &RefOr<Schema>) -> bool {
 /// The OpenAPI document. Spec 09.
 pub fn openapi() -> OpenApi {
     let schemas = collect_schemas();
-    OpenApiBuilder::new()
+    let mut document = OpenApiBuilder::new()
         .info(
             InfoBuilder::new()
                 .title(concat!(llmobs_core::llmobs_name!(), " API"))
@@ -177,7 +178,228 @@ pub fn openapi() -> OpenApi {
             SecurityRequirement::new("bearer", [] as [&str; 0]),
         ]))
         .paths(paths())
-        .build()
+        .build();
+    drop_null_from_omitted_optionals(&mut document);
+    document
+}
+
+/// Spec 09: an absent optional field is omitted, never `null`.
+///
+/// utoipa marks every `Option<T>` nullable. This removes `null` from every property
+/// that is not `required` and from every optional query parameter. The D65 message and
+/// part components are skipped: their optional fields can really be `null`.
+fn drop_null_from_omitted_optionals(openapi: &mut OpenApi) {
+    let skip = d65_component_names();
+    if let Some(components) = openapi.components.as_mut() {
+        for (name, schema) in &mut components.schemas {
+            if skip.contains(name.as_str()) {
+                continue;
+            }
+            strip_nested(schema);
+        }
+    }
+    for path_item in openapi.paths.paths.values_mut() {
+        strip_query_parameters(path_item.parameters.as_mut());
+        strip_operation(path_item.get.as_mut());
+        strip_operation(path_item.put.as_mut());
+        strip_operation(path_item.post.as_mut());
+        strip_operation(path_item.delete.as_mut());
+        strip_operation(path_item.options.as_mut());
+        strip_operation(path_item.head.as_mut());
+        strip_operation(path_item.patch.as_mut());
+        strip_operation(path_item.trace.as_mut());
+        strip_operation(path_item.query.as_mut());
+    }
+}
+
+fn d65_component_names() -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    names.insert(<llmobs_core::message::Message as ToSchema>::name().into_owned());
+    for name in llmobs_core::message::part_component_names() {
+        names.insert((*name).to_owned());
+    }
+    names
+}
+
+fn strip_operation(operation: Option<&mut utoipa::openapi::path::Operation>) {
+    if let Some(operation) = operation {
+        strip_query_parameters(operation.parameters.as_mut());
+    }
+}
+
+fn strip_query_parameters(parameters: Option<&mut Vec<RefOr<Parameter>>>) {
+    let Some(parameters) = parameters else {
+        return;
+    };
+    for parameter in parameters {
+        let RefOr::T(parameter) = parameter else {
+            continue;
+        };
+        if parameter.parameter_in != ParameterIn::Query {
+            continue;
+        }
+        if let Some(schema) = parameter.schema.as_mut() {
+            strip_value(schema);
+        }
+    }
+}
+
+/// Removes null from an omitted optional schema, then walks nested properties.
+fn strip_value(schema: &mut RefOr<Schema>) {
+    if let Some(replacement) = without_null_wrapper(schema) {
+        *schema = replacement;
+    }
+    if let RefOr::T(inner) = schema {
+        remove_null_type(inner);
+    }
+    strip_nested(schema);
+}
+
+/// Walks properties and items. A required property keeps its own null.
+fn strip_nested(schema: &mut RefOr<Schema>) {
+    let RefOr::T(schema) = schema else {
+        return;
+    };
+    match schema {
+        Schema::Object(object) => {
+            let required: BTreeSet<&str> = object.required.iter().map(String::as_str).collect();
+            for (name, property) in &mut object.properties {
+                if required.contains(name.as_str()) {
+                    strip_nested(property);
+                } else {
+                    strip_value(property);
+                }
+            }
+            if let Some(AdditionalProperties::RefOr(schema)) =
+                object.additional_properties.as_deref_mut()
+            {
+                strip_nested(schema);
+            }
+        }
+        Schema::Array(array) => {
+            if let ArrayItems::RefOrSchema(items) = &mut array.items {
+                strip_nested(items);
+            }
+        }
+        Schema::OneOf(one_of) => {
+            for item in &mut one_of.items {
+                strip_nested(item);
+            }
+        }
+        Schema::AllOf(all_of) => {
+            for item in &mut all_of.items {
+                strip_nested(item);
+            }
+        }
+        Schema::AnyOf(any_of) => {
+            for item in &mut any_of.items {
+                strip_nested(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn remove_null_type(schema: &mut Schema) {
+    let schema_type = match schema {
+        Schema::Object(object) => &mut object.schema_type,
+        Schema::Array(array) => &mut array.schema_type,
+        Schema::OneOf(one_of) => &mut one_of.schema_type,
+        Schema::AllOf(all_of) => &mut all_of.schema_type,
+        Schema::AnyOf(any_of) => &mut any_of.schema_type,
+        _ => return,
+    };
+    let SchemaType::Array(types) = schema_type else {
+        return;
+    };
+    types.retain(|ty| *ty != Type::Null);
+    if types.len() == 1 {
+        let ty = types.remove(0);
+        *schema_type = SchemaType::Type(ty);
+    }
+}
+
+/// `oneOf: [X, {"type": "null"}]` becomes `X`. A described `$ref` is wrapped in `allOf`.
+fn without_null_wrapper(schema: &RefOr<Schema>) -> Option<RefOr<Schema>> {
+    let RefOr::T(Schema::OneOf(one_of)) = schema else {
+        return None;
+    };
+    if one_of.items.len() != 2 {
+        return None;
+    }
+    let null_at = one_of.items.iter().position(is_null_schema)?;
+    let kept = one_of.items[1 - null_at].clone();
+    let has_meta =
+        one_of.description.is_some() || one_of.default.is_some() || one_of.example.is_some();
+    if matches!(kept, RefOr::Ref(_)) && has_meta {
+        let mut builder = AllOfBuilder::new().item(kept);
+        if let Some(description) = one_of.description.clone() {
+            builder = builder.description(Some(description));
+        }
+        if let Some(default) = one_of.default.clone() {
+            builder = builder.default(Some(default));
+        }
+        if let Some(example) = one_of.example.clone() {
+            let mut all_of = builder.build();
+            all_of.example = Some(example);
+            return Some(RefOr::T(Schema::AllOf(all_of)));
+        }
+        return Some(RefOr::T(Schema::AllOf(builder.build())));
+    }
+    if has_meta {
+        return Some(apply_wrapper_meta(
+            kept,
+            one_of.description.clone(),
+            one_of.default.clone(),
+            one_of.example.clone(),
+        ));
+    }
+    Some(kept)
+}
+
+fn apply_wrapper_meta(
+    schema: RefOr<Schema>,
+    description: Option<String>,
+    default: Option<serde_json::Value>,
+    example: Option<serde_json::Value>,
+) -> RefOr<Schema> {
+    let RefOr::T(mut inner) = schema else {
+        return schema;
+    };
+    match &mut inner {
+        Schema::Object(object) => {
+            if object.description.is_none() {
+                object.description = description;
+            }
+            if object.default.is_none() {
+                object.default = default;
+            }
+            if object.example.is_none() {
+                object.example = example;
+            }
+        }
+        Schema::Array(array) => {
+            if array.description.is_none() {
+                array.description = description;
+            }
+            if array.default.is_none() {
+                array.default = default;
+            }
+            if array.example.is_none() {
+                array.example = example;
+            }
+        }
+        _ => {}
+    }
+    RefOr::T(inner)
+}
+
+fn is_null_schema(schema: &RefOr<Schema>) -> bool {
+    matches!(
+        schema,
+        RefOr::T(Schema::Object(object))
+            if matches!(object.schema_type, SchemaType::Type(Type::Null))
+    )
 }
 
 fn components(schemas: &SchemaSet) -> Components {
@@ -615,7 +837,7 @@ fn path_uuid(name: &str, description: &str) -> Parameter {
         .description(Some(description))
         .schema(Some(
             ObjectBuilder::new()
-                .schema_type(utoipa::openapi::schema::Type::String)
+                .schema_type(Type::String)
                 .format(Some(SchemaFormat::KnownFormat(KnownFormat::Uuid))),
         ))
         .build()
@@ -629,7 +851,7 @@ fn path_sha256() -> Parameter {
         .description(Some("SHA-256 of the media blob, lowercase hex."))
         .schema(Some(
             ObjectBuilder::new()
-                .schema_type(utoipa::openapi::schema::Type::String)
+                .schema_type(Type::String)
                 .pattern(Some("^[0-9a-f]{64}$")),
         ))
         .build()
@@ -648,7 +870,7 @@ fn range_header() -> Parameter {
 }
 
 fn string_schema() -> ObjectBuilder {
-    ObjectBuilder::new().schema_type(utoipa::openapi::schema::Type::String)
+    ObjectBuilder::new().schema_type(Type::String)
 }
 
 fn with_query<T: IntoParams>(mut path_params: Vec<Parameter>) -> Vec<Parameter> {
@@ -694,7 +916,7 @@ fn binary(description: &str) -> Response {
             "application/octet-stream",
             Content::new(Some(
                 ObjectBuilder::new()
-                    .schema_type(utoipa::openapi::schema::Type::String)
+                    .schema_type(Type::String)
                     .format(Some(SchemaFormat::KnownFormat(KnownFormat::Binary)))
                     .description(Some(
                         "Bytes of the blob. The response Content-Type is the blob's MIME type.",

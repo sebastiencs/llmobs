@@ -102,10 +102,7 @@
             "description": "Opaque cursor from a previous page.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -412,10 +409,7 @@
             "description": "Filter DSL expression. Applied to the view each series is computed on (spec 05).",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -424,14 +418,7 @@
             "description": "Split series that are not already split.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/MetricsGroupBy"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/MetricsGroupBy"
             }
           }
         ],
@@ -522,14 +509,7 @@
             "description": "Return only this kind.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/SavedViewKind"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/SavedViewKind"
             }
           },
           {
@@ -548,10 +528,7 @@
             "description": "Opaque cursor from a previous page.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -979,14 +956,7 @@
             "description": "Kind of target to return.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/ScoreTargetKind"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/ScoreTargetKind"
             }
           },
           {
@@ -995,14 +965,7 @@
             "description": "Scores attached to this trace.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/TraceId"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/TraceId"
             }
           },
           {
@@ -1011,14 +974,7 @@
             "description": "Scores attached to this span.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/SpanId"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/SpanId"
             }
           },
           {
@@ -1027,10 +983,7 @@
             "description": "Scores attached to this session.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -1039,10 +992,7 @@
             "description": "Score name.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -1051,14 +1001,7 @@
             "description": "Who wrote the score.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/ScoreSource"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/ScoreSource"
             }
           },
           {
@@ -1067,14 +1010,7 @@
             "description": "Inclusive `created_at` start. RFC 3339 or epoch milliseconds.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/TimeParam"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/TimeParam"
             }
           },
           {
@@ -1083,14 +1019,7 @@
             "description": "Exclusive `created_at` end. RFC 3339 or epoch milliseconds.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/TimeParam"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/TimeParam"
             }
           },
           {
@@ -1109,10 +1038,7 @@
             "description": "Opaque cursor from a previous page.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -1203,10 +1129,7 @@
             "description": "Filter DSL expression over the `sessions` view (spec 05).",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -1215,14 +1138,7 @@
             "description": "Inclusive range start. RFC 3339 or epoch milliseconds.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/TimeParam"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/TimeParam"
             }
           },
           {
@@ -1231,14 +1147,7 @@
             "description": "Exclusive range end. RFC 3339 or epoch milliseconds.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/TimeParam"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/TimeParam"
             }
           },
           {
@@ -1275,10 +1184,7 @@
             "description": "Opaque cursor from a previous page.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -1452,10 +1358,7 @@
             "description": "Filter DSL expression over the `spans` view (spec 05).",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -1464,10 +1367,7 @@
             "description": "Full-text search (spec 05 § Full-text search).",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -1476,14 +1376,7 @@
             "description": "Inclusive range start. RFC 3339 or epoch milliseconds.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/TimeParam"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/TimeParam"
             }
           },
           {
@@ -1492,14 +1385,7 @@
             "description": "Exclusive range end. RFC 3339 or epoch milliseconds.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/TimeParam"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/TimeParam"
             }
           },
           {
@@ -1536,10 +1422,7 @@
             "description": "Opaque cursor from a previous page.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -1649,10 +1532,7 @@
             "description": "Filter DSL expression over the `traces` view (spec 05).",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -1661,10 +1541,7 @@
             "description": "Full-text search (spec 05 § Full-text search).",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -1673,14 +1550,7 @@
             "description": "Inclusive range start. RFC 3339 or epoch milliseconds.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/TimeParam"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/TimeParam"
             }
           },
           {
@@ -1689,14 +1559,7 @@
             "description": "Exclusive range end. RFC 3339 or epoch milliseconds.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/TimeParam"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/TimeParam"
             }
           },
           {
@@ -1733,10 +1596,7 @@
             "description": "Opaque cursor from a previous page.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -1846,10 +1706,7 @@
             "description": "Filter DSL expression over the light columns of the `traces` view (spec 05).",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -1968,14 +1825,7 @@
             "description": "Instant the client is looking at. RFC 3339 or epoch milliseconds.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/TimeParam"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/TimeParam"
             }
           }
         ],
@@ -2239,10 +2089,7 @@
             "description": "Filter DSL expression over the `traces` view, applied before grouping (spec 05).",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -2251,14 +2098,7 @@
             "description": "Inclusive range start. RFC 3339 or epoch milliseconds.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/TimeParam"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/TimeParam"
             }
           },
           {
@@ -2267,14 +2107,7 @@
             "description": "Exclusive range end. RFC 3339 or epoch milliseconds.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/TimeParam"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/components/schemas/TimeParam"
             }
           },
           {
@@ -2311,10 +2144,7 @@
             "description": "Opaque cursor from a previous page.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -2539,11 +2369,22 @@
             "description": "Base64 payload."
           },
           "mime_type": {
-            "type": "string",
-            "description": "MIME type, when known."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "MIME type, when known. Omitted when absent. An explicit `null` from the source is kept (D65)."
           },
           "modality": {
-            "$ref": "#/components/schemas/Modality"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Modality"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Media kind, when known. Omitted when absent. An explicit `null` from the source is kept (D65)."
           },
           "type": {
             "type": "string",
@@ -2710,10 +2551,7 @@
         ],
         "properties": {
           "cost_total": {
-            "type": [
-              "number",
-              "null"
-            ],
+            "type": "number",
             "format": "double",
             "description": "Sum of trace costs, USD. Omitted when every trace omitted the field."
           },
@@ -2738,10 +2576,7 @@
             "description": "Number of sessions."
           },
           "total_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Sum of trace token totals. Omitted when every trace omitted the field."
           },
@@ -2773,15 +2608,8 @@
             "description": "What is wrong with the field."
           },
           "position": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/TextPosition",
-                "description": "Location inside the field value, for filter and SQL errors."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/TextPosition",
+            "description": "Location inside the field value, for filter and SQL errors."
           }
         }
       },
@@ -2825,18 +2653,12 @@
             "description": "Which headline."
           },
           "previous": {
-            "type": [
-              "number",
-              "null"
-            ],
+            "type": "number",
             "format": "double",
             "description": "Value over the previous range. Omitted when that range has no data."
           },
           "value": {
-            "type": [
-              "number",
-              "null"
-            ],
+            "type": "number",
             "format": "double",
             "description": "Value over `[from, to)`. Omitted when the range has no data."
           }
@@ -2891,12 +2713,18 @@
         ],
         "properties": {
           "finish_reason": {
-            "type": "string",
-            "description": "Why generation stopped. Omitted from JSON when absent."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why generation stopped. Omitted when absent. An explicit `null` from the source is kept (D65)."
           },
           "name": {
-            "type": "string",
-            "description": "Optional speaker name. Omitted from JSON when absent."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional speaker name. Omitted when absent. An explicit `null` from the source is kept (D65)."
           },
           "parts": {
             "type": "array",
@@ -2952,10 +2780,7 @@
             "description": "Bucket start, nanoseconds since the Unix epoch. JSON is RFC 3339."
           },
           "value": {
-            "type": [
-              "number",
-              "null"
-            ],
+            "type": "number",
             "format": "double",
             "description": "Bucket value. Omitted when the bucket has no data."
           }
@@ -2970,10 +2795,7 @@
         ],
         "properties": {
           "group": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Group key: the `group_by` value, a model, or a score name. Omitted when the series is not split."
           },
           "metric": {
@@ -3037,15 +2859,8 @@
             "description": "Inclusive range start, nanoseconds since the Unix epoch. JSON is RFC 3339."
           },
           "group_by": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/MetricsGroupBy",
-                "description": "Split applied to series that are not already split. Omitted when absent."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/MetricsGroupBy",
+            "description": "Split applied to series that are not already split. Omitted when absent."
           },
           "kpis": {
             "type": "array",
@@ -3088,10 +2903,7 @@
         ],
         "properties": {
           "cost_total": {
-            "type": [
-              "number",
-              "null"
-            ],
+            "type": "number",
             "format": "double",
             "description": "Sum of `cost_total`, USD. Omitted when every span omitted the field."
           },
@@ -3105,10 +2917,7 @@
             "description": "Model name."
           },
           "total_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Sum of `total_tokens`. Omitted when every span omitted the field."
           }
@@ -3267,10 +3076,7 @@
             "description": "Machine-readable error code."
           },
           "detail": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Extra explanation. Omitted when absent."
           },
           "errors": {
@@ -3339,10 +3145,7 @@
             "description": "Owning org."
           },
           "retention_days": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int32",
             "description": "Retention in days. Omitted when the project uses the default.",
             "minimum": 0
@@ -3445,10 +3248,7 @@
             "description": "Display name."
           },
           "owner_user_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "format": "uuid",
             "description": "Owner. Omitted when the view has no owner."
           },
@@ -3543,10 +3343,7 @@
         ],
         "properties": {
           "author_user_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "format": "uuid",
             "description": "Person who annotated, for `human` scores. Spec 01 `author_user_id`."
           },
@@ -3556,10 +3353,7 @@
             "description": "Creation time: `i64` nanoseconds in Rust, an RFC 3339 string in JSON (D64). Spec 01 `created_at`."
           },
           "dataset_item_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "format": "uuid",
             "description": "Dataset item the score belongs to. Spec 01 `dataset_item_id`."
           },
@@ -3568,18 +3362,12 @@
             "description": "Tombstone. Spec 01 `deleted`."
           },
           "evaluator_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "format": "uuid",
             "description": "Evaluator that produced the score. Spec 01 `evaluator_id`."
           },
           "experiment_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "format": "uuid",
             "description": "Experiment the score belongs to. Spec 01 `experiment_id`."
           },
@@ -3607,17 +3395,11 @@
             "description": "Partition key. Spec 01 `project_id`."
           },
           "reason": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Explanation. Spec 01 `reason`."
           },
           "rule_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "format": "uuid",
             "description": "Online rule that produced the score. Spec 01 `rule_id`."
           },
@@ -3627,10 +3409,7 @@
             "description": "Last-writer-wins key. Spec 01 `score_id`."
           },
           "session_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Session of a span or trace target, when known. Ignored for session targets. Spec 01 `session_id`."
           },
           "source": {
@@ -3647,10 +3426,7 @@
             "description": "Last-writer-wins version: `i64` nanoseconds in Rust, an RFC 3339 string in JSON (D64). Spec 01 `updated_at`."
           },
           "user_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "End-user id, when the writer knows it. Spec 01 `user_id`."
           },
           "value": {
@@ -3873,10 +3649,7 @@
                     "description": "Category label. Stored in `value_str`."
                   },
                   "value": {
-                    "type": [
-                      "number",
-                      "null"
-                    ],
+                    "type": "number",
                     "format": "double",
                     "description": "Optional numeric mapping. Stored in `value_num`. Omitted from JSON when absent."
                   }
@@ -3981,10 +3754,7 @@
         ],
         "properties": {
           "cost_total": {
-            "type": [
-              "number",
-              "null"
-            ],
+            "type": "number",
             "format": "double",
             "description": "Sum of trace costs, USD. Omitted when every trace omitted the field."
           },
@@ -4020,10 +3790,7 @@
             "description": "Earliest trace start, nanoseconds since the Unix epoch. JSON is RFC 3339."
           },
           "total_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Sum of trace token totals. Omitted when every trace omitted the field."
           },
@@ -4033,10 +3800,7 @@
             "description": "Number of traces in the session."
           },
           "user_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "End-user id."
           }
         }
@@ -4049,26 +3813,12 @@
         ],
         "properties": {
           "input": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Payload",
-                "description": "Root span input."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Payload",
+            "description": "Root span input."
           },
           "output": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Payload",
-                "description": "Root span output."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Payload",
+            "description": "Root span output."
           },
           "trace": {
             "$ref": "#/components/schemas/TraceSummary",
@@ -4129,18 +3879,12 @@
             }
           },
           "cache_read_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Cache-read tokens."
           },
           "cache_write_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Cache-write tokens."
           },
@@ -4152,37 +3896,21 @@
             "description": "Conventions detected on the span."
           },
           "cost_input": {
-            "type": [
-              "number",
-              "null"
-            ],
+            "type": "number",
             "format": "double",
             "description": "Input cost, USD."
           },
           "cost_output": {
-            "type": [
-              "number",
-              "null"
-            ],
+            "type": "number",
             "format": "double",
             "description": "Output cost, USD."
           },
           "cost_source": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/CostSource",
-                "description": "How cost was obtained."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/CostSource",
+            "description": "How cost was obtained."
           },
           "cost_total": {
-            "type": [
-              "number",
-              "null"
-            ],
+            "type": "number",
             "format": "double",
             "description": "Total cost, USD."
           },
@@ -4197,10 +3925,7 @@
             "description": "End, nanoseconds since the Unix epoch. JSON is RFC 3339."
           },
           "environment": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Deployment environment."
           },
           "events": {
@@ -4216,28 +3941,15 @@
             "description": "Server receive time, nanoseconds since the Unix epoch. JSON is RFC 3339."
           },
           "input": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Payload",
-                "description": "Parsed input. Omitted when the stored span has no input text."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Payload",
+            "description": "Parsed input. Omitted when the stored span has no input text."
           },
           "input_preview": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "First 512 characters of the plain-text input rendering."
           },
           "input_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Input tokens, including cached tokens."
           },
@@ -4266,10 +3978,7 @@
             }
           },
           "model": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Response model, or the request model when the response names none."
           },
           "name": {
@@ -4277,76 +3986,41 @@
             "description": "Span name."
           },
           "operation": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "GenAI operation name."
           },
           "output": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Payload",
-                "description": "Parsed output. Omitted when the stored span has no output text."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Payload",
+            "description": "Parsed output. Omitted when the stored span has no output text."
           },
           "output_preview": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "First 512 characters of the plain-text output rendering."
           },
           "output_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Output tokens, including reasoning tokens."
           },
           "parent_span_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SpanId",
-                "description": "Parent span. Omitted when this span is a root of the received trace."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/SpanId",
+            "description": "Parent span. Omitted when this span is a root of the received trace."
           },
           "provider": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Normalized provider name."
           },
           "reasoning_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Reasoning tokens."
           },
           "release": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Release."
           },
           "request_model": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Model named in the request."
           },
           "request_params": {
@@ -4363,10 +4037,7 @@
             }
           },
           "response_model": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Model named in the response."
           },
           "schema_version": {
@@ -4376,31 +4047,19 @@
             "minimum": 0
           },
           "scope_name": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Instrumentation scope name."
           },
           "scope_version": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Instrumentation scope version."
           },
           "service_name": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Resource `service.name`."
           },
           "session_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Session id."
           },
           "span_id": {
@@ -4421,10 +4080,7 @@
             "description": "OTel status."
           },
           "status_message": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Status description."
           },
           "system_instructions": {
@@ -4441,10 +4097,7 @@
             "description": "Tool definitions. A JSON string when the stored text is not JSON."
           },
           "total_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Total tokens."
           },
@@ -4460,18 +4113,12 @@
             "description": "Names of attributes truncated at ingest."
           },
           "ttft_ns": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Time to first token, nanoseconds."
           },
           "user_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "End-user id."
           }
         }
@@ -4602,26 +4249,17 @@
         ],
         "properties": {
           "cache_read_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Cache-read tokens."
           },
           "cache_write_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Cache-write tokens."
           },
           "cost_total": {
-            "type": [
-              "number",
-              "null"
-            ],
+            "type": "number",
             "format": "double",
             "description": "Total cost, USD."
           },
@@ -4636,24 +4274,15 @@
             "description": "End, nanoseconds since the Unix epoch. JSON is RFC 3339."
           },
           "environment": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Deployment environment."
           },
           "input_preview": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "First 512 characters of the plain-text input rendering."
           },
           "input_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Input tokens, including cached tokens."
           },
@@ -4668,10 +4297,7 @@
             }
           },
           "model": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Response model, or the request model when the response names none."
           },
           "name": {
@@ -4679,65 +4305,37 @@
             "description": "Span name."
           },
           "output_preview": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "First 512 characters of the plain-text output rendering."
           },
           "output_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Output tokens, including reasoning tokens."
           },
           "parent_span_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SpanId",
-                "description": "Parent span. Omitted when this span is a root of the received trace."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/SpanId",
+            "description": "Parent span. Omitted when this span is a root of the received trace."
           },
           "provider": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Normalized provider name."
           },
           "reasoning_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Reasoning tokens."
           },
           "release": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Release."
           },
           "service_name": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Resource `service.name`."
           },
           "session_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Session id."
           },
           "span_id": {
@@ -4758,10 +4356,7 @@
             "description": "OTel status."
           },
           "status_message": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Status description."
           },
           "tags": {
@@ -4772,10 +4367,7 @@
             "description": "Tags."
           },
           "total_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Total tokens."
           },
@@ -4784,18 +4376,12 @@
             "description": "Trace id."
           },
           "ttft_ns": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Time to first token, nanoseconds."
           },
           "user_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "End-user id."
           }
         }
@@ -4860,8 +4446,11 @@
             "description": "Arguments, as JSON. Absent for a call without arguments."
           },
           "id": {
-            "type": "string",
-            "description": "Provider call id, when the source has one."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Provider call id, when the source has one. Omitted when absent. An explicit `null` from the source is kept (D65)."
           },
           "name": {
             "type": "string",
@@ -4886,8 +4475,11 @@
         ],
         "properties": {
           "id": {
-            "type": "string",
-            "description": "Provider call id, when the source has one."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Provider call id, when the source has one. Omitted when absent. An explicit `null` from the source is kept (D65)."
           },
           "response": {
             "description": "Tool result, as JSON."
@@ -4988,26 +4580,17 @@
         ],
         "properties": {
           "cache_read_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Sum of cache-read tokens. Omitted when every span omitted the field."
           },
           "cache_write_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Sum of cache-write tokens. Omitted when every span omitted the field."
           },
           "cost_total": {
-            "type": [
-              "number",
-              "null"
-            ],
+            "type": "number",
             "format": "double",
             "description": "Sum of span costs, USD. Omitted when every span omitted the field."
           },
@@ -5022,10 +4605,7 @@
             "description": "Latest span end, nanoseconds since the Unix epoch. JSON is RFC 3339."
           },
           "environment": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Deployment environment."
           },
           "error_count": {
@@ -5038,17 +4618,11 @@
             "description": "Whether a span with no parent is present."
           },
           "input_preview": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Root input preview, or the first `llm` span's."
           },
           "input_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Sum of span input tokens. Omitted when every span omitted the field."
           },
@@ -5079,45 +4653,26 @@
             "description": "Root span name, or the earliest span's name when there is no root."
           },
           "output_preview": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Root output preview, or the first `llm` span's."
           },
           "output_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Sum of span output tokens. Omitted when every span omitted the field."
           },
           "reasoning_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Sum of reasoning tokens. Omitted when every span omitted the field."
           },
           "release": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Release."
           },
           "root_span_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SpanId",
-                "description": "Span id of the root. Omitted when the trace has no root."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/SpanId",
+            "description": "Span id of the root. Omitted when the trace has no root."
           },
           "scores": {
             "type": "array",
@@ -5127,10 +4682,7 @@
             "description": "Latest score of each name attached to this trace."
           },
           "session_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Session id."
           },
           "span_count": {
@@ -5155,10 +4707,7 @@
             "description": "Sorted distinct tags of every span."
           },
           "total_tokens": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Sum of total tokens. Omitted when every span omitted the field."
           },
@@ -5167,10 +4716,7 @@
             "description": "Trace id."
           },
           "user_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "End-user id."
           }
         }
@@ -5217,31 +4763,19 @@
         "description": "Body of `PATCH /api/v1/projects/{project}/saved-views/{id}`.\n\nOmitted fields are left unchanged. Spec 09 § Observability data.",
         "properties": {
           "is_default": {
-            "type": [
-              "boolean",
-              "null"
-            ],
+            "type": "boolean",
             "description": "Default view for this kind."
           },
           "name": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Display name."
           },
           "shared": {
-            "type": [
-              "boolean",
-              "null"
-            ],
+            "type": "boolean",
             "description": "Visible to every member of the project."
           },
           "state": {
-            "type": [
-              "object",
-              "null"
-            ],
+            "type": "object",
             "description": "Opaque UI state: list-page URL params, or `{query, params}` for SQL."
           }
         },
@@ -5256,11 +4790,22 @@
         ],
         "properties": {
           "mime_type": {
-            "type": "string",
-            "description": "MIME type, when known."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "MIME type, when known. Omitted when absent. An explicit `null` from the source is kept (D65)."
           },
           "modality": {
-            "$ref": "#/components/schemas/Modality"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Modality"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Media kind, when known. Omitted when absent. An explicit `null` from the source is kept (D65)."
           },
           "type": {
             "type": "string",
@@ -5299,10 +4844,7 @@
             "description": "Instance administrator, allowed to manage instance settings."
           },
           "name": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Display name. Omitted when the user has not set one."
           }
         }

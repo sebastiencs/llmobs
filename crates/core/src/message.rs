@@ -510,6 +510,30 @@ fn string_schema(description: &'static str) -> utoipa::openapi::schema::ObjectBu
         .description(Some(description))
 }
 
+const EXPLICIT_NULL: &str =
+    " Omitted when absent. An explicit `null` from the source is kept (D65).";
+
+fn nullable_string(description: &str) -> SchemaRef {
+    utoipa::openapi::schema::ObjectBuilder::new()
+        .schema_type(utoipa::openapi::schema::SchemaType::from_iter([
+            utoipa::openapi::schema::Type::String,
+            utoipa::openapi::schema::Type::Null,
+        ]))
+        .description(Some(format!("{description}{EXPLICIT_NULL}")))
+        .into()
+}
+
+fn nullable_modality(description: &str) -> SchemaRef {
+    utoipa::openapi::schema::OneOfBuilder::new()
+        .description(Some(format!("{description}{EXPLICIT_NULL}")))
+        .item(modality_schema())
+        .item(
+            utoipa::openapi::schema::ObjectBuilder::new()
+                .schema_type(utoipa::openapi::schema::Type::Null),
+        )
+        .into()
+}
+
 fn any_schema(description: &'static str) -> utoipa::openapi::schema::ObjectBuilder {
     utoipa::openapi::schema::ObjectBuilder::new()
         .schema_type(utoipa::openapi::schema::SchemaType::AnyValue)
@@ -590,7 +614,7 @@ fn part_components() -> [(&'static str, SchemaRef); 7] {
                 vec![
                     (
                         "id",
-                        string_schema("Provider call id, when the source has one.").into(),
+                        nullable_string("Provider call id, when the source has one."),
                         false,
                     ),
                     ("name", string_schema("Tool name.").into(), true),
@@ -611,7 +635,7 @@ fn part_components() -> [(&'static str, SchemaRef); 7] {
                 vec![
                     (
                         "id",
-                        string_schema("Provider call id, when the source has one.").into(),
+                        nullable_string("Provider call id, when the source has one."),
                         false,
                     ),
                     ("response", any_schema("Tool result, as JSON.").into(), true),
@@ -624,10 +648,14 @@ fn part_components() -> [(&'static str, SchemaRef); 7] {
                 "Media addressed by a URI, including `media://` after extraction.",
                 "uri",
                 vec![
-                    ("modality", modality_schema(), false),
+                    (
+                        "modality",
+                        nullable_modality("Media kind, when known."),
+                        false,
+                    ),
                     (
                         "mime_type",
-                        string_schema("MIME type, when known.").into(),
+                        nullable_string("MIME type, when known."),
                         false,
                     ),
                     ("uri", string_schema("The URI.").into(), true),
@@ -640,10 +668,14 @@ fn part_components() -> [(&'static str, SchemaRef); 7] {
                 "Inline base64 media, before extraction replaces it with a URI.",
                 "blob",
                 vec![
-                    ("modality", modality_schema(), false),
+                    (
+                        "modality",
+                        nullable_modality("Media kind, when known."),
+                        false,
+                    ),
                     (
                         "mime_type",
-                        string_schema("MIME type, when known.").into(),
+                        nullable_string("MIME type, when known."),
                         false,
                     ),
                     ("content", string_schema("Base64 payload.").into(), true),
@@ -666,6 +698,11 @@ fn part_components() -> [(&'static str, SchemaRef); 7] {
             .into(),
         ),
     ]
+}
+
+/// Names of the seven part components, in canonical order.
+pub fn part_component_names() -> [&'static str; 7] {
+    part_components().map(|(name, _)| name)
 }
 
 impl utoipa::PartialSchema for Role {
@@ -739,10 +776,7 @@ impl utoipa::PartialSchema for Message {
                 utoipa::openapi::Ref::from_schema_name(<Role as utoipa::ToSchema>::name()),
             )
             .required("role")
-            .property(
-                "name",
-                string_schema("Optional speaker name. Omitted from JSON when absent."),
-            )
+            .property("name", nullable_string("Optional speaker name."))
             .property(
                 "parts",
                 utoipa::openapi::schema::ArrayBuilder::new()
@@ -754,10 +788,7 @@ impl utoipa::PartialSchema for Message {
                     )),
             )
             .required("parts")
-            .property(
-                "finish_reason",
-                string_schema("Why generation stopped. Omitted from JSON when absent."),
-            )
+            .property("finish_reason", nullable_string("Why generation stopped."))
             .into()
     }
 }

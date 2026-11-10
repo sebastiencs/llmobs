@@ -220,6 +220,24 @@ fn document_lint() {
                 if parameter["in"] == "path" {
                     assert_eq!(parameter["required"], true, "{path} {}", parameter["name"]);
                 }
+                if parameter["in"] == "query" {
+                    assert!(
+                        !schema_is_nullable(&parameter["schema"]),
+                        "{id} query {} is nullable",
+                        parameter["name"]
+                    );
+                }
+            }
+        }
+        if let Some(parameters) = document["paths"][path]["parameters"].as_array() {
+            for parameter in parameters {
+                if parameter["in"] == "query" {
+                    assert!(
+                        !schema_is_nullable(&parameter["schema"]),
+                        "{path} query {} is nullable",
+                        parameter["name"]
+                    );
+                }
             }
         }
     }
@@ -276,6 +294,7 @@ fn document_lint() {
     assert_ne!(schemas["MessageRole"], schemas["OrgRole"]);
     assert!(schemas.contains_key("MessageRole"));
     assert!(schemas.contains_key("OrgRole"));
+    assert_nullability(schemas);
 }
 
 fn rendered_document() -> String {
@@ -378,6 +397,120 @@ fn check_property_names(schema: &Value, owner: &str) {
             }
         }
     }
+}
+
+fn assert_nullability(schemas: &serde_json::Map<String, Value>) {
+    const D65: &[(&str, &[&str])] = &[
+        ("Message", &["finish_reason", "name"]),
+        ("ToolCallPart", &["id"]),
+        ("ToolCallResponsePart", &["id"]),
+        ("UriPart", &["mime_type", "modality"]),
+        ("BlobPart", &["mime_type", "modality"]),
+        ("TextPart", &[]),
+        ("ReasoningPart", &[]),
+        ("UnknownPart", &[]),
+    ];
+    let d65_names: HashSet<&str> = D65.iter().map(|(name, _)| *name).collect();
+    let mut required_nullable = BTreeSet::new();
+    for (name, schema) in schemas {
+        if let Some((_, fields)) = D65.iter().find(|(component, _)| *component == name) {
+            assert_eq!(
+                nullable_property_names(schema),
+                fields.iter().copied().collect(),
+                "{name}"
+            );
+        }
+        collect_required_nullable(
+            name,
+            schema,
+            d65_names.contains(name.as_str()),
+            &mut required_nullable,
+        );
+    }
+    let pages = [
+        "TracePage",
+        "SpanPage",
+        "SessionPage",
+        "EndUserPage",
+        "ScorePage",
+        "ProjectPage",
+        "SavedViewPage",
+    ];
+    let expected: BTreeSet<String> = pages
+        .iter()
+        .map(|page| format!("{page}.next_cursor"))
+        .collect();
+    assert_eq!(required_nullable, expected);
+}
+
+fn nullable_property_names(schema: &Value) -> BTreeSet<&str> {
+    schema["properties"]
+        .as_object()
+        .map(|properties| {
+            properties
+                .iter()
+                .filter(|(_, property)| schema_is_nullable(property))
+                .map(|(name, _)| name.as_str())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn collect_required_nullable(
+    component: &str,
+    schema: &Value,
+    d65: bool,
+    required_nullable: &mut BTreeSet<String>,
+) {
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return;
+    };
+    let required = schema["required"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
+    for (name, property) in properties {
+        if schema_is_nullable(property) {
+            if required.contains(name.as_str()) {
+                required_nullable.insert(format!("{component}.{name}"));
+            } else {
+                assert!(
+                    d65,
+                    "{component}.{name} is nullable but not required and not a D65 field"
+                );
+            }
+        }
+        collect_required_nullable(component, property, d65, required_nullable);
+        if let Some(items) = property.get("items") {
+            collect_required_nullable(component, items, d65, required_nullable);
+        }
+    }
+}
+
+fn schema_is_nullable(schema: &Value) -> bool {
+    type_includes_null(schema)
+        || composite_includes_null(schema, "oneOf")
+        || composite_includes_null(schema, "anyOf")
+}
+
+fn type_includes_null(schema: &Value) -> bool {
+    match schema.get("type") {
+        Some(Value::String(ty)) => ty == "null",
+        Some(Value::Array(types)) => types.iter().any(|ty| ty.as_str() == Some("null")),
+        _ => false,
+    }
+}
+
+fn composite_includes_null(schema: &Value, key: &str) -> bool {
+    schema
+        .get(key)
+        .and_then(Value::as_array)
+        .is_some_and(|items| items.iter().any(type_includes_null))
 }
 
 fn is_snake(name: &str) -> bool {

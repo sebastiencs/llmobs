@@ -86,8 +86,11 @@ expression: "serde_json::to_string_pretty(&part).unwrap()"
           "description": "Arguments, as JSON. Absent for a call without arguments."
         },
         "id": {
-          "type": "string",
-          "description": "Provider call id, when the source has one."
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Provider call id, when the source has one. Omitted when absent. An explicit `null` from the source is kept (D65)."
         },
         "name": {
           "type": "string",
@@ -112,8 +115,11 @@ expression: "serde_json::to_string_pretty(&part).unwrap()"
       ],
       "properties": {
         "id": {
-          "type": "string",
-          "description": "Provider call id, when the source has one."
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Provider call id, when the source has one. Omitted when absent. An explicit `null` from the source is kept (D65)."
         },
         "response": {
           "description": "Tool result, as JSON."
@@ -137,11 +143,22 @@ expression: "serde_json::to_string_pretty(&part).unwrap()"
       ],
       "properties": {
         "mime_type": {
-          "type": "string",
-          "description": "MIME type, when known."
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "MIME type, when known. Omitted when absent. An explicit `null` from the source is kept (D65)."
         },
         "modality": {
-          "$ref": "#/components/schemas/Modality"
+          "oneOf": [
+            {
+              "$ref": "#/components/schemas/Modality"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Media kind, when known. Omitted when absent. An explicit `null` from the source is kept (D65)."
         },
         "type": {
           "type": "string",
@@ -170,11 +187,22 @@ expression: "serde_json::to_string_pretty(&part).unwrap()"
           "description": "Base64 payload."
         },
         "mime_type": {
-          "type": "string",
-          "description": "MIME type, when known."
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "MIME type, when known. Omitted when absent. An explicit `null` from the source is kept (D65)."
         },
         "modality": {
-          "$ref": "#/components/schemas/Modality"
+          "oneOf": [
+            {
+              "$ref": "#/components/schemas/Modality"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Media kind, when known. Omitted when absent. An explicit `null` from the source is kept (D65)."
         },
         "type": {
           "type": "string",

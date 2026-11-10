@@ -11,12 +11,18 @@ expression: "schema_pretty::<Message>()"
   ],
   "properties": {
     "finish_reason": {
-      "type": "string",
-      "description": "Why generation stopped. Omitted from JSON when absent."
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Why generation stopped. Omitted when absent. An explicit `null` from the source is kept (D65)."
     },
     "name": {
-      "type": "string",
-      "description": "Optional speaker name. Omitted from JSON when absent."
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Optional speaker name. Omitted when absent. An explicit `null` from the source is kept (D65)."
     },
     "parts": {
       "type": "array",

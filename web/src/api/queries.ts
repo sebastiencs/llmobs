@@ -25,7 +25,7 @@ export function projectListOptions(org: string) {
       const { data, error } = await api.GET("/api/v1/orgs/{org}/projects", {
         params: {
           path: { org },
-          query: { limit: 50, cursor: pageParam },
+          query: { limit: 50, cursor: pageParam ?? undefined },
         },
         signal,
       });

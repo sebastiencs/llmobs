@@ -414,9 +414,10 @@ export interface components {
         BlobPart: {
             /** @description Base64 payload. */
             content: string;
-            /** @description MIME type, when known. */
-            mime_type?: string;
-            modality?: components["schemas"]["Modality"];
+            /** @description MIME type, when known. Omitted when absent. An explicit `null` from the source is kept (D65). */
+            mime_type?: string | null;
+            /** @description Media kind, when known. Omitted when absent. An explicit `null` from the source is kept (D65). */
+            modality?: components["schemas"]["Modality"] | null;
             /**
              * @description Part type.
              * @enum {string}
@@ -507,7 +508,7 @@ export interface components {
              * Format: double
              * @description Sum of trace costs, USD. Omitted when every trace omitted the field.
              */
-            cost_total?: number | null;
+            cost_total?: number;
             /**
              * Format: int64
              * @description Sum of the traces' `error_count`.
@@ -532,7 +533,7 @@ export interface components {
              * Format: int64
              * @description Sum of trace token totals. Omitted when every trace omitted the field.
              */
-            total_tokens?: number | null;
+            total_tokens?: number;
             /**
              * Format: int64
              * @description Number of traces.
@@ -551,7 +552,8 @@ export interface components {
             field: string;
             /** @description What is wrong with the field. */
             message: string;
-            position?: components["schemas"]["TextPosition"] | null;
+            /** @description Location inside the field value, for filter and SQL errors. */
+            position?: components["schemas"]["TextPosition"];
         };
         /**
          * @description One function the filter DSL or SQL console can call.
@@ -580,12 +582,12 @@ export interface components {
              * Format: double
              * @description Value over the previous range. Omitted when that range has no data.
              */
-            previous?: number | null;
+            previous?: number;
             /**
              * Format: double
              * @description Value over `[from, to)`. Omitted when the range has no data.
              */
-            value?: number | null;
+            value?: number;
         };
         /**
          * @description Headline metrics.
@@ -615,10 +617,10 @@ export interface components {
         };
         /** @description One message in a conversation. Spec 01 § Canonical message format. */
         Message: {
-            /** @description Why generation stopped. Omitted from JSON when absent. */
-            finish_reason?: string;
-            /** @description Optional speaker name. Omitted from JSON when absent. */
-            name?: string;
+            /** @description Why generation stopped. Omitted when absent. An explicit `null` from the source is kept (D65). */
+            finish_reason?: string | null;
+            /** @description Optional speaker name. Omitted when absent. An explicit `null` from the source is kept (D65). */
+            name?: string | null;
             /** @description Message parts. Always present; empty when the message has none. */
             parts: components["schemas"]["Part"][];
             role: components["schemas"]["MessageRole"];
@@ -649,7 +651,7 @@ export interface components {
              * Format: double
              * @description Bucket value. Omitted when the bucket has no data.
              */
-            value?: number | null;
+            value?: number;
         };
         /**
          * @description One time series.
@@ -658,7 +660,7 @@ export interface components {
          */
         MetricSeries: {
             /** @description Group key: the `group_by` value, a model, or a score name. Omitted when the series is not split. */
-            group?: string | null;
+            group?: string;
             /** @description Which series. */
             metric: components["schemas"]["MetricName"];
             /** @description One point per bucket. */
@@ -694,7 +696,8 @@ export interface components {
              * @description Inclusive range start, nanoseconds since the Unix epoch. JSON is RFC 3339.
              */
             from: string;
-            group_by?: components["schemas"]["MetricsGroupBy"] | null;
+            /** @description Split applied to series that are not already split. Omitted when absent. */
+            group_by?: components["schemas"]["MetricsGroupBy"];
             /** @description Headline numbers for the range and the previous range of the same length. */
             kpis: components["schemas"]["Kpi"][];
             /** @description One point per bucket, for every series. */
@@ -719,7 +722,7 @@ export interface components {
              * Format: double
              * @description Sum of `cost_total`, USD. Omitted when every span omitted the field.
              */
-            cost_total?: number | null;
+            cost_total?: number;
             /**
              * Format: int64
              * @description Number of `llm` spans.
@@ -731,7 +734,7 @@ export interface components {
              * Format: int64
              * @description Sum of `total_tokens`. Omitted when every span omitted the field.
              */
-            total_tokens?: number | null;
+            total_tokens?: number;
         };
         /**
          * Format: uuid
@@ -799,7 +802,7 @@ export interface components {
             /** @description Machine-readable error code. */
             code: components["schemas"]["ProblemCode"];
             /** @description Extra explanation. Omitted when absent. */
-            detail?: string | null;
+            detail?: string;
             /** @description Field errors. Omitted when empty, because RFC 7807 clients expect the member to be absent. */
             errors?: components["schemas"]["FieldError"][];
             /**
@@ -840,7 +843,7 @@ export interface components {
              * Format: int32
              * @description Retention in days. Omitted when the project uses the default.
              */
-            retention_days?: number | null;
+            retention_days?: number;
             /** @description The caller's effective role on this project. */
             role: components["schemas"]["OrgRole"];
             /** @description URL slug, unique within the org. */
@@ -898,7 +901,7 @@ export interface components {
              * Format: uuid
              * @description Owner. Omitted when the view has no owner.
              */
-            owner_user_id?: string | null;
+            owner_user_id?: string;
             /** @description Visible to every member of the project. */
             shared: boolean;
             /** @description Opaque UI state: list-page URL params, or `{query, params}` for SQL. */
@@ -944,7 +947,7 @@ export interface components {
              * Format: uuid
              * @description Person who annotated, for `human` scores. Spec 01 `author_user_id`.
              */
-            author_user_id?: string | null;
+            author_user_id?: string;
             /**
              * Format: date-time
              * @description Creation time: `i64` nanoseconds in Rust, an RFC 3339 string in JSON (D64). Spec 01 `created_at`.
@@ -954,19 +957,19 @@ export interface components {
              * Format: uuid
              * @description Dataset item the score belongs to. Spec 01 `dataset_item_id`.
              */
-            dataset_item_id?: string | null;
+            dataset_item_id?: string;
             /** @description Tombstone. Spec 01 `deleted`. */
             deleted: boolean;
             /**
              * Format: uuid
              * @description Evaluator that produced the score. Spec 01 `evaluator_id`.
              */
-            evaluator_id?: string | null;
+            evaluator_id?: string;
             /**
              * Format: uuid
              * @description Experiment the score belongs to. Spec 01 `experiment_id`.
              */
-            experiment_id?: string | null;
+            experiment_id?: string;
             /**
              * Format: date-time
              * @description Server receive time: `i64` nanoseconds in Rust, an RFC 3339 string in JSON (D64). Spec 01 `ingest_time`.
@@ -981,19 +984,19 @@ export interface components {
             /** @description Partition key. Spec 01 `project_id`. */
             project_id: components["schemas"]["ProjectId"];
             /** @description Explanation. Spec 01 `reason`. */
-            reason?: string | null;
+            reason?: string;
             /**
              * Format: uuid
              * @description Online rule that produced the score. Spec 01 `rule_id`.
              */
-            rule_id?: string | null;
+            rule_id?: string;
             /**
              * Format: uuid
              * @description Last-writer-wins key. Spec 01 `score_id`.
              */
             score_id: string;
             /** @description Session of a span or trace target, when known. Ignored for session targets. Spec 01 `session_id`. */
-            session_id?: string | null;
+            session_id?: string;
             /** @description Who wrote the score. Spec 01 `source`. */
             source: components["schemas"]["ScoreSource"];
             /** @description Span, trace, or session this score is attached to. Spec 01 `target`. */
@@ -1004,7 +1007,7 @@ export interface components {
              */
             updated_at: string;
             /** @description End-user id, when the writer knows it. Spec 01 `user_id`. */
-            user_id?: string | null;
+            user_id?: string;
             /** @description The score value. Spec 01 `data_type`, `value_num`, `value_str`. */
             value: components["schemas"]["ScoreValue"];
         };
@@ -1100,7 +1103,7 @@ export interface components {
                  * Format: double
                  * @description Optional numeric mapping. Stored in `value_num`. Omitted from JSON when absent.
                  */
-                value?: number | null;
+                value?: number;
             };
         } | {
             /** @enum {string} */
@@ -1145,7 +1148,7 @@ export interface components {
              * Format: double
              * @description Sum of trace costs, USD. Omitted when every trace omitted the field.
              */
-            cost_total?: number | null;
+            cost_total?: number;
             /**
              * Format: int64
              * @description `end_time - start_time`, nanoseconds.
@@ -1174,14 +1177,14 @@ export interface components {
              * Format: int64
              * @description Sum of trace token totals. Omitted when every trace omitted the field.
              */
-            total_tokens?: number | null;
+            total_tokens?: number;
             /**
              * Format: int64
              * @description Number of traces in the session.
              */
             trace_count: number;
             /** @description End-user id. */
-            user_id?: string | null;
+            user_id?: string;
         };
         /**
          * @description One trace in a session, oldest first, with the root span's payloads.
@@ -1189,8 +1192,10 @@ export interface components {
          *     `input` and `output` are omitted when the trace has no root. Spec 09 § Response shapes.
          */
         SessionTurn: {
-            input?: components["schemas"]["Payload"] | null;
-            output?: components["schemas"]["Payload"] | null;
+            /** @description Root span input. */
+            input?: components["schemas"]["Payload"];
+            /** @description Root span output. */
+            output?: components["schemas"]["Payload"];
             /** @description Trace row. */
             trace: components["schemas"]["TraceSummary"];
         };
@@ -1222,30 +1227,31 @@ export interface components {
              * Format: int64
              * @description Cache-read tokens.
              */
-            cache_read_tokens?: number | null;
+            cache_read_tokens?: number;
             /**
              * Format: int64
              * @description Cache-write tokens.
              */
-            cache_write_tokens?: number | null;
+            cache_write_tokens?: number;
             /** @description Conventions detected on the span. */
             conventions: components["schemas"]["Convention"][];
             /**
              * Format: double
              * @description Input cost, USD.
              */
-            cost_input?: number | null;
+            cost_input?: number;
             /**
              * Format: double
              * @description Output cost, USD.
              */
-            cost_output?: number | null;
-            cost_source?: components["schemas"]["CostSource"] | null;
+            cost_output?: number;
+            /** @description How cost was obtained. */
+            cost_source?: components["schemas"]["CostSource"];
             /**
              * Format: double
              * @description Total cost, USD.
              */
-            cost_total?: number | null;
+            cost_total?: number;
             /**
              * Format: int64
              * @description `end_time - start_time`, nanoseconds. Saturates on overflow.
@@ -1257,7 +1263,7 @@ export interface components {
              */
             end_time: string;
             /** @description Deployment environment. */
-            environment?: string | null;
+            environment?: string;
             /** @description Span events. */
             events: components["schemas"]["SpanEventView"][];
             /**
@@ -1265,14 +1271,15 @@ export interface components {
              * @description Server receive time, nanoseconds since the Unix epoch. JSON is RFC 3339.
              */
             ingest_time: string;
-            input?: components["schemas"]["Payload"] | null;
+            /** @description Parsed input. Omitted when the stored span has no input text. */
+            input?: components["schemas"]["Payload"];
             /** @description First 512 characters of the plain-text input rendering. */
-            input_preview?: string | null;
+            input_preview?: string;
             /**
              * Format: int64
              * @description Input tokens, including cached tokens.
              */
-            input_tokens?: number | null;
+            input_tokens?: number;
             /** @description Span links. */
             links: components["schemas"]["SpanLinkView"][];
             /** @description SHA-256 hex of extracted media blobs. */
@@ -1282,31 +1289,33 @@ export interface components {
                 [key: string]: string;
             };
             /** @description Response model, or the request model when the response names none. */
-            model?: string | null;
+            model?: string;
             /** @description Span name. */
             name: string;
             /** @description GenAI operation name. */
-            operation?: string | null;
-            output?: components["schemas"]["Payload"] | null;
+            operation?: string;
+            /** @description Parsed output. Omitted when the stored span has no output text. */
+            output?: components["schemas"]["Payload"];
             /** @description First 512 characters of the plain-text output rendering. */
-            output_preview?: string | null;
+            output_preview?: string;
             /**
              * Format: int64
              * @description Output tokens, including reasoning tokens.
              */
-            output_tokens?: number | null;
-            parent_span_id?: components["schemas"]["SpanId"] | null;
+            output_tokens?: number;
+            /** @description Parent span. Omitted when this span is a root of the received trace. */
+            parent_span_id?: components["schemas"]["SpanId"];
             /** @description Normalized provider name. */
-            provider?: string | null;
+            provider?: string;
             /**
              * Format: int64
              * @description Reasoning tokens.
              */
-            reasoning_tokens?: number | null;
+            reasoning_tokens?: number;
             /** @description Release. */
-            release?: string | null;
+            release?: string;
             /** @description Model named in the request. */
-            request_model?: string | null;
+            request_model?: string;
             /** @description Request parameters. A JSON string when the stored text is not JSON. */
             request_params?: unknown;
             /** @description Resource attributes except `service.name`. */
@@ -1314,20 +1323,20 @@ export interface components {
                 [key: string]: string;
             };
             /** @description Model named in the response. */
-            response_model?: string | null;
+            response_model?: string;
             /**
              * Format: int32
              * @description Normalization version of this row.
              */
             schema_version: number;
             /** @description Instrumentation scope name. */
-            scope_name?: string | null;
+            scope_name?: string;
             /** @description Instrumentation scope version. */
-            scope_version?: string | null;
+            scope_version?: string;
             /** @description Resource `service.name`. */
-            service_name?: string | null;
+            service_name?: string;
             /** @description Session id. */
-            session_id?: string | null;
+            session_id?: string;
             /** @description Span id. */
             span_id: components["schemas"]["SpanId"];
             /** @description Kind of work. */
@@ -1340,7 +1349,7 @@ export interface components {
             /** @description OTel status. */
             status: components["schemas"]["SpanStatus"];
             /** @description Status description. */
-            status_message?: string | null;
+            status_message?: string;
             /** @description System instructions. A JSON string when the stored text is not JSON. */
             system_instructions?: unknown;
             /** @description Tags. */
@@ -1351,7 +1360,7 @@ export interface components {
              * Format: int64
              * @description Total tokens.
              */
-            total_tokens?: number | null;
+            total_tokens?: number;
             /** @description Trace id. */
             trace_id: components["schemas"]["TraceId"];
             /** @description Names of attributes truncated at ingest. */
@@ -1360,9 +1369,9 @@ export interface components {
              * Format: int64
              * @description Time to first token, nanoseconds.
              */
-            ttft_ns?: number | null;
+            ttft_ns?: number;
             /** @description End-user id. */
-            user_id?: string | null;
+            user_id?: string;
         };
         /**
          * @description One span event as returned by the API.
@@ -1433,17 +1442,17 @@ export interface components {
              * Format: int64
              * @description Cache-read tokens.
              */
-            cache_read_tokens?: number | null;
+            cache_read_tokens?: number;
             /**
              * Format: int64
              * @description Cache-write tokens.
              */
-            cache_write_tokens?: number | null;
+            cache_write_tokens?: number;
             /**
              * Format: double
              * @description Total cost, USD.
              */
-            cost_total?: number | null;
+            cost_total?: number;
             /**
              * Format: int64
              * @description `end_time - start_time`, nanoseconds. Saturates on overflow.
@@ -1455,43 +1464,44 @@ export interface components {
              */
             end_time: string;
             /** @description Deployment environment. */
-            environment?: string | null;
+            environment?: string;
             /** @description First 512 characters of the plain-text input rendering. */
-            input_preview?: string | null;
+            input_preview?: string;
             /**
              * Format: int64
              * @description Input tokens, including cached tokens.
              */
-            input_tokens?: number | null;
+            input_tokens?: number;
             /** @description User metadata. */
             metadata: {
                 [key: string]: string;
             };
             /** @description Response model, or the request model when the response names none. */
-            model?: string | null;
+            model?: string;
             /** @description Span name. */
             name: string;
             /** @description First 512 characters of the plain-text output rendering. */
-            output_preview?: string | null;
+            output_preview?: string;
             /**
              * Format: int64
              * @description Output tokens, including reasoning tokens.
              */
-            output_tokens?: number | null;
-            parent_span_id?: components["schemas"]["SpanId"] | null;
+            output_tokens?: number;
+            /** @description Parent span. Omitted when this span is a root of the received trace. */
+            parent_span_id?: components["schemas"]["SpanId"];
             /** @description Normalized provider name. */
-            provider?: string | null;
+            provider?: string;
             /**
              * Format: int64
              * @description Reasoning tokens.
              */
-            reasoning_tokens?: number | null;
+            reasoning_tokens?: number;
             /** @description Release. */
-            release?: string | null;
+            release?: string;
             /** @description Resource `service.name`. */
-            service_name?: string | null;
+            service_name?: string;
             /** @description Session id. */
-            session_id?: string | null;
+            session_id?: string;
             /** @description Span id. */
             span_id: components["schemas"]["SpanId"];
             /** @description Kind of work. */
@@ -1504,23 +1514,23 @@ export interface components {
             /** @description OTel status. */
             status: components["schemas"]["SpanStatus"];
             /** @description Status description. */
-            status_message?: string | null;
+            status_message?: string;
             /** @description Tags. */
             tags: string[];
             /**
              * Format: int64
              * @description Total tokens.
              */
-            total_tokens?: number | null;
+            total_tokens?: number;
             /** @description Trace id. */
             trace_id: components["schemas"]["TraceId"];
             /**
              * Format: int64
              * @description Time to first token, nanoseconds.
              */
-            ttft_ns?: number | null;
+            ttft_ns?: number;
             /** @description End-user id. */
-            user_id?: string | null;
+            user_id?: string;
         };
         /** @description Plain text. */
         TextPart: {
@@ -1557,8 +1567,8 @@ export interface components {
         ToolCallPart: {
             /** @description Arguments, as JSON. Absent for a call without arguments. */
             arguments?: unknown;
-            /** @description Provider call id, when the source has one. */
-            id?: string;
+            /** @description Provider call id, when the source has one. Omitted when absent. An explicit `null` from the source is kept (D65). */
+            id?: string | null;
             /** @description Tool name. */
             name: string;
             /**
@@ -1571,8 +1581,8 @@ export interface components {
         };
         /** @description The result of a tool call. */
         ToolCallResponsePart: {
-            /** @description Provider call id, when the source has one. */
-            id?: string;
+            /** @description Provider call id, when the source has one. Omitted when absent. An explicit `null` from the source is kept (D65). */
+            id?: string | null;
             /** @description Tool result, as JSON. */
             response: unknown;
             /**
@@ -1622,17 +1632,17 @@ export interface components {
              * Format: int64
              * @description Sum of cache-read tokens. Omitted when every span omitted the field.
              */
-            cache_read_tokens?: number | null;
+            cache_read_tokens?: number;
             /**
              * Format: int64
              * @description Sum of cache-write tokens. Omitted when every span omitted the field.
              */
-            cache_write_tokens?: number | null;
+            cache_write_tokens?: number;
             /**
              * Format: double
              * @description Sum of span costs, USD. Omitted when every span omitted the field.
              */
-            cost_total?: number | null;
+            cost_total?: number;
             /**
              * Format: int64
              * @description `end_time - start_time`, nanoseconds.
@@ -1644,7 +1654,7 @@ export interface components {
              */
             end_time: string;
             /** @description Deployment environment. */
-            environment?: string | null;
+            environment?: string;
             /**
              * Format: int64
              * @description Number of spans with status `error`.
@@ -1653,12 +1663,12 @@ export interface components {
             /** @description Whether a span with no parent is present. */
             has_root: boolean;
             /** @description Root input preview, or the first `llm` span's. */
-            input_preview?: string | null;
+            input_preview?: string;
             /**
              * Format: int64
              * @description Sum of span input tokens. Omitted when every span omitted the field.
              */
-            input_tokens?: number | null;
+            input_tokens?: number;
             /**
              * Format: int64
              * @description Number of `llm` spans.
@@ -1673,24 +1683,25 @@ export interface components {
             /** @description Root span name, or the earliest span's name when there is no root. */
             name: string;
             /** @description Root output preview, or the first `llm` span's. */
-            output_preview?: string | null;
+            output_preview?: string;
             /**
              * Format: int64
              * @description Sum of span output tokens. Omitted when every span omitted the field.
              */
-            output_tokens?: number | null;
+            output_tokens?: number;
             /**
              * Format: int64
              * @description Sum of reasoning tokens. Omitted when every span omitted the field.
              */
-            reasoning_tokens?: number | null;
+            reasoning_tokens?: number;
             /** @description Release. */
-            release?: string | null;
-            root_span_id?: components["schemas"]["SpanId"] | null;
+            release?: string;
+            /** @description Span id of the root. Omitted when the trace has no root. */
+            root_span_id?: components["schemas"]["SpanId"];
             /** @description Latest score of each name attached to this trace. */
             scores: components["schemas"]["ScoreBrief"][];
             /** @description Session id. */
-            session_id?: string | null;
+            session_id?: string;
             /**
              * Format: int64
              * @description Number of spans.
@@ -1709,11 +1720,11 @@ export interface components {
              * Format: int64
              * @description Sum of total tokens. Omitted when every span omitted the field.
              */
-            total_tokens?: number | null;
+            total_tokens?: number;
             /** @description Trace id. */
             trace_id: components["schemas"]["TraceId"];
             /** @description End-user id. */
-            user_id?: string | null;
+            user_id?: string;
         };
         /**
          * @description One span in a flat pre-order trace tree.
@@ -1745,19 +1756,20 @@ export interface components {
          */
         UpdateSavedView: {
             /** @description Default view for this kind. */
-            is_default?: boolean | null;
+            is_default?: boolean;
             /** @description Display name. */
-            name?: string | null;
+            name?: string;
             /** @description Visible to every member of the project. */
-            shared?: boolean | null;
+            shared?: boolean;
             /** @description Opaque UI state: list-page URL params, or `{query, params}` for SQL. */
-            state?: Record<string, never> | null;
+            state?: Record<string, never>;
         };
         /** @description Media addressed by a URI, including `media://` after extraction. */
         UriPart: {
-            /** @description MIME type, when known. */
-            mime_type?: string;
-            modality?: components["schemas"]["Modality"];
+            /** @description MIME type, when known. Omitted when absent. An explicit `null` from the source is kept (D65). */
+            mime_type?: string | null;
+            /** @description Media kind, when known. Omitted when absent. An explicit `null` from the source is kept (D65). */
+            modality?: components["schemas"]["Modality"] | null;
             /**
              * @description Part type.
              * @enum {string}
@@ -1784,7 +1796,7 @@ export interface components {
             /** @description Instance administrator, allowed to manage instance settings. */
             is_instance_admin: boolean;
             /** @description Display name. Omitted when the user has not set one. */
-            name?: string | null;
+            name?: string;
         };
         /**
          * @description Sort key for user lists.
@@ -1886,7 +1898,7 @@ export interface operations {
                 /** @description Maximum number of items to return (1–1000, default 50). */
                 limit?: components["schemas"]["Limit"];
                 /** @description Opaque cursor from a previous page. */
-                cursor?: string | null;
+                cursor?: string;
             };
             header?: never;
             path: {
@@ -2104,9 +2116,9 @@ export interface operations {
                 /** @description Bucket width. Defaults to `auto` (~120 points). */
                 bucket?: components["schemas"]["MetricsBucket"];
                 /** @description Filter DSL expression. Applied to the view each series is computed on (spec 05). */
-                filter?: string | null;
+                filter?: string;
                 /** @description Split series that are not already split. */
-                group_by?: components["schemas"]["MetricsGroupBy"] | null;
+                group_by?: components["schemas"]["MetricsGroupBy"];
             };
             header?: never;
             path: {
@@ -2177,11 +2189,11 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description Return only this kind. */
-                kind?: components["schemas"]["SavedViewKind"] | null;
+                kind?: components["schemas"]["SavedViewKind"];
                 /** @description Maximum number of items to return (1–1000, default 50). */
                 limit?: components["schemas"]["Limit"];
                 /** @description Opaque cursor from a previous page. */
-                cursor?: string | null;
+                cursor?: string;
             };
             header?: never;
             path: {
@@ -2516,25 +2528,25 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description Kind of target to return. */
-                target?: components["schemas"]["ScoreTargetKind"] | null;
+                target?: components["schemas"]["ScoreTargetKind"];
                 /** @description Scores attached to this trace. */
-                trace_id?: components["schemas"]["TraceId"] | null;
+                trace_id?: components["schemas"]["TraceId"];
                 /** @description Scores attached to this span. */
-                span_id?: components["schemas"]["SpanId"] | null;
+                span_id?: components["schemas"]["SpanId"];
                 /** @description Scores attached to this session. */
-                session_id?: string | null;
+                session_id?: string;
                 /** @description Score name. */
-                name?: string | null;
+                name?: string;
                 /** @description Who wrote the score. */
-                source?: components["schemas"]["ScoreSource"] | null;
+                source?: components["schemas"]["ScoreSource"];
                 /** @description Inclusive `created_at` start. RFC 3339 or epoch milliseconds. */
-                from?: components["schemas"]["TimeParam"] | null;
+                from?: components["schemas"]["TimeParam"];
                 /** @description Exclusive `created_at` end. RFC 3339 or epoch milliseconds. */
-                to?: components["schemas"]["TimeParam"] | null;
+                to?: components["schemas"]["TimeParam"];
                 /** @description Maximum number of items to return (1–1000, default 50). */
                 limit?: components["schemas"]["Limit"];
                 /** @description Opaque cursor from a previous page. */
-                cursor?: string | null;
+                cursor?: string;
             };
             header?: never;
             path: {
@@ -2605,11 +2617,11 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description Filter DSL expression over the `sessions` view (spec 05). */
-                filter?: string | null;
+                filter?: string;
                 /** @description Inclusive range start. RFC 3339 or epoch milliseconds. */
-                from?: components["schemas"]["TimeParam"] | null;
+                from?: components["schemas"]["TimeParam"];
                 /** @description Exclusive range end. RFC 3339 or epoch milliseconds. */
-                to?: components["schemas"]["TimeParam"] | null;
+                to?: components["schemas"]["TimeParam"];
                 /** @description Sort key. Defaults to start time. */
                 sort?: components["schemas"]["SessionSort"];
                 /** @description Sort direction. Defaults to descending. */
@@ -2617,7 +2629,7 @@ export interface operations {
                 /** @description Maximum number of items to return (1–1000, default 50). */
                 limit?: components["schemas"]["Limit"];
                 /** @description Opaque cursor from a previous page. */
-                cursor?: string | null;
+                cursor?: string;
             };
             header?: never;
             path: {
@@ -2749,13 +2761,13 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description Filter DSL expression over the `spans` view (spec 05). */
-                filter?: string | null;
+                filter?: string;
                 /** @description Full-text search (spec 05 § Full-text search). */
-                search?: string | null;
+                search?: string;
                 /** @description Inclusive range start. RFC 3339 or epoch milliseconds. */
-                from?: components["schemas"]["TimeParam"] | null;
+                from?: components["schemas"]["TimeParam"];
                 /** @description Exclusive range end. RFC 3339 or epoch milliseconds. */
-                to?: components["schemas"]["TimeParam"] | null;
+                to?: components["schemas"]["TimeParam"];
                 /** @description Sort key. Defaults to start time. */
                 sort?: components["schemas"]["SpanSort"];
                 /** @description Sort direction. Defaults to descending. */
@@ -2763,7 +2775,7 @@ export interface operations {
                 /** @description Maximum number of items to return (1–1000, default 50). */
                 limit?: components["schemas"]["Limit"];
                 /** @description Opaque cursor from a previous page. */
-                cursor?: string | null;
+                cursor?: string;
                 /** @description Include spans from the evaluation environment. Default false. Spec 05 § Default exclusions. */
                 include_eval?: boolean;
                 /** @description Include experiment spans. Default false. Spec 05 § Default exclusions. */
@@ -2838,13 +2850,13 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description Filter DSL expression over the `traces` view (spec 05). */
-                filter?: string | null;
+                filter?: string;
                 /** @description Full-text search (spec 05 § Full-text search). */
-                search?: string | null;
+                search?: string;
                 /** @description Inclusive range start. RFC 3339 or epoch milliseconds. */
-                from?: components["schemas"]["TimeParam"] | null;
+                from?: components["schemas"]["TimeParam"];
                 /** @description Exclusive range end. RFC 3339 or epoch milliseconds. */
-                to?: components["schemas"]["TimeParam"] | null;
+                to?: components["schemas"]["TimeParam"];
                 /** @description Sort key. Defaults to start time. */
                 sort?: components["schemas"]["TraceSort"];
                 /** @description Sort direction. Defaults to descending. */
@@ -2852,7 +2864,7 @@ export interface operations {
                 /** @description Maximum number of items to return (1–1000, default 50). */
                 limit?: components["schemas"]["Limit"];
                 /** @description Opaque cursor from a previous page. */
-                cursor?: string | null;
+                cursor?: string;
                 /** @description Include traces from the evaluation environment. Default false. Spec 05 § Default exclusions. */
                 include_eval?: boolean;
                 /** @description Include experiment traces. Default false. Spec 05 § Default exclusions. */
@@ -2927,7 +2939,7 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description Filter DSL expression over the light columns of the `traces` view (spec 05). */
-                filter?: string | null;
+                filter?: string;
                 /** @description Include traces from the evaluation environment. Default false. Spec 05 § Default exclusions. */
                 include_eval?: boolean;
                 /** @description Include experiment traces. Default false. Spec 05 § Default exclusions. */
@@ -3002,7 +3014,7 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description Instant the client is looking at. RFC 3339 or epoch milliseconds. */
-                around?: components["schemas"]["TimeParam"] | null;
+                around?: components["schemas"]["TimeParam"];
             };
             header?: never;
             path: {
@@ -3199,11 +3211,11 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description Filter DSL expression over the `traces` view, applied before grouping (spec 05). */
-                filter?: string | null;
+                filter?: string;
                 /** @description Inclusive range start. RFC 3339 or epoch milliseconds. */
-                from?: components["schemas"]["TimeParam"] | null;
+                from?: components["schemas"]["TimeParam"];
                 /** @description Exclusive range end. RFC 3339 or epoch milliseconds. */
-                to?: components["schemas"]["TimeParam"] | null;
+                to?: components["schemas"]["TimeParam"];
                 /** @description Sort key. Defaults to last seen. */
                 sort?: components["schemas"]["UserSort"];
                 /** @description Sort direction. Defaults to descending. */
@@ -3211,7 +3223,7 @@ export interface operations {
                 /** @description Maximum number of items to return (1–1000, default 50). */
                 limit?: components["schemas"]["Limit"];
                 /** @description Opaque cursor from a previous page. */
-                cursor?: string | null;
+                cursor?: string;
             };
             header?: never;
             path: {

@@ -136,4 +136,3 @@ Competitor research: `research/competitors.md`.
 - `.cursor/` is untracked while D58 says `.cursor/rules` is kept (and the plans tell agents to read it): commit `.cursor/rules`, or drop that mention from D58?
 - When a price row matches but a unit price is null while those tokens are present, is that part of the cost null or zero (spec 02 § Cost computation)? `reasoning` already falls back to the output price.
 - For embedding spans, is `cost_output` always null or always 0 (spec 02 § Cost computation)?
-- Optional query parameters are generated as `T | null` in `web/src/api/schema.gen.ts`: keep that, or change the utoipa annotations?
