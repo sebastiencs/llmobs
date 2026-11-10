@@ -14,6 +14,8 @@ use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::{SessionState, SessionStateBuilder, SessionStateDefaults};
 use datafusion::prelude::SessionConfig;
 
+use super::hex::HexIdRule;
+
 /// Parser recursion limit. A left-deep operator chain is bounded separately (D95).
 pub(crate) const PARSER_RECURSION_LIMIT: usize = 50;
 
@@ -44,6 +46,7 @@ pub(crate) fn session_state(
         .with_aggregate_functions(SessionStateDefaults::default_aggregate_functions())
         .with_window_functions(SessionStateDefaults::default_window_functions())
         .with_expr_planners(SessionStateDefaults::default_expr_planners())
+        .with_optimizer_rule(Arc::new(HexIdRule))
         .build()
 }
 

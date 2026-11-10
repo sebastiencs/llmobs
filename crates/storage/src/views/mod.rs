@@ -1,5 +1,6 @@
 //! User-facing views over the stored providers (D91, D101).
 
+mod hex;
 mod scores;
 mod session;
 mod sessions;

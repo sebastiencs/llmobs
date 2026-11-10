@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 llmobs-core.workspace = true
 datafusion = { workspace = true }
+hex = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

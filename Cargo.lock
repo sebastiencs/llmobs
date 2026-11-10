@@ -2224,6 +2224,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "datafusion",
+ "hex",
  "llmobs-core",
  "serde_json",
  "thiserror",
