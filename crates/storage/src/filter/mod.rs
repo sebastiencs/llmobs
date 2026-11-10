@@ -5,6 +5,7 @@
 
 #![allow(dead_code)]
 
+mod scope;
 mod scores;
 mod validate;
 
@@ -140,22 +141,28 @@ fn invalid(message: impl AsRef<str>, position: Option<Position>) -> InvalidQuery
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::num::NonZeroUsize;
+    use std::path::PathBuf;
+    use std::str::FromStr;
     use std::sync::Arc;
 
     use datafusion::arrow::array::{Array, AsArray, RecordBatch};
     use datafusion::execution::runtime_env::RuntimeEnv;
+    use datafusion::logical_expr::Expr;
     use llmobs_core::enums::{SpanKind, SpanStatus};
+    use llmobs_core::ids::{SpanId, TraceId};
+    use llmobs_core::names::metadata_key;
     use llmobs_core::score::{Score, ScoreTarget};
     use llmobs_core::span::Span;
 
-    use crate::query_error::Position;
+    use crate::query_error::{Position, RunError};
     use crate::test_support::{
         dataset_scores, dataset_spans, example_query, live_scores, live_scores_table, spans_table,
         traces_table,
     };
-    use crate::views::{ProjectQuery, QueryContext};
+    use crate::views::{ProjectQuery, QueryContext, TimeWindow};
 
     use super::FilterView;
+    use super::scope::{exclusions, search, time_window};
 
     fn context() -> QueryContext {
         QueryContext::new(example_query(), None).expect("example project")
@@ -954,5 +961,282 @@ mod tests {
             .expect_err("nine names");
         assert_eq!(error.message, "a filter can use at most 8 score names");
         assert_eq!(error.position, at(1, column));
+    }
+
+    fn context_with_spans(spans: &[Span]) -> QueryContext {
+        QueryContext::new(
+            ProjectQuery {
+                spans: spans_table(spans),
+                traces: traces_table(spans),
+                scores: live_scores_table(&dataset_scores()),
+                runtime: Arc::new(RuntimeEnv::default()),
+                target_partitions: NonZeroUsize::new(2).expect("two partitions"),
+            },
+            None,
+        )
+        .expect("context")
+    }
+
+    async fn matching_expr(
+        ctx: &QueryContext,
+        view: FilterView,
+        expr: Expr,
+        column: &str,
+    ) -> BTreeSet<String> {
+        let frame = ctx
+            .session()
+            .table(view.as_str())
+            .await
+            .unwrap_or_else(|error| panic!("{}: {error}", view.as_str()));
+        let filtered = frame
+            .filter(expr)
+            .unwrap_or_else(|error| panic!("filter: {error}"));
+        strings(&filtered.collect().await.expect("collect"), column)
+    }
+
+    fn listed_trace_ids() -> BTreeSet<String> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/api/responses/traces.json");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let value: serde_json::Value = serde_json::from_str(&text).expect("traces.json");
+        value["data"]
+            .as_array()
+            .expect("data")
+            .iter()
+            .map(|row| row["trace_id"].as_str().expect("trace_id").to_owned())
+            .collect()
+    }
+
+    fn day() -> TimeWindow {
+        TimeWindow::new(nanos("2026-01-01T00:00:00Z"), nanos("2026-01-02T00:00:00Z")).expect("day")
+    }
+
+    #[tokio::test]
+    async fn exclusions_hide_eval_traces_unless_asked() {
+        let ctx = context();
+        let listed = listed_trace_ids();
+        let hidden = exclusions(&ctx, FilterView::Traces, false, false, false)
+            .expect("exclusions")
+            .expect("both clauses");
+        assert_eq!(
+            matching_expr(&ctx, FilterView::Traces, hidden, "trace_id").await,
+            listed
+        );
+        assert!(!listed.contains("a1000000000000000000000000000005"));
+
+        let with_eval = exclusions(&ctx, FilterView::Traces, true, false, false)
+            .expect("include eval")
+            .expect("experiment clause");
+        let mut expected = listed.clone();
+        expected.insert("a1000000000000000000000000000005".to_owned());
+        assert_eq!(
+            matching_expr(&ctx, FilterView::Traces, with_eval, "trace_id").await,
+            expected
+        );
+
+        let by_filter = exclusions(&ctx, FilterView::Traces, false, false, true)
+            .expect("environment reference")
+            .expect("experiment clause");
+        assert_eq!(
+            matching_expr(&ctx, FilterView::Traces, by_filter, "trace_id").await,
+            expected
+        );
+
+        assert!(
+            exclusions(&ctx, FilterView::Traces, true, true, false)
+                .expect("neither clause")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn experiment_traces_stay_hidden_when_eval_is_included() {
+        let mut spans = dataset_spans();
+        let mut experiment = spans[0].clone();
+        experiment.trace_id = TraceId::from_str("a1000000000000000000000000000007").expect("trace");
+        experiment.span_id = SpanId::from_str("b100000000000071").expect("span");
+        experiment.parent_span_id = None;
+        experiment.environment = Some("production".to_owned());
+        experiment
+            .metadata
+            .insert(metadata_key::EXPERIMENT_ID.to_owned(), "exp-1".to_owned());
+        spans.push(experiment);
+        let ctx = context_with_spans(&spans);
+        let listed = listed_trace_ids();
+        let experiment_id = "a1000000000000000000000000000007";
+        let eval_id = "a1000000000000000000000000000005";
+
+        let default = exclusions(&ctx, FilterView::Traces, false, false, false)
+            .expect("default")
+            .expect("clauses");
+        assert_eq!(
+            matching_expr(&ctx, FilterView::Traces, default, "trace_id").await,
+            listed
+        );
+
+        let eval_only = exclusions(&ctx, FilterView::Traces, true, false, false)
+            .expect("eval")
+            .expect("experiment clause");
+        let mut with_eval = listed.clone();
+        with_eval.insert(eval_id.to_owned());
+        assert_eq!(
+            matching_expr(&ctx, FilterView::Traces, eval_only, "trace_id").await,
+            with_eval
+        );
+
+        let experiments = exclusions(&ctx, FilterView::Traces, false, true, false)
+            .expect("experiments")
+            .expect("eval clause");
+        let mut with_experiment = listed.clone();
+        with_experiment.insert(experiment_id.to_owned());
+        assert_eq!(
+            matching_expr(&ctx, FilterView::Traces, experiments, "trace_id").await,
+            with_experiment
+        );
+    }
+
+    #[tokio::test]
+    async fn time_window_includes_the_start_and_excludes_the_end() {
+        let ctx = context();
+        let from = nanos("2026-01-01T10:05:00Z");
+        let to = nanos("2026-01-01T10:20:00Z");
+        let window = TimeWindow::new(from, to).expect("window");
+        let rows = traces(&dataset_spans());
+        assert!(
+            rows.iter().any(|trace| trace.start_time == to),
+            "a trace starts on the exclusive boundary"
+        );
+        let expected: BTreeSet<String> = rows
+            .into_iter()
+            .filter(|trace| (from..to).contains(&trace.start_time))
+            .map(|trace| trace.id)
+            .collect();
+        assert!(!expected.is_empty());
+        assert_eq!(
+            matching_expr(&ctx, FilterView::Traces, time_window(window), "trace_id").await,
+            expected
+        );
+    }
+
+    fn text_has(span: &Span, needle: &str) -> bool {
+        let needle = needle.to_lowercase();
+        [
+            span.input.as_deref(),
+            span.output.as_deref(),
+            Some(span.name.as_str()),
+            span.system_instructions.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|text| text.to_lowercase().contains(&needle))
+    }
+
+    #[tokio::test]
+    async fn search_matches_span_text_literally() {
+        let ctx = context();
+        let spans = dataset_spans();
+        let found = search(FilterView::Spans, "ORDER", Some(day()), &ctx)
+            .await
+            .expect("search")
+            .expect("predicate");
+        assert_eq!(
+            matching_expr(&ctx, FilterView::Spans, found, "span_id").await,
+            ids_where(&spans, |span| text_has(span, "order"))
+        );
+        assert!(
+            search(FilterView::Spans, " \n", None, &ctx)
+                .await
+                .expect("empty")
+                .is_none()
+        );
+
+        let mut rows = spans;
+        let mut units = rows[0].clone();
+        units.trace_id = TraceId::from_str("a1000000000000000000000000000007").expect("trace");
+        units.span_id = SpanId::from_str("b100000000000071").expect("span");
+        units.parent_span_id = None;
+        units.input = Some("bought 1000 units".to_owned());
+        units.output = None;
+        units.name = "count".to_owned();
+        units.system_instructions = None;
+        let mut percent = units.clone();
+        percent.trace_id = TraceId::from_str("a1000000000000000000000000000008").expect("trace");
+        percent.span_id = SpanId::from_str("b100000000000081").expect("span");
+        percent.input = Some("save 100% today".to_owned());
+        let mut slash = units.clone();
+        slash.trace_id = TraceId::from_str("a1000000000000000000000000000009").expect("trace");
+        slash.span_id = SpanId::from_str("b100000000000091").expect("span");
+        slash.input = Some(r"dir a\b".to_owned());
+        rows.extend([units, percent, slash]);
+        let ctx = context_with_spans(&rows);
+
+        let percent_hit = search(FilterView::Spans, "100%", Some(day()), &ctx)
+            .await
+            .expect("percent")
+            .expect("predicate");
+        assert_eq!(
+            matching_expr(&ctx, FilterView::Spans, percent_hit, "span_id").await,
+            BTreeSet::from(["b100000000000081".to_owned()])
+        );
+        let underscore = search(FilterView::Spans, "100_", Some(day()), &ctx)
+            .await
+            .expect("underscore")
+            .expect("predicate");
+        assert!(
+            matching_expr(&ctx, FilterView::Spans, underscore, "span_id")
+                .await
+                .is_empty()
+        );
+        let backslash = search(FilterView::Spans, r"\", Some(day()), &ctx)
+            .await
+            .expect("backslash")
+            .expect("predicate");
+        assert_eq!(
+            matching_expr(&ctx, FilterView::Spans, backslash, "span_id").await,
+            BTreeSet::from(["b100000000000091".to_owned()])
+        );
+    }
+
+    #[tokio::test]
+    async fn search_on_traces_returns_the_owning_trace() {
+        let ctx = context();
+        let spans = dataset_spans();
+        let found = search(FilterView::Traces, "ORDER", Some(day()), &ctx)
+            .await
+            .expect("search")
+            .expect("subquery");
+        let expected: BTreeSet<String> = spans
+            .iter()
+            .filter(|span| text_has(span, "order"))
+            .map(|span| span.trace_id.to_hex())
+            .collect();
+        assert!(!expected.is_empty());
+        assert_eq!(
+            matching_expr(&ctx, FilterView::Traces, found, "trace_id").await,
+            expected
+        );
+
+        let missing = search(FilterView::Traces, "ORDER", None, &ctx).await;
+        match missing {
+            Err(RunError::InvalidRequest(message)) => {
+                assert_eq!(message, "search needs a time range");
+            }
+            other => panic!("expected a missing window, got {other:?}"),
+        }
+        let spans_missing = search(FilterView::Spans, "ORDER", None, &ctx).await;
+        match spans_missing {
+            Err(RunError::InvalidRequest(message)) => {
+                assert_eq!(message, "search needs a time range");
+            }
+            other => panic!("expected a missing window, got {other:?}"),
+        }
+        let sessions = search(FilterView::Sessions, "ORDER", Some(day()), &ctx).await;
+        match sessions {
+            Err(RunError::InvalidRequest(message)) => {
+                assert_eq!(message, "search is not available on this list");
+            }
+            other => panic!("expected an unsupported list, got {other:?}"),
+        }
     }
 }
