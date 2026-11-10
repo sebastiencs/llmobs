@@ -251,7 +251,7 @@ What `with-serde` does for each quirk; the `prost` version.
 
 **Commit:** `otel: encode attribute values and track consumed attributes`
 
-**Prerequisite:** core request C3 (`marker::MAX_DEPTH`) is on `main`. If it isn't, stop and report.
+**Uses** core request C3 (`marker::MAX_DEPTH`), already on `main`.
 
 ### `warn.rs`
 
@@ -334,7 +334,7 @@ pub(crate) const SMALL_ATTRIBUTE_BYTES: usize = 256;
 
 **Commit:** `otel: normalize span skeletons and reject invalid spans`
 
-**Prerequisite:** core request C1 (`NORMALIZE_WARNING`) is on `main`.
+**Uses** core request C1 (`metadata_key::NORMALIZE_WARNING`), already on `main`.
 
 ### `reject.rs`
 
@@ -345,7 +345,7 @@ pub(crate) const SMALL_ATTRIBUTE_BYTES: usize = 256;
 
 ### `normalize.rs`
 
-The public `IngestContext`, `IngestLimits` (with the spec's defaults) and `Normalized` (README § Public API). `media` stays an empty `Vec` until N14. Its type is `Vec<MediaBlob>` from core once C2 lands. Until then, N4 declares the field after C2. If C2 isn't on `main`, leave the field out and add it in N14. Say which you did.
+The public `IngestContext`, `IngestLimits` (with the spec's defaults) and `Normalized` (README § Public API). `media: Vec<llmobs_core::media::MediaBlob>` stays empty until N14.
 
 `pub fn normalize(request, ctx, prices: &PriceTable) -> Normalized`. `PriceTable` doesn't exist until N16. Until then the signature is `normalize(request, ctx)`, and N16 adds the parameter. This is the one planned API change, and N16 updates every caller.
 
@@ -418,5 +418,4 @@ These cases need span times inside the README's 10-second window, except those o
 ### Report
 
 - the initial `PENDING` list;
-- what you did about `MediaBlob`/C2;
 - whether core exposes a schema-version constant.

@@ -38,7 +38,7 @@ These were settled with the user on 2026-11-10. N1 writes them into `docs/mvp-de
 | # | Decision | Source |
 |---|---|---|
 | D100 | **The normalizer is a hybrid; there is no convention trait.** The span's attributes go into an `AttrBag` that records which keys were read and how (payload or not), which implements rule 2. **Scalar fields** are declarative precedence tables of `(key, convention, value type)`: model, provider, tokens, context, params, reported cost. Spec 02's tables become data in `fields.rs`. **Span kind, payloads (input, output, system instructions, tool definitions) and TTFT** are plain functions, one per convention, called in precedence order. The first one that returns a value wins, all-or-nothing per field: message lists from two conventions are never merged. | User |
-| D101 | **Normalization is pure and returns its media.** `normalize` returns `Normalized { spans, media, rejections }`. `media` holds the extracted blobs (`llmobs_core::MediaBlob`: SHA-256, MIME type, bytes). The server stores them with `Storage::put_media` before the WAL append, and storage owns the `media` table (A1 draft). Spec 02 § Media extraction step 4 moves to the server. | User |
+| D101 | **Normalization is pure and returns its media.** `normalize` returns `Normalized { spans, media, rejections }`. `media` holds the extracted blobs (`llmobs_core::media::MediaBlob`: SHA-256, MIME type, bytes as `Vec<u8>`). The server stores them with `Storage::put_media` before the WAL append, and storage owns the `media` table (A1 draft). Spec 02 § Media extraction step 4 moves to the server. | User |
 | D102 | **The built-in price table is a converted snapshot checked into the repo** (`crates/otel/prices/builtin.json`), embedded with `include_str!`. No network access at build time. `just prices-update <litellm.json>` regenerates it through an env-gated test, like `fixtures-fmt`. It is refreshed by hand each release, and the diff is reviewed. | User |
 | D103 | **The output is `Vec<Span>`.** The server converts it with `llmobs_core::batch` before `append_spans`. Building Arrow directly is deferred until a benchmark asks for it. | User |
 | D104 | **Timestamps.** OTLP `u64` nanoseconds above `i64::MAX` reject the span (`timestamp_overflow`). The D85 bounds reject the span (`start_time_out_of_range`). `end < start` is **clamped**: `end_time = start_time`, and the attribute `llmobs.normalize_warning` gets `end_before_start`. The span is kept. | User |
@@ -76,15 +76,15 @@ server ── model_prices rows (meta.db) ──▶ PriceTable::new          ser
   - B2's captured cases are blessed with `LLMOBS_BLESS=1` (N4) and reviewed;
   - each D111 "pinned by a captured fixture" behaviour gets re-checked against them;
   - the golden test's `PENDING` list (N4) must be empty when B1 ends; B2's cases never go into it.
-- **Core (`llmobs-core`)** is a shared contract. B1 does not change it. The requests below go to the coordinating session and must be on `main` before the sub-phase that needs them. If one is missing, the agent stops and reports it.
+- **Core (`llmobs-core`)** is a shared contract. B1 does not change it. The requests below were made by the coordinating session and are on `main`.
 
 ### Requests for `llmobs-core`
 
 | # | Needed by | Request |
 |---|---|---|
-| C1 | N4 | `metadata_key::NORMALIZE_WARNING = llmobs_name!(".normalize_warning")` in `names.rs`. The value is a JSON array string of warning codes, sorted and deduplicated (`["end_before_start"]`). |
-| C2 | N14 | `pub struct MediaBlob { pub sha256: String /* 64 lowercase hex */, pub mime_type: String, pub bytes: bytes::Bytes }` in a new `media.rs`. It's used by `llmobs-otel` (produced) and `llmobs-storage` (`put_media`). If A1 has already defined it in core, use theirs. |
-| C3 | N3 | A `marker::MAX_DEPTH: &str = "[llmobs: max depth]"` constant next to the truncation markers. |
+| C1 | N4 | `metadata_key::NORMALIZE_WARNING` (`llmobs.normalize_warning`) in `names.rs`. The value is a JSON array string of warning codes, sorted and deduplicated. **Done.** |
+| C2 | N14 | `llmobs_core::media::MediaBlob { sha256: String /* 64 lowercase hex */, mime_type: String, bytes: Vec<u8> }`, whose `Debug` prints the size, never the bytes. Used by `llmobs-otel` (produced) and `llmobs-storage` (`put_media`). **Done.** |
+| C3 | N3 | `marker::MAX_DEPTH` (`[llmobs: max depth]`) next to the truncation markers. **Done.** |
 
 ## Public API at the end of B1
 
