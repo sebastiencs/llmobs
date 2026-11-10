@@ -42,7 +42,7 @@ If the code has to deviate from the spec, update the spec **in the same change**
 
 **Dependencies.**
 - Every version is declared once in the root `Cargo.toml` `[workspace.dependencies]`; crates use `dep = { workspace = true }`.
-- `datafusion`, `arrow`, `parquet` and `object_store` are a pinned family: never bump one without the others.
+- `datafusion`, `arrow`, `parquet` and `object_store` are a pinned family: never bump one without the others. Dependabot PRs follow the same rules; the DataFusion family arrives as one PR.
 - Look up real versions (`cargo search`, `cargo info`); never guess one.
 - JS packages use exact versions and respect `minimumReleaseAge`; Python dev tools are pinned by `uv.lock`.
 
@@ -120,6 +120,10 @@ Run everything through `just`:
 | `just lint` | clippy, warnings as errors |
 | `just test` | all Rust tests |
 | `just deny` | supply-chain checks (advisories, bans, sources; licenses deferred, D57) |
+| `just deny-advisories` | RustSec advisories only |
+| `just assert-clean` | fail if the working tree changed; CI runs it after each job |
+| `just ts-smoke <tarball>` | load a packed TS SDK from ESM and CommonJS |
+| `just check-workflows` | lint and audit GitHub Actions workflows (actionlint, zizmor) |
 | `just openapi` | regenerate `crates/server/openapi.json` and `web/src/api/schema.gen.ts` |
 | `just web-dev` | web dev server with the API mocked from `fixtures/api` |
 | `just web-dev-server` | web dev server proxied at the real API |
@@ -132,6 +136,19 @@ Required tools:
 - Node (version in `.node-version`)
 - `pnpm` (version in the root `package.json` `packageManager`)
 - `uv`
+- `actionlint` and `zizmor` (only when editing `.github/`)
+
+## CI
+
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`. `ci-ok` is the required status.
+
+CI runs the `just` recipes from the table. A branch that passes `just check` locally and leaves a clean tree passes CI, except for the runtime matrix (Python 3.15, Node 22.12).
+
+Actions are pinned by commit SHA with the tag in a comment; Dependabot updates them. Never use a tag or branch reference.
+
+Workflow `run:` steps call `just` recipes. New checks go into the `justfile` first.
+
+Updated by hand: `rust-toolchain.toml`, `.node-version`, `packageManager`.
 
 ## Naming
 

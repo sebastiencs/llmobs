@@ -36,7 +36,7 @@ TLS: terminated by a reverse proxy in the reference setups; native TLS optional 
 
 | Artifact | Details |
 |---|---|
-| Binary | `llmobs` for linux-x86_64, linux-aarch64 (musl, static), macOS arm64/x86_64. Web UI embedded. Built in CI with `cargo build --release` (LTO thin, `codegen-units=1`, `panic=abort` off — we want unwinding for task isolation). |
+| Binary | `llmobs` for linux-x86_64, linux-aarch64 (musl, static), macOS arm64/x86_64. Web UI embedded. Built in CI with `cargo build --release` (LTO thin, `codegen-units=1`, `panic=abort` off — we want unwinding for task isolation) (release pipeline added with the server track, D81). |
 | Docker image | `ghcr.io/<org>/llmobs:<version>`, distroless/static base, non-root uid 10001, `VOLUME /data`, `EXPOSE 8080 4317 4318`, healthcheck `/healthz`. Multi-arch. |
 | docker-compose | `llmobs` only (local disk) and a variant with MinIO for S3 mode. |
 | Helm chart | One `StatefulSet` (replicas: 1, enforced), `PersistentVolumeClaim` for `/data`, `Service` (8080, 4317, 4318), optional `Ingress`, `Secret` for encryption key / SMTP / OIDC, values for S3. `podManagementPolicy: OrderedReady`, `terminationGracePeriodSeconds: 60`, `strategy: Recreate` semantics (never two pods on one volume). |
@@ -102,7 +102,7 @@ llmobs admin backup --to /backups/llmobs-$(date +%F)   # online, consistent
 - Outbound requests (webhooks, LLM connections, OIDC, Slack) go through an HTTP client with an SSRF guard: deny private/link-local/loopback ranges unless `security.allow_private_network_egress = true` (needed for local Ollama/vLLM — the setting is shown in the LLM connection form).
 - Request size limits everywhere; JSON depth limit 128.
 - Content-Security-Policy on the UI (`default-src 'self'`; media from `self` only); payloads rendered as text (no HTML injection from trace content).
-- `cargo deny` + `cargo audit` in CI; dependency licenses compatible with any license we later pick.
+- `cargo deny` (advisories, bans, sources) on every CI run and `cargo deny check advisories` weekly (RustSec, the database `cargo audit` uses); Dependabot alerts for JS and Python; dependency licenses compatible with any license we later pick (license check enabled once D9 is decided, D57).
 
 ## Documentation deliverables (part of the MVP)
 
