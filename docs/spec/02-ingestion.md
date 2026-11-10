@@ -68,7 +68,7 @@ Note: Vercel's outer `ai.generateText` is `chain` (not `llm`) so tokens/cost are
 | GenAI | `gen_ai.input.messages` (messages), `gen_ai.system_instructions`, `gen_ai.tool.definitions`; tool spans: `gen_ai.tool.call.arguments` (json) | `gen_ai.output.messages`; tool spans: `gen_ai.tool.call.result` |
 | GenAI legacy events | events `gen_ai.system.message`, `gen_ai.user.message`, `gen_ai.assistant.message`, `gen_ai.tool.message` → messages | event `gen_ai.choice` → messages |
 | OpenInference | `llm.input_messages.{i}.message.*` (flattened → messages); else `input.value` (format from `input.mime_type`: `application/json` → json, else text) | `llm.output_messages.{i}.message.*`; else `output.value` |
-| Vercel | `ai.prompt.messages` (JSON, converted) or `ai.prompt`; tool: `ai.toolCall.args` | `ai.response.text` + `ai.response.toolCalls` → assistant message; `ai.response.object`; tool: `ai.toolCall.result` |
+| Vercel | `ai.prompt.messages` (JSON, converted) or `ai.prompt`; tool: `ai.toolCall.args` | On `llm` spans: `ai.response.text` + `ai.response.toolCalls` → one assistant message (finish reason: rule 16). On other kinds: `ai.response.text`, else `ai.response.object`, as a non-message value (rule 10). Tool: `ai.toolCall.result` |
 | OpenLLMetry | `gen_ai.prompt.{i}.role/content` (+ `tool_calls`) → messages; else `traceloop.entity.input` | `gen_ai.completion.{i}.*`; else `traceloop.entity.output` |
 | Langfuse | `langfuse.observation.input` | `langfuse.observation.output` |
 | Laminar | `lmnr.span.input` | `lmnr.span.output` |
@@ -119,23 +119,25 @@ These rules resolve ambiguities in the tables above. They were fixed while writi
    - *Payload* attributes are always removed from `attributes` once consumed. These are every attribute that feeds `input`, `output`, `system_instructions` or `tool_definitions`, including flattened `llm.input_messages.*`, `llm.output_messages.*`, `llm.tools.*` and `gen_ai.prompt.*`/`gen_ai.completion.*`.
    - Payload attributes of **lower-precedence** conventions for a field that a higher-precedence source already filled are removed too, for example OpenInference `input.value` when `llm.input_messages.*` exist.
    - Every other consumed attribute is kept in `attributes` if its encoded value is at most 256 bytes; otherwise it is removed.
-3. **Tokens and cost** are normalized only on `llm` and `embedding` spans. On other kinds the usage attributes stay in `attributes`, and the token and cost columns are null. This prevents double counting with child LLM spans (Vercel `ai.generateText`). `provider`, `request_model`, `response_model` and `operation` are normalized on every kind.
+   - *Format hints* (`input.mime_type`, `output.mime_type`) are not payload attributes. They are consumed attributes and follow the previous bullet, even when the payload they describe was dropped.
+3. **Tokens and cost** are normalized only on `llm` and `embedding` spans. On other kinds the usage attributes stay in `attributes`, and the token and cost columns are null. This prevents double counting with child LLM spans (Vercel `ai.generateText`). `provider`, `request_model`, `response_model`, `operation` and `request_params` are normalized on every kind.
 4. **`total_tokens`**: taken from a total attribute if present, else `input_tokens + output_tokens` when both are known, else null.
 5. **System messages:** system messages that arrive *inside* a message list (OpenInference, OpenLLMetry, Vercel) stay in `input` as `role: system` messages. `system_instructions` is filled only from dedicated sources (`gen_ai.system_instructions`).
 6. **Tool calls:** a tool call's `arguments` (and a tool response's `response`) is parsed into a JSON value when it is a string containing valid JSON; otherwise it is kept as a JSON string.
 7. **`tool_definitions`**: a JSON array, with one element per tool (parsed JSON schema objects), in index order.
-8. **`request_params`**: a compact JSON object with keys sorted alphabetically. Null when there are no parameters.
+8. **`request_params`**: a compact JSON object with keys sorted alphabetically. Null when there are no parameters. Vercel `ai.settings.<key>` contributes `<key>` unchanged (no case conversion: `ai.settings.maxRetries` → `maxRetries`), with its OTLP value type (`intValue` → JSON number). The source attributes are consumed attributes (rule 2).
 9. **Previews** (max 512 Unicode scalar values, cut with no ellipsis):
    - `messages` input: text parts of the last `user` message, joined with `\n`. If there is no user message, use the last message's text parts.
    - `messages` output: text parts of the last message, joined with `\n`. Null if it has none.
    - `json`: the compact JSON.
    - `text`: the text.
-10. **Payload format for non-message values:** a value that parses as a JSON object or array is `json`; any other string is `text`. So Vercel `ai.prompt` (JSON object string) is `json`, and `ai.response.text` is `text`.
+10. **Payload format for non-message values:** a value that parses as a JSON object or array is `json`; any other string is `text`. So Vercel `ai.prompt` (JSON object string) is `json`, and `ai.response.text` on a non-`llm` span is `text`.
 11. **Context fields consumed from metadata-like sources** (`ai.telemetry.metadata.sessionId`/`userId`, `traceloop.association.properties.session_id`/`user_id`, …) fill `session_id`/`user_id` and are **not** duplicated in the `metadata` map. Their sibling keys do go to `metadata`, with the source prefix stripped (`ai.telemetry.metadata.feature` → `feature`).
 12. **`provider`** is lowercased and mapped through an alias table owned by `llmobs-otel` (`openai.chat`, `openai.responses` → `openai`; `anthropic.messages` → `anthropic`; …). Unknown values are kept lowercased.
 13. **`conventions`** are listed in precedence order (§ Convention detection), without duplicates.
 14. **Truncation of strings:** cut at the largest UTF-8 character boundary ≤ the limit, then append the marker. The stored value is therefore slightly longer than the limit. Payloads are measured **after** media extraction.
 15. **Rejected spans:** a span whose trace ID or span ID is missing, of the wrong length or all zeros is rejected (counted in `partial_success.rejected_spans`). The other spans of the request are still accepted. An all-zero `parentSpanId` is treated as absent.
+16. **Finish reason of a message built from flat attributes** (Vercel `doGenerate`/`doStream`): the first element of `gen_ai.response.finish_reasons` when present, else `ai.response.finishReason`. GenAI wins by the precedence of § Convention detection. Both source attributes are consumed attributes (rule 2).
 
 ## Media extraction
 
@@ -170,12 +172,12 @@ Resolution for span with `model` m, `provider` p, at `start_time` t, in project 
 1. If span has a reported cost (`llmobs.cost.total`, `llm.cost.total`, `gen_ai.usage.cost`) → use it, `cost_source = reported`.
 2. Else candidates = project-custom rows ∪ org-custom rows ∪ built-in rows matching m (and p when the row has one), `valid_from ≤ t`; pick by priority project > org > built-in, then latest `valid_from`, then longest pattern.
 3. `uncached_input = input_tokens − cache_read − cache_write`, `non_reasoning_output = output_tokens − reasoning` (floored at 0).
-4. `cost_input = uncached_input·input + cache_read·cache_read_price + cache_write·cache_write_price`; `cost_output = non_reasoning_output·output + reasoning·reasoning_price`; all /1e6.
+4. `cost_input = uncached_input·input + cache_read·cache_read_price + cache_write·cache_write_price`; `cost_output = non_reasoning_output·output + reasoning·reasoning_price`; all /1e6. A term whose token count is 0 or absent contributes 0, even if its unit price is null. A term whose token count is greater than 0 and whose unit price is null (after `reasoning` → `output`) makes its part null; nothing else falls back. `cost_total = cost_input + cost_output`, null if either is null. `cost_source` stays `computed` (D82).
 5. No match ⇒ costs null, `cost_source = none` (UI shows "—", never $0).
 
 Built-in prices: a snapshot of LiteLLM's `model_prices_and_context_window.json`, converted at build time to our format and embedded; refreshed every release. Costs are computed once at ingest and **not** recomputed when prices change (documented; a recompute job is post-MVP).
 
-Embedding spans use `input` price only.
+Embedding spans use the `input` price only: `cost_output` is null and `cost_total = cost_input` (D82).
 
 ## Live bus
 

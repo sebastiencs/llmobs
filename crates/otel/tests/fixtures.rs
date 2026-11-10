@@ -660,13 +660,7 @@ fn check_computed(label: &str, span: &Span, rows: &[PriceRow], failures: &mut Ve
         ));
         return;
     };
-    let Ok((input, output, total)) = recompute(span, row) else {
-        failures.push(format!(
-            "{label}: {} price row {} cannot price the token counts",
-            span.span_id, row.model_name
-        ));
-        return;
-    };
+    let (input, output, total) = recompute(span, row);
     compare_cost(label, span, "cost_input", span.cost_input, input, failures);
     compare_cost(
         label,
@@ -684,25 +678,30 @@ fn compare_cost(
     span: &Span,
     field: &str,
     actual: Option<f64>,
-    expected: f64,
+    expected: Option<f64>,
     failures: &mut Vec<String>,
 ) {
-    let Some(actual) = actual else {
-        failures.push(format!(
+    match (actual, expected) {
+        (None, None) => {}
+        (None, Some(expected)) => failures.push(format!(
             "{label}: {} {field} is absent; recomputed {expected}",
             span.span_id
-        ));
-        return;
-    };
-    if (actual - expected).abs() > 1e-12 {
-        failures.push(format!(
-            "{label}: {} {field} is {actual}, recomputed {expected}",
+        )),
+        (Some(_), None) => failures.push(format!(
+            "{label}: {} {field} is present; recomputed absent",
             span.span_id
-        ));
+        )),
+        (Some(actual), Some(expected)) if (actual - expected).abs() > 1e-12 => {
+            failures.push(format!(
+                "{label}: {} {field} is {actual}, recomputed {expected}",
+                span.span_id
+            ));
+        }
+        (Some(_), Some(_)) => {}
     }
 }
 
-fn recompute(span: &Span, row: &PriceRow) -> Result<(f64, f64, f64), ()> {
+fn recompute(span: &Span, row: &PriceRow) -> (Option<f64>, Option<f64>, Option<f64>) {
     let input = span.input_tokens.unwrap_or(0) as f64;
     let output = span.output_tokens.unwrap_or(0) as f64;
     let cache_read = span.cache_read_tokens.unwrap_or(0) as f64;
@@ -710,27 +709,43 @@ fn recompute(span: &Span, row: &PriceRow) -> Result<(f64, f64, f64), ()> {
     let reasoning = span.reasoning_tokens.unwrap_or(0) as f64;
     let uncached = (input - cache_read - cache_write).max(0.0);
     let non_reasoning = (output - reasoning).max(0.0);
+    let cost_input = priced_part(&[
+        charge(uncached, row.price_input),
+        charge(cache_read, row.price_cache_read),
+        charge(cache_write, row.price_cache_write),
+    ])
+    .map(|cost| cost / 1e6);
     if span.span_kind == SpanKind::Embedding {
-        let cost_input = charge(uncached, row.price_input)?;
-        let cost_input = cost_input / 1e6;
-        return Ok((cost_input, 0.0, cost_input));
+        return (cost_input, None, cost_input);
     }
-    let cost_input = charge(uncached, row.price_input)?
-        + charge(cache_read, row.price_cache_read)?
-        + charge(cache_write, row.price_cache_write)?;
     let reasoning_price = row.price_reasoning.or(row.price_output);
-    let cost_output =
-        charge(non_reasoning, row.price_output)? + charge(reasoning, reasoning_price)?;
-    let cost_input = cost_input / 1e6;
-    let cost_output = cost_output / 1e6;
-    Ok((cost_input, cost_output, cost_input + cost_output))
+    let cost_output = priced_part(&[
+        charge(non_reasoning, row.price_output),
+        charge(reasoning, reasoning_price),
+    ])
+    .map(|cost| cost / 1e6);
+    let cost_total = match (cost_input, cost_output) {
+        (Some(input), Some(output)) => Some(input + output),
+        _ => None,
+    };
+    (cost_input, cost_output, cost_total)
 }
 
-fn charge(tokens: f64, price: Option<f64>) -> Result<f64, ()> {
-    if tokens == 0.0 {
-        return Ok(0.0);
+/// `None` when any term is `None`. A zero token count is `Some(0.0)` from [`charge`].
+fn priced_part(terms: &[Option<f64>]) -> Option<f64> {
+    let mut total = 0.0;
+    for term in terms {
+        total += (*term)?;
     }
-    price.map(|price| tokens * price).ok_or(())
+    Some(total)
+}
+
+fn charge(tokens: f64, price: Option<f64>) -> Option<f64> {
+    if tokens == 0.0 {
+        Some(0.0)
+    } else {
+        price.map(|price| tokens * price)
+    }
 }
 
 fn pick_price<'a>(
@@ -1256,5 +1271,56 @@ fn empty_case() -> Case {
             media: Vec::new(),
             rejected_spans: 0,
         },
+    }
+}
+
+#[test]
+fn null_cache_write_price_nulls_input_and_total() {
+    let mut span = bare_span("llm");
+    span.input_tokens = Some(100);
+    span.cache_write_tokens = Some(100);
+    span.output_tokens = Some(10);
+    let mut row = sample_price();
+    row.price_cache_write = None;
+    let (input, output, total) = recompute(&span, &row);
+    assert_eq!(input, None);
+    assert_eq!(output, Some(10.0 * 4.0 / 1e6));
+    assert_eq!(total, None);
+}
+
+#[test]
+fn embedding_span_has_null_output_cost() {
+    let mut span = bare_span("embedding");
+    span.input_tokens = Some(1_000_000);
+    let mut row = sample_price();
+    row.price_input = Some(2.0);
+    let (input, output, total) = recompute(&span, &row);
+    assert_eq!((input, output, total), (Some(2.0), None, Some(2.0)));
+}
+
+#[test]
+fn null_reasoning_price_uses_the_output_price() {
+    let mut span = bare_span("llm");
+    span.output_tokens = Some(5);
+    span.reasoning_tokens = Some(5);
+    let mut row = sample_price();
+    row.price_reasoning = None;
+    row.price_output = Some(4.0);
+    let (_input, output, _total) = recompute(&span, &row);
+    assert_eq!(output, Some(5.0 * 4.0 / 1e6));
+}
+
+fn sample_price() -> PriceRow {
+    PriceRow {
+        model_name: "demo".to_owned(),
+        match_pattern: "demo".to_owned(),
+        provider: None,
+        valid_from: 0,
+        price_input: Some(3.0),
+        price_output: Some(4.0),
+        price_cache_read: Some(0.3),
+        price_cache_write: Some(3.75),
+        price_reasoning: None,
+        tiers: None,
     }
 }
