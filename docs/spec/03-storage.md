@@ -247,7 +247,7 @@ Runs in a background task with bounded parallelism (`compaction.threads`, defaul
 
 ## 6. Query path
 
-For each request, `llmobs-storage` builds a DataFusion `SessionContext` and the project's `TableProvider`s, all bound to one `ReadState` (catalog, memtable and tombstones, §4). The providers expose the stored Arrow schemas of 01 (binary IDs, `project_id`). They don't register themselves: the query layer (05) registers the user-facing views over them (hex IDs, hidden `project_id`, `sessions`, default exclusions, D89). Because each provider is constructed for a single project, the user cannot name another project's data. A dropped project (§7) gets empty tables.
+For each request, `Storage::query` returns a `ProjectQuery`: the project's `TableProvider`s, all bound to one `ReadState` (catalog, memtable and tombstones, §4), plus a per-query `RuntimeEnv` (memory pool, spill directory) and `target_partitions`. The query layer (05, D91) builds the DataFusion session from it. The providers expose the stored Arrow schemas of 01 (binary IDs, `project_id`). They don't register themselves: the query layer (05) registers the user-facing views over them (hex IDs, hidden `project_id`, `sessions`, default exclusions, D89). Because each provider is constructed for a single project, the user cannot name another project's data. A dropped project (§7) gets empty tables.
 
 ### `SpansProvider::scan(projection, filters, limit)`
 

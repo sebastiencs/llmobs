@@ -17,6 +17,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,7 +27,7 @@ use llmobs_core::ids::ProjectId;
 
 use crate::config::StorageConfig;
 use crate::config::WalSync;
-use crate::error::{AppendError, MemtableError, OpenError, StorageError, WalError};
+use crate::error::{AppendError, MemtableError, OpenError, QueryError, StorageError, WalError};
 use crate::hooks::Hooks;
 use crate::memtable::Memtable;
 use crate::read_state::{Published, ReadState};
@@ -37,6 +38,9 @@ use crate::wal::{SegmentWriter, replay};
 
 pub mod config;
 pub mod error;
+pub mod query;
+
+pub use query::ProjectQuery;
 
 pub(crate) mod hooks;
 pub(crate) mod memtable;
@@ -73,11 +77,10 @@ pub struct StorageHealth {
 /// `Send + Sync`. The server holds this in an `Arc`.
 pub struct Storage {
     hard_limit: u64,
+    target_partitions: NonZeroUsize,
     shutting_down: AtomicBool,
     lock: File,
-    /// Kept so the published snapshot outlives the writers' clones. Queries
-    /// read it once `Storage::query` exists.
-    #[allow(dead_code)]
+    /// Published memtables. `query` loads one snapshot for both providers.
     published: Arc<Published>,
     spans: WalWriterHandle,
     scores: WalWriterHandle,
@@ -99,6 +102,9 @@ impl Storage {
         config.validate()?;
         let data_dir = config.data_dir.clone();
         let hard_limit = config.memtable.hard_limit.0;
+        // `validate` rejects 0. A missed check still yields one partition.
+        let target_partitions =
+            NonZeroUsize::new(config.query.target_partitions).unwrap_or(NonZeroUsize::MIN);
         let tune = WriterTune {
             sync: config.wal.sync,
             group_max_bytes: config.wal.group_max_bytes.0,
@@ -140,6 +146,7 @@ impl Storage {
         );
         Ok(Self {
             hard_limit,
+            target_partitions,
             shutting_down: AtomicBool::new(false),
             lock: recovered.lock,
             published,
@@ -166,6 +173,32 @@ impl Storage {
         batch: RecordBatch,
     ) -> Result<AppendReceipt, AppendError> {
         self.append(Table::Scores, project, batch).await
+    }
+
+    /// Providers for `project`, both bound to one published snapshot.
+    ///
+    /// No DataFusion session is built. The query layer builds one from
+    /// [`ProjectQuery::runtime`] and [`ProjectQuery::target_partitions`].
+    /// M1's runtime is the default; M6 installs the memory pool.
+    pub fn query(&self, project: ProjectId) -> Result<ProjectQuery, QueryError> {
+        let state = self.published.load();
+        let partitions = self.target_partitions.get();
+        let spans = Arc::new(query::SpansProvider::new(
+            project,
+            Arc::clone(&state.spans),
+            partitions,
+        ));
+        let scores = Arc::new(query::ScoresProvider::new(
+            project,
+            Arc::clone(&state.scores),
+            partitions,
+        ));
+        Ok(ProjectQuery {
+            spans,
+            scores,
+            runtime: Arc::new(datafusion::execution::runtime_env::RuntimeEnv::default()),
+            target_partitions: self.target_partitions,
+        })
     }
 
     /// Writer flags and memtable accounting. Does not touch the disk.

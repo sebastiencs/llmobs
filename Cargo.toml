@@ -44,6 +44,10 @@ llmobs-server = { path = "crates/server" }
 # `compression` is omitted from DataFusion's default features: it pulls xz, bzip2,
 # gzip, and zstd for DataFusion's own file readers. Parquet readers enable the
 # codecs we accept on the `parquet` pin below.
+# Same release as `datafusion`. `MemorySourceConfig` is not re-exported from the
+# `datafusion` crate; this is the crate that defines it. Keep default features
+# off so the compression codecs DataFusion's own pin excludes stay out.
+datafusion-datasource = { version = "55.2", default-features = false }
 datafusion = { version = "55.2", default-features = false, features = [
     "nested_expressions",
     "crypto_expressions",

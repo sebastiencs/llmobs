@@ -17,6 +17,7 @@ bytesize.workspace = true
 chrono.workspace = true
 crc32c.workspace = true
 datafusion.workspace = true
+datafusion-datasource.workspace = true
 humantime-serde.workspace = true
 serde.workspace = true
 thiserror.workspace = true
