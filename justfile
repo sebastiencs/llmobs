@@ -79,6 +79,15 @@ ts-smoke tarball:
     EXPECTED="$expected" node -e 'const { VERSION } = require("llmobs"); if (VERSION !== process.env.EXPECTED) { console.error(`CJS: VERSION ${VERSION}`); process.exit(1); }'
     echo "llmobs ${expected} loads from ESM and CommonJS on Node $(node --version)"
 
+# Lint GitHub Actions workflows (actionlint) and audit them for security issues (zizmor)
+check-workflows:
+    actionlint
+    zizmor --offline .github
+
+# RustSec advisories only; run weekly by CI
+deny-advisories:
+    cargo deny check advisories
+
 # Web dev server with mocked API (fixtures/api)
 web-dev: js-install
     pnpm --dir web run dev

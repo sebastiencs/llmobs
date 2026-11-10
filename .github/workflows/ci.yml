@@ -132,6 +132,34 @@ jobs:
       - run: just check-py
       - run: just assert-clean
 
+  workflows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
+        with:
+          tool: just@1.59.0
+      - name: Install actionlint
+        shell: bash
+        # taiki-e/install-action v2.89.1 has no actionlint manifest.
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o /tmp/actionlint.tar.gz https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          tar -xzf /tmp/actionlint.tar.gz -C "$HOME/.local/bin" actionlint
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install zizmor
+        # v2.89.1's manifest stops at zizmor 1.31.1; 1.32.0 is the latest release older than 7 days.
+        run: uv tool install zizmor==1.32.0
+      - run: just check-workflows
+      - run: just assert-clean
+
   ci-ok:
     if: always()
     needs:
@@ -143,6 +171,7 @@ jobs:
         ts-sdk,
         ts-sdk-min-node,
         python-sdk,
+        workflows,
       ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
