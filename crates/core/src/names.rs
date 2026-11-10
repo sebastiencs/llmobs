@@ -74,6 +74,9 @@ pub mod metadata_key {
     pub const EVAL_EVALUATOR_ID: &str = crate::llmobs_name!(".eval.evaluator_id");
     /// `llmobs.normalize_error`, stored in `attributes`. Spec 02 § Message conversion.
     pub const NORMALIZE_ERROR: &str = crate::llmobs_name!(".normalize_error");
+    /// `llmobs.normalize_warning`, stored in `attributes`: a JSON array of warning codes,
+    /// sorted and without duplicates. Spec 02 § Normalization rules.
+    pub const NORMALIZE_WARNING: &str = crate::llmobs_name!(".normalize_warning");
 }
 
 /// Keys written into score metadata by evaluators.
@@ -125,6 +128,9 @@ pub mod marker {
         concat!("…[", crate::llmobs_name!(), ": truncated, original ");
     /// Prefix of a truncated message placeholder: `[llmobs: `, then `<K> messages truncated]`.
     pub const TRUNCATED_MESSAGES_PREFIX: &str = concat!("[", crate::llmobs_name!(), ": ");
+    /// Replaces an attribute value nested deeper than the ingest depth limit:
+    /// `[llmobs: max depth]`. Spec 02 § Normalization rules.
+    pub const MAX_DEPTH: &str = concat!("[", crate::llmobs_name!(), ": max depth]");
 }
 
 #[cfg(test)]
@@ -181,6 +187,11 @@ mod tests {
                 metadata_key::NORMALIZE_ERROR,
             ),
             (
+                "metadata_key",
+                "NORMALIZE_WARNING",
+                metadata_key::NORMALIZE_WARNING,
+            ),
+            (
                 "score_metadata_key",
                 "JUDGE_TRACE_ID",
                 score_metadata_key::JUDGE_TRACE_ID,
@@ -225,6 +236,7 @@ mod tests {
                 "TRUNCATED_MESSAGES_PREFIX",
                 marker::TRUNCATED_MESSAGES_PREFIX,
             ),
+            ("marker", "MAX_DEPTH", marker::MAX_DEPTH),
         ];
         rows.iter()
             .map(|(module, name, value)| format!("{module}::{name} = \"{value}\""))
@@ -268,6 +280,7 @@ mod tests {
             metadata_key::EVAL_EXPERIMENT_ID,
             metadata_key::EVAL_EVALUATOR_ID,
             metadata_key::NORMALIZE_ERROR,
+            metadata_key::NORMALIZE_WARNING,
             environment::EVAL,
             environment::EVAL_EXTERNAL,
             media::DROPPED_URI,
@@ -280,5 +293,6 @@ mod tests {
         }
         assert!(marker::TRUNCATED_STRING_SUFFIX_PREFIX.contains(PRODUCT));
         assert!(marker::TRUNCATED_MESSAGES_PREFIX.contains(PRODUCT));
+        assert!(marker::MAX_DEPTH.contains(PRODUCT));
     }
 }

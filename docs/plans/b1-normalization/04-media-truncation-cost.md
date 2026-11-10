@@ -8,7 +8,7 @@ See [README.md](README.md). These run in the pipeline order of spec 02: payloads
 
 **Commit:** `otel: extract media blobs from payloads`
 
-**Prerequisite:** C2 (`llmobs_core::MediaBlob`) is on `main`. If it isn't, stop and report.
+**Uses** C2 (`llmobs_core::media::MediaBlob`), already on `main`.
 
 `media.rs`:
 
@@ -58,7 +58,7 @@ Anything else is `application/octet-stream`. The `modality` of a created part co
 
 **Output:** SHA-256 lowercase hex. The same blob twice in a request gives one `MediaBlob`. `span.media_refs` lists the span's hashes, sorted and unique. `Normalized.media` is sorted by `sha256`.
 
-Fill `Normalized.media` (adding the field now if N4 couldn't).
+Fill `Normalized.media`.
 
 Fixtures:
 - update `edge/media-before-truncation` and `edge/media-truncation-rejection` so they pass, minus truncation, which comes in N15;
