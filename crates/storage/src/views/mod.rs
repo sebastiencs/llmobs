@@ -2,6 +2,7 @@
 
 mod scores;
 mod session;
+mod sessions;
 mod spans;
 mod traces;
 
@@ -135,10 +136,10 @@ impl std::fmt::Debug for QueryContext {
 }
 
 impl QueryContext {
-    /// Builds the session and registers `spans`, `traces` and `scores`.
+    /// Builds the session and registers `spans`, `traces`, `sessions` and `scores`.
     ///
-    /// `window`, when set, is written into each view's scan (D101). `sessions` is
-    /// registered by a later sub-phase.
+    /// `window`, when set, is written into each base view's scan (D101). `sessions`
+    /// is aggregated from the windowed `traces` view.
     ///
     /// # Errors
     ///
@@ -151,11 +152,13 @@ impl QueryContext {
             ViewName::Spans,
             spans::spans_view(source.spans, window)?,
         )?;
+        let traces_plan = traces::traces_view(source.traces, window)?;
         register(
             &session,
-            ViewName::Traces,
-            traces::traces_view(source.traces, window)?,
+            ViewName::Sessions,
+            map_plan(sessions::sessions_from_traces(traces_plan.clone()))?,
         )?;
+        register(&session, ViewName::Traces, traces_plan)?;
         register(
             &session,
             ViewName::Scores,
@@ -481,6 +484,23 @@ mod tests {
                 "total_tokens",
                 "cost_total",
                 "models",
+            ],
+        );
+        let sessions = field_names(&ctx, "sessions").await;
+        same_columns(
+            &sessions,
+            &[
+                "session_id",
+                "start_time",
+                "end_time",
+                "duration_ns",
+                "duration_ms",
+                "trace_count",
+                "error_count",
+                "total_tokens",
+                "cost_total",
+                "user_id",
+                "tags",
             ],
         );
         let scores = field_names(&ctx, "scores").await;
