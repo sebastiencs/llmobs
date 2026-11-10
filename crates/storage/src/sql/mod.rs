@@ -1,7 +1,8 @@
 //! SQL console: validate, plan, bind, run and encode.
 //!
 //! `{name:Type}` placeholders are bound before planning. [`QueryContext::sql_json`]
-//! runs the plan under a timeout and a row cap.
+//! runs the plan under a timeout and a row cap. [`QueryContext::sql_export`] streams
+//! the same plan as CSV, NDJSON or Parquet.
 
 #![allow(dead_code)]
 
@@ -10,7 +11,7 @@ mod params;
 mod run;
 mod validate;
 
-pub use run::{SQL_MAX_ROWS, SqlColumn, SqlJson, SqlRequest};
+pub use run::{EXPORT_MAX_ROWS, ExportFormat, SQL_MAX_ROWS, SqlColumn, SqlJson, SqlRequest};
 
 use std::collections::HashSet;
 

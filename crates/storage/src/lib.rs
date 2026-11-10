@@ -11,7 +11,7 @@ mod sql;
 mod views;
 
 pub use query_error::{InvalidQuery, Position, RunError};
-pub use sql::{SQL_MAX_ROWS, SqlColumn, SqlJson, SqlRequest};
+pub use sql::{EXPORT_MAX_ROWS, ExportFormat, SQL_MAX_ROWS, SqlColumn, SqlJson, SqlRequest};
 pub use views::{
     ColumnInfo, ColumnKind, FunctionInfo, ProjectQuery, QueryContext, SqliteView, TimeWindow,
     ViewColumns, ViewName, function_catalog, view_catalog,

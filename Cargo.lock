@@ -2223,10 +2223,13 @@ version = "0.0.0"
 dependencies = [
  "arrow",
  "async-trait",
+ "bytes",
  "chrono",
  "datafusion",
+ "futures",
  "hex",
  "llmobs-core",
+ "parquet",
  "serde_json",
  "thiserror",
  "tokio",

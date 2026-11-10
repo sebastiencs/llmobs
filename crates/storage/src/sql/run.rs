@@ -1,22 +1,28 @@
-//! Run a console statement and return D98's JSON result.
+//! Run a console statement and return D98's JSON result or an export stream.
 
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
+use bytes::Bytes;
 use datafusion::dataframe::DataFrame;
+use datafusion::logical_expr::LogicalPlan;
+use datafusion::physical_plan::SendableRecordBatchStream;
 use datafusion::physical_plan::common::collect;
+use futures::stream::{BoxStream, Stream, StreamExt};
 use serde_json::{Map, Value};
 
-use super::encode::json_rows;
+use super::encode::{self, json_rows};
 use super::prepare_sql;
 use crate::query_error::{RunError, classify};
 use crate::views::QueryContext;
 
 /// One console request.
 ///
-/// `limit` is the JSON row cap. Exports ignore it (Q13); the server passes
-/// [`SQL_MAX_ROWS`] there.
+/// `limit` is the JSON row cap. [`QueryContext::sql_export`] ignores it; the
+/// server passes [`SQL_MAX_ROWS`] there.
 #[derive(Debug)]
 pub struct SqlRequest<'a> {
     /// The statement, with `{name:Type}` placeholders.
@@ -52,6 +58,20 @@ pub struct SqlJson {
 
 /// Most rows a JSON console response returns.
 pub const SQL_MAX_ROWS: usize = 10_000;
+
+/// Most rows an export streams. The stream stops after this many data rows.
+pub const EXPORT_MAX_ROWS: usize = 10_000_000;
+
+/// Byte format of [`QueryContext::sql_export`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    /// RFC 4180 CSV. The first chunk is the header line.
+    Csv,
+    /// One JSON object per line.
+    Ndjson,
+    /// ZSTD Parquet. Chunks are completed row groups, and the footer is last.
+    Parquet,
+}
 
 impl QueryContext {
     /// Run `request.query` and encode at most `request.limit` rows.
@@ -108,6 +128,239 @@ impl QueryContext {
             truncated,
         })
     }
+
+    /// Stream `request.query` as `format`, up to [`EXPORT_MAX_ROWS`] data rows.
+    ///
+    /// `request.limit` is ignored. Preparation (parsing, validation, parameters,
+    /// planning) fails as the outer error, before any byte is produced. The
+    /// timeout is measured from this call. When it expires, the stream yields
+    /// [`RunError::Timeout`] and ends.
+    ///
+    /// A failure while reading batches is yielded as `Err(classify(error))` and
+    /// the stream ends. Bytes already yielded stay yielded: the server can only
+    /// cut the response there, so a Parquet stream that fails mid-way has no footer.
+    ///
+    /// # Errors
+    ///
+    /// Parsing, validation, parameter and planning errors. Starting the execution
+    /// stream fails the same way. The time limit and later execution errors are
+    /// items of the returned stream.
+    pub async fn sql_export(
+        &self,
+        request: SqlRequest<'_>,
+        format: ExportFormat,
+    ) -> Result<BoxStream<'static, Result<Bytes, RunError>>, RunError> {
+        let deadline = tokio::time::Instant::now() + request.timeout;
+        let plan = prepare_sql(self, request.query, request.params).await?;
+        self.export_stream(plan, format, EXPORT_MAX_ROWS, deadline)
+            .await
+    }
+
+    /// Execute `plan` and encode at most `row_cap` data rows.
+    ///
+    /// `deadline` is the timeout measured by [`Self::sql_export`]. Tests pass a
+    /// small `row_cap`; the public entry point passes [`EXPORT_MAX_ROWS`].
+    async fn export_stream(
+        &self,
+        plan: LogicalPlan,
+        format: ExportFormat,
+        row_cap: usize,
+        deadline: tokio::time::Instant,
+    ) -> Result<BoxStream<'static, Result<Bytes, RunError>>, RunError> {
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(timeout_stream());
+        }
+        let frame = DataFrame::new(self.session().state(), plan)
+            .limit(0, Some(row_cap))
+            .map_err(classify)?;
+        let schema = Schema::new(frame.schema().fields().clone());
+        let body = match format {
+            ExportFormat::Csv => ExportBody::Csv {
+                header_pending: true,
+            },
+            ExportFormat::Ndjson => ExportBody::Ndjson,
+            ExportFormat::Parquet => {
+                ExportBody::Parquet(Box::new(encode::ParquetEncoder::new(&schema)?))
+            }
+        };
+        let inner = frame.execute_stream().await.map_err(classify)?;
+        if tokio::time::Instant::now() >= deadline {
+            drop(inner);
+            return Ok(timeout_stream());
+        }
+        Ok(ExportStream {
+            inner: Some(inner),
+            schema,
+            remaining: row_cap,
+            deadline,
+            sleep: Box::pin(tokio::time::sleep_until(deadline)),
+            body,
+            buffered: None,
+            stashed_error: None,
+            done: false,
+        }
+        .boxed())
+    }
+}
+
+fn timeout_stream() -> BoxStream<'static, Result<Bytes, RunError>> {
+    futures::stream::once(async { Err(RunError::Timeout) }).boxed()
+}
+
+/// Which encoder the export stream still has to run.
+enum ExportBody {
+    Csv { header_pending: bool },
+    Ndjson,
+    Parquet(Box<encode::ParquetEncoder>),
+}
+
+/// Pulls up to `remaining` rows and encodes them until `deadline`.
+struct ExportStream {
+    inner: Option<SendableRecordBatchStream>,
+    schema: Schema,
+    remaining: usize,
+    deadline: tokio::time::Instant,
+    sleep: Pin<Box<tokio::time::Sleep>>,
+    body: ExportBody,
+    buffered: Option<RecordBatch>,
+    stashed_error: Option<RunError>,
+    done: bool,
+}
+
+impl Stream for ExportStream {
+    type Item = Result<Bytes, RunError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let stream = self.get_mut();
+        if stream.done {
+            return Poll::Ready(None);
+        }
+        if stream.deadline_reached(cx) {
+            stream.stop();
+            return Poll::Ready(Some(Err(RunError::Timeout)));
+        }
+        if let ExportBody::Csv {
+            header_pending: true,
+        } = stream.body
+        {
+            stream.kick(cx);
+            if let ExportBody::Csv { header_pending } = &mut stream.body {
+                *header_pending = false;
+            }
+            return Poll::Ready(Some(Ok(encode::csv_header(&stream.schema))));
+        }
+        if let Some(error) = stream.stashed_error.take() {
+            stream.stop();
+            return Poll::Ready(Some(Err(error)));
+        }
+        loop {
+            if stream.buffered.is_none() && (stream.remaining == 0 || stream.inner.is_none()) {
+                return stream.finish();
+            }
+            match stream.next_batch(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => return stream.finish(),
+                Poll::Ready(Some(Err(error))) => {
+                    stream.stop();
+                    return Poll::Ready(Some(Err(error)));
+                }
+                Poll::Ready(Some(Ok(batch))) => match stream.encode(&batch) {
+                    Err(error) => {
+                        stream.stop();
+                        return Poll::Ready(Some(Err(error)));
+                    }
+                    Ok(None) => continue,
+                    Ok(Some(bytes)) => return Poll::Ready(Some(Ok(bytes))),
+                },
+            }
+        }
+    }
+}
+
+impl ExportStream {
+    fn deadline_reached(&mut self, cx: &mut Context<'_>) -> bool {
+        tokio::time::Instant::now() >= self.deadline
+            || matches!(self.sleep.as_mut().poll(cx), Poll::Ready(()))
+    }
+
+    /// Poll the execution stream once so a CSV header does not leave it idle.
+    fn kick(&mut self, cx: &mut Context<'_>) {
+        if self.buffered.is_some() || self.stashed_error.is_some() {
+            return;
+        }
+        match self.poll_inner(cx) {
+            Poll::Ready(Some(Ok(batch))) => self.buffered = Some(batch),
+            Poll::Ready(Some(Err(error))) => self.stashed_error = Some(error),
+            Poll::Ready(None) | Poll::Pending => {}
+        }
+    }
+
+    fn next_batch(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<RecordBatch, RunError>>> {
+        if let Some(batch) = self.buffered.take() {
+            return Poll::Ready(Some(Ok(self.cap(batch))));
+        }
+        match self.poll_inner(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Ready(Some(Err(error))) => Poll::Ready(Some(Err(error))),
+            Poll::Ready(Some(Ok(batch))) => Poll::Ready(Some(Ok(self.cap(batch)))),
+        }
+    }
+
+    fn poll_inner(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<RecordBatch, RunError>>> {
+        let Some(inner) = self.inner.as_mut() else {
+            return Poll::Ready(None);
+        };
+        match inner.poll_next_unpin(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(None) => {
+                self.inner.take();
+                Poll::Ready(None)
+            }
+            Poll::Ready(Some(Err(error))) => Poll::Ready(Some(Err(classify(error)))),
+            Poll::Ready(Some(Ok(batch))) => Poll::Ready(Some(Ok(batch))),
+        }
+    }
+
+    fn cap(&mut self, batch: RecordBatch) -> RecordBatch {
+        let rows = batch.num_rows().min(self.remaining);
+        self.remaining -= rows;
+        if self.remaining == 0 {
+            self.inner.take();
+        }
+        if rows == batch.num_rows() {
+            batch
+        } else {
+            batch.slice(0, rows)
+        }
+    }
+
+    fn encode(&mut self, batch: &RecordBatch) -> Result<Option<Bytes>, RunError> {
+        match &mut self.body {
+            ExportBody::Csv { .. } => encode::csv_rows(batch, &self.schema),
+            ExportBody::Ndjson => encode::ndjson_rows(batch, &self.schema),
+            ExportBody::Parquet(encoder) => encoder.push(batch),
+        }
+    }
+
+    fn finish(&mut self) -> Poll<Option<Result<Bytes, RunError>>> {
+        self.inner.take();
+        self.done = true;
+        let ExportBody::Parquet(encoder) = std::mem::replace(&mut self.body, ExportBody::Ndjson)
+        else {
+            return Poll::Ready(None);
+        };
+        match (*encoder).finish() {
+            Ok(bytes) if bytes.is_empty() => Poll::Ready(None),
+            Ok(bytes) => Poll::Ready(Some(Ok(bytes))),
+            Err(error) => Poll::Ready(Some(Err(error))),
+        }
+    }
+
+    fn stop(&mut self) {
+        self.inner.take();
+        self.done = true;
+    }
 }
 
 fn cap_rows(batches: Vec<RecordBatch>, limit: usize) -> (Vec<RecordBatch>, bool) {
@@ -141,7 +394,7 @@ mod tests {
     use crate::query_error::RunError;
     use crate::test_support::{dataset_spans, example_query};
     use crate::views::{QueryContext, SqliteView, TimeWindow};
-    use datafusion::arrow::array::Int64Array;
+    use datafusion::arrow::array::{Int64Array, StringArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::common::Diagnostic;
@@ -150,6 +403,7 @@ mod tests {
     use datafusion::error::DataFusionError;
     use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
     use llmobs_core::time_serde::parse_rfc3339;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use serde_json::Value;
 
     fn context() -> QueryContext {
@@ -499,5 +753,276 @@ mod tests {
         assert_eq!(count, expected as i64);
         assert!(count > 0);
         assert!(count < dataset_spans().len() as i64);
+    }
+
+    async fn export_bytes(
+        ctx: &QueryContext,
+        query: &str,
+        format: ExportFormat,
+        row_cap: usize,
+    ) -> Vec<u8> {
+        let plan = prepare_sql(ctx, query, &empty_params())
+            .await
+            .unwrap_or_else(|error| panic!("{query}: {error}"));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        let mut stream = ctx
+            .export_stream(plan, format, row_cap, deadline)
+            .await
+            .unwrap_or_else(|error| panic!("{query}: {error}"));
+        let mut body = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.unwrap_or_else(|error| panic!("{query}: {error}"));
+            body.extend_from_slice(&chunk);
+        }
+        body
+    }
+
+    fn csv_lines(bytes: &[u8]) -> Vec<String> {
+        let text = String::from_utf8(bytes.to_vec()).expect("csv utf-8");
+        assert!(text.ends_with("\r\n"), "{text:?}");
+        text.split("\r\n")
+            .filter(|line| !line.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn ndjson_rows(bytes: &[u8]) -> Vec<Map<String, Value>> {
+        let text = String::from_utf8(bytes.to_vec()).expect("ndjson utf-8");
+        text.lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                serde_json::from_str(line).unwrap_or_else(|error| panic!("{line}: {error}"))
+            })
+            .collect()
+    }
+
+    fn parquet_batches(bytes: &[u8]) -> Vec<RecordBatch> {
+        let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))
+            .expect("parquet")
+            .build()
+            .expect("reader");
+        reader.map(|batch| batch.expect("batch")).collect()
+    }
+
+    fn data_rows(batches: &[RecordBatch]) -> Vec<Map<String, Value>> {
+        if batches.is_empty() {
+            return Vec::new();
+        }
+        let schema = batches[0].schema();
+        json_rows(batches, schema.as_ref()).expect("json")
+    }
+
+    #[tokio::test]
+    async fn csv_quotes_special_names_and_writes_tags_as_json() {
+        let ctx = context();
+        let bytes = export_bytes(
+            &ctx,
+            "SELECT trace_id, name, tags FROM traces ORDER BY start_time",
+            ExportFormat::Csv,
+            EXPORT_MAX_ROWS,
+        )
+        .await;
+        let lines = csv_lines(&bytes);
+        assert_eq!(lines.len(), 7, "{lines:?}");
+        assert_eq!(lines[0], "trace_id,name,tags");
+        assert!(
+            lines[1..].iter().any(|line| line.contains('[')),
+            "{lines:?}"
+        );
+
+        let schema = Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec![
+                Some("plain"),
+                Some("say \"hi\", there"),
+            ]))],
+        )
+        .expect("batch");
+        let table = MemTable::try_new(schema, vec![vec![batch]]).expect("table");
+        let ctx = context();
+        ctx.register_sqlite_view(SqliteView::ExperimentItems, Arc::new(table))
+            .expect("register");
+        let bytes = export_bytes(
+            &ctx,
+            "SELECT name FROM experiment_items",
+            ExportFormat::Csv,
+            EXPORT_MAX_ROWS,
+        )
+        .await;
+        assert_eq!(
+            csv_lines(&bytes),
+            [
+                "name".to_owned(),
+                "plain".to_owned(),
+                "\"say \"\"hi\"\", there\"".to_owned(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn ndjson_matches_sql_json_rows() {
+        let query = "SELECT trace_id, name, tags FROM traces ORDER BY start_time";
+        let ctx = context();
+        let json = ctx
+            .sql_json(request(query, &empty_params(), 10))
+            .await
+            .expect("json");
+        let bytes = export_bytes(&ctx, query, ExportFormat::Ndjson, EXPORT_MAX_ROWS).await;
+        assert_eq!(ndjson_rows(&bytes), json.rows);
+    }
+
+    #[tokio::test]
+    async fn parquet_rows_match_the_spans_view() {
+        let ctx = context();
+        let bytes = export_bytes(
+            &ctx,
+            "SELECT * FROM spans",
+            ExportFormat::Parquet,
+            EXPORT_MAX_ROWS,
+        )
+        .await;
+        let expected = crate::test_support::rows(&ctx, "SELECT * FROM spans").await;
+        assert_eq!(data_rows(&parquet_batches(&bytes)), data_rows(&expected));
+    }
+
+    #[tokio::test]
+    async fn the_row_cap_limits_each_format() {
+        let ctx = context();
+        let query = "SELECT trace_id FROM traces ORDER BY start_time";
+        for format in [
+            ExportFormat::Csv,
+            ExportFormat::Ndjson,
+            ExportFormat::Parquet,
+        ] {
+            let bytes = export_bytes(&ctx, query, format, 3).await;
+            let rows = match format {
+                ExportFormat::Csv => csv_lines(&bytes).len() - 1,
+                ExportFormat::Ndjson => ndjson_rows(&bytes).len(),
+                ExportFormat::Parquet => parquet_batches(&bytes)
+                    .iter()
+                    .map(RecordBatch::num_rows)
+                    .sum(),
+            };
+            assert_eq!(rows, 3, "{format:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_sql_is_an_outer_error() {
+        let exported = context()
+            .sql_export(
+                request("INSERT INTO spans VALUES (1)", &empty_params(), 10),
+                ExportFormat::Csv,
+            )
+            .await;
+        match exported {
+            Err(RunError::Invalid(_)) => {}
+            Err(error) => panic!("{error:?}"),
+            Ok(_) => panic!("invalid SQL returned a stream"),
+        }
+    }
+
+    #[tokio::test]
+    async fn division_by_zero_ends_the_stream() {
+        let mut stream = context()
+            .sql_export(
+                request(
+                    "SELECT 1 / x FROM (VALUES (1), (0)) t(x)",
+                    &empty_params(),
+                    10,
+                ),
+                ExportFormat::Ndjson,
+            )
+            .await
+            .expect("stream");
+        let mut failed = None;
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(_) => {}
+                Err(RunError::Failed(message)) => {
+                    failed = Some(message);
+                    break;
+                }
+                Err(other) => panic!("{other:?}"),
+            }
+        }
+        let message = failed.expect("failed");
+        assert!(message.to_ascii_lowercase().contains("zero"), "{message}");
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_slow_export_hits_the_timeout() {
+        let ctx = context();
+        ctx.register_sqlite_view(SqliteView::ExperimentItems, integers(20_000))
+            .expect("register");
+        let started = Instant::now();
+        let mut stream = ctx
+            .sql_export(
+                SqlRequest {
+                    query: "SELECT sum(a.v + b.v) FROM experiment_items a, experiment_items b",
+                    params: &empty_params(),
+                    limit: SQL_MAX_ROWS,
+                    timeout: Duration::from_millis(50),
+                },
+                ExportFormat::Csv,
+            )
+            .await
+            .expect("stream");
+        let mut timed_out = false;
+        while let Some(item) = stream.next().await {
+            match item {
+                Err(RunError::Timeout) => {
+                    timed_out = true;
+                    break;
+                }
+                Ok(_) => {}
+                Err(other) => panic!("{other:?}"),
+            }
+        }
+        assert!(timed_out);
+        assert!(stream.next().await.is_none());
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "returned in {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn dropping_an_export_releases_its_memory() {
+        let runtime = runtime(1 << 30);
+        let ctx = context_with(Arc::clone(&runtime));
+        ctx.register_sqlite_view(SqliteView::ExperimentItems, integers(20_000))
+            .expect("register");
+        let mut stream = ctx
+            .sql_export(
+                SqlRequest {
+                    // Output names are unique (Q10). The export cap is 10M rows,
+                    // so this join is still running after the first chunk.
+                    query: "SELECT a.v AS a_v, b.v AS b_v \
+                            FROM experiment_items a, experiment_items b",
+                    params: &empty_params(),
+                    limit: SQL_MAX_ROWS,
+                    timeout: Duration::from_secs(30),
+                },
+                ExportFormat::Csv,
+            )
+            .await
+            .expect("stream");
+        let first = stream.next().await.expect("chunk").expect("bytes");
+        assert!(!first.is_empty());
+        drop(stream);
+        let started = Instant::now();
+        loop {
+            if runtime.memory_pool.reserved() == 0 {
+                break;
+            }
+            if started.elapsed() > Duration::from_secs(10) {
+                panic!("reserved {}", runtime.memory_pool.reserved());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 }
