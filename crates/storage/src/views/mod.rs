@@ -8,9 +8,9 @@ mod sessions;
 mod spans;
 mod traces;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::common::{DFSchema, DFSchemaRef};
@@ -113,6 +113,24 @@ pub enum ViewName {
     DatasetItems,
 }
 
+/// A server-owned table the SQL console can name (D93).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SqliteView {
+    /// Experiment item rows.
+    ExperimentItems,
+    /// Dataset item rows.
+    DatasetItems,
+}
+
+impl SqliteView {
+    fn view_name(self) -> ViewName {
+        match self {
+            Self::ExperimentItems => ViewName::ExperimentItems,
+            Self::DatasetItems => ViewName::DatasetItems,
+        }
+    }
+}
+
 impl ViewName {
     /// Unqualified table name.
     pub fn as_str(self) -> &'static str {
@@ -135,6 +153,8 @@ pub struct QueryContext {
     /// Unqualified schema of each registered view, taken from its logical plan.
     #[allow(dead_code)] // parse_filter reads this
     schemas: HashMap<ViewName, DFSchemaRef>,
+    /// View names the SQL console may reference. SQLite views join this set.
+    registered: Mutex<HashSet<ViewName>>,
 }
 
 impl std::fmt::Debug for QueryContext {
@@ -187,7 +207,55 @@ impl QueryContext {
                 scores::scores_view(source.scores, window)?,
             )?,
         );
-        Ok(Self { session, schemas })
+        Ok(Self {
+            session,
+            schemas,
+            registered: Mutex::new(HashSet::from([
+                ViewName::Spans,
+                ViewName::Traces,
+                ViewName::Sessions,
+                ViewName::Scores,
+            ])),
+        })
+    }
+
+    /// Register a server-built table under its view name.
+    ///
+    /// # Errors
+    ///
+    /// [`RunError::InvalidRequest`] when `view` is already registered.
+    /// [`RunError::Internal`] when DataFusion rejects the table.
+    pub fn register_sqlite_view(
+        &self,
+        view: SqliteView,
+        table: Arc<dyn TableProvider>,
+    ) -> Result<(), RunError> {
+        let name = view.view_name();
+        let mut registered = self
+            .registered
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !registered.insert(name) {
+            return Err(RunError::InvalidRequest(format!(
+                "{} is already registered",
+                name.as_str()
+            )));
+        }
+        if let Err(error) = self.session.register_table(name.as_str(), table) {
+            registered.remove(&name);
+            return Err(RunError::Internal(error));
+        }
+        Ok(())
+    }
+
+    /// Names a SQL statement may use as tables, before CTE names.
+    pub(crate) fn registered_view_names(&self) -> HashSet<String> {
+        self.registered
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .map(|name| name.as_str().to_owned())
+            .collect()
     }
 
     #[allow(dead_code)] // filter, SQL and read queries use this from Q7 on

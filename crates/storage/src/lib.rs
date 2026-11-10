@@ -7,12 +7,13 @@
 mod filter;
 mod query_error;
 mod query_text;
+mod sql;
 mod views;
 
 pub use query_error::{InvalidQuery, Position, RunError};
 pub use views::{
-    ColumnInfo, ColumnKind, FunctionInfo, ProjectQuery, QueryContext, TimeWindow, ViewColumns,
-    ViewName, function_catalog, view_catalog,
+    ColumnInfo, ColumnKind, FunctionInfo, ProjectQuery, QueryContext, SqliteView, TimeWindow,
+    ViewColumns, ViewName, function_catalog, view_catalog,
 };
 
 #[cfg(test)]
