@@ -67,6 +67,11 @@ impl SegmentWriter {
         self.len
     }
 
+    /// Absolute path of the segment file.
+    pub(crate) fn path(&self) -> PathBuf {
+        self.dir.join(&self.name)
+    }
+
     /// Appends `bytes` and advances [`Self::len`].
     ///
     /// The `WalWrite` hook runs first. An injected fault writes nothing.
@@ -91,6 +96,21 @@ impl SegmentWriter {
         self.file
             .sync_data()
             .map_err(|source| self.io("syncing WAL segment", source))?;
+        Ok(())
+    }
+
+    /// Drops any bytes past `len` and fsyncs the file.
+    ///
+    /// A group that was written but not acknowledged is removed, so the next
+    /// replay does not treat it as a committed record.
+    pub(crate) fn rewind(&mut self, len: u64) -> Result<(), WalError> {
+        self.file
+            .set_len(len)
+            .map_err(|source| self.io("truncating WAL segment", source))?;
+        self.file
+            .sync_all()
+            .map_err(|source| self.io("syncing WAL segment", source))?;
+        self.len = len;
         Ok(())
     }
 

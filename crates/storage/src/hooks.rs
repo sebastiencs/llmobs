@@ -17,15 +17,26 @@ pub(crate) enum HookPoint {
     /// `SegmentWriter::sync`, before `sync_data`.
     WalSync,
     /// After the group is durable, before it is inserted into the memtable.
-    ///
-    /// The writer task pauses here once it exists.
-    #[allow(dead_code)]
     AfterWalSync,
     /// After the memtable insert, before the read state is published.
-    ///
-    /// The writer task pauses here once it exists.
-    #[allow(dead_code)]
     BeforePublish,
+    /// After the read state is published, before the group is acknowledged.
+    AfterPublish,
+}
+
+#[cfg(test)]
+impl HookPoint {
+    const COUNT: usize = 5;
+
+    const fn index(self) -> usize {
+        match self {
+            Self::WalWrite => 0,
+            Self::WalSync => 1,
+            Self::AfterWalSync => 2,
+            Self::BeforePublish => 3,
+            Self::AfterPublish => 4,
+        }
+    }
 }
 
 /// Per-storage test seam. In production builds every method is a no-op.
@@ -44,13 +55,17 @@ impl Hooks {
     pub(crate) fn fail(&self, _point: HookPoint) -> Option<io::Error> {
         None
     }
+
+    /// Does nothing outside tests. The writer calls this once per committed group.
+    #[inline]
+    pub(crate) fn note_group(&self, _requests: usize, _bytes: u64) {}
 }
 
 #[cfg(test)]
 mod fault {
     use std::collections::HashSet;
     use std::io;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
     use super::HookPoint;
@@ -65,7 +80,9 @@ mod fault {
         held: Mutex<HashSet<HookPoint>>,
         cv: Condvar,
         armed: Mutex<HashSet<HookPoint>>,
-        waiting: AtomicUsize,
+        waiting_at: [AtomicUsize; HookPoint::COUNT],
+        hits: [AtomicU64; HookPoint::COUNT],
+        groups: Mutex<Vec<(usize, u64)>>,
     }
 
     impl std::fmt::Debug for State {
@@ -85,7 +102,21 @@ mod fault {
                     held: Mutex::new(HashSet::new()),
                     cv: Condvar::new(),
                     armed: Mutex::new(HashSet::new()),
-                    waiting: AtomicUsize::new(0),
+                    waiting_at: [
+                        AtomicUsize::new(0),
+                        AtomicUsize::new(0),
+                        AtomicUsize::new(0),
+                        AtomicUsize::new(0),
+                        AtomicUsize::new(0),
+                    ],
+                    hits: [
+                        AtomicU64::new(0),
+                        AtomicU64::new(0),
+                        AtomicU64::new(0),
+                        AtomicU64::new(0),
+                        AtomicU64::new(0),
+                    ],
+                    groups: Mutex::new(Vec::new()),
                 }),
             }
         }
@@ -97,11 +128,13 @@ mod fault {
         /// The wait holds the same mutex `release` takes, so a release that
         /// arrives after the point is observed cannot be lost.
         pub(crate) fn pause(&self, point: HookPoint) {
+            let index = point.index();
+            self.inner.hits[index].fetch_add(1, Ordering::SeqCst);
             let mut held = lock(&self.inner.held);
             if !held.contains(&point) {
                 return;
             }
-            self.inner.waiting.fetch_add(1, Ordering::SeqCst);
+            self.inner.waiting_at[index].fetch_add(1, Ordering::SeqCst);
             while held.contains(&point) {
                 held = self
                     .inner
@@ -109,7 +142,7 @@ mod fault {
                     .wait(held)
                     .unwrap_or_else(PoisonError::into_inner);
             }
-            self.inner.waiting.fetch_sub(1, Ordering::SeqCst);
+            self.inner.waiting_at[index].fetch_sub(1, Ordering::SeqCst);
         }
 
         /// Takes a one-shot fault armed with [`Self::arm_fail`].
@@ -140,7 +173,36 @@ mod fault {
 
         /// How many calls are inside [`Self::pause`] for a held point.
         pub(crate) fn waiting(&self) -> usize {
-            self.inner.waiting.load(Ordering::SeqCst)
+            self.inner
+                .waiting_at
+                .iter()
+                .map(|count| count.load(Ordering::SeqCst))
+                .sum()
+        }
+
+        /// How many calls are inside [`Self::pause`] for `point`.
+        pub(crate) fn waiting_at(&self, point: HookPoint) -> usize {
+            self.inner.waiting_at[point.index()].load(Ordering::SeqCst)
+        }
+
+        /// How many times [`Self::pause`] has been entered for `point`.
+        ///
+        /// This counts every call, including ones that were not held, so a test
+        /// can count `WalSync` without pausing the writer.
+        pub(crate) fn hits(&self, point: HookPoint) -> u64 {
+            self.inner.hits[point.index()].load(Ordering::SeqCst)
+        }
+
+        /// Records one committed group. The writer calls this before `AfterWalSync`.
+        pub(crate) fn note_group(&self, requests: usize, bytes: u64) {
+            lock(&self.inner.groups).push((requests, bytes));
+        }
+
+        /// Groups recorded by [`Self::note_group`], in commit order.
+        ///
+        /// Each entry is `(requests, bytes)`.
+        pub(crate) fn groups(&self) -> Vec<(usize, u64)> {
+            lock(&self.inner.groups).clone()
         }
     }
 }

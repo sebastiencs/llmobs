@@ -20,4 +20,16 @@ pub mod error;
 
 pub(crate) mod hooks;
 pub(crate) mod memtable;
+pub(crate) mod read_state;
 pub(crate) mod wal;
+
+/// One acknowledged append.
+///
+/// `seq` is the WAL sequence of that record. `rows` is the batch's row count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AppendReceipt {
+    /// WAL sequence number of this record.
+    pub seq: u64,
+    /// Rows in the batch.
+    pub rows: usize,
+}

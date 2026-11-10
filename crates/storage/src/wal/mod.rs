@@ -1,12 +1,12 @@
 //! Write-ahead log for one table.
 //!
-//! Spec 03 §1. Records, segment files, and replay live here. The writer task
-//! follows. These pieces are only called from tests until that task lands.
+//! Spec 03 §1. Records, segment files, replay, and the writer task live here.
 #![allow(dead_code)]
 
 mod record;
 mod replay;
 mod segment;
+pub(crate) mod writer;
 
 use std::fs::File;
 use std::io;
