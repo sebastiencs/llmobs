@@ -86,6 +86,14 @@ clap = { version = "4.6", features = ["derive", "env"] }
 mimalloc = { version = "0.1", default-features = false }
 uuid = { version = "1.29", features = ["v7", "serde"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+# WAL record checksum (spec 03 §1).
+crc32c = "0.6.9"
+# `[storage]` sizes, for example `"256MiB"` (D90).
+bytesize = { version = "2.7.0", features = ["serde"] }
+# `[storage]` durations, for example `"120s"` (D90).
+humantime-serde = "1.1.1"
+# DataFusion 55's `TableProvider` is an `#[async_trait]` trait.
+async-trait = "0.1.92"
 # OTLP messages for fixture validation. Default features stay off: `full` enables the tonic service.
 opentelemetry-proto = { version = "0.33.1", default-features = false, features = [
     "gen-tonic-messages",
@@ -100,6 +108,8 @@ base64 = "0.23.1"
 utoipa = { version = "6.0.0", features = ["uuid"] }
 # Same major as axum 0.8's query decoding. Axum is not a dependency yet.
 serde_urlencoded = "0.7.1"
+tempfile = "3.27.0"
+proptest = "1.12.0"
 
 [profile.dev]
 debug = "line-tables-only"
