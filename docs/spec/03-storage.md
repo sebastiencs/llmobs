@@ -115,7 +115,7 @@ Runs in a background task with bounded parallelism (`compaction.threads`, defaul
 
 ## 6. Query path
 
-`llmobs-query` builds a DataFusion `SessionContext` per request. It registers the project's tables as custom `TableProvider`s bound to `(project_id, catalog snapshot, memtable snapshot, tombstone snapshot)`. Because the provider is constructed for a single project, the user cannot name another project's data.
+`llmobs-storage` builds a DataFusion `SessionContext` per request. It registers the project's tables as custom `TableProvider`s bound to `(project_id, catalog snapshot, memtable snapshot, tombstone snapshot)`. Because the provider is constructed for a single project, the user cannot name another project's data.
 
 ### `SpansProvider::scan(projection, filters, limit)`
 

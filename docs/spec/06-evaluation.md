@@ -88,7 +88,7 @@ Any expression may end with a JSONPath suffix: `trace.output$.parts[0].content`.
 
 ## Built-in judge templates
 
-Shipped as code (`llmobs-eval/templates/*.yaml`); "create from template" copies the prompt into a new evaluator the user can edit.
+Shipped as code in `llmobs-server`; "create from template" copies the prompt into a new evaluator the user can edit.
 
 | Template | Variables | Output |
 |---|---|---|

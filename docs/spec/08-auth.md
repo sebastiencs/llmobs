@@ -99,7 +99,7 @@ Enforced in one place: every handler declares `require(ProjectPerm::X)` / `requi
   - `LLMOBS_SMTP_URL`: `smtp://user:pass@host:587` (STARTTLS required), `smtps://…:465` (implicit TLS), or `smtp://host:25?tls=none` for local relays.
   - `LLMOBS_EMAIL_FROM`: e.g. `"llmobs <noreply@acme.com>"`.
   - Resend, SES, SendGrid and Postmark all work through their SMTP relays.
-- **Templates:** `minijinja` templates embedded in the binary (`llmobs-mail/templates/<name>.{html,txt}.j2`), sent as multipart/alternative. The HTML is a simple inline-styled layout with no external assets.
+- **Templates:** `minijinja` templates embedded in `llmobs-server`, sent as multipart/alternative. The HTML is a simple inline-styled layout with no external assets.
 - **Emails in MVP:**
 
   | Template | Trigger |

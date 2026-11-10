@@ -59,26 +59,32 @@ Single tokio runtime. CPU-heavy work (Parquet encode, compaction, DataFusion exe
 
 ## Crate layout (monorepo)
 
+D52. The earlier split (`llmobs-query`, `llmobs-meta`, `llmobs-auth`, `llmobs-eval`, `llmobs-alerts`, `llmobs-mail`, `llmobs-api`, and a `crates/llmobs/` binary) is folded in as follows: query lives in `llmobs-storage`; meta, auth, eval, alerts, mail and api are modules of `llmobs-server`; the binary is `llmobs-cli`. `web/` is embedded into the binary by `llmobs-server` (`memory-serve`).
+
 ```
 crates/
-  llmobs/            # binary: CLI (clap) — serve, admin, query, trace, mcp-stdio
-  llmobs-core/       # shared contracts only: ids, stored enums, names, message types, Span/Score structs, Arrow schemas + batch conversion (D59–D63)
-  llmobs-otel/       # OTLP decode (prost/opentelemetry-proto), convention detection, normalization, media extraction
-  llmobs-storage/    # WAL, memtable, Parquet writer/reader, catalog, flush, compaction, deletion, retention, GC
-  llmobs-query/      # DataFusion session factory, TableProviders, filter DSL, SQL sandbox, metrics queries
-  llmobs-meta/       # SQLite (sqlx) repositories + embedded migrations
-  llmobs-auth/       # passwords, sessions, OAuth/OIDC, API keys, RBAC checks
-  llmobs-eval/       # judge runner, built-in checks, webhook evaluator, online rules, trace-completion
-  llmobs-alerts/     # alert evaluation loop + channels
-  llmobs-mail/       # lettre + minijinja templates
-  llmobs-api/        # axum routers, SSE, OpenAPI (utoipa), MCP server, static assets
-web/                 # Vite + React + TS UI (built into crates/llmobs-api via memory-serve)
-sdks/python/         # `llmobs` on PyPI
-sdks/typescript/     # `llmobs` on npm
-docs/
+  core/      llmobs-core     shared contracts: IDs, enums, names, messages, Span/Score,
+                             Arrow schemas + batch conversion, OpenAPI schemas,
+                             no config (D59)                                          (spec 01)
+  otel/      llmobs-otel     OTLP decode, normalization, media, truncation, cost      (spec 02)
+  storage/   llmobs-storage  WAL, memtable, Parquet, catalog, compaction, deletion,
+                             DataFusion providers, filter DSL, SQL sandbox            (specs 03, 05)
+  server/    llmobs-server   API, auth, metadata DB, evaluation, alerts, email, MCP   (specs 04, 06–09)
+  cli/       llmobs-cli      the `llmobs` binary                                       (spec 09 § CLI)
+web/                         React UI (Vite, TanStack, shadcn/ui, pnpm)               (spec 11)
+sdks/python/                 Python SDK (uv)                                           (spec 10)
+sdks/typescript/             TypeScript SDK (pnpm)                                     (spec 10)
+fixtures/otlp/               OTLP fixtures shared by Rust golden tests and SDK tests  (spec 02 § Testing)
+fixtures/api/                example API responses (UI mocks), checked against the server types (spec 09)
+tools/                       dev tools (fixture capture, benchmarks); not shipped
+docs/                        decisions, specs, plans, research
 ```
 
-Dependency direction: `core` ← `otel`, `meta` ← `storage` ← `query` ← `eval`, `alerts` ← `api` ← `llmobs`.
+Dependency direction:
+
+- `core` depends on no workspace crate.
+- `otel` and `storage` depend only on `core`. They never depend on each other, so they can be built in parallel; `server` connects them.
+- `server` depends on `core`, `otel` and `storage`; `cli` depends on `server` and `core`.
 
 ## Spec-level choices (reviewed and accepted)
 
