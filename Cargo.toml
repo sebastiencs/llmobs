@@ -56,7 +56,7 @@ datafusion = { version = "55.2", default-features = false, features = [
     "recursive_protection",
     "sql",
 ] }
-arrow = "59.2"
+arrow = { version = "59.2", default-features = false }
 # parquet 59 has no `flate2` feature. `flate2-zlib-rs` is that release's deflate backend.
 parquet = { version = "59.2", default-features = false, features = [
     "arrow",
@@ -91,7 +91,6 @@ opentelemetry-proto = { version = "0.33.1", default-features = false, features =
     "trace",
     "with-serde",
 ] }
-prost = "0.14.4"
 regex = "1.13.1"
 sha2 = "0.11.1"
 base64 = "0.23.1"

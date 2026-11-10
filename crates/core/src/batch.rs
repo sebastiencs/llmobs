@@ -11,12 +11,12 @@ use arrow::array::{
     ListBuilder, MapBuilder, RecordBatch, StringBuilder, StructBuilder, TimestampNanosecondBuilder,
     UInt16Builder,
 };
-use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
+use arrow::datatypes::{DataType, Field, Fields};
 use arrow::error::ArrowError;
 use uuid::Uuid;
 
 use crate::error::CoreError;
-use crate::schema::{event_field, link_field, scores_schema, spans_schema};
+use crate::schema::{event_fields, link_fields, scores_schema, spans_schema};
 use crate::score::{Score, ScoreTarget};
 use crate::span::{Span, SpanEvent, SpanLink};
 
@@ -504,27 +504,15 @@ fn utf8_map(
     )
 }
 
-fn timestamp_type() -> DataType {
-    DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
-}
-
 fn event_list(rows: usize) -> ListBuilder<StructBuilder> {
-    let fields = Fields::from(vec![
-        Field::new(event_field::TIME, timestamp_type(), false),
-        Field::new(event_field::NAME, DataType::Utf8, false),
-        Field::new(event_field::ATTRIBUTES, DataType::Utf8, true),
-    ]);
-    let item = DataType::Struct(fields.clone());
-    ListBuilder::with_capacity(StructBuilder::from_fields(fields, rows), rows)
-        .with_field(Arc::new(Field::new("item", item, false)))
+    struct_list_builder(event_fields(), rows)
 }
 
 fn link_list(rows: usize) -> ListBuilder<StructBuilder> {
-    let fields = Fields::from(vec![
-        Field::new(link_field::TRACE_ID, DataType::FixedSizeBinary(16), false),
-        Field::new(link_field::SPAN_ID, DataType::FixedSizeBinary(8), false),
-        Field::new(link_field::ATTRIBUTES, DataType::Utf8, true),
-    ]);
+    struct_list_builder(link_fields(), rows)
+}
+
+fn struct_list_builder(fields: Fields, rows: usize) -> ListBuilder<StructBuilder> {
     let item = DataType::Struct(fields.clone());
     ListBuilder::with_capacity(StructBuilder::from_fields(fields, rows), rows)
         .with_field(Arc::new(Field::new("item", item, false)))
@@ -657,7 +645,7 @@ mod tests {
     use std::io::Cursor;
 
     use arrow::array::{Array, AsArray, RecordBatch};
-    use arrow::datatypes::{Float64Type, Int64Type, TimestampNanosecondType, UInt16Type};
+    use arrow::datatypes::{Float64Type, Int64Type, TimeUnit, TimestampNanosecondType, UInt16Type};
     use arrow::ipc::reader::StreamReader;
     use arrow::ipc::writer::StreamWriter;
     use bytes::Bytes;
@@ -667,7 +655,7 @@ mod tests {
     use super::*;
     use crate::enums::PayloadFormat;
     use crate::ids::{SpanId, TraceId};
-    use crate::schema::{self, scores_schema, spans_schema};
+    use crate::schema::{self, event_field, link_field, scores_schema, spans_schema};
     use crate::score::{Score, ScoreTarget, ScoreValue};
     use crate::span::{Span, full_span, minimal_span};
 
@@ -1131,6 +1119,10 @@ mod tests {
                 "column {index} drifted"
             );
         }
+    }
+
+    fn timestamp_type() -> DataType {
+        DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
     }
 
     fn normalize_schema(schema: &arrow::datatypes::SchemaRef) -> arrow::datatypes::SchemaRef {

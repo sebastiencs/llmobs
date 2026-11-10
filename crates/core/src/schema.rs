@@ -226,20 +226,30 @@ fn map_utf8() -> DataType {
     DataType::Map(Arc::new(entries), false)
 }
 
-fn event_struct() -> DataType {
-    DataType::Struct(Fields::from(vec![
+/// Fields of one `spans.events` item. The batch builder uses the same list.
+pub(crate) fn event_fields() -> Fields {
+    Fields::from(vec![
         Field::new(event_field::TIME, timestamp_ns(), false),
         Field::new(event_field::NAME, DataType::Utf8, false),
         Field::new(event_field::ATTRIBUTES, DataType::Utf8, true),
-    ]))
+    ])
 }
 
-fn link_struct() -> DataType {
-    DataType::Struct(Fields::from(vec![
+/// Fields of one `spans.links` item. The batch builder uses the same list.
+pub(crate) fn link_fields() -> Fields {
+    Fields::from(vec![
         Field::new(link_field::TRACE_ID, DataType::FixedSizeBinary(16), false),
         Field::new(link_field::SPAN_ID, DataType::FixedSizeBinary(8), false),
         Field::new(link_field::ATTRIBUTES, DataType::Utf8, true),
-    ]))
+    ])
+}
+
+fn event_struct() -> DataType {
+    DataType::Struct(event_fields())
+}
+
+fn link_struct() -> DataType {
+    DataType::Struct(link_fields())
 }
 
 fn struct_list(item: DataType) -> DataType {

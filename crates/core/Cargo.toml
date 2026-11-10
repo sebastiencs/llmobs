@@ -22,6 +22,7 @@ insta = { workspace = true }
 serde_json = { workspace = true }
 parquet = { workspace = true }
 bytes = { workspace = true }
+arrow = { workspace = true, features = ["ipc"] }
 
 [lints]
 workspace = true
