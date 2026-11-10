@@ -1,7 +1,11 @@
-import { screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
+import { render, screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import { ThemeProvider } from "@/components/theme-provider";
 import { server } from "@/mocks/node";
+import { createAppRouter } from "@/router";
 import { renderApp } from "@/test/render";
 
 const USER = {
@@ -17,10 +21,6 @@ const ACME = {
   name: "Acme",
   role: "owner",
 };
-
-beforeEach(() => {
-  server.resetHandlers();
-});
 
 it("redirects a member to their first org and lists its projects", async () => {
   const { router } = await renderApp("/");
@@ -70,6 +70,41 @@ it("loads the next project page", async () => {
   expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
   expect(requests[1]?.searchParams.get("cursor")).toBe("c2");
   expect(requests[1]?.searchParams.get("limit")).toBe("50");
+});
+
+it("shows skeletons while the project list is loading", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.use(
+    http.get("/api/v1/orgs/:org/projects", async () => {
+      await gate;
+      return HttpResponse.json({ data: [], next_cursor: null });
+    }),
+  );
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const router = createAppRouter({
+    queryClient,
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    </QueryClientProvider>,
+  );
+  const loaded = router.load();
+  await waitFor(() => {
+    expect(document.querySelectorAll("[data-slot='skeleton']").length).toBeGreaterThan(0);
+  });
+  expect(screen.queryByText("No projects yet")).not.toBeInTheDocument();
+  release();
+  await loaded;
+  expect(await screen.findByText("No projects yet")).toBeInTheDocument();
 });
 
 it("shows an empty project list", async () => {

@@ -68,6 +68,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       return;
     }
     const media = window.matchMedia(COLOR_SCHEME_QUERY);
+    setPrefersDark(media.matches);
     const onChange = (event: MediaQueryListEvent) => {
       setPrefersDark(event.matches);
     };

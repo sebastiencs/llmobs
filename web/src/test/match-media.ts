@@ -5,8 +5,11 @@ const COLOR_SCHEME_QUERY = "(prefers-color-scheme: dark)";
 let prefersDark = false;
 const listeners = new Set<ChangeListener>();
 
-export function setPrefersDark(value: boolean): void {
+export function setPrefersDark(value: boolean, notify = true): void {
   prefersDark = value;
+  if (!notify) {
+    return;
+  }
   const event = { matches: value, media: COLOR_SCHEME_QUERY } as MediaQueryListEvent;
   for (const listener of [...listeners]) {
     listener(event);

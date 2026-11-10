@@ -4,6 +4,21 @@ import { describe, expect, it, vi } from "vitest";
 import { THEME_STORAGE_KEY, ThemeProvider, useTheme } from "@/components/theme-provider";
 import { setPrefersDark } from "@/test/match-media";
 
+function SchemeHarness() {
+  const { resolvedTheme, setTheme } = useTheme();
+  return (
+    <>
+      <button type="button" onClick={() => setTheme("light")}>
+        light
+      </button>
+      <button type="button" onClick={() => setTheme("system")}>
+        system
+      </button>
+      <span>{resolvedTheme}</span>
+    </>
+  );
+}
+
 function Harness({ next = "light" }: { next?: "light" | "dark" }) {
   const { setTheme, theme } = useTheme();
   return (
@@ -63,6 +78,24 @@ describe("ThemeProvider", () => {
     });
     expect(document.documentElement).toHaveClass("dark");
     expect(document.documentElement.style.colorScheme).toBe("dark");
+  });
+
+  it("reads the current scheme when returning to system", async () => {
+    const user = userEvent.setup();
+    setPrefersDark(false);
+    render(
+      <ThemeProvider>
+        <SchemeHarness />
+      </ThemeProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "light" }));
+    expect(document.documentElement).toHaveClass("light");
+
+    setPrefersDark(true, false);
+    await user.click(screen.getByRole("button", { name: "system" }));
+    expect(screen.getByText("dark")).toBeInTheDocument();
+    expect(document.documentElement).toHaveClass("dark");
+    expect(document.documentElement).not.toHaveClass("light");
   });
 
   it("treats an unknown stored value as system", () => {

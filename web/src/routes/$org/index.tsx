@@ -19,6 +19,7 @@ import {
 export const Route = createFileRoute("/$org/")({
   loader: ({ context, params }) =>
     context.queryClient.ensureInfiniteQueryData(projectListOptions(params.org)),
+  pendingMs: 0,
   pendingComponent: ProjectsPending,
   component: OrgHome,
 });
@@ -41,8 +42,11 @@ function OrgHome() {
   if (projects.error) {
     throw projects.error;
   }
+  if (projects.isPending) {
+    return <ProjectsPending />;
+  }
 
-  const rows = projects.data?.pages.flatMap((page) => page.data) ?? [];
+  const rows = projects.data.pages.flatMap((page) => page.data);
 
   return (
     <div className="flex flex-col gap-6">

@@ -43,20 +43,10 @@
   "overrides": [
     {
       "includes": ["web/src/components/ui/**"],
-      "formatter": {
-        "enabled": false
-      },
       "linter": {
         "rules": {
           "style": {
             "useImportType": "off"
-          }
-        }
-      },
-      "assist": {
-        "actions": {
-          "source": {
-            "organizeImports": "off"
           }
         }
       }
