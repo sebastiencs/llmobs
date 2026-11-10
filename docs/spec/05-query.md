@@ -126,4 +126,4 @@ All series honor the filter DSL (applied to the view the series is computed on; 
 | Span list | `spans` view with filter (e.g. all LLM calls for model X) |
 | User list | `SELECT user_id, count(*), sum(cost_total), max(end_time) … FROM traces GROUP BY user_id` |
 
-Trace tree assembly happens in Rust after the scan (parent/child map); spans whose parent is missing attach to a synthetic root, ordered by `start_time`.
+Trace tree assembly happens in Rust after the scan (parent/child map); spans whose parent is missing, or that sit in a parent cycle, are emitted as roots with `detached: true`, in pre-order by `(start_time, span_id)` (09 § Response shapes).
