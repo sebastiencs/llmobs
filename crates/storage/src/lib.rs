@@ -19,8 +19,8 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::num::NonZeroUsize;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow::array::{Array, RecordBatch, StringArray};
 use llmobs_core::ids::ProjectId;
@@ -79,7 +79,9 @@ pub struct Storage {
     hard_limit: u64,
     target_partitions: NonZeroUsize,
     shutting_down: AtomicBool,
-    lock: File,
+    /// Released by [`Self::shutdown`] so another process can open the directory
+    /// while this value is still alive.
+    lock: Mutex<Option<File>>,
     /// Published memtables. `query` loads one snapshot for both providers.
     published: Arc<Published>,
     spans: WalWriterHandle,
@@ -148,7 +150,7 @@ impl Storage {
             hard_limit,
             target_partitions,
             shutting_down: AtomicBool::new(false),
-            lock: recovered.lock,
+            lock: Mutex::new(Some(recovered.lock)),
             published,
             spans,
             scores,
@@ -215,13 +217,23 @@ impl Storage {
 
     /// Stops both writers and releases the data directory lock.
     ///
+    /// Other tasks may still hold this value and be inside `append`. An append
+    /// that has not been acknowledged returns [`AppendError::ShuttingDown`].
+    /// A second call reports the same writer failure as the first, or `Ok`
+    /// when the writers already stopped cleanly.
+    ///
     /// M1 does not flush. Acknowledged rows stay in the WAL and are replayed
     /// on the next [`Self::open`]. M2 flushes the memtables here.
-    pub async fn shutdown(self) -> Result<(), StorageError> {
+    pub async fn shutdown(&self) -> Result<(), StorageError> {
         self.shutting_down.store(true, Ordering::Release);
         let spans = self.spans.shutdown().await;
         let scores = self.scores.shutdown().await;
-        drop(self.lock);
+        drop(
+            self.lock
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take(),
+        );
         writer_exit("spans", &spans)?;
         writer_exit("scores", &scores)?;
         Ok(())
@@ -850,6 +862,124 @@ mod tests {
         assert!(finished.is_ok(), "append and health deadlocked");
         let storage = Arc::try_unwrap(storage).unwrap();
         assert_eq!(storage.published_rows(Table::Spans), 32);
+        storage.shutdown().await.unwrap();
+    }
+
+    async fn span_names(spans: Arc<dyn datafusion::catalog::TableProvider>) -> Vec<String> {
+        let ctx = datafusion::execution::context::SessionContext::new();
+        ctx.register_table("spans_t", spans).unwrap();
+        let batches = ctx
+            .sql("SELECT name FROM spans_t")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let mut names = Vec::new();
+        for batch in batches {
+            let column = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            for index in 0..column.len() {
+                names.push(column.value(index).to_owned());
+            }
+        }
+        names
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_query_during_append_stays_on_its_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::open(config_in(dir.path())).await.unwrap());
+        storage.hooks().hold(HookPoint::AfterWalSync);
+        let append = {
+            let storage = Arc::clone(&storage);
+            tokio::spawn(async move { storage.append_spans(project(), spans_at(&[1])).await })
+        };
+        let started = std::time::Instant::now();
+        while storage.hooks().waiting_at(HookPoint::AfterWalSync) == 0 {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "writer never reached AfterWalSync"
+            );
+            tokio::task::yield_now().await;
+        }
+        let during = storage.query(project()).unwrap();
+        assert!(span_names(Arc::clone(&during.spans)).await.is_empty());
+        storage.hooks().release(HookPoint::AfterWalSync);
+        append.await.unwrap().unwrap();
+        let after = storage.query(project()).unwrap();
+        assert_eq!(span_names(after.spans).await.len(), 1);
+        assert!(span_names(during.spans).await.is_empty());
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_failed_sync_is_never_visible() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::open(config_in(dir.path())).await.unwrap());
+        storage
+            .append_spans(project(), spans_named(&[1], "kept"))
+            .await
+            .unwrap();
+        storage.hooks().arm_fail(HookPoint::WalSync);
+        let append = {
+            let storage = Arc::clone(&storage);
+            tokio::spawn(async move {
+                storage
+                    .append_spans(project(), spans_named(&[2], "lost"))
+                    .await
+            })
+        };
+        while !append.is_finished() {
+            let names = span_names(storage.query(project()).unwrap().spans).await;
+            assert!(!names.iter().any(|name| name == "lost"));
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(append.await.unwrap().unwrap_err(), AppendError::WalFailed);
+        let names = span_names(storage.query(project()).unwrap().spans).await;
+        assert_eq!(names, vec!["kept".to_owned()]);
+        let shutdown = storage.shutdown().await.unwrap_err();
+        assert!(matches!(
+            shutdown,
+            StorageError::WalFailed { table: "spans" }
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn shutdown_during_appends_keeps_only_acknowledged_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(dir.path());
+        let storage = Arc::new(Storage::open(config.clone()).await.unwrap());
+        let mut tasks = Vec::new();
+        for index in 0..8 {
+            let storage = Arc::clone(&storage);
+            tasks.push(tokio::spawn(async move {
+                storage
+                    .append_spans(project(), spans_named(&[index], &format!("s{index}")))
+                    .await
+            }));
+        }
+        tokio::task::yield_now().await;
+        storage.shutdown().await.unwrap();
+        let mut acknowledged = 0;
+        for task in tasks {
+            match task.await.unwrap() {
+                Ok(_) => acknowledged += 1,
+                Err(AppendError::ShuttingDown) => {}
+                Err(error) => panic!("{error}"),
+            }
+        }
+        drop(storage);
+        let storage = Storage::open(config).await.unwrap();
+        let mut names = span_names(storage.query(project()).unwrap().spans).await;
+        let found = names.len();
+        names.sort();
+        names.dedup();
+        assert_eq!(found, acknowledged);
+        assert_eq!(names.len(), acknowledged);
         storage.shutdown().await.unwrap();
     }
 

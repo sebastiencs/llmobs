@@ -66,6 +66,7 @@ If the code has to deviate from the spec, update the spec **in the same change**
 - Every behaviour change comes with tests.
 - Normalization uses golden fixtures in `fixtures/otlp/`.
 - Storage needs crash-recovery and concurrency tests.
+- `LLMOBS_CRASH_ITERATIONS=N just test` runs the storage crash harness longer (default 25).
 - Tests cover the current behaviour only.
 - UI tests use the MSW mocks from `fixtures/api/`; a page test overrides an endpoint with `server.use` instead of mocking modules.
 

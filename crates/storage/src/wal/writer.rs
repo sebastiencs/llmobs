@@ -70,11 +70,14 @@ impl WriterShared {
 }
 
 /// Handle to a running writer task.
+///
+/// The sender and the task sit behind a mutex so [`Self::shutdown`] can run
+/// while other tasks still call [`Self::append`].
 #[derive(Debug)]
 pub(crate) struct WalWriterHandle {
-    tx: mpsc::Sender<AppendRequest>,
+    tx: Mutex<Option<mpsc::Sender<AppendRequest>>>,
     state: Arc<WriterShared>,
-    task: JoinHandle<()>,
+    task: Mutex<Option<JoinHandle<()>>>,
 }
 
 /// Why [`WalWriterHandle::shutdown`] did not finish cleanly.
@@ -113,7 +116,18 @@ impl WalWriterHandle {
             bytes,
             ack,
         };
-        if self.tx.send(request).await.is_err() {
+        let tx = {
+            let guard = self.tx.lock().unwrap_or_else(PoisonError::into_inner);
+            guard.as_ref().cloned()
+        };
+        let Some(tx) = tx else {
+            return Err(if self.state.failed() {
+                AppendError::WalFailed
+            } else {
+                AppendError::ShuttingDown
+            });
+        };
+        if tx.send(request).await.is_err() {
             return Err(if self.state.failed() {
                 AppendError::WalFailed
             } else {
@@ -124,23 +138,42 @@ impl WalWriterHandle {
     }
 
     /// Clones the queue sender. Dropping every clone is what ends the task.
-    fn sender(&self) -> mpsc::Sender<AppendRequest> {
-        self.tx.clone()
+    fn sender(&self) -> Option<mpsc::Sender<AppendRequest>> {
+        self.tx
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .cloned()
     }
 
-    /// Drops the sender, waits for the task to drain and exit.
+    /// Drops the sender and waits for the task to drain and exit.
     ///
     /// Interval mode syncs a dirty segment before the task finishes. The
     /// caller still has to drop every other sender; this drops the one the
-    /// handle owns. The failure flag is read after the task exits, so a sync
-    /// that fails while shutting down is reported.
-    pub(crate) async fn shutdown(self) -> Result<(), WriterExit> {
+    /// handle owns. A second call finds the task already finished. The failure
+    /// flag is read after the task exits, so a sync that fails while shutting
+    /// down is reported.
+    pub(crate) async fn shutdown(&self) -> Result<(), WriterExit> {
         let state = Arc::clone(&self.state);
-        drop(self.tx);
-        match self.task.await {
-            Ok(()) if state.failed() => Err(WriterExit::Failed),
-            Ok(()) => Ok(()),
-            Err(_) => Err(WriterExit::Panicked),
+        drop(
+            self.tx
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take(),
+        );
+        let task = self
+            .task
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        match task {
+            None if state.failed() => Err(WriterExit::Failed),
+            None => Ok(()),
+            Some(task) => match task.await {
+                Ok(()) if state.failed() => Err(WriterExit::Failed),
+                Ok(()) => Ok(()),
+                Err(_) => Err(WriterExit::Panicked),
+            },
         }
     }
 }
@@ -184,7 +217,11 @@ pub(crate) fn spawn(mut params: WriterParams) -> WalWriterHandle {
     });
     let task_state = Arc::clone(&state);
     let task = tokio::spawn(run(params, rx, task_state));
-    WalWriterHandle { tx, state, task }
+    WalWriterHandle {
+        tx: Mutex::new(Some(tx)),
+        state,
+        task: Mutex::new(Some(task)),
+    }
 }
 
 struct Prepared {
@@ -1046,7 +1083,7 @@ mod tests {
         );
         let hooks = running.hooks.clone();
         hooks.hold(HookPoint::AfterWalSync);
-        let sender = running.handle.sender();
+        let sender = running.handle.sender().unwrap();
         let state = Arc::clone(running.handle.shared());
         let mut tasks = Vec::new();
         for start in 0..4 {
