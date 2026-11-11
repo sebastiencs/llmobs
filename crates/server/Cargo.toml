@@ -28,6 +28,11 @@ tracing.workspace = true
 serde_path_to_error.workspace = true
 serde_urlencoded.workspace = true
 unicode-normalization.workspace = true
+argon2.workspace = true
+rand.workspace = true
+subtle.workspace = true
+sha2.workspace = true
+base64.workspace = true
 
 [dev-dependencies]
 bytesize.workspace = true

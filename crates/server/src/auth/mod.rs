@@ -1,7 +1,22 @@
-//! Authentication building blocks. P6 is the role enums; later phases add passwords,
-//! sessions, and the permission rules.
+//! Authentication building blocks. Roles, token generation, and password hashing.
+//! Sessions and the permission rules come later.
 
+mod password;
 mod roles;
+mod secret;
+
+/// A failure while minting a token or hashing a password.
+///
+/// The text is static. It does not include the password, the token, or the salt.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AuthError {
+    /// The OS random source failed.
+    #[error("random number generator failed")]
+    Rng,
+    /// argon2 rejected the parameters or the hash operation failed.
+    #[error("password hash failed")]
+    PasswordHash,
+}
 
 pub(crate) use roles::{
     OrgRole, ProjectOverride, org_role_str, parse_org_role, parse_project_override,
