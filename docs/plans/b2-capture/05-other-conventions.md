@@ -53,7 +53,7 @@ OpenLLMetry has been moving from `gen_ai.prompt.N.*` to the current GenAI conven
 
 **Commit:** `capture: record the Langfuse SDK`
 
-**Package:** `langfuse` 5.2.0 on 2026-11-10, the current major per D119. Read the v5 Python SDK's source and docs for:
+**Package:** `langfuse` 5.2.0 on 2026-11-10, the current major per D121. Read the v5 Python SDK's source and docs for:
 - how it is configured: host, keys, and `LANGFUSE_*` variables;
 - how trace-level fields are set (session, user, tags, metadata, release, environment);
 - the OpenAI drop-in integration.

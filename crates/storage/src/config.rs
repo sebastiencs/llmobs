@@ -1,8 +1,8 @@
 //! `[storage]` configuration (D59, D90).
 //!
 //! Sizes are strings with a binary unit (`"256MiB"`). Durations are strings
-//! with a unit (`"120s"`, `"5ms"`). Only the fields M1 reads are here; later
-//! milestones add theirs.
+//! with a unit (`"120s"`, `"5ms"`). S3 credentials are the standard `AWS_*`
+//! environment variables and are not fields of this struct.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -13,6 +13,9 @@ use serde::{Deserialize, Deserializer};
 
 use crate::error::ConfigError;
 
+/// Rule named by a rejected `storage.object_store` value.
+const OBJECT_STORE_RULE: &str = "must be file://<absolute path> or s3://<bucket>[/<prefix>]";
+
 /// Storage settings. `data_dir` is required, so this struct has no [`Default`].
 ///
 /// The server fills `data_dir` from the top-level data directory (spec 12).
@@ -20,15 +23,25 @@ use crate::error::ConfigError;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StorageConfig {
-    /// Directory that holds `LOCK`, `wal/`, and, later, `catalog.db`.
+    /// Directory that holds `LOCK`, `wal/`, and `catalog.db`.
     pub data_dir: PathBuf,
+    /// Object store root. Absent means `file://<data_dir>/objects`, resolved by
+    /// [`Self::object_store_url`].
+    #[serde(default, deserialize_with = "deserialize_object_store")]
+    pub object_store: Option<ObjectStoreUrl>,
+    /// S3 client settings. Credentials are not here.
+    #[serde(default)]
+    pub s3: S3Config,
     /// WAL writer settings.
     #[serde(default)]
     pub wal: WalConfig,
+    /// Memtable flush settings.
+    #[serde(default)]
+    pub flush: FlushConfig,
     /// Memtable accounting.
     #[serde(default)]
     pub memtable: MemtableConfig,
-    /// Query execution settings used in M1.
+    /// Query execution settings.
     #[serde(default)]
     pub query: QueryConfig,
 }
@@ -70,6 +83,36 @@ impl StorageConfig {
                 "must be at least 16MiB",
             ));
         }
+        if self.flush.max_bytes < ByteSize::mib(1) {
+            return Err(ConfigError::invalid(
+                "storage.flush.max_bytes",
+                "must be at least 1MiB",
+            ));
+        }
+        if self.flush.max_bytes >= self.memtable.hard_limit {
+            return Err(ConfigError::invalid(
+                "storage.flush.max_bytes",
+                "must be less than storage.memtable.hard_limit",
+            ));
+        }
+        if self.flush.max_age < Duration::from_millis(100) {
+            return Err(ConfigError::invalid(
+                "storage.flush.max_age",
+                "must be at least 100ms",
+            ));
+        }
+        if self.flush.max_age > Duration::from_secs(60 * 60) {
+            return Err(ConfigError::invalid(
+                "storage.flush.max_age",
+                "must be at most 1h",
+            ));
+        }
+        if !(1..=64).contains(&self.flush.upload_concurrency) {
+            return Err(ConfigError::invalid(
+                "storage.flush.upload_concurrency",
+                "must be from 1 to 64",
+            ));
+        }
         if self.query.target_partitions < 1 {
             return Err(ConfigError::invalid(
                 "storage.query.target_partitions",
@@ -77,6 +120,13 @@ impl StorageConfig {
             ));
         }
         Ok(())
+    }
+
+    /// The configured object store, or `data_dir/objects` when the field is absent.
+    pub fn object_store_url(&self) -> ObjectStoreUrl {
+        self.object_store
+            .clone()
+            .unwrap_or_else(|| ObjectStoreUrl::Local(self.data_dir.join("objects")))
     }
 }
 
@@ -206,12 +256,18 @@ pub struct QueryConfig {
     /// DataFusion `target_partitions`. Defaults to the process parallelism.
     #[serde(default = "default_target_partitions")]
     pub target_partitions: usize,
+    /// Bytes of Parquet footer and page-index metadata DataFusion may cache.
+    ///
+    /// Zero is allowed. [`ByteSize`] cannot represent a negative size.
+    #[serde(default = "default_metadata_cache_bytes")]
+    pub metadata_cache_bytes: ByteSize,
 }
 
 impl Default for QueryConfig {
     fn default() -> Self {
         Self {
             target_partitions: default_target_partitions(),
+            metadata_cache_bytes: default_metadata_cache_bytes(),
         }
     }
 }
@@ -222,6 +278,127 @@ fn default_target_partitions() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
+}
+
+fn default_metadata_cache_bytes() -> ByteSize {
+    ByteSize::mib(512)
+}
+
+/// Where flushed Parquet files live.
+///
+/// Deserialized from `file://<absolute path>` or `s3://<bucket>[/<prefix>]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ObjectStoreUrl {
+    /// A directory on the local filesystem.
+    Local(PathBuf),
+    /// An S3 bucket. `prefix` has no leading or trailing slash; empty is the bucket root.
+    S3 {
+        /// Bucket name.
+        bucket: String,
+        /// Key prefix under the bucket, without surrounding slashes.
+        prefix: String,
+    },
+}
+
+impl ObjectStoreUrl {
+    fn parse(raw: &str) -> Result<Self, ConfigError> {
+        if raw.contains(['?', '#']) {
+            return Err(ConfigError::invalid(
+                "storage.object_store",
+                OBJECT_STORE_RULE,
+            ));
+        }
+        if let Some(path) = raw.strip_prefix("file://") {
+            let path = PathBuf::from(path);
+            if path.is_absolute() {
+                return Ok(Self::Local(path));
+            }
+        } else if let Some(rest) = raw.strip_prefix("s3://") {
+            let (bucket, prefix) = match rest.split_once('/') {
+                Some((bucket, prefix)) => (bucket, prefix.trim_matches('/')),
+                None => (rest, ""),
+            };
+            if !bucket.is_empty() && !bucket.contains([' ', '/']) {
+                return Ok(Self::S3 {
+                    bucket: bucket.to_owned(),
+                    prefix: prefix.to_owned(),
+                });
+            }
+        }
+        Err(ConfigError::invalid(
+            "storage.object_store",
+            OBJECT_STORE_RULE,
+        ))
+    }
+}
+
+fn deserialize_object_store<'de, D>(deserializer: D) -> Result<Option<ObjectStoreUrl>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    ObjectStoreUrl::parse(&raw)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
+}
+
+/// `[storage.s3]`. Credentials come from the standard `AWS_*` environment.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct S3Config {
+    /// Region. Absent means the `AWS_REGION` environment variable.
+    #[serde(default)]
+    pub region: Option<String>,
+    /// Custom endpoint, for MinIO or R2. Absent means AWS.
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// Address the bucket as a path (`endpoint/bucket`) instead of a subdomain.
+    #[serde(default)]
+    pub force_path_style: bool,
+    /// Allow an `http://` endpoint. A local MinIO needs this.
+    #[serde(default)]
+    pub allow_http: bool,
+}
+
+fn default_flush_max_bytes() -> ByteSize {
+    ByteSize::mib(256)
+}
+
+fn default_flush_max_age() -> Duration {
+    Duration::from_secs(120)
+}
+
+fn default_upload_concurrency() -> usize {
+    8
+}
+
+/// `[storage.flush]`.
+///
+/// Each field's serde default is the spec value. [`ByteSize`] and [`Duration`]
+/// themselves default to zero, so a present section with a missing key must
+/// not use those.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlushConfig {
+    /// Freeze a memtable once it reaches this many accounted bytes.
+    #[serde(default = "default_flush_max_bytes")]
+    pub max_bytes: ByteSize,
+    /// Freeze a memtable once its oldest row has been buffered this long.
+    #[serde(default = "default_flush_max_age", with = "humantime_serde")]
+    pub max_age: Duration,
+    /// How many Parquet files one flush uploads at a time.
+    #[serde(default = "default_upload_concurrency")]
+    pub upload_concurrency: usize,
+}
+
+impl Default for FlushConfig {
+    fn default() -> Self {
+        Self {
+            max_bytes: default_flush_max_bytes(),
+            max_age: default_flush_max_age(),
+            upload_concurrency: default_upload_concurrency(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -280,6 +457,8 @@ mod tests {
             r#"{"data_dir":"/data","wal":{"extra":1}}"#,
             r#"{"data_dir":"/data","memtable":{"extra":1}}"#,
             r#"{"data_dir":"/data","query":{"extra":1}}"#,
+            r#"{"data_dir":"/data","flush":{"extra":1}}"#,
+            r#"{"data_dir":"/data","s3":{"extra":1}}"#,
         ];
         for json in samples {
             let error = parse(json).unwrap_err();
@@ -310,6 +489,34 @@ mod tests {
                 r#"{"data_dir":"/data","query":{"target_partitions":0}}"#,
                 "storage.query.target_partitions: must be at least 1",
             ),
+            (
+                r#"{"data_dir":"/data","flush":{"max_bytes":"1KiB"}}"#,
+                "storage.flush.max_bytes: must be at least 1MiB",
+            ),
+            (
+                r#"{"data_dir":"/data","flush":{"max_bytes":"1GiB"}}"#,
+                "storage.flush.max_bytes: must be less than storage.memtable.hard_limit",
+            ),
+            (
+                r#"{"data_dir":"/data","memtable":{"hard_limit":"16MiB"},"flush":{"max_bytes":"16MiB"}}"#,
+                "storage.flush.max_bytes: must be less than storage.memtable.hard_limit",
+            ),
+            (
+                r#"{"data_dir":"/data","flush":{"max_age":"99ms"}}"#,
+                "storage.flush.max_age: must be at least 100ms",
+            ),
+            (
+                r#"{"data_dir":"/data","flush":{"max_age":"3601s"}}"#,
+                "storage.flush.max_age: must be at most 1h",
+            ),
+            (
+                r#"{"data_dir":"/data","flush":{"upload_concurrency":0}}"#,
+                "storage.flush.upload_concurrency: must be from 1 to 64",
+            ),
+            (
+                r#"{"data_dir":"/data","flush":{"upload_concurrency":65}}"#,
+                "storage.flush.upload_concurrency: must be from 1 to 64",
+            ),
         ];
         for (json, message) in cases {
             let config = parse(json).unwrap();
@@ -329,11 +536,26 @@ mod tests {
                     "group_max_wait": "1s"
                 },
                 "memtable": { "hard_limit": "16MiB" },
-                "query": { "target_partitions": 1 }
+                "flush": {
+                    "max_bytes": "1MiB",
+                    "max_age": "100ms",
+                    "upload_concurrency": 1
+                },
+                "query": { "target_partitions": 1, "metadata_cache_bytes": "0B" }
             }"#,
         )
         .unwrap();
         config.validate().unwrap();
+        let upper = parse(
+            r#"{
+                "data_dir": "/data",
+                "flush": { "max_age": "1h", "upload_concurrency": 64 }
+            }"#,
+        )
+        .unwrap();
+        upper.validate().unwrap();
+        assert_eq!(upper.flush.max_age, Duration::from_secs(60 * 60));
+        assert_eq!(upper.flush.upload_concurrency, 64);
     }
 
     #[test]
@@ -354,6 +576,8 @@ mod tests {
         assert!(!config.wal.skip_corrupt);
         assert_eq!(config.memtable, MemtableConfig::default());
         assert_eq!(config.query, QueryConfig::default());
+        assert_eq!(config.flush, FlushConfig::default());
+        assert_eq!(config.s3, S3Config::default());
     }
 
     #[test]
@@ -363,6 +587,12 @@ mod tests {
         assert_eq!(config.wal, WalConfig::default());
         assert_eq!(config.memtable, MemtableConfig::default());
         assert_eq!(config.query, QueryConfig::default());
+        assert_eq!(config.flush, FlushConfig::default());
+        assert_eq!(config.s3, S3Config::default());
+        assert_eq!(
+            config.object_store_url(),
+            ObjectStoreUrl::Local(PathBuf::from("/data/objects"))
+        );
         config.validate().unwrap();
     }
 
@@ -372,5 +602,69 @@ mod tests {
         let error = WalSync::parse(&rejected).unwrap_err();
         assert!(!error.to_string().contains(&rejected));
         assert!(error.to_string().contains("storage.wal.sync"));
+    }
+
+    #[test]
+    fn the_default_object_store_is_under_data_dir() {
+        let config = parse(r#"{"data_dir":"/var/lib/llmobs"}"#).unwrap();
+        assert_eq!(
+            config.object_store_url(),
+            ObjectStoreUrl::Local(PathBuf::from("/var/lib/llmobs/objects"))
+        );
+    }
+
+    #[test]
+    fn object_store_urls_parse() {
+        let bucket = parse(r#"{"data_dir":"/data","object_store":"s3://bucket"}"#).unwrap();
+        assert_eq!(
+            bucket.object_store_url(),
+            ObjectStoreUrl::S3 {
+                bucket: "bucket".to_owned(),
+                prefix: String::new(),
+            }
+        );
+        let prefixed = parse(r#"{"data_dir":"/data","object_store":"s3://bucket/a/b"}"#).unwrap();
+        assert_eq!(
+            prefixed.object_store_url(),
+            ObjectStoreUrl::S3 {
+                bucket: "bucket".to_owned(),
+                prefix: "a/b".to_owned(),
+            }
+        );
+        let local = parse(r#"{"data_dir":"/data","object_store":"file:///var/objects"}"#).unwrap();
+        assert_eq!(
+            local.object_store_url(),
+            ObjectStoreUrl::Local(PathBuf::from("/var/objects"))
+        );
+    }
+
+    #[test]
+    fn object_store_urls_fail_with_the_field_name() {
+        for value in ["http://x", "file://relative", "s3://"] {
+            let error = parse(&format!(
+                r#"{{"data_dir":"/data","object_store":"{value}"}}"#
+            ))
+            .unwrap_err();
+            assert!(
+                error.contains("storage.object_store"),
+                "{value:?} produced {error}"
+            );
+        }
+        let echoed = parse(r#"{"data_dir":"/data","object_store":"http://x"}"#).unwrap_err();
+        assert!(!echoed.contains("http://x"));
+        let relative =
+            parse(r#"{"data_dir":"/data","object_store":"file://relative"}"#).unwrap_err();
+        assert!(!relative.contains("relative"));
+    }
+
+    #[test]
+    fn an_object_store_error_does_not_echo_the_bucket() {
+        let bucket = "bucket-7f3a9c2e-not-a-secret";
+        let error = parse(&format!(
+            r#"{{"data_dir":"/data","object_store":"s3://{bucket}?x=1"}}"#
+        ))
+        .unwrap_err();
+        assert!(error.contains("storage.object_store"));
+        assert!(!error.contains(bucket));
     }
 }

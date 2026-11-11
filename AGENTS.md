@@ -67,6 +67,7 @@ If the code has to deviate from the spec, update the spec **in the same change**
 - Normalization uses golden fixtures in `fixtures/otlp/`.
 - Storage needs crash-recovery and concurrency tests.
 - `LLMOBS_CRASH_ITERATIONS=N just test` runs the storage crash harness longer (default 25).
+- `LLMOBS_TEST_S3_ENDPOINT` (with `LLMOBS_TEST_S3_BUCKET` and the `AWS_*` credentials) runs the storage S3 test against a real S3-compatible server; `crates/storage/tests/s3.rs` shows how to start one (D119).
 - Tests cover the current behaviour only.
 - UI tests use the MSW mocks from `fixtures/api/`; a page test overrides an endpoint with `server.use` instead of mocking modules.
 - Captured OTLP fixtures are recorded with `just capture` (tools/capture) and never edited by hand; `just check-capture` before committing one.

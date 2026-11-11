@@ -22,11 +22,40 @@ pub(crate) enum HookPoint {
     BeforePublish,
     /// After the read state is published, before the group is acknowledged.
     AfterPublish,
+    /// After the catalog writes, before the SQLite commit.
+    ///
+    /// `fail` rolls the transaction back. The in-memory catalog stays as it was.
+    CatalogCommit,
+    /// Before the bytes of a local object are written to the temp file.
+    ObjectWrite,
+    /// Before `sync_all` on a local object temp file.
+    ObjectSync,
+    /// Before the temp file is renamed to its final name.
+    ObjectRename,
+    /// Before the directory fsync that publishes a local object.
+    ///
+    /// The rename has already happened. A fault here moves the file back to its
+    /// temp name, so a failed `put_durable` does not leave the final path.
+    ObjectDirSync,
+    /// After the active memtable is moved to frozen.
+    ///
+    /// The flush task pauses here after a new freeze, not on a retry.
+    FlushAfterFreeze,
+    /// After every output path is recorded in `staged_objects`.
+    FlushAfterStage,
+    /// After every flushed object is durable.
+    FlushAfterWrite,
+    /// After the catalog commit that publishes the files and drops `frozen`.
+    FlushAfterCommit,
+    /// After WAL segments covered by `flushed_seq` are deleted and the directory is fsynced.
+    FlushAfterTruncate,
+    /// Before GC deletes a staged object that is not in the catalog.
+    GcBeforeDelete,
 }
 
 #[cfg(test)]
 impl HookPoint {
-    const COUNT: usize = 5;
+    const COUNT: usize = 16;
 
     const fn index(self) -> usize {
         match self {
@@ -35,6 +64,17 @@ impl HookPoint {
             Self::AfterWalSync => 2,
             Self::BeforePublish => 3,
             Self::AfterPublish => 4,
+            Self::CatalogCommit => 5,
+            Self::ObjectWrite => 6,
+            Self::ObjectSync => 7,
+            Self::ObjectRename => 8,
+            Self::ObjectDirSync => 9,
+            Self::FlushAfterFreeze => 10,
+            Self::FlushAfterStage => 11,
+            Self::FlushAfterWrite => 12,
+            Self::FlushAfterCommit => 13,
+            Self::FlushAfterTruncate => 14,
+            Self::GcBeforeDelete => 15,
         }
     }
 }
@@ -83,6 +123,8 @@ mod fault {
         waiting_at: [AtomicUsize; HookPoint::COUNT],
         hits: [AtomicU64; HookPoint::COUNT],
         groups: Mutex<Vec<(usize, u64)>>,
+        passed: Mutex<Vec<HookPoint>>,
+        abort_at: Mutex<HashSet<HookPoint>>,
     }
 
     impl std::fmt::Debug for State {
@@ -102,21 +144,11 @@ mod fault {
                     held: Mutex::new(HashSet::new()),
                     cv: Condvar::new(),
                     armed: Mutex::new(HashSet::new()),
-                    waiting_at: [
-                        AtomicUsize::new(0),
-                        AtomicUsize::new(0),
-                        AtomicUsize::new(0),
-                        AtomicUsize::new(0),
-                        AtomicUsize::new(0),
-                    ],
-                    hits: [
-                        AtomicU64::new(0),
-                        AtomicU64::new(0),
-                        AtomicU64::new(0),
-                        AtomicU64::new(0),
-                        AtomicU64::new(0),
-                    ],
+                    waiting_at: [const { AtomicUsize::new(0) }; HookPoint::COUNT],
+                    hits: [const { AtomicU64::new(0) }; HookPoint::COUNT],
                     groups: Mutex::new(Vec::new()),
+                    passed: Mutex::new(Vec::new()),
+                    abort_at: Mutex::new(HashSet::new()),
                 }),
             }
         }
@@ -130,6 +162,13 @@ mod fault {
         pub(crate) fn pause(&self, point: HookPoint) {
             let index = point.index();
             self.inner.hits[index].fetch_add(1, Ordering::SeqCst);
+            lock(&self.inner.passed).push(point);
+            let aborting = lock(&self.inner.abort_at).contains(&point);
+            if aborting {
+                // The crash child is a separate process. Aborting it is the point.
+                #[allow(clippy::exit)]
+                std::process::abort();
+            }
             let mut held = lock(&self.inner.held);
             if !held.contains(&point) {
                 return;
@@ -164,6 +203,13 @@ mod fault {
             let mut held = lock(&self.inner.held);
             held.remove(&point);
             self.inner.cv.notify_all();
+        }
+
+        /// The next [`Self::pause`] on `point` aborts the process.
+        ///
+        /// Used by the flush crash child. The parent reopens the directory.
+        pub(crate) fn abort_at(&self, point: HookPoint) {
+            lock(&self.inner.abort_at).insert(point);
         }
 
         /// The next [`Self::fail`] on `point` returns an error, once.
@@ -203,6 +249,13 @@ mod fault {
         /// Each entry is `(requests, bytes)`.
         pub(crate) fn groups(&self) -> Vec<(usize, u64)> {
             lock(&self.inner.groups).clone()
+        }
+
+        /// Hook points entered through [`Self::pause`], in order.
+        ///
+        /// M2.9 asserts the durability order from this.
+        pub(crate) fn points(&self) -> Vec<HookPoint> {
+            lock(&self.inner.passed).clone()
         }
     }
 }

@@ -17,7 +17,7 @@ use crate::error::CaptureError;
 
 /// Fixture groups a capture may write.
 ///
-/// `fixtures/otlp/README.md` § Layout, without `llmobs` (D119).
+/// `fixtures/otlp/README.md` § Layout, without `llmobs` (D121).
 pub const GROUPS: &[&str] = &[
     "genai",
     "openinference",

@@ -14,4 +14,4 @@ The recipes arrive with the tool, in K9–K10 of [`docs/plans/b2-capture/`](../d
 - `just capture-all` records every scenario.
 - `just check-capture` runs the scenario projects' lint and type checks, then recaptures every scenario and compares it with the committed `input.json` (timing excluded).
 
-A captured `input.json` is never edited by hand. Change the scenario and recapture (D120).
+A captured `input.json` is never edited by hand. Change the scenario and recapture (D122).

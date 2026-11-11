@@ -1,17 +1,17 @@
 //! Columnar storage for spans and scores: a write-ahead log, an in-memory
-//! memtable, and DataFusion table providers.
+//! memtable, Parquet files, and a SQLite catalog, queried through DataFusion.
 //!
 //! See `docs/spec/03-storage.md`. The design and milestones are in
 //! `docs/plans/a1-storage/00-design.md`.
 //!
-//! # M1 is not usable in production
+//! # What this crate does not do yet
 //!
-//! The server must not wire this crate in yet. There is no flush, so:
-//!
-//! - the WAL is never truncated and grows until the process restarts;
-//! - the memtable only grows; once it reaches `storage.memtable.hard_limit`,
-//!   every append answers [`error::AppendError::Backpressure`];
-//! - shutdown does not flush: data stays in the WAL and is replayed at the next open.
+//! - there is no `traces` table; `Storage::query` returns an empty one;
+//! - compaction does not run, so level-0 files accumulate;
+//! - deletion and retention are absent;
+//! - day pruning is exact; the one-day anchor slack is not built;
+//! - the query runtime uses DataFusion's default memory pool.
+//!   Parquet footers and page indexes use DataFusion's built-in metadata cache.
 
 #![warn(missing_docs)]
 
@@ -24,22 +24,31 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow::array::{Array, RecordBatch, StringArray};
 use datafusion::datasource::MemTable;
+use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use llmobs_core::ids::ProjectId;
 
+use crate::catalog::Committer;
 use crate::config::StorageConfig;
 use crate::config::WalSync;
 use crate::error::{AppendError, MemtableError, OpenError, QueryError, StorageError, WalError};
+use crate::flush::FlushHandle;
 use crate::hooks::Hooks;
 use crate::memtable::Memtable;
+use crate::objects::Objects;
 use crate::read_state::{Published, ReadState};
 use crate::wal::Table;
 use crate::wal::sync_dir;
 use crate::wal::writer::{WalWriterHandle, WriterExit, WriterParams, spawn};
 use crate::wal::{SegmentWriter, replay};
 
+pub(crate) mod catalog;
 pub mod config;
 pub mod error;
 mod filter;
+pub(crate) mod flush;
+pub(crate) mod gc;
+pub(crate) mod objects;
+pub(crate) mod parquet;
 pub mod query;
 mod query_error;
 mod query_text;
@@ -69,6 +78,8 @@ pub(crate) mod memtable;
 pub(crate) mod read_state;
 pub(crate) mod wal;
 
+#[cfg(test)]
+mod crash_tests;
 #[cfg(test)]
 mod test_support;
 
@@ -107,25 +118,52 @@ pub struct Storage {
     /// Released by [`Self::shutdown`] so another process can open the directory
     /// while this value is still alive.
     lock: Mutex<Option<File>>,
-    /// Published memtables. `query` loads one snapshot for both providers.
+    /// Published memtables and catalog. `query` loads one snapshot.
     published: Arc<Published>,
     spans: WalWriterHandle,
     scores: WalWriterHandle,
-    /// Shared with the writers. Tests arm faults here; production hooks are empty.
+    spans_flush: FlushHandle,
+    scores_flush: FlushHandle,
+    gc: gc::GcHandle,
+    /// Shared with the flush tasks and staged-object collection.
+    #[cfg_attr(not(test), allow(dead_code))]
+    objects: Arc<Objects>,
+    /// Kept so tests can read `flushed_seq`. The flush tasks hold their own clones.
+    #[cfg_attr(not(test), allow(dead_code))]
+    committer: Arc<Committer>,
+    runtime: Arc<RuntimeEnv>,
+    /// Records replayed into the memtable at open. A flushed record is not counted.
+    #[cfg_attr(not(test), allow(dead_code))]
+    replayed: [u64; 2],
+    /// Shared with the writers and the flush tasks. Tests arm faults here.
     #[allow(dead_code)]
     hooks: Hooks,
 }
 
 impl Storage {
-    /// Creates the directory layout, takes `data_dir/LOCK`, replays both WALs,
-    /// and starts the writers.
+    /// Creates the directory layout, takes `data_dir/LOCK`, replays both WALs
+    /// after `flushed_seq`, and starts the writers and flush tasks.
     ///
     /// Returns only after replay, so an append cannot run before recovery.
-    /// `after_seq` is 0 until M2 reads `flushed_seq` from `catalog.db`. Replay
-    /// may push a memtable past `hard_limit`; later appends then answer
-    /// [`AppendError::Backpressure`] until the process restarts. M1 has no flush,
-    /// so it cannot make room.
+    /// Replay may push a memtable past `hard_limit`; later appends then answer
+    /// [`AppendError::Backpressure`] until a flush makes room.
     pub async fn open(config: StorageConfig) -> Result<Self, OpenError> {
+        Self::open_inner(config, None).await
+    }
+
+    /// [`Self::open`] with a remote store standing in for S3.
+    #[cfg(test)]
+    pub(crate) async fn open_with_store(
+        config: StorageConfig,
+        store: Arc<dyn object_store::ObjectStore>,
+    ) -> Result<Self, OpenError> {
+        Self::open_inner(config, Some(store)).await
+    }
+
+    async fn open_inner(
+        config: StorageConfig,
+        remote: Option<Arc<dyn object_store::ObjectStore>>,
+    ) -> Result<Self, OpenError> {
         config.validate()?;
         let data_dir = config.data_dir.clone();
         let hard_limit = config.memtable.hard_limit.0;
@@ -137,11 +175,14 @@ impl Storage {
             group_max_bytes: config.wal.group_max_bytes.0,
             group_max_wait: config.wal.group_max_wait,
             segment_bytes: config.wal.segment_bytes.0,
+            flush_max_bytes: config.flush.max_bytes.0,
         };
+        let max_age = config.flush.max_age;
+        let upload_concurrency = config.flush.upload_concurrency;
         #[allow(clippy::default_constructed_unit_structs)]
         let hooks = Hooks::default();
-        let for_disk = share_hooks(&hooks);
-        let recovered = tokio::task::spawn_blocking(move || recover(&config, &for_disk))
+        let layout_dir = data_dir.clone();
+        let lock = tokio::task::spawn_blocking(move || prepare_layout(&layout_dir))
             .await
             .map_err(|_| {
                 open_io(
@@ -150,10 +191,53 @@ impl Storage {
                     io::Error::other("open task panicked"),
                 )
             })??;
-
+        let committer = Arc::new(Committer::open(&data_dir, share_hooks(&hooks)).await?);
+        let objects = open_objects(&config, &hooks, remote).await?;
+        let objects_for_cleanup = Arc::clone(&objects);
+        let removed =
+            tokio::task::spawn_blocking(move || objects_for_cleanup.remove_local_temp_files())
+                .await
+                .map_err(|_| {
+                    open_io(
+                        "removing temporary object files",
+                        &data_dir,
+                        io::Error::other("cleanup task panicked"),
+                    )
+                })??;
+        if removed > 0 {
+            tracing::info!(removed, "removed leftover object temp files");
+        }
+        let runtime = build_runtime(config.query.metadata_cache_bytes.0)?;
+        objects.register(&runtime);
+        let spans_flushed = committer.flushed_seq(Table::Spans).await;
+        let scores_flushed = committer.flushed_seq(Table::Scores).await;
+        let replay_dir = data_dir.clone();
+        let skip_corrupt = config.wal.skip_corrupt;
+        let segment_bytes = config.wal.segment_bytes.0;
+        let replay_hooks = share_hooks(&hooks);
+        let recovered = tokio::task::spawn_blocking(move || {
+            recover_tables(
+                &replay_dir,
+                spans_flushed,
+                scores_flushed,
+                skip_corrupt,
+                segment_bytes,
+                &replay_hooks,
+            )
+        })
+        .await
+        .map_err(|_| {
+            open_io(
+                "replaying WAL",
+                &data_dir,
+                io::Error::other("replay task panicked"),
+            )
+        })??;
+        let catalog = committer.catalog().await;
         let published = Arc::new(Published::new(ReadState {
             spans: recovered.spans.memtable.snapshot(),
             scores: recovered.scores.memtable.snapshot(),
+            catalog,
         }));
         let spans = spawn_writer(
             Table::Spans,
@@ -171,14 +255,57 @@ impl Storage {
             &published,
             &hooks,
         );
+        let spans_flush = flush::spawn(flush::FlushStart {
+            table: Table::Spans,
+            dir: data_dir.join("wal").join(Table::Spans.name()),
+            shared: Arc::clone(spans.shared()),
+            committer: Arc::clone(&committer),
+            objects: Arc::clone(&objects),
+            published: Arc::clone(&published),
+            hooks: share_hooks(&hooks),
+            max_bytes: tune.flush_max_bytes,
+            max_age,
+            upload_concurrency,
+        });
+        let scores_flush = flush::spawn(flush::FlushStart {
+            table: Table::Scores,
+            dir: data_dir.join("wal").join(Table::Scores.name()),
+            shared: Arc::clone(scores.shared()),
+            committer: Arc::clone(&committer),
+            objects: Arc::clone(&objects),
+            published: Arc::clone(&published),
+            hooks: share_hooks(&hooks),
+            max_bytes: tune.flush_max_bytes,
+            max_age,
+            upload_concurrency,
+        });
+        if let Err(error) =
+            gc::collect_once(&committer, &objects, &hooks, catalog::now_ns(), gc::MAX_AGE).await
+        {
+            // The error names the object key. Keys contain project ids.
+            tracing::warn!("staged object collection failed");
+            tracing::debug!(%error, "staged object collection error");
+        }
+        let gc = gc::spawn(gc::GcStart {
+            committer: Arc::clone(&committer),
+            objects: Arc::clone(&objects),
+            hooks: share_hooks(&hooks),
+        });
         Ok(Self {
             hard_limit,
             target_partitions,
             shutting_down: AtomicBool::new(false),
-            lock: Mutex::new(Some(recovered.lock)),
+            lock: Mutex::new(Some(lock)),
             published,
             spans,
             scores,
+            spans_flush,
+            scores_flush,
+            gc,
+            objects,
+            committer,
+            runtime,
+            replayed: [recovered.spans_records, recovered.scores_records],
             hooks,
         })
     }
@@ -206,21 +333,24 @@ impl Storage {
     ///
     /// No DataFusion session is built. The query layer builds one from
     /// [`ProjectQuery::runtime`] and [`ProjectQuery::target_partitions`].
-    /// M1's runtime is the default; M6 installs the memory pool.
+    /// The runtime is the one built at open. Its memory pool stays the default
+    /// until a later milestone installs one.
     pub fn query(&self, project: ProjectId) -> Result<ProjectQuery, QueryError> {
         let state = self.published.load();
         let partitions = self.target_partitions.get();
         let spans = Arc::new(query::SpansProvider::new(
             project,
             Arc::clone(&state.spans),
+            Arc::clone(&state.catalog),
             partitions,
         ));
         let scores = Arc::new(query::ScoresProvider::new(
             project,
             Arc::clone(&state.scores),
+            Arc::clone(&state.catalog),
             partitions,
         ));
-        // M1 has no `traces` provider: M3 adds it. Until then the view is empty.
+        // There is no `traces` provider yet. Until then the view is empty.
         let traces = Arc::new(MemTable::try_new(
             llmobs_core::schema::traces_schema(),
             vec![vec![]],
@@ -229,7 +359,7 @@ impl Storage {
             spans,
             traces,
             scores,
-            runtime: Arc::new(datafusion::execution::runtime_env::RuntimeEnv::default()),
+            runtime: Arc::clone(&self.runtime),
             target_partitions: self.target_partitions,
         })
     }
@@ -246,19 +376,38 @@ impl Storage {
         }
     }
 
-    /// Stops both writers and releases the data directory lock.
+    /// One staged-object collection, with an explicit age.
+    ///
+    /// The background task uses one hour. Tests pass a shorter age. A zero age
+    /// collects every row whose `created_at` is before this call.
+    #[doc(hidden)]
+    pub async fn collect_staged(&self, max_age: std::time::Duration) -> Result<(), error::GcError> {
+        gc::collect_once(
+            &self.committer,
+            &self.objects,
+            &self.hooks,
+            catalog::now_ns(),
+            max_age,
+        )
+        .await
+    }
+
+    /// Stops writers, flushes both memtables, and releases the data directory lock.
     ///
     /// Other tasks may still hold this value and be inside `append`. An append
     /// that has not been acknowledged returns [`AppendError::ShuttingDown`].
     /// A second call reports the same writer failure as the first, or `Ok`
     /// when the writers already stopped cleanly.
     ///
-    /// M1 does not flush. Acknowledged rows stay in the WAL and are replayed
-    /// on the next [`Self::open`]. M2 flushes the memtables here.
+    /// Each flush task gets up to 30 seconds, together, to commit. A flush that
+    /// is still running is cancelled; its rows stay in the WAL and are replayed
+    /// on the next [`Self::open`].
     pub async fn shutdown(&self) -> Result<(), StorageError> {
         self.shutting_down.store(true, Ordering::Release);
+        self.gc.abort();
         let spans = self.spans.shutdown().await;
         let scores = self.scores.shutdown().await;
+        self.finish_flushes().await;
         drop(
             self.lock
                 .lock()
@@ -268,6 +417,39 @@ impl Storage {
         writer_exit("spans", &spans)?;
         writer_exit("scores", &scores)?;
         Ok(())
+    }
+
+    async fn finish_flushes(&self) {
+        self.spans_flush.request_stop();
+        self.scores_flush.request_stop();
+        let spans = self.spans_flush.take_task();
+        let scores = self.scores_flush.take_task();
+        let spans_abort = spans.as_ref().map(tokio::task::JoinHandle::abort_handle);
+        let scores_abort = scores.as_ref().map(tokio::task::JoinHandle::abort_handle);
+        let wait = async move {
+            if let Some(task) = spans {
+                let _ = task.await;
+            }
+            if let Some(task) = scores {
+                let _ = task.await;
+            }
+        };
+        tokio::pin!(wait);
+        if tokio::time::timeout(std::time::Duration::from_secs(30), &mut wait)
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                "flush did not finish before shutdown; acknowledged rows remain in the WAL"
+            );
+            if let Some(handle) = spans_abort {
+                handle.abort();
+            }
+            if let Some(handle) = scores_abort {
+                handle.abort();
+            }
+            let _ = wait.await;
+        }
     }
 
     async fn append(
@@ -320,12 +502,53 @@ impl Storage {
             .map(|batch| batch.batch.num_rows())
             .sum()
     }
+
+    /// Active catalog files for `table`.
+    #[cfg(test)]
+    fn catalog_files(&self, table: Table) -> Vec<Arc<catalog::FileMeta>> {
+        self.published.load().catalog.test_files(table)
+    }
+
+    /// Rows in the active catalog files of `table`.
+    #[cfg(test)]
+    fn catalog_rows(&self, table: Table) -> u64 {
+        self.catalog_files(table).iter().map(|file| file.rows).sum()
+    }
+
+    /// WAL records replayed into the memtable at the last open.
+    #[cfg(test)]
+    fn replayed(&self, table: Table) -> u64 {
+        self.replayed[catalog::table_index(table)]
+    }
+
+    /// `flushed_seq` stored for `table`.
+    #[cfg(test)]
+    async fn flushed_seq(&self, table: Table) -> u64 {
+        self.committer.flushed_seq(table).await
+    }
+
+    /// Paths left in `staged_objects`.
+    #[cfg(test)]
+    async fn staged_paths(&self) -> Result<Vec<String>, error::CatalogError> {
+        self.committer.staged_paths().await
+    }
+}
+
+impl Drop for Storage {
+    fn drop(&mut self) {
+        self.spans.abort();
+        self.scores.abort();
+        self.spans_flush.abort();
+        self.scores_flush.abort();
+        self.gc.abort();
+    }
 }
 
 struct Recovered {
-    lock: File,
     spans: RecoveredTable,
     scores: RecoveredTable,
+    spans_records: u64,
+    scores_records: u64,
 }
 
 struct RecoveredTable {
@@ -334,48 +557,71 @@ struct RecoveredTable {
     next_seq: u64,
 }
 
-fn recover(config: &StorageConfig, hooks: &Hooks) -> Result<Recovered, OpenError> {
-    let data_dir = &config.data_dir;
+fn prepare_layout(data_dir: &Path) -> Result<File, OpenError> {
     ensure_dir(data_dir)?;
     let wal = data_dir.join("wal");
     ensure_dir(&wal)?;
-    let spans_dir = wal.join(Table::Spans.name());
-    let scores_dir = wal.join(Table::Scores.name());
-    ensure_dir(&spans_dir)?;
-    ensure_dir(&scores_dir)?;
-    let lock = lock_dir(data_dir)?;
-    let spans = recover_table(&spans_dir, Table::Spans, config, hooks)?;
-    let scores = recover_table(&scores_dir, Table::Scores, config, hooks)?;
+    ensure_dir(&wal.join(Table::Spans.name()))?;
+    ensure_dir(&wal.join(Table::Scores.name()))?;
+    lock_dir(data_dir)
+}
+
+fn recover_tables(
+    data_dir: &Path,
+    spans_flushed: u64,
+    scores_flushed: u64,
+    skip_corrupt: bool,
+    segment_bytes: u64,
+    hooks: &Hooks,
+) -> Result<Recovered, OpenError> {
+    let wal = data_dir.join("wal");
+    let spans = recover_table(
+        &wal.join(Table::Spans.name()),
+        Table::Spans,
+        spans_flushed,
+        skip_corrupt,
+        segment_bytes,
+        hooks,
+    )?;
+    let scores = recover_table(
+        &wal.join(Table::Scores.name()),
+        Table::Scores,
+        scores_flushed,
+        skip_corrupt,
+        segment_bytes,
+        hooks,
+    )?;
     Ok(Recovered {
-        lock,
-        spans,
-        scores,
+        spans_records: spans.records,
+        scores_records: scores.records,
+        spans: spans.table,
+        scores: scores.table,
     })
+}
+
+struct ReplayTable {
+    table: RecoveredTable,
+    records: u64,
 }
 
 fn recover_table(
     dir: &Path,
     table: Table,
-    config: &StorageConfig,
+    after_seq: u64,
+    skip_corrupt: bool,
+    segment_bytes: u64,
     hooks: &Hooks,
-) -> Result<RecoveredTable, OpenError> {
+) -> Result<ReplayTable, OpenError> {
     let mut memtable = Memtable::new(table);
-    // M2 replaces this 0 with `flushed_seq` from catalog.db.
-    let outcome = replay(
-        dir,
-        table,
-        0,
-        config.wal.skip_corrupt,
-        &mut |_seq, batch| {
-            if batch.num_rows() == 0 {
-                return Ok(());
-            }
-            let project = project_of(&batch)?;
-            memtable
-                .insert(project, batch)
-                .map_err(|err| memtable_to_wal(&err))
-        },
-    )
+    let outcome = replay(dir, table, after_seq, skip_corrupt, &mut |seq, batch| {
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+        let project = project_of(&batch)?;
+        memtable
+            .insert(project, batch, seq)
+            .map_err(|err| memtable_to_wal(&err))
+    })
     .map_err(replay_error)?;
     tracing::info!(
         table = table.name(),
@@ -386,17 +632,44 @@ fn recover_table(
         memtable_bytes = memtable.bytes(),
         "replayed WAL"
     );
-    let segment = SegmentWriter::create(
-        dir,
-        outcome.next_seq,
-        config.wal.segment_bytes.0,
-        share_hooks(hooks),
-    )?;
-    Ok(RecoveredTable {
-        memtable,
-        segment,
-        next_seq: outcome.next_seq,
+    let segment = SegmentWriter::create(dir, outcome.next_seq, segment_bytes, share_hooks(hooks))?;
+    Ok(ReplayTable {
+        records: outcome.records,
+        table: RecoveredTable {
+            memtable,
+            segment,
+            next_seq: outcome.next_seq,
+        },
     })
+}
+
+async fn open_objects(
+    config: &StorageConfig,
+    hooks: &Hooks,
+    remote: Option<Arc<dyn object_store::ObjectStore>>,
+) -> Result<Arc<Objects>, OpenError> {
+    #[cfg(test)]
+    if let Some(store) = remote {
+        return Ok(Arc::new(Objects::remote_for_test(
+            store,
+            share_hooks(hooks),
+        )?));
+    }
+    #[cfg(not(test))]
+    let _ = remote;
+    Ok(Arc::new(Objects::new(config, share_hooks(hooks)).await?))
+}
+
+fn build_runtime(metadata_cache_bytes: u64) -> Result<Arc<RuntimeEnv>, OpenError> {
+    let limit = usize::try_from(metadata_cache_bytes).unwrap_or(usize::MAX);
+    let runtime = RuntimeEnvBuilder::new()
+        .with_metadata_cache_limit(limit)
+        .build()
+        .map_err(|error| {
+            tracing::error!(%error, "building the query runtime");
+            OpenError::Runtime
+        })?;
+    Ok(Arc::new(runtime))
 }
 
 struct WriterTune {
@@ -404,6 +677,7 @@ struct WriterTune {
     group_max_bytes: u64,
     group_max_wait: std::time::Duration,
     segment_bytes: u64,
+    flush_max_bytes: u64,
 }
 
 fn spawn_writer(
@@ -423,6 +697,7 @@ fn spawn_writer(
         group_max_bytes: tune.group_max_bytes,
         group_max_wait: tune.group_max_wait,
         segment_bytes: tune.segment_bytes,
+        flush_max_bytes: tune.flush_max_bytes,
         hooks: share_hooks(hooks),
         published: Arc::clone(published),
         memtable: recovered.memtable,
@@ -589,9 +864,10 @@ mod tests {
     use llmobs_core::ids::{ProjectId, TraceId};
     use llmobs_core::schema::spans_schema;
     use llmobs_core::score::{Score, ScoreTarget, ScoreValue};
+    use object_store::ObjectStoreExt;
 
     use super::*;
-    use crate::config::{MemtableConfig, QueryConfig, WalConfig};
+    use crate::config::{FlushConfig, MemtableConfig, QueryConfig, S3Config, WalConfig};
     use crate::error::StorageError;
     use crate::hooks::HookPoint;
     use crate::wal::{parse_segment_name, spans_at, spans_named};
@@ -607,7 +883,10 @@ mod tests {
     fn config_in(dir: &Path) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            object_store: None,
+            s3: S3Config::default(),
             wal: WalConfig::default(),
+            flush: FlushConfig::default(),
             memtable: MemtableConfig::default(),
             query: QueryConfig::default(),
         }
@@ -740,6 +1019,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut config = config_in(dir.path());
         config.memtable.hard_limit = ByteSize::mib(16);
+        config.flush.max_bytes = ByteSize::mib(1);
         let storage = Storage::open(config.clone()).await.unwrap();
         let huge = spans_named(&[1], &"m".repeat(17 * 1024 * 1024));
         let error = storage.append_spans(project(), huge).await.unwrap_err();
@@ -778,7 +1058,10 @@ mod tests {
             StorageError::WalFailed { table: "spans" }
         ));
         let storage = Storage::open(config).await.unwrap();
-        assert_eq!(storage.published_rows(Table::Spans), 1);
+        // Shutdown flushed the acknowledged row, so replay has nothing to insert.
+        assert_eq!(storage.replayed(Table::Spans), 0);
+        assert_eq!(storage.published_rows(Table::Spans), 0);
+        assert_eq!(storage.catalog_rows(Table::Spans), 1);
         let receipt = storage
             .append_spans(project(), spans_at(&[3]))
             .await
@@ -800,7 +1083,9 @@ mod tests {
             .append_spans(project(), spans_at(&[2]))
             .await
             .unwrap();
-        storage.shutdown().await.unwrap();
+        // Drop aborts the flush task. Shutdown would commit the rows and the
+        // following corruption would no longer be in the replayed WAL.
+        drop(storage);
         let segment = span_segments(dir.path())
             .into_iter()
             .find(|path| path.metadata().unwrap().len() > 0)
@@ -834,7 +1119,8 @@ mod tests {
             .append_spans(project(), spans_at(&[3]))
             .await
             .unwrap();
-        storage.shutdown().await.unwrap();
+        // Drop leaves the WAL unflushed so the corrupt middle segment is still there.
+        drop(storage);
 
         let mut segments = span_segments(dir.path());
         segments.retain(|path| path.metadata().unwrap().len() > 0);
@@ -1005,12 +1291,229 @@ mod tests {
         }
         drop(storage);
         let storage = Storage::open(config).await.unwrap();
-        let mut names = span_names(storage.query(project()).unwrap().spans).await;
-        let found = names.len();
-        names.sort();
-        names.dedup();
-        assert_eq!(found, acknowledged);
-        assert_eq!(names.len(), acknowledged);
+        assert_eq!(storage.replayed(Table::Spans), 0);
+        assert_eq!(storage.published_rows(Table::Spans), 0);
+        assert_eq!(
+            storage.catalog_rows(Table::Spans),
+            u64::try_from(acknowledged).unwrap_or(u64::MAX)
+        );
+        storage.shutdown().await.unwrap();
+    }
+
+    async fn wait_for_catalog(storage: &Storage, table: Table, rows: u64) {
+        let started = std::time::Instant::now();
+        loop {
+            if storage.catalog_rows(table) == rows && storage.published_rows(table) == 0 {
+                return;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(15),
+                "flush did not commit {rows} rows"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_aged_memtable_is_flushed_and_skipped_on_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_in(dir.path());
+        config.flush.max_age = Duration::from_millis(100);
+        let storage = Storage::open(config.clone()).await.unwrap();
+        let first = storage.query(project()).unwrap();
+        let second = storage.query(project()).unwrap();
+        assert!(Arc::ptr_eq(&first.runtime, &second.runtime));
+        let receipt = storage
+            .append_spans(project(), spans_at(&[1]))
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        wait_for_catalog(&storage, Table::Spans, 1).await;
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(storage.flushed_seq(Table::Spans).await, receipt.seq);
+        let files = storage.catalog_files(Table::Spans);
+        assert_eq!(files.len(), 1);
+        assert!(!files[0].fully_merged);
+        assert_eq!(files[0].level, 0);
+        let object = dir.path().join("objects").join(&files[0].path);
+        assert_eq!(object.metadata().unwrap().len(), files[0].size);
+        assert!(storage.staged_paths().await.unwrap().is_empty());
+        storage.shutdown().await.unwrap();
+
+        let storage = Storage::open(config).await.unwrap();
+        assert_eq!(storage.replayed(Table::Spans), 0);
+        assert_eq!(storage.published_rows(Table::Spans), 0);
+        assert_eq!(storage.catalog_rows(Table::Spans), 1);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_large_memtable_flushes_without_waiting_for_age() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_in(dir.path());
+        config.flush.max_bytes = ByteSize::mib(1);
+        config.flush.max_age = Duration::from_secs(60 * 60);
+        let storage = Storage::open(config).await.unwrap();
+        let started = std::time::Instant::now();
+        storage
+            .append_spans(project(), spans_named(&[1], &"m".repeat(1_200_000)))
+            .await
+            .unwrap();
+        wait_for_catalog(&storage, Table::Spans, 1).await;
+        assert!(started.elapsed() < Duration::from_secs(10));
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn shutdown_flushes_before_returning() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_in(dir.path());
+        config.flush.max_age = Duration::from_secs(60 * 60);
+        let storage = Storage::open(config.clone()).await.unwrap();
+        storage
+            .append_spans(project(), spans_at(&[1]))
+            .await
+            .unwrap();
+        storage.shutdown().await.unwrap();
+        let storage = Storage::open(config).await.unwrap();
+        assert_eq!(storage.replayed(Table::Spans), 0);
+        assert_eq!(storage.published_rows(Table::Spans), 0);
+        assert_eq!(storage.catalog_rows(Table::Spans), 1);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn truncation_deletes_covered_segments_and_keeps_the_newest() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_in(dir.path());
+        config.wal.segment_bytes = ByteSize::mib(1);
+        config.flush.max_bytes = ByteSize::mib(1);
+        config.flush.max_age = Duration::from_secs(60 * 60);
+        config.memtable.hard_limit = ByteSize::mib(64);
+        let storage = Storage::open(config).await.unwrap();
+        storage.hooks().hold(HookPoint::FlushAfterFreeze);
+        let big = incompressible(2 * 1024 * 1024);
+        storage
+            .append_spans(project(), spans_named(&[1], &big))
+            .await
+            .unwrap();
+        storage
+            .append_spans(project(), spans_named(&[2], &big))
+            .await
+            .unwrap();
+        let before = span_segments(dir.path());
+        assert!(before.len() >= 2, "{before:?}");
+        storage.hooks().release(HookPoint::FlushAfterFreeze);
+        storage.shutdown().await.unwrap();
+        let after = span_segments(dir.path());
+        let oldest = before.iter().min().unwrap();
+        let newest = before.iter().max().unwrap();
+        assert!(!after.contains(oldest), "deleted {oldest:?} from {after:?}");
+        assert!(after.contains(newest), "kept {newest:?} in {after:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_flush_retries_failed_uploads_without_duplicating_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let inner = Arc::new(object_store::memory::InMemory::new());
+        let fault = test_support::FaultStore::new(Arc::clone(&inner) as _);
+        fault.enqueue(test_support::FaultKind::FailBefore);
+        fault.enqueue(test_support::FaultKind::FailBefore);
+        let mut config = config_in(dir.path());
+        config.flush.max_age = Duration::from_millis(100);
+        config.flush.upload_concurrency = 1;
+        let storage = Storage::open_with_store(config, Arc::new(fault))
+            .await
+            .unwrap();
+        storage
+            .append_spans(project(), spans_at(&[1]))
+            .await
+            .unwrap();
+        wait_for_catalog(&storage, Table::Spans, 1).await;
+        let committed: Vec<String> = storage
+            .catalog_files(Table::Spans)
+            .iter()
+            .map(|file| file.path.clone())
+            .collect();
+        let staged = storage.staged_paths().await.unwrap();
+        assert_eq!(staged.len(), 2, "{staged:?}");
+        assert!(committed.iter().all(|path| !staged.contains(path)));
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_ambiguous_upload_is_retried_under_a_new_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let inner = Arc::new(object_store::memory::InMemory::new());
+        let fault = test_support::FaultStore::new(Arc::clone(&inner) as _);
+        fault.enqueue(test_support::FaultKind::FailAfter);
+        let mut config = config_in(dir.path());
+        config.flush.max_age = Duration::from_millis(100);
+        config.flush.upload_concurrency = 1;
+        let storage = Storage::open_with_store(config, Arc::new(fault))
+            .await
+            .unwrap();
+        storage
+            .append_spans(project(), spans_at(&[1]))
+            .await
+            .unwrap();
+        wait_for_catalog(&storage, Table::Spans, 1).await;
+        let committed = storage.catalog_files(Table::Spans);
+        assert_eq!(committed.len(), 1);
+        let staged = storage.staged_paths().await.unwrap();
+        assert_eq!(staged.len(), 1, "{staged:?}");
+        assert_ne!(staged[0], committed[0].path);
+        inner
+            .get(&object_store::path::Path::from(staged[0].as_str()))
+            .await
+            .unwrap();
+        inner
+            .get(&object_store::path::Path::from(committed[0].path.as_str()))
+            .await
+            .unwrap();
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn failed_uploads_backpressure_until_the_store_recovers() {
+        let dir = tempfile::tempdir().unwrap();
+        let inner = Arc::new(object_store::memory::InMemory::new());
+        let fault = test_support::FaultStore::new(Arc::clone(&inner) as _);
+        fault.hold_failures();
+        let mut config = config_in(dir.path());
+        config.memtable.hard_limit = ByteSize::mib(16);
+        config.flush.max_bytes = ByteSize::mib(1);
+        config.flush.max_age = Duration::from_secs(60 * 60);
+        config.flush.upload_concurrency = 1;
+        let storage = Storage::open_with_store(config, Arc::new(fault.clone()))
+            .await
+            .unwrap();
+        let payload = incompressible(1024 * 1024);
+        let mut accepted = 0_i64;
+        loop {
+            match storage
+                .append_spans(project(), spans_named(&[accepted], &payload))
+                .await
+            {
+                Ok(_) => accepted += 1,
+                Err(AppendError::Backpressure) => break,
+                Err(error) => panic!("{error}"),
+            }
+            assert!(accepted < 64, "backpressure never tripped");
+        }
+        assert!(accepted > 0);
+        fault.release();
+        let started = std::time::Instant::now();
+        loop {
+            match storage.append_spans(project(), spans_at(&[99])).await {
+                Ok(_) => break,
+                Err(AppendError::Backpressure) => {
+                    assert!(started.elapsed() < Duration::from_secs(30));
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                Err(error) => panic!("{error}"),
+            }
+        }
         storage.shutdown().await.unwrap();
     }
 

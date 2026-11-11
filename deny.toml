@@ -4,7 +4,13 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+ignore = [
+    # sqlx 0.9.0 requires libsqlite3-sys <0.38. The patched release is 0.39.0.
+    { id = "RUSTSEC-2026-0459", reason = "sqlx 0.9.0 requires libsqlite3-sys <0.38; the fix is libsqlite3-sys 0.39.0" },
+    # object_store 0.13's aws feature requires quick-xml ^0.39. The fixes are 0.41.
+    { id = "RUSTSEC-2026-0194", reason = "object_store 0.13 requires quick-xml ^0.39; the fix is quick-xml 0.41" },
+    { id = "RUSTSEC-2026-0195", reason = "object_store 0.13 requires quick-xml ^0.39; the fix is quick-xml 0.41" },
+]
 
 [licenses]
 # D57: license policy deferred until our own license is chosen.
