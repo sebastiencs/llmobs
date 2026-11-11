@@ -301,6 +301,13 @@ function TracesPage() {
                 traceId={search.trace}
                 spanId={search.span}
                 onAddFilter={onFilter}
+                onClose={() => {
+                  void navigate({
+                    to: "/$org/$project/traces",
+                    params: { org, project },
+                    search: (prev) => withoutTrace(prev),
+                  });
+                }}
                 onSelectSpan={(spanId) => {
                   void navigate({
                     to: "/$org/$project/traces",

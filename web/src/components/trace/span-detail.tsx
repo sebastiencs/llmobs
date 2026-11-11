@@ -7,6 +7,7 @@ import { useProject } from "@/components/shell/project-context";
 import { AttributesTab } from "@/components/trace/attributes-tab";
 import { ChatTab } from "@/components/trace/chat-tab";
 import { IoTab } from "@/components/trace/io-tab";
+import { ScoresTab } from "@/components/trace/scores-tab";
 import { SpanHeader } from "@/components/trace/span-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -14,7 +15,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { STORAGE_PREFIX } from "@/product";
 
 const TAB_KEY = `${STORAGE_PREFIX}span-tab`;
-type SpanTab = "chat" | "io" | "attributes";
+type SpanTab = "chat" | "io" | "attributes" | "scores";
 
 export function SpanDetail({
   traceId,
@@ -31,7 +32,7 @@ export function SpanDetail({
   const span = useQuery(spanDetailQuery(org, project, traceId, spanId));
   const [choice, setChoice] = useState(readStoredTab);
   function select(value: string) {
-    if (value !== "chat" && value !== "io" && value !== "attributes") return;
+    if (value !== "chat" && value !== "io" && value !== "attributes" && value !== "scores") return;
     setChoice(value);
     localStorage.setItem(TAB_KEY, value);
   }
@@ -71,6 +72,9 @@ export function SpanDetail({
             <TabsTrigger value="attributes" className="text-xs">
               Attributes
             </TabsTrigger>
+            <TabsTrigger value="scores" className="text-xs">
+              Scores
+            </TabsTrigger>
           </TabsList>
           {messages ? (
             <TabsContent value="chat" className="min-h-0 overflow-auto px-3 pb-3">
@@ -82,6 +86,9 @@ export function SpanDetail({
           </TabsContent>
           <TabsContent value="attributes" className="min-h-0 overflow-auto px-3 pb-3">
             <AttributesTab span={detail} onAddFilter={onAddFilter} />
+          </TabsContent>
+          <TabsContent value="scores" className="min-h-0 overflow-auto px-3 pb-3">
+            <ScoresTab traceId={traceId} spanId={spanId} />
           </TabsContent>
         </Tabs>
       </section>
@@ -95,13 +102,14 @@ function hasMessages(span: Schema<"SpanDetail">): boolean {
 
 function readStoredTab(): SpanTab | null {
   const stored = localStorage.getItem(TAB_KEY);
-  if (stored === "chat" || stored === "io" || stored === "attributes") return stored;
+  if (stored === "chat" || stored === "io" || stored === "attributes" || stored === "scores") {
+    return stored;
+  }
   return null;
 }
 
 function activeTab(choice: SpanTab | null, messages: boolean): SpanTab {
-  if (choice === "attributes") return "attributes";
-  if (choice === "io") return "io";
+  if (choice === "scores" || choice === "attributes" || choice === "io") return choice;
   if (choice === "chat" && messages) return "chat";
   if (messages) return "chat";
   return "io";

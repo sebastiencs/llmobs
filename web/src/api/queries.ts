@@ -135,6 +135,24 @@ export function spanListOptions(
   };
 }
 
+export function scoresQuery(
+  org: string,
+  project: string,
+  query: {
+    trace_id: string;
+    span_id?: string;
+    target?: Schema<"ScoreTargetKind">;
+    limit?: number;
+  },
+) {
+  return $api.queryOptions("get", "/api/v1/projects/{project}/scores", {
+    params: {
+      path: { project: projectRef(org, project) },
+      query,
+    },
+  });
+}
+
 export function savedViewsQuery(org: string, project: string, kind: Schema<"SavedViewKind">) {
   return $api.queryOptions("get", "/api/v1/projects/{project}/saved-views", {
     params: {

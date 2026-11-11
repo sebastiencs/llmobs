@@ -13,6 +13,24 @@ import { PRESETS, type Preset } from "@/lib/time-range";
 
 const TRACE_SORTS = ["start_time", "duration", "cost_total", "total_tokens"] as const;
 const SORT_ORDERS = ["asc", "desc"] as const;
+const TRACE_MODES = ["tree", "transcript"] as const;
+
+export type TraceMode = (typeof TRACE_MODES)[number];
+
+/** Search params of the full trace page. The list keeps its own URL. */
+export type TracePageSearch = {
+  span?: string;
+  mode?: TraceMode;
+};
+
+export function parseTracePageSearch(search: Record<string, unknown>): TracePageSearch {
+  const span = parseHex(search.span, 16);
+  const mode = parseEnum(search.mode, TRACE_MODES);
+  return {
+    ...(span ? { span } : {}),
+    ...(mode ? { mode } : {}),
+  };
+}
 
 export const TRACE_COLUMN_IDS = [
   "status",

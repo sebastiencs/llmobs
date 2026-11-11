@@ -1,25 +1,28 @@
 import { useQuery } from "@tanstack/react-query";
 import { problemOf } from "@/api/problem";
 import { traceDetailQuery } from "@/api/queries";
-import { IdText } from "@/components/id-text";
 import { useProject } from "@/components/shell/project-context";
-import { StatusDot } from "@/components/status-dot";
 import { SpanDetail } from "@/components/trace/span-detail";
 import { SplitPane } from "@/components/trace/split-pane";
+import { TraceHeader } from "@/components/trace/trace-header";
 import { TreeGrid } from "@/components/trace/tree-grid";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatCost, formatDuration, formatTokens } from "@/lib/format";
+import type { TraceMode } from "@/lib/search/traces";
 
 export function TraceView({
   traceId,
   spanId,
+  mode,
   onSelectSpan,
   onAddFilter,
+  onClose,
 }: {
   traceId: string;
   spanId?: string;
+  mode?: TraceMode;
   onSelectSpan: (spanId: string) => void;
   onAddFilter?: (conjunct: string) => void;
+  onClose?: () => void;
 }) {
   const { org, project } = useProject();
   const trace = useQuery(traceDetailQuery(org, project, traceId));
@@ -45,14 +48,7 @@ export function TraceView({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-[32px] shrink-0 items-center gap-2 border-b px-3">
-        <span className="min-w-0 truncate text-sm">{detail.trace.name}</span>
-        <StatusDot status={detail.trace.status} />
-        <span className="num shrink-0 text-xs">{formatDuration(detail.trace.duration_ns)}</span>
-        <span className="num shrink-0 text-xs">{formatTokens(detail.trace.total_tokens)}</span>
-        <span className="num shrink-0 text-xs">{formatCost(detail.trace.cost_total)}</span>
-        <IdText value={detail.trace.trace_id} kind="trace" />
-      </div>
+      <TraceHeader trace={detail.trace} spanId={selected} mode={mode} onClose={onClose} />
       {detail.truncated ? (
         <div className="shrink-0 border-b bg-muted px-3 py-1 text-xs">
           Showing the first 20 000 spans

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { parseTracesSearch } from "./traces";
+import { parseTracePageSearch, parseTracesSearch } from "./traces";
 
 it("keeps valid trace search and drops the rest", () => {
   expect(
@@ -41,4 +41,15 @@ it("keeps a saved-view id", () => {
   expect(parseTracesSearch({ view: id })).toEqual({ view: id });
   expect(parseTracesSearch({ view: id.toUpperCase() })).toEqual({});
   expect(parseTracesSearch({ view: "errors" })).toEqual({});
+});
+
+it("keeps a span and a mode on the trace page", () => {
+  expect(
+    parseTracePageSearch({
+      span: "b".repeat(16),
+      mode: "transcript",
+      trace: "a".repeat(32),
+    }),
+  ).toEqual({ span: "b".repeat(16), mode: "transcript" });
+  expect(parseTracePageSearch({ span: "B".repeat(16), mode: "chat" })).toEqual({});
 });
