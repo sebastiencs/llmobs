@@ -5,6 +5,7 @@
 //! server maps those batches to API types.
 
 mod cursor;
+mod scores;
 mod sessions;
 mod traces;
 mod users;
@@ -17,6 +18,7 @@ use crate::filter::{FilterView, exclusions, time_window};
 use crate::query_error::{RunError, classify};
 use crate::views::{QueryContext, TimeWindow};
 
+pub use scores::{LATEST_SCORE_COLUMNS, ScoreListRequest, ScoreTargets, latest_scores, score_list};
 pub use sessions::{
     MAX_SESSION_TURNS, SessionDetailData, SessionListRequest, SessionSort, session_detail,
     session_list,

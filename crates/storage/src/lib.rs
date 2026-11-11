@@ -13,11 +13,12 @@ mod views;
 
 pub use query_error::{InvalidQuery, Position, RunError};
 pub use reads::{
-    ListScope, MAX_PAGE, MAX_SESSION_TURNS, MAX_TRACE_SPANS, MAX_USER_SESSIONS, Page,
-    SPAN_LIST_COLUMNS, SessionDetailData, SessionListRequest, SessionSort, SortOrder,
-    SpanListRequest, SpanSort, TraceDetailData, TraceListRequest, TraceSort, USER_COLUMNS,
-    UserDetailData, UserListRequest, UserSort, session_detail, session_list, span_detail,
-    span_list, trace_detail, trace_list, user_detail, user_list,
+    LATEST_SCORE_COLUMNS, ListScope, MAX_PAGE, MAX_SESSION_TURNS, MAX_TRACE_SPANS,
+    MAX_USER_SESSIONS, Page, SPAN_LIST_COLUMNS, ScoreListRequest, ScoreTargets, SessionDetailData,
+    SessionListRequest, SessionSort, SortOrder, SpanListRequest, SpanSort, TraceDetailData,
+    TraceListRequest, TraceSort, USER_COLUMNS, UserDetailData, UserListRequest, UserSort,
+    latest_scores, score_list, session_detail, session_list, span_detail, span_list, trace_detail,
+    trace_list, user_detail, user_list,
 };
 pub use sql::{EXPORT_MAX_ROWS, ExportFormat, SQL_MAX_ROWS, SqlColumn, SqlJson, SqlRequest};
 pub use views::{
