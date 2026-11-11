@@ -2,7 +2,7 @@
 
 ## P26 — Security review
 
-**Goal:** a model that did not implement P1–P25 reviews the auth code against spec 08, the decisions D133–D149 and the checklist below, writes the findings, and fixes only what is small and certain.
+**Goal:** a model that did not implement P1–P25 reviews the auth code against spec 08, the decisions D135–D151 and the checklist below, writes the findings, and fixes only what is small and certain.
 
 **Who:** a different model (or a different vendor's model) from the one that implemented P1–P25. Start from a fresh session with no memory of the implementation.
 
@@ -12,7 +12,7 @@
 
 ### How to review
 
-1. Read `AGENTS.md`, spec 04 § Identity & tenancy and § Keys & credentials, spec 08, spec 09 § Conventions and the auth/org/admin endpoints, D133–D149, and `docs/research/auth/README.md` and `advisories.md`.
+1. Read `AGENTS.md`, spec 04 § Identity & tenancy and § Keys & credentials, spec 08, spec 09 § Conventions and the auth/org/admin endpoints, D135–D151, and `docs/research/auth/README.md` and `advisories.md`.
 2. Read `crates/server/src/{auth,http,routes,meta,email,bootstrap.rs,admin.rs,serve.rs,config.rs}` and `crates/cli/src/login.rs` in full. Do not rely on test names; read the code paths.
 3. Go through every checklist item below. For each, record **OK** with the file and line that shows it, or a **finding**.
 4. Try to break it: write throw-away tests (kept only if they reveal a bug; then they stay as regression tests with the fix or the finding).
@@ -28,7 +28,7 @@
 5. Expiry checked on every use (keys and PATs even when cached); revocation through the API evicts caches immediately.
 6. Password hashing parameters, rehash on login, NFC, policy, dummy hash for unknown users: one argon2 verification per login attempt in every branch.
 7. Login, forgot and resend answers do not depend on whether the account exists (status, body, headers, and no SMTP on the request path).
-8. Rate limits and lockout keyed as D141; lockout cannot lock out OAuth login or password reset; memory bounded.
+8. Rate limits and lockout keyed as D143; lockout cannot lock out OAuth login or password reset; memory bounded.
 9. Setup: token required, single use, constant-time compare, concurrency-safe (one transaction re-checking `users`), refused once a user exists; headless init runs once and validates `LLMOBS_INIT_SECRET_KEY`.
 
 **Authorization**
@@ -49,7 +49,7 @@
 
 **OAuth/OIDC**
 22. `state`, PKCE and `nonce` always on; the callback ignores existing sessions; id_token checks (signature, `iss`, `aud`, `exp`, `nonce`); unverified emails never create or link accounts.
-23. Linking rules of D146, pre-hijack clearing, instance admin never linked, Entra multi-tenant issuers refused, `hd` checked for Google domains.
+23. Linking rules of D148, pre-hijack clearing, instance admin never linked, Entra multi-tenant issuers refused, `hd` checked for Google domains.
 24. The HTTP client for providers does not follow redirects; timeouts set.
 
 **Data and logs**

@@ -17,7 +17,7 @@ At the end of this part a user can set up the instance, sign up (open policy), l
 - `insert_session(conn, NewSession { hash, user_id, user_agent, ip }, now, expires_at)`.
 - `session_user(pool, hash, now) -> Option<SessionRow { hash, user: UserRow, last_seen_at, expires_at }>`: joins `users`; returns `None` when `expires_at <= now` or the user has `disabled_at` set.
 - `touch_session(conn, hash, now, expires_at)`; `delete_session(conn, hash)`; `delete_user_sessions(conn, user_id, keep: Option<&str>)`; `purge_expired_sessions(conn, now) -> u64`.
-- `user_agent` is cut to 256 characters before insert; `ip` is the client IP of D140 as text.
+- `user_agent` is cut to 256 characters before insert; `ip` is the client IP of D142 as text.
 
 ### Cookie and lifecycle (`auth/session.rs`)
 
@@ -45,7 +45,7 @@ Standard.
 
 ## P10 — Principals, roles and the route table
 
-**Goal:** every request is authenticated once, every route declares its access in one table, and one middleware enforces it (D136–D139).
+**Goal:** every request is authenticated once, every route declares its access in one table, and one middleware enforces it (D138–D141).
 
 **Edit only:** `crates/server/src/auth/{principal.rs,roles.rs}`, `crates/server/src/http/{mod.rs,access.rs,csrf.rs}` (`access.rs`, `csrf.rs` new), `crates/server/src/api/openapi.rs` (security schemes), `crates/server/openapi.json`, `web/src/api/schema.gen.ts` (generated), `crates/server/src/test_support.rs`, `crates/server/src/lib.rs`.
 
@@ -58,7 +58,7 @@ Standard.
 pub(crate) enum Role { Viewer, Member, Admin }               // effective role on a project
 
 pub(crate) fn effective_project_role(org: OrgRole, ov: Option<ProjectOverride>) -> Option<Role>;
-// Owner, Admin → Some(Admin) (override ignored, D137); Member/Viewer: override None → hidden (None),
+// Owner, Admin → Some(Admin) (override ignored, D139); Member/Viewer: override None → hidden (None),
 // override Admin/Member/Viewer → that role; no override → Member/Viewer.
 
 pub(crate) fn org_rank(r: OrgRole) -> u8;                   // viewer 0 < member 1 < admin 2 < owner 3
@@ -91,12 +91,12 @@ pub(crate) enum Principal {
 P16 adds `ApiKey`, P17 adds `Pat`. `email` is held for handlers that need it (password checks); it is never logged (the `Debug` impl of `AuthUser` omits it).
 
 `authenticate` middleware (outermost after request logging):
-1. If an `Authorization` header is present: it must be `Bearer <token>`; anything else → 401 `unauthorized`. In P10 no bearer kind is recognised yet, so every bearer → 401. The cookie is **ignored** whenever an `Authorization` header is present (D138).
+1. If an `Authorization` header is present: it must be `Bearer <token>`; anything else → 401 `unauthorized`. In P10 no bearer kind is recognised yet, so every bearer → 401. The cookie is **ignored** whenever an `Authorization` header is present (D140).
 2. Else, if a session cookie resolves (P9) → `Principal::Session`; a refresh `Set-Cookie` is appended to the response.
 3. Else no principal.
 4. The principal (an `Option<Principal>`) goes into the request extensions.
 
-### CSRF (`http/csrf.rs`, D139)
+### CSRF (`http/csrf.rs`, D141)
 
 After `authenticate`: for methods other than GET, HEAD, OPTIONS, when the principal is a `Session` **or** the path starts with `/api/auth/`, the `Origin` header must equal `config.public_url.origin()` exactly; otherwise 403 `forbidden` with detail `"origin check failed"`. Missing `Origin` fails too.
 
@@ -162,7 +162,7 @@ How the merge of method routers works in axum 0.8.9 and how `%2F` behaves.
 
 ## P11 — Setup, headless init and the auth config
 
-**Goal:** the first user can be created through `POST /api/auth/setup` with the setup token, or headlessly from `[init]` (spec 08 § Bootstrapping, D142); `GET /api/auth/config` gets its handler.
+**Goal:** the first user can be created through `POST /api/auth/setup` with the setup token, or headlessly from `[init]` (spec 08 § Bootstrapping, D144); `GET /api/auth/config` gets its handler.
 
 **Edit only:** `crates/server/src/bootstrap.rs` (new), `crates/server/src/meta/api_keys.rs` (new; insert only), `crates/server/src/routes/{mod.rs,auth.rs}` (new), `crates/server/src/api/account.rs` (`SetupRequest`, `SetupResponse`), `crates/server/src/http/{mod.rs,access.rs}`, `crates/server/src/serve.rs`, `crates/server/src/api/openapi.rs`, `crates/server/openapi.json`, `web/src/api/schema.gen.ts`, `fixtures/api/` (examples), `crates/server/src/test_support.rs`.
 
@@ -177,7 +177,7 @@ How the merge of method routers works in axum 0.8.9 and how `%2F` behaves.
 `AppInner.setup: SetupState { token: Mutex<Option<String>> }`. At `serve` start, after `meta.db`:
 - users exist → `None`;
 - no user and a complete `[init]` → run `apply_init`, then `None`;
-- no user and no `[init]` → generate `new_opaque_token()`, keep it, log once at `warn` with `target = "setup"`: `setup required: open <public_url>/setup?token=<token>` (D142; the only secret ever logged).
+- no user and no `[init]` → generate `new_opaque_token()`, keep it, log once at `warn` with `target = "setup"`: `setup required: open <public_url>/setup?token=<token>` (D144; the only secret ever logged).
 
 ### `apply_init(state, init)` (one `MetaDb::write`)
 
@@ -224,7 +224,7 @@ Standard.
 
 ## P12 — Login, logout, signup and `/me`
 
-**Goal:** password login with the uniform answers, rate limits and lockout of D141/D143; logout; signup under `open`; `GET /api/auth/me`.
+**Goal:** password login with the uniform answers, rate limits and lockout of D143/D145; logout; signup under `open`; `GET /api/auth/me`.
 
 **Edit only:** `crates/server/src/routes/auth.rs`, `crates/server/src/api/account.rs` (`LoginRequest`, `SignupRequest`), `crates/server/src/http/access.rs`, `crates/server/src/api/openapi.rs`, `crates/server/openapi.json`, `web/src/api/schema.gen.ts`, `fixtures/api/`, `crates/server/src/test_support.rs`.
 
@@ -252,7 +252,7 @@ Request `{email, password, name?}` with `#[serde(deny_unknown_fields)]`. P20 add
 1. `limits.ip_forms` → 429. Password disabled → 403.
 2. Policy `disabled` → 403 `forbidden` ("sign-up is disabled"); `invite_only` → 403 ("sign-up requires an invitation").
 3. `open`: email valid (400 field error); `signup_domains` non-empty and the domain not in it → 403; `enforce_sso_domains` contains the domain → 403 `sso_required`; policy (400 field error); name ≤ 100.
-4. Insert the user (not verified). Email exists → 409 `conflict` (D143).
+4. Insert the user (not verified). Email exists → 409 `conflict` (D145).
 5. `require_email_verification` → 201 with `{"verification_required": true}` and no session (P21 sends the email). Else → 201 `Me` with a session cookie.
 
 Response type: an enum serialized as `{ "me": Me }` or `{ "verification_required": true }` is awkward for clients; use `SignupResponse { me: Option<Me>, verification_required: bool }`.
@@ -319,7 +319,7 @@ pub async fn list_users(config: &ServerConfig) -> Result<Vec<UserSummary>, Admin
 pub struct UserSummary { pub id: Uuid, pub email: String, pub name: Option<String>, pub instance_admin: bool, pub disabled: bool, pub created_at: i64 }
 ```
 
-They use `MetaDb::open_existing` (D134: no migration; `NotInitialized` → "run `llmobs serve` once to create the database"; `SchemaMismatch` → "this binary expects schema N, found M"). They do not take the data-dir lock. `create_user` normalizes the email, checks the policy, and creates a verified user (the operator vouches for it). `AdminError` is a `thiserror` enum; its messages name no email.
+They use `MetaDb::open_existing` (D136: no migration; `NotInitialized` → "run `llmobs serve` once to create the database"; `SchemaMismatch` → "this binary expects schema N, found M"). They do not take the data-dir lock. `create_user` normalizes the email, checks the policy, and creates a verified user (the operator vouches for it). `AdminError` is a `thiserror` enum; its messages name no email.
 
 ### CLI
 

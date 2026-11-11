@@ -14,18 +14,18 @@ Config, `meta.db`, the axum app and `llmobs serve`. At the end of P5, `llmobs se
 
 ### Decision numbers
 
-Find the highest `D<n>` in `docs/mvp-decisions.md` on `main`. If it is below 133 and no open plan reserves 133–149, keep D133–D149. Otherwise renumber them to the next free block, and update every `D13x`/`D14x` reference in `docs/plans/d-meta-auth/`.
+Find the highest `D<n>` in `docs/mvp-decisions.md` on `main`. If it is below 135 and no open plan reserves 135–151, keep D135–D151. Otherwise renumber them to the next free block, and update every `D13x`/`D14x`/`D15x` reference in `docs/plans/d-meta-auth/`.
 
 ### `docs/mvp-decisions.md`
 
-- Append D133–D149 to the decision log, one row each, with the wording of the README table (shortened to one or two sentences each, as the other rows are, ending with the spec section they change).
+- Append D135–D151 to the decision log, one row each, with the wording of the README table (shortened to one or two sentences each, as the other rows are, ending with the spec section they change).
 - D43 contradicts spec 08: change it to "Email/password on by default (argon2id, spec 08 § Passwords); sign-up policy `LLMOBS_AUTH_SIGNUP` (default `invite_only`) and `LLMOBS_AUTH_DISABLE_PASSWORD`; the first user becomes instance admin and owner of the first org; GitHub, Google, generic OIDC; works without email (copyable invite links, CLI password reset). No SAML in v1." This is a wording fix, not a new decision.
 
 ### Spec 04
 
-- Header paragraph: `synchronous=FULL` instead of `NORMAL`, with "writes are rare; every commit is durable before the response (D134)". "one writer connection (serialized writes through a `Mutex`) and a read pool of 4 read-only connections". Add: "`llmobs admin` commands open `meta.db` without running migrations and refuse a database at another migration version (D134)."
-- `users.email`: `TEXT NOT NULL UNIQUE` without `COLLATE NOCASE`, comment "normalized: trimmed, NFC, lowercase (D134)". Same for `invites.email`.
-- `invites`: add `CREATE UNIQUE INDEX invites_pending ON invites(org_id, email) WHERE accepted_at IS NULL;` and the sentence "A new invite for the same (org, email) replaces the pending one (D145)."
+- Header paragraph: `synchronous=FULL` instead of `NORMAL`, with "writes are rare; every commit is durable before the response (D136)". "one writer connection (serialized writes through a `Mutex`) and a read pool of 4 read-only connections". Add: "`llmobs admin` commands open `meta.db` without running migrations and refuse a database at another migration version (D136)."
+- `users.email`: `TEXT NOT NULL UNIQUE` without `COLLATE NOCASE`, comment "normalized: trimmed, NFC, lowercase (D136)". Same for `invites.email`.
+- `invites`: add `CREATE UNIQUE INDEX invites_pending ON invites(org_id, email) WHERE accepted_at IS NULL;` and the sentence "A new invite for the same (org, email) replaces the pending one (D147)."
 - New table after `password_resets`:
 
 ```sql
@@ -36,35 +36,35 @@ CREATE TABLE email_verifications (
 );
 ```
 
-- `api_keys.prefix` and `personal_tokens.prefix` comment: "type prefix + first 6 random characters, e.g. `sk-llmobs-a1B2c3` (D138)".
+- `api_keys.prefix` and `personal_tokens.prefix` comment: "type prefix + first 6 random characters, e.g. `sk-llmobs-a1B2c3` (D140)".
 - `web_sessions.id` comment: "SHA-256 hex of the cookie value (32 random bytes, base64url)".
-- § Metering & instance: after the `instance_settings` DDL, add "Created by track E with its first use (D133)."
+- § Metering & instance: after the `instance_settings` DDL, add "Created by track E with its first use (D135)."
 
 ### Spec 08
 
 Edit in place; keep the structure.
-- § Bootstrapping: the setup page needs the setup token of D142 (`/setup?token=…`, logged once at startup while no user exists). Headless init runs once, in one transaction, only when `users` is empty; `LLMOBS_INIT_SECRET_KEY`, when set, must match the secret key format (`sk-llmobs-` + 32 base62 characters) or startup fails.
-- § Sign-up policy: add "An invite token admits its own email only (D145). Signup under `open` with an email already registered answers 409 (D143)." In the `LLMOBS_AUTH_ENFORCE_SSO_DOMAINS` row, add "any configured OAuth/OIDC provider satisfies it".
-- § Passwords: NFC normalization, the length counted in Unicode scalar values, the list source (SecLists `10k-most-common.txt`, entries of 10+ characters), the hashing semaphore, the dummy hash, the rate limits and lockout of D141 (in memory; keys; lockout does not block OAuth/OIDC login or password reset; reset clears it). Uniform answers of D143. Password change: `POST /api/v1/me/password` revokes every other web session and all PATs.
-- § Web sessions: CSRF rule of D139 replaces the current bullet. Add: "A bearer token wins over the cookie (D138)." Add: "Disabling a user deletes their sessions."
-- § OAuth / OIDC: per-provider `link_existing_by_email` (GitHub and Google default `true`, `[[auth.oidc]]` default `false`); the linking rules of D146 replace the "Account linking" bullet; refuse multi-tenant Entra issuers; `allowed_domains` checks the verified email's domain, and for Google also the `hd` claim; state cookie signed with a per-process key, 10 minutes, `SameSite=Lax`, `Path=/api/auth/callback`; the callback redirects to the relative path given to `/authorize?redirect=` (must start with `/` and not `//`), and errors redirect to `/login?error=<code>`.
-- § Authorization: the override rule of D137 (who can be overridden, who edits overrides, ceilings, last owner); instance admins have no implicit access to org data; any signed-in user creates orgs. "404 for what you cannot see, 403 for what you can see but not change" (D136). Session-only operations and PAT scopes of D138. Replace "Deletion by user/project still requires `admin` (PAT or session), not an API key." with "Deletion by user or project requires `admin` with a session or a `read, write` PAT, never an API key."
-- § API keys: prefix of D138; cache eviction on revoke; credentials only in the `Authorization` header. CLI login: the browser page is `/cli-auth?port=…&state=…`, the callback host is always `127.0.0.1`; `llmobs logout` revokes the PAT with `DELETE /api/v1/me/tokens/current`.
-- § Email: transactional emails are sent by a background task (D143). Templates add `verify_email` links `<public_url>/verify?token=…`, reset links `<public_url>/reset?token=…`, invite links `<public_url>/invite/<token>`.
-- § Auth events log: D148 (ids only; `account = "unknown"`).
-- New § Client IP: D140.
+- § Bootstrapping: the setup page needs the setup token of D144 (`/setup?token=…`, logged once at startup while no user exists). Headless init runs once, in one transaction, only when `users` is empty; `LLMOBS_INIT_SECRET_KEY`, when set, must match the secret key format (`sk-llmobs-` + 32 base62 characters) or startup fails.
+- § Sign-up policy: add "An invite token admits its own email only (D147). Signup under `open` with an email already registered answers 409 (D145)." In the `LLMOBS_AUTH_ENFORCE_SSO_DOMAINS` row, add "any configured OAuth/OIDC provider satisfies it".
+- § Passwords: NFC normalization, the length counted in Unicode scalar values, the list source (SecLists `10k-most-common.txt`, entries of 10+ characters), the hashing semaphore, the dummy hash, the rate limits and lockout of D143 (in memory; keys; lockout does not block OAuth/OIDC login or password reset; reset clears it). Uniform answers of D145. Password change: `POST /api/v1/me/password` revokes every other web session and all PATs.
+- § Web sessions: CSRF rule of D141 replaces the current bullet. Add: "A bearer token wins over the cookie (D140)." Add: "Disabling a user deletes their sessions."
+- § OAuth / OIDC: per-provider `link_existing_by_email` (GitHub and Google default `true`, `[[auth.oidc]]` default `false`); the linking rules of D148 replace the "Account linking" bullet; refuse multi-tenant Entra issuers; `allowed_domains` checks the verified email's domain, and for Google also the `hd` claim; state cookie signed with a per-process key, 10 minutes, `SameSite=Lax`, `Path=/api/auth/callback`; the callback redirects to the relative path given to `/authorize?redirect=` (must start with `/` and not `//`), and errors redirect to `/login?error=<code>`.
+- § Authorization: the override rule of D139 (who can be overridden, who edits overrides, ceilings, last owner); instance admins have no implicit access to org data; any signed-in user creates orgs. "404 for what you cannot see, 403 for what you can see but not change" (D138). Session-only operations and PAT scopes of D140. Replace "Deletion by user/project still requires `admin` (PAT or session), not an API key." with "Deletion by user or project requires `admin` with a session or a `read, write` PAT, never an API key."
+- § API keys: prefix of D140; cache eviction on revoke; credentials only in the `Authorization` header. CLI login: the browser page is `/cli-auth?port=…&state=…`, the callback host is always `127.0.0.1`; `llmobs logout` revokes the PAT with `DELETE /api/v1/me/tokens/current`.
+- § Email: transactional emails are sent by a background task (D145). Templates add `verify_email` links `<public_url>/verify?token=…`, reset links `<public_url>/reset?token=…`, invite links `<public_url>/invite/<token>`.
+- § Auth events log: D150 (ids only; `account = "unknown"`).
+- New § Client IP: D142.
 
 ### Spec 09
 
-- § Conventions: "Credentials are accepted only in the `Authorization` header or the session cookie, never in a query string (D138)." Codes: add `conflict` (409) and `sso_required` (403), `email_not_verified` (403).
+- § Conventions: "Credentials are accepted only in the `Authorization` header or the session cookie, never in a query string (D140)." Codes: add `conflict` (409) and `sso_required` (403), `email_not_verified` (403).
 - § Auth table: `POST /setup` body `{setup_token, email, password, name?, org_name, project_name}`; add `POST /email/verify/resend`. `GET /authorize/{provider}` takes `?redirect=`.
-- § Orgs, projects, members, keys: add `GET/PATCH /api/v1/me`, `POST /api/v1/me/password`, `DELETE /api/v1/me/tokens/current`, `GET /api/v1/projects/{project}/members` (effective roles and overrides), `PATCH /api/v1/admin/users/{id}`, `POST /api/v1/admin/settings/test-email`. Mark `GET/PATCH /api/v1/admin/settings` as `GET` only, "PATCH comes with the first editable setting (D147)". Mark `DELETE /orgs/{org}` and `DELETE /projects/{project}` as "GDPR deletion track". Mark `llm-connections` and `usage` as "track E / metering".
+- § Orgs, projects, members, keys: add `GET/PATCH /api/v1/me`, `POST /api/v1/me/password`, `DELETE /api/v1/me/tokens/current`, `GET /api/v1/projects/{project}/members` (effective roles and overrides), `PATCH /api/v1/admin/users/{id}`, `POST /api/v1/admin/settings/test-email`. Mark `GET/PATCH /api/v1/admin/settings` as `GET` only, "PATCH comes with the first editable setting (D149)". Mark `DELETE /orgs/{org}` and `DELETE /projects/{project}` as "GDPR deletion track". Mark `llm-connections` and `usage` as "track E / metering".
 
 ### Spec 12
 
-- § Configuration table: add `trusted_proxies` (env `LLMOBS_TRUSTED_PROXIES`, comma-separated CIDRs, default empty, D140) and `log.format`/`log.level` stay. Add the `[init]` section keys with their `LLMOBS_INIT_*` aliases.
-- § Process lifecycle, Startup: "lock data dir and open storage (`catalog.db`, replay WAL) → open `meta.db` + migrations → (log the setup URL if no user exists) → start background tasks → bind ports → `/readyz` = 200" (D135). Remove "verify encryption key" from the D-era order and add "(track E adds: verify encryption key, after `meta.db`)".
-- § Security checklist: add "credentials never in query strings; request logs carry route templates, not raw URIs (D148)".
+- § Configuration table: add `trusted_proxies` (env `LLMOBS_TRUSTED_PROXIES`, comma-separated CIDRs, default empty, D142) and `log.format`/`log.level` stay. Add the `[init]` section keys with their `LLMOBS_INIT_*` aliases.
+- § Process lifecycle, Startup: "lock data dir and open storage (`catalog.db`, replay WAL) → open `meta.db` + migrations → (log the setup URL if no user exists) → start background tasks → bind ports → `/readyz` = 200" (D137). Remove "verify encryption key" from the D-era order and add "(track E adds: verify encryption key, after `meta.db`)".
+- § Security checklist: add "credentials never in query strings; request logs carry route templates, not raw URIs (D150)".
 
 ### Checks
 
@@ -93,7 +93,7 @@ pub struct ServerConfig {
     pub data_dir: PathBuf,                 // default "./llmobs-data"
     pub public_url: PublicUrl,             // default "http://localhost:8080"
     pub http_addr: SocketAddr,             // default 0.0.0.0:8080
-    pub trusted_proxies: Vec<IpNet>,       // default empty (D140)
+    pub trusted_proxies: Vec<IpNet>,       // default empty (D142)
     pub storage: StorageSection,           // the [storage] table, see below
     pub auth: AuthSettings,
     pub smtp_url: Option<SmtpUrl>,         // P19 adds the parsed type; P2 keeps Option<Secret<String>>
@@ -166,7 +166,7 @@ How `[storage]` maps to `StorageConfig`, and whether figment error messages can 
 
 ## P3 — `meta.db`
 
-**Goal:** `MetaDb` opens `<data_dir>/meta.db` with the pragmas of D134, runs the first migration, and gives one serialized writer and a read pool.
+**Goal:** `MetaDb` opens `<data_dir>/meta.db` with the pragmas of D136, runs the first migration, and gives one serialized writer and a read pool.
 
 **Edit only:** `crates/server/src/meta/mod.rs` (new), `crates/server/src/clock.rs` (new), `crates/server/migrations/meta/0001_identity.sql` (new), `crates/server/src/lib.rs`, `crates/server/Cargo.toml` (`sqlx`, `tokio`, `uuid`, `tempfile` dev).
 
@@ -294,11 +294,11 @@ impl From<MetaError> for ApiError { … } // Conflict → Conflict, the rest →
 
 ### Client IP (`http/client_ip.rs`)
 
-`pub(crate) fn client_ip(peer: IpAddr, headers: &HeaderMap, trusted: &[IpNet]) -> IpAddr` (D140): if `peer` is not trusted, return `peer`. Else walk `X-Forwarded-For` from the right (all header lines, comma-separated, trimmed); return the first address not in `trusted`; malformed entries stop the walk and return the last good one (or `peer` if none). The router is served with `into_make_service_with_connect_info::<SocketAddr>()`; a tiny extractor `ClientIp(IpAddr)` reads `ConnectInfo` and the config. In `oneshot` tests there is no `ConnectInfo`: `TestApp` inserts a `ConnectInfo` extension (default `127.0.0.1:50000`, settable per request).
+`pub(crate) fn client_ip(peer: IpAddr, headers: &HeaderMap, trusted: &[IpNet]) -> IpAddr` (D142): if `peer` is not trusted, return `peer`. Else walk `X-Forwarded-For` from the right (all header lines, comma-separated, trimmed); return the first address not in `trusted`; malformed entries stop the walk and return the last good one (or `peer` if none). The router is served with `into_make_service_with_connect_info::<SocketAddr>()`; a tiny extractor `ClientIp(IpAddr)` reads `ConnectInfo` and the config. In `oneshot` tests there is no `ConnectInfo`: `TestApp` inserts a `ConnectInfo` extension (default `127.0.0.1:50000`, settable per request).
 
 ### Request logging
 
-A `from_fn` middleware logs one `info` event per request after the response: `method`, `route` (the `MatchedPath` template, or `"<unmatched>"`), `status`, `duration_ms`. Never the URI, query or headers (D148). `target = "http"`.
+A `from_fn` middleware logs one `info` event per request after the response: `method`, `route` (the `MatchedPath` template, or `"<unmatched>"`), `status`, `duration_ms`. Never the URI, query or headers (D150). `target = "http"`.
 
 ### Health
 
@@ -330,7 +330,7 @@ The axum mechanisms used for 404/405 bodies and whether `JsonRejection` messages
 
 ## P5 — `llmobs serve`
 
-**Goal:** `llmobs serve [--config path]` starts the server and shuts it down cleanly; the startup order is D135.
+**Goal:** `llmobs serve [--config path]` starts the server and shuts it down cleanly; the startup order is D137.
 
 **Edit only:** `crates/server/src/serve.rs` (new), `crates/server/src/lib.rs`, `crates/cli/src/main.rs`, `crates/cli/Cargo.toml` (`tokio`, `tracing`, `tracing-subscriber`, `anyhow`), `crates/server/Cargo.toml`.
 
@@ -345,7 +345,7 @@ pub struct Running { pub local_addr: SocketAddr, /* join handle, shutdown sender
 impl Running { pub async fn shutdown(self) -> Result<(), ServeError>; }
 ```
 
-Order (D135):
+Order (D137):
 1. Create `data_dir` if missing.
 2. `Storage::open(config.storage_config())` (takes the lock; a second process fails here with `ServeError::Storage`, whose message says the data dir is in use when that is the cause — check how A1's `OpenError` reports a held lock).
 3. `MetaDb::open(&config.data_dir)`.

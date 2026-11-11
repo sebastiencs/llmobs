@@ -50,7 +50,7 @@ Standard.
 
 ## P15 — Members and project overrides
 
-**Goal:** list, change and remove org members, and manage per-project overrides, with the ceilings and the last-owner rule of D137.
+**Goal:** list, change and remove org members, and manage per-project overrides, with the ceilings and the last-owner rule of D139.
 
 **Edit only:** `crates/server/src/routes/members.rs` (new), `crates/server/src/routes/mod.rs`, `crates/server/src/api/` (new `members.rs` types), `crates/server/src/http/access.rs`, `crates/server/src/api/openapi.rs`, `crates/server/openapi.json`, `web/src/api/schema.gen.ts`, `fixtures/api/`.
 
@@ -78,7 +78,7 @@ Standard.
 - `{user}` is not a member of the org → 404.
 - The caller cannot give a role ranked above their own; only an `owner` may set `owner` or change an owner's role, or remove an owner.
 - After the change, the org must still have an owner: demoting or removing the last owner → 409 `conflict` ("an org needs an owner").
-- A target who becomes `owner` or `admin` loses their overrides in this org's projects (D137: they are never overridden).
+- A target who becomes `owner` or `admin` loses their overrides in this org's projects (D139: they are never overridden).
 - Removing a member deletes their overrides (P6 `remove_org_member`).
 - Audit `member role changed` / `member removed` with org, actor and target ids.
 
@@ -109,7 +109,7 @@ Standard.
 
 ## P16 — API keys
 
-**Goal:** create, list and revoke project API keys; authenticate requests with `sk-`/`pk-` bearers; cache and coalesce as D138 says.
+**Goal:** create, list and revoke project API keys; authenticate requests with `sk-`/`pk-` bearers; cache and coalesce as D140 says.
 
 **Edit only:** `crates/server/src/meta/api_keys.rs`, `crates/server/src/auth/{principal.rs,cache.rs,last_used.rs}` (`cache.rs`, `last_used.rs` new), `crates/server/src/http/access.rs`, `crates/server/src/routes/api_keys.rs` (new), `crates/server/src/routes/mod.rs`, `crates/server/src/api/` (new `keys.rs` types), `crates/server/src/serve.rs` (flush task and shutdown flush), `crates/server/src/api/openapi.rs`, `crates/server/openapi.json`, `web/src/api/schema.gen.ts`, `fixtures/api/`, `crates/server/src/test_support.rs`.
 
@@ -165,7 +165,7 @@ Standard.
 
 ## P17 — Personal access tokens and CLI login
 
-**Goal:** `/api/v1/me/tokens`, PAT authentication with the scope rules of D138, and `llmobs login` / `llmobs logout`.
+**Goal:** `/api/v1/me/tokens`, PAT authentication with the scope rules of D140, and `llmobs login` / `llmobs logout`.
 
 **Edit only:** `crates/server/src/meta/personal_tokens.rs`, `crates/server/src/auth/principal.rs`, `crates/server/src/http/access.rs`, `crates/server/src/routes/tokens.rs` (new), `crates/server/src/routes/mod.rs`, `crates/server/src/api/keys.rs`, `crates/server/src/api/openapi.rs`, `crates/server/openapi.json`, `web/src/api/schema.gen.ts`, `fixtures/api/`, `crates/cli/src/{main.rs,login.rs}` (`login.rs` new), `crates/cli/Cargo.toml`, root `Cargo.toml` (`reqwest`, `dirs`, `toml`, as in the README table).
 
@@ -177,7 +177,7 @@ Standard.
 
 ### Principal
 
-`Principal::Pat { user: AuthUser, token_id: Uuid, write: bool }`. `authenticate`: `Personal` kind → cache (token row: id, user id, scopes, expires) → **the user is loaded from the DB on every request** (disabled users fail at once, D147; roles are resolved per request by `enforce`, so a role change applies at once). Revoked, expired, or user disabled → 401.
+`Principal::Pat { user: AuthUser, token_id: Uuid, write: bool }`. `authenticate`: `Personal` kind → cache (token row: id, user id, scopes, expires) → **the user is loaded from the DB on every request** (disabled users fail at once, D149; roles are resolved per request by `enforce`, so a role change applies at once). Revoked, expired, or user disabled → 401.
 
 `enforce` for `Pat`: `session_only` routes and `InstanceAdmin` → 403. `write == false` and a method other than GET/HEAD → 403. Otherwise like a session user.
 
@@ -222,7 +222,7 @@ The router behaviour for `current`, and how the CLI test controls the credential
 
 ## P18 — The generated authorization suite
 
-**Goal:** one test drives every route in `routes()` with every kind of principal and checks the outcome predicted from its `Access` (D136, research test cases 6, 7, 11–15).
+**Goal:** one test drives every route in `routes()` with every kind of principal and checks the outcome predicted from its `Access` (D138, research test cases 6, 7, 11–15).
 
 **Edit only:** `crates/server/src/http/access_suite.rs` (new, `#[cfg(test)]`), `crates/server/src/http/access.rs` (a `#[cfg(test)]` response header), `crates/server/src/test_support.rs`.
 
@@ -237,7 +237,7 @@ Through the API (not raw SQL), build: instance admin Root (member of nothing); o
 - For each documented route: substitute `{org}` with A's slug, `{project}` with A1's id, `{user}` with A's member id, `{id}` with an id that exists for that route where one is cheap to create, else a fresh UUID, `{token}` and `{provider}` with syntactically valid values.
 - Send `{}` with `Content-Type: application/json` and the right `Origin` for non-GET routes.
 - `enforce` adds a `#[cfg(test)]` response header `x-test-access: allowed | denied-401 | denied-403 | denied-404` so the suite can tell an enforcement decision from a handler's own 404/400.
-- `expected(access, method, principal) -> Outcome` is a pure function written from D136–D138 in the test, not by calling `enforce`.
+- `expected(access, method, principal) -> Outcome` is a pure function written from D138–D140 in the test, not by calling `enforce`.
 - Assert the header equals the prediction for every (route, principal) pair. The failure message names the route, the principal and both outcomes.
 
 ### Extra assertions

@@ -1,12 +1,12 @@
 # Part 6 · OAuth and OIDC (P23–P25)
 
-GitHub (OAuth 2, not OIDC), Google (OIDC) and any number of generic OIDC providers (spec 08 § OAuth / OIDC), with the linking rules of D146. P24 lands the flow with the strictest behaviour (a provider login whose email belongs to an existing account is refused); P25 adds conditional linking, provisioning and domain rules.
+GitHub (OAuth 2, not OIDC), Google (OIDC) and any number of generic OIDC providers (spec 08 § OAuth / OIDC), with the linking rules of D148. P24 lands the flow with the strictest behaviour (a provider login whose email belongs to an existing account is refused); P25 adds conditional linking, provisioning and domain rules.
 
 ---
 
 ## P23 — Provider config and the mock IdP
 
-**Goal:** provider configuration with its validation, lazy discovery through an HTTP client without redirects, and an in-process mock IdP for tests (D149).
+**Goal:** provider configuration with its validation, lazy discovery through an HTTP client without redirects, and an in-process mock IdP for tests (D151).
 
 **Edit only:** `crates/server/src/config.rs`, `crates/server/src/auth/oidc/{mod.rs,provider.rs,github.rs}` (new), `crates/server/src/test_support/mock_idp.rs` (new; turn `test_support.rs` into `test_support/mod.rs`), `crates/server/src/http/mod.rs` (`providers` in `AppInner`), `crates/server/src/routes/auth.rs` (`GET /api/auth/config` lists providers), `crates/server/Cargo.toml`, root `Cargo.toml` (`openidconnect`, `oauth2`, `hmac`, dev `rsa`).
 
@@ -18,7 +18,7 @@ GitHub (OAuth 2, not OIDC), Google (OIDC) and any number of generic OIDC provide
 [auth.github]
 client_id = "…"
 client_secret = "…"                  # Secret<String>
-link_existing_by_email = true        # default true (D146)
+link_existing_by_email = true        # default true (D148)
 
 [auth.google]
 client_id = "…"
@@ -35,7 +35,7 @@ client_secret = "…"
 scopes = ["openid", "email", "profile"]   # default; must contain "openid"
 allowed_domains = []
 auto_provision = { org = "acme", role = "member" }   # optional; role ∈ admin | member | viewer
-link_existing_by_email = false       # default false (D146)
+link_existing_by_email = false       # default false (D148)
 ```
 
 Validation at load (errors name the key and the provider, never a secret):
@@ -91,7 +91,7 @@ The `rsa`/`rand_core` combination used, and the openidconnect 4.1 types for meta
 
 ## P24 — Authorize and callback
 
-**Goal:** the authorization-code flow with `state`, PKCE and `nonce` (D146), id_token validation, GitHub's OAuth flow, sign-in of a known identity, and creation of new users under the sign-up policy. An email that matches an existing account without an identity is refused (`link_refused`) until P25.
+**Goal:** the authorization-code flow with `state`, PKCE and `nonce` (D148), id_token validation, GitHub's OAuth flow, sign-in of a known identity, and creation of new users under the sign-up policy. An email that matches an existing account without an identity is refused (`link_refused`) until P25.
 
 **Edit only:** `crates/server/src/auth/oidc/{mod.rs,flow.rs,state_cookie.rs,github.rs}` (`flow.rs`, `state_cookie.rs` new), `crates/server/src/meta/identities.rs` (new), `crates/server/src/meta/mod.rs`, `crates/server/src/routes/oauth.rs` (new), `crates/server/src/routes/mod.rs`, `crates/server/src/http/{mod.rs,access.rs}` (`oauth_key` in `AppInner`), `crates/server/src/api/openapi.rs`, `crates/server/openapi.json`, `web/src/api/schema.gen.ts`, `crates/server/src/test_support/`.
 
@@ -99,7 +99,7 @@ The `rsa`/`rand_core` combination used, and the openidconnect 4.1 types for meta
 
 ### State cookie (`state_cookie.rs`)
 
-- `AppInner.oauth_key: [u8; 32]`, random per process (D146): a restart invalidates logins in flight, which is acceptable for a 10-minute cookie.
+- `AppInner.oauth_key: [u8; 32]`, random per process (D148): a restart invalidates logins in flight, which is acceptable for a 10-minute cookie.
 - Value: `base64url(json(OAuthState { provider, state, nonce, pkce_verifier, redirect, created_ns }))` + `.` + `base64url(HMAC-SHA256(oauth_key, first part))`. Verification is constant-time (`hmac`'s `verify_slice`).
 - Cookie `llmobs_oauth` (name from the constant): `HttpOnly; SameSite=Lax; Path=/api/auth/callback; Max-Age=600`, plus `Secure` with an https `public_url`.
 
@@ -112,7 +112,7 @@ The `rsa`/`rand_core` combination used, and the openidconnect 4.1 types for meta
 
 Error codes (closed set, documented in spec 08 and the OpenAPI description): `invalid_state`, `provider_error`, `provider_unavailable`, `email_not_verified`, `domain_not_allowed`, `signup_closed`, `account_disabled`, `link_refused`, `setup_required`. P25 uses the last three more widely.
 
-Both routes are GET, so the CSRF check of D139 does not apply; `state` bound to the cookie is the CSRF defence (Langfuse CVE-2025-65107).
+Both routes are GET, so the CSRF check of D141 does not apply; `state` bound to the cookie is the CSRF defence (Langfuse CVE-2025-65107).
 
 ### Callback steps (`flow.rs`)
 
@@ -155,7 +155,7 @@ Standard.
 
 ## P25 — Linking, provisioning, domains and setup through SSO
 
-**Goal:** the rest of D146: conditional linking with pre-hijack protection, `allowed_domains` and Google's `hd`, `auto_provision`, SSO-enforced domains, and first-run setup through an identity provider.
+**Goal:** the rest of D148: conditional linking with pre-hijack protection, `allowed_domains` and Google's `hd`, `auto_provision`, SSO-enforced domains, and first-run setup through an identity provider.
 
 **Edit only:** `crates/server/src/auth/oidc/{flow.rs,mod.rs}`, `crates/server/src/routes/oauth.rs`, `crates/server/src/bootstrap.rs`, `crates/server/src/meta/{identities.rs,users.rs,members.rs}`, `crates/server/src/api/openapi.rs`, `crates/server/openapi.json`, `web/src/api/schema.gen.ts`, `docs/spec/08-auth.md` (only if the error codes changed).
 

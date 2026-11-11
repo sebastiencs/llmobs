@@ -80,7 +80,7 @@ Anything in spec 04's DDL that the functions could not express.
 
 ## P7 — Secrets and passwords
 
-**Goal:** generation, hashing and parsing of every token kind, and the password policy and hasher of D141.
+**Goal:** generation, hashing and parsing of every token kind, and the password policy and hasher of D143.
 
 **Edit only:** `crates/server/src/auth/{secret.rs,password.rs,common-passwords.txt}` (new), `crates/server/src/auth/mod.rs`, `crates/server/Cargo.toml`, root `Cargo.toml` (`argon2`, `rand`, `subtle`; `sha2`, `base64` exist).
 
@@ -97,7 +97,7 @@ pub(crate) enum KeyKind { Secret, Public, Personal }   // sk-llmobs- (32), pk-ll
 pub(crate) struct NewKey { pub(crate) plaintext: String, pub(crate) hash: String, pub(crate) prefix: String }
 pub(crate) fn new_key(kind: KeyKind) -> NewKey;
 pub(crate) fn parse_key(bearer: &str) -> Option<KeyKind>;   // exact prefix, exact length, base62 tail
-pub(crate) fn display_prefix(plaintext: &str) -> String;    // type prefix + first 6 tail chars (D138)
+pub(crate) fn display_prefix(plaintext: &str) -> String;    // type prefix + first 6 tail chars (D140)
 
 pub(crate) struct OpaqueToken { pub(crate) plaintext: String, pub(crate) hash: String }
 pub(crate) fn new_opaque_token() -> OpaqueToken;           // 32 random bytes, base64url without padding (43 chars)
@@ -127,7 +127,7 @@ pub(crate) struct Verified { pub(crate) ok: bool, pub(crate) needs_rehash: bool 
 
 - `check_policy` works on the NFC form: length in `chars()` 10–128; equal to the email (case-insensitive after NFC) → `EqualsEmail`; NFC-lowercased password in the common list → `TooCommon`.
 - `hash` and `verify` NFC-normalize first, acquire a semaphore permit (`max(2, available_parallelism / 2)`), run argon2 in `spawn_blocking`. Params: argon2id, v0x13, m = 19 456 KiB, t = 2, p = 1, 16-byte random salt, PHC string output.
-- `verify(…, None)` verifies against `dummy` and returns `ok: false` (D141: unknown emails and password-less users cost the same).
+- `verify(…, None)` verifies against `dummy` and returns `ok: false` (D143: unknown emails and password-less users cost the same).
 - `needs_rehash`: the PHC parameters are weaker than the current ones, or the algorithm is not argon2id.
 - A stored PHC string that does not parse → `ok: false` and an `error` log with the user id at the call site (the hasher itself never logs input).
 
@@ -153,7 +153,7 @@ The SecLists commit hash, the number of entries kept, and the `rand` API used.
 
 ## P8 — Rate limits and lockout
 
-**Goal:** the in-memory limiters and lockout table of D141, bounded in memory.
+**Goal:** the in-memory limiters and lockout table of D143, bounded in memory.
 
 **Edit only:** `crates/server/src/auth/limits.rs` (new), `crates/server/src/auth/mod.rs`, `crates/server/src/http/mod.rs` (add `limits: Limits` to `AppInner`), `crates/server/src/serve.rs` (prune task), `crates/server/src/test_support.rs`.
 

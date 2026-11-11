@@ -41,7 +41,7 @@ impl Mailer {
 - Templates: `templates/{invite,password_reset,verify_email,test}.{txt,html}` loaded with `include_str!` into the environment at construction. The `.html` ones auto-escape (minijinja picks auto-escaping by template name extension). A global `product` holds the name constant of P7. The HTML is the simple inline-styled layout of spec 08 with no external assets.
 - Subjects: "You're invited to <org> on llmobs", "Reset your llmobs password", "Verify your email for llmobs", "llmobs test email" (built from the name constant).
 - Messages are `multipart/alternative` (text first, then HTML), built with lettre's builder; lettre generates the `Message-ID`.
-- `send_in_background`: `tokio::spawn`; up to 3 attempts, waiting 1 s then 2 s between them; logs at `info` (sent) or `warn` (failed after retries) with `template`, `message_id` and `attempt`. Never the recipient, the subject variables or the body (spec 08 § Email, D148).
+- `send_in_background`: `tokio::spawn`; up to 3 attempts, waiting 1 s then 2 s between them; logs at `info` (sent) or `warn` (failed after retries) with `template`, `message_id` and `attempt`. Never the recipient, the subject variables or the body (spec 08 § Email, D150).
 - `MailError` messages carry no address and no SMTP server text (lettre errors can quote the server's reply, which may contain the address): map to fixed kinds (`Connect`, `Tls`, `Auth`, `Rejected`, `Template`, `InvalidAddress`) and keep the lettre error only as a `#[source]` that is never formatted into responses. Logging the source chain at `warn` is allowed only if it cannot contain an address; if unsure, log the kind only.
 - `TestApp::with_mailer()` installs the stub transport and exposes `sent() -> Vec<SentMail { to, subject, text, html }>`.
 
@@ -62,7 +62,7 @@ The lettre feature names used.
 
 ## P20 — Invites
 
-**Goal:** invite by email with a copyable link, accept while signed in or at signup (D145).
+**Goal:** invite by email with a copyable link, accept while signed in or at signup (D147).
 
 **Edit only:** `crates/server/src/meta/invites.rs` (new), `crates/server/src/meta/mod.rs`, `crates/server/src/routes/{invites.rs,auth.rs}` (`invites.rs` new), `crates/server/src/routes/mod.rs`, `crates/server/src/api/` (invite types, `SignupRequest.invite_token`), `crates/server/src/http/access.rs`, `crates/server/src/api/openapi.rs`, `crates/server/openapi.json`, `web/src/api/schema.gen.ts`, `fixtures/api/`.
 
@@ -77,7 +77,7 @@ The lettre feature names used.
 | Route | Access | Behaviour |
 |---|---|---|
 | `GET /api/v1/orgs/{org}/invites` | `Org { ManageMembers }` | Page of pending `Invite { id, email, role, invited_by?: MemberUser, created_at, expires_at }`. |
-| `POST /api/v1/orgs/{org}/invites` | `Org { ManageMembers, session_only }` | `{email, role}`. Ceiling (D137: no role above the caller's; `owner` only by an owner). Email already a member → 409. Token: `new_opaque_token()`, 7 days. 201 `{invite: Invite, accept_url: "<public_url>/invite/<token>"}`. With a mailer, also `send_in_background(email, Email::Invite{…})`. Audit `invite created` (org, actor, invite ids). |
+| `POST /api/v1/orgs/{org}/invites` | `Org { ManageMembers, session_only }` | `{email, role}`. Ceiling (D139: no role above the caller's; `owner` only by an owner). Email already a member → 409. Token: `new_opaque_token()`, 7 days. 201 `{invite: Invite, accept_url: "<public_url>/invite/<token>"}`. With a mailer, also `send_in_background(email, Email::Invite{…})`. Audit `invite created` (org, actor, invite ids). |
 | `DELETE /api/v1/orgs/{org}/invites/{id}` | `Org { ManageMembers, session_only }` | 204; unknown → 404. |
 | `GET /api/auth/invites/{token}` | `Public` | `limits.ip_forms`. Pending and unexpired → 200 `InvitePreview { org: {name, slug}, email, role, expires_at, account_exists }`; else 404. (`account_exists` tells the UI whether to show login or signup; only the token holder learns it.) |
 | `POST /api/auth/invites/{token}/accept` | `User { session_only }` | `limits.ip_forms`. Invite not pending/expired → 404. The caller's email ≠ the invite's → 403 `forbidden` ("this invitation is for another email address"). Already a member → mark accepted, 200 with the current membership. Else add the membership with the invite's role, mark accepted, set `email_verified_at` if null, 200 `OrgMembership`. Audit. |
@@ -112,7 +112,7 @@ Standard.
 
 ## P21 — Forgot password and email verification
 
-**Goal:** password reset by email, and the verification flow behind `require_email_verification` (D143, D144).
+**Goal:** password reset by email, and the verification flow behind `require_email_verification` (D145, D146).
 
 **Edit only:** `crates/server/src/meta/email_verifications.rs` (new), `crates/server/src/meta/mod.rs`, `crates/server/src/auth/reset.rs`, `crates/server/src/routes/auth.rs`, `crates/server/src/api/account.rs`, `crates/server/src/http/access.rs`, `crates/server/src/api/openapi.rs`, `crates/server/openapi.json`, `web/src/api/schema.gen.ts`, `fixtures/api/`.
 
@@ -144,7 +144,7 @@ Standard.
 
 ## P22 — Instance admin endpoints
 
-**Goal:** `/api/v1/admin/users` and `/api/v1/admin/settings` (D147).
+**Goal:** `/api/v1/admin/users` and `/api/v1/admin/settings` (D149).
 
 **Edit only:** `crates/server/src/routes/admin.rs` (new), `crates/server/src/routes/mod.rs`, `crates/server/src/api/` (new `admin.rs` types), `crates/server/src/meta/users.rs`, `crates/server/src/http/access.rs`, `crates/server/src/api/openapi.rs`, `crates/server/openapi.json`, `web/src/api/schema.gen.ts`, `fixtures/api/`.
 
