@@ -161,9 +161,9 @@ impl PriceTable { pub fn new(rows: Vec<PriceRow>) -> Result<Self, PriceError>; }
 
 `normalize` gains its third parameter `prices: &PriceTable`. Update every caller: the golden test, unit tests and proptests.
 
-### Computation (spec 02 § Cost computation, D82, D107)
+### Computation (spec 02 § Cost computation, D82, D109)
 
-1. **Reported cost** (N1 § 5 keys), on `llm`/`embedding` spans only. Rule 3 keeps cost columns null on other kinds, so a reported cost there stays in `attributes` (pinned by a fixture). On an `llm`/`embedding` span, any reported key gives `cost_source = reported`, and D107 fills the columns.
+1. **Reported cost** (N1 § 5 keys), on `llm`/`embedding` spans only. Rule 3 keeps cost columns null on other kinds, so a reported cost there stays in `attributes` (pinned by a fixture). On an `llm`/`embedding` span, any reported key gives `cost_source = reported`, and D109 fills the columns.
 2. **Lookup**, only on `llm`/`embedding` spans that have a model (`coalesce(response_model, request_model)`).
    - Candidates are the rows whose regex matches the model, whose `valid_from ≤ start_time`, and whose provider matches the span's.
    - **Clarification A, added to spec 02:** a row with a `provider` matches when the span's provider equals it, **or the span has no provider**.
@@ -179,7 +179,7 @@ Fixtures (all with the test table `fixtures/otlp/prices.json`; extend it if need
 - `edge/cost-missing-price-nulls-part` (D82);
 - `edge/cost-embedding` (D82);
 - `edge/cost-tier`: add a tiered row to `prices.json`, which also needs `fixtures.rs` validation of `tiers`;
-- `edge/cost-reported-partial` (D107);
+- `edge/cost-reported-partial` (D109);
 - `edge/cost-reported-on-chain-span`;
 - `edge/cost-valid-from` (two rows, two dates);
 - `edge/provider-inferred-from-price-row`.
@@ -232,7 +232,7 @@ Conversion rules (also written as a comment at the top of the test):
 `justfile`:
 
 ```
-# Regenerate the built-in price snapshot from a downloaded LiteLLM JSON (D102)
+# Regenerate the built-in price snapshot from a downloaded LiteLLM JSON (D104)
 prices-update litellm_json:
     LLMOBS_LITELLM_JSON={{litellm_json}} cargo test -p llmobs-otel --test prices -- refresh
 ```

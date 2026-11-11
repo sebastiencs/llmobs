@@ -28,7 +28,7 @@ Every case directory contains exactly three files: `case.json`, `input.json`, an
 | `origin` | `"hand_written"` \| `"captured"` | yes | |
 | `source` | object | iff `origin` is `"captured"` | `{instrumentation, instrumentation_version, language, libraries: {name: version}, captured_at}`. `captured_at` is RFC 3339. |
 | `spec_refs` | array of strings | yes, at least one | Spec sections this case pins, for example `"02 § Mapping tables / Span kind"`. |
-| `settings` | object | no | Per-case ingest overrides. Allowed keys: `max_attribute_bytes`, `media_min_bytes`, `media_max_bytes`, all integers. Any other key is an error. |
+| `settings` | object | no | Per-case ingest overrides. Allowed keys: `max_attribute_bytes`, `media_min_bytes`, `media_max_bytes`, `retention_days`, all integers. `retention_days` is an integer ≥ 1; absent means no retention. Any other key is an error. |
 | `context` | object | no | Overrides `project_id` (UUID string) and `ingest_time` (RFC 3339). |
 | `notes` | string | no | Free text, for example which spec ambiguity the case resolves. |
 
@@ -39,6 +39,8 @@ When `settings` or `context` omit a field, the defaults are:
 - `ingest_time` = `"2026-01-01T00:00:00.000000000Z"`
 
 Every span starts and ends before the case's `ingest_time`, and starts no earlier than 10 seconds before it. With the default ingest time, spans start at `2025-12-31T23:59:50Z` or later and end before `2026-01-01T00:00:00Z`.
+
+A case whose spans are rejected for the D85 bounds uses `context.ingest_time` and `settings.retention_days` to place them out of range.
 
 ## input.json
 
@@ -62,7 +64,7 @@ This is what an exporter configured with `http/json` sends, and what `POST /v1/t
 }
 ```
 
-- `spans` lists every span the normalizer must accept, in `llmobs_core::Span` JSON (D60, D64). Timestamps are RFC 3339 with 9 fractional digits and a `Z` suffix. Optional and empty fields are omitted. Spans are sorted by `(trace_id, start_time, span_id)`.
+- `spans` lists every span the normalizer must accept, in `llmobs_core::Span` JSON (D60, D64). Timestamps are RFC 3339 with 9 fractional digits and a `Z` suffix. Optional and empty fields are omitted. Spans are sorted by `(trace_id, start_time, span_id)`. When a span has normalization warnings, `attributes` includes `llmobs.normalize_warning`: a JSON array of warning codes, sorted, without duplicates (spec 02 rule 18).
 - `media` lists every blob the normalizer must extract. The bytes are not stored, only their identity: `{"sha256": "<64 lowercase hex>", "mime_type": "image/png", "size_bytes": 70}`. Sorted by `sha256`. Every entry is referenced by some span's `media_refs`, and every `media_refs` entry appears here.
 - `rejected_spans` is the number of input spans the normalizer must reject (spec 02 § Normalization rules). It equals the number of input spans minus `spans.len()`.
 - Each span's `project_id` and `ingest_time` equal the case context (defaults or overrides).
