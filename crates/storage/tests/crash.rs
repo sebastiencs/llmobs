@@ -290,10 +290,9 @@ async fn check_dir(dir: &Path, before: &[Ack]) -> Result<(), String> {
         .await
         .map_err(|error| error.to_string())?;
     let stored = stored_rows(&storage.query(project()).unwrap()).await;
-    storage
-        .shutdown()
-        .await
-        .map_err(|error| error.to_string())?;
+    // Drop leaves the rows in the WAL. Shutdown would flush them, and the next
+    // iteration of this directory would not see them in the memtable.
+    drop(storage);
 
     let mut by_batch: BTreeMap<u64, BTreeSet<u32>> = BTreeMap::new();
     let mut span_ids = HashSet::new();

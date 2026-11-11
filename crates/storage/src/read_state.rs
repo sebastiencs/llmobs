@@ -22,7 +22,7 @@ pub(crate) struct ReadState {
     pub spans: Arc<MemSnapshot>,
     /// Scores memtable as of this publish, active and frozen batches together.
     pub scores: Arc<MemSnapshot>,
-    /// Catalog as of this publish. Empty until M2.6 loads `catalog.db` at open.
+    /// Catalog as of this publish.
     pub catalog: Arc<Catalog>,
 }
 

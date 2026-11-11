@@ -221,7 +221,7 @@ If a precondition fails, the transaction rolls back and the job gets a conflict:
 
 **Claims.** Background jobs claim their input files in memory before reading them, so compaction and the deletion rewriter never work on the same file. Claims don't survive a restart and need not: an interrupted job is simply redone.
 
-**Metadata cache:** an LRU cache (default 512 MiB) of decoded Parquet footers, page indexes and bloom filters keyed by file id, plugged into DataFusion through its reader factory. Files are immutable, so entries never go stale. DataFusion 55's built-in file metadata cache is used for whatever it covers; a custom `ParquetFileReaderFactory` adds only what is missing.
+**Metadata cache.** One process-wide DataFusion `RuntimeEnv`, built at open and returned by every `Storage::query`. `query.metadata_cache_bytes` (default 512 MiB; zero disables it) is `CacheManagerConfig`'s file-metadata cache limit. The cache stores decoded Parquet footers. With a cache configured, DataFusion also loads column and offset indexes into that metadata. Bloom-filter bitsets are not part of it: the footer records their offsets, and a pruning read fetches the bitset from the object. Files are immutable, so entries never go stale. There is no custom `ParquetFileReaderFactory`.
 
 ## 5. Compaction
 
@@ -247,7 +247,7 @@ Runs in a background task with bounded parallelism (`compaction.threads`, defaul
 
 ## 6. Query path
 
-For each request, `Storage::query` returns a `ProjectQuery`: the project's `TableProvider`s, all bound to one `ReadState` (catalog, memtable and tombstones, §4), plus a per-query `RuntimeEnv` (memory pool, spill directory) and `target_partitions`. The query layer (05, D91) builds the DataFusion session from it. The providers expose the stored Arrow schemas of 01 (binary IDs, `project_id`). They don't register themselves: the query layer (05) registers the user-facing views over them (hex IDs, hidden `project_id`, `sessions`, default exclusions, D89). Because each provider is constructed for a single project, the user cannot name another project's data. A dropped project (§7) gets empty tables.
+For each request, `Storage::query` returns a `ProjectQuery`: the project's `TableProvider`s, all bound to one `ReadState` (catalog, memtable and tombstones, §4), plus the process `RuntimeEnv` built at open (object store and metadata cache; the memory pool stays the default until M6) and `target_partitions`. The query layer (05, D91) builds the DataFusion session from it. The providers expose the stored Arrow schemas of 01 (binary IDs, `project_id`). They don't register themselves: the query layer (05) registers the user-facing views over them (hex IDs, hidden `project_id`, `sessions`, default exclusions, D89). Because each provider is constructed for a single project, the user cannot name another project's data. A dropped project (§7) gets empty tables.
 
 ### `SpansProvider::scan(projection, filters, limit)`
 

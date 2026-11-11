@@ -52,7 +52,9 @@ pub(crate) struct WriterShared {
     memtable: Mutex<Memtable>,
     /// Wakes the table's flush task once the active memtable reaches `flush.max_bytes`.
     ///
-    /// The task itself starts in M2.6. A notify with no waiter is kept until then.
+    /// A notify with no waiter is kept, so a flush that is between waits still
+    /// sees it. A memtable that is already over the threshold at open does not
+    /// notify until the next group; the flush task also reads `active_bytes`.
     pub(crate) flush_notify: Arc<Notify>,
 }
 
@@ -65,6 +67,11 @@ impl WriterShared {
     /// Bytes of the active and frozen memtables, for the backpressure check.
     pub(crate) fn memtable_bytes(&self) -> u64 {
         self.memtable_bytes.load(Ordering::Acquire)
+    }
+
+    /// Stores the byte count last computed under the memtable lock.
+    pub(crate) fn set_memtable_bytes(&self, bytes: u64) {
+        self.memtable_bytes.store(bytes, Ordering::Release);
     }
 
     /// The live memtable. Only the writer inserts.
@@ -148,6 +155,28 @@ impl WalWriterHandle {
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             .cloned()
+    }
+
+    /// Drops the sender and cancels the task.
+    ///
+    /// [`Storage`](crate::Storage)'s `Drop` uses this so a dropped value does
+    /// not keep appending. Shutdown takes the task first; a later abort is a
+    /// no-op.
+    pub(crate) fn abort(&self) {
+        drop(
+            self.tx
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take(),
+        );
+        if let Some(task) = self
+            .task
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            task.abort();
+        }
     }
 
     /// Drops the sender and waits for the task to drain and exit.
@@ -658,7 +687,7 @@ fn insert_all(
         }
         let bytes = u64::try_from(memtable.bytes()).unwrap_or(u64::MAX);
         let active = u64::try_from(memtable.active_bytes()).unwrap_or(u64::MAX);
-        shared.memtable_bytes.store(bytes, Ordering::Release);
+        shared.set_memtable_bytes(bytes);
         active >= flush_max_bytes
     };
     if notify {

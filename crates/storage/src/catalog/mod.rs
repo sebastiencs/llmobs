@@ -1,14 +1,14 @@
 //! In-memory catalog. `catalog.db` is loaded in [`db`] and published by [`committer`].
 //!
-//! `Storage::open` installs the catalog in M2.6. Until then a published
-//! [`crate::read_state::ReadState`] carries an empty one, and the committer is
-//! only reached from tests.
+//! `Storage::open` loads this from `catalog.db` and publishes it with the
+//! replayed memtables. A flush replaces it in the same publish that drops
+//! `frozen`.
 #![allow(dead_code)]
 
 mod committer;
 mod db;
 
-pub(crate) use committer::CatalogEdit;
+pub(crate) use committer::{CatalogEdit, Committer};
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
@@ -112,6 +112,17 @@ impl Catalog {
         Self {
             tables: [BTreeMap::new(), BTreeMap::new()],
         }
+    }
+
+    /// Every active file of `table`, in project then day order.
+    #[cfg(test)]
+    pub(crate) fn test_files(&self, table: Table) -> Vec<Arc<FileMeta>> {
+        self.tables[table_index(table)]
+            .values()
+            .flat_map(|days| days.values())
+            .flatten()
+            .map(Arc::clone)
+            .collect()
     }
 
     /// Files for `project` on the inclusive day range, in `(min_time, id)` order.

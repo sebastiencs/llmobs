@@ -4,9 +4,7 @@
 //! Lock order: this mutex, then a table memtable, then the `Published` write
 //! lock. `publish` must not call back into this committer.
 //!
-//! `Storage` constructs a committer in M2.6. Until then this module is reached
-//! from tests.
-#![allow(dead_code)]
+//! `Storage` owns one committer. Flush, and later compaction, are its callers.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -44,6 +42,12 @@ pub(crate) struct Committer {
     inner: Mutex<CommitterInner>,
 }
 
+impl std::fmt::Debug for Committer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Committer")
+    }
+}
+
 impl Committer {
     /// Open `catalog.db`, migrate, and load the active files.
     pub(crate) async fn open(data_dir: &Path, hooks: Hooks) -> Result<Self, CatalogError> {
@@ -62,6 +66,21 @@ impl Committer {
     /// The catalog last committed, or the one loaded at open.
     pub(crate) async fn catalog(&self) -> Arc<Catalog> {
         Arc::clone(&self.inner.lock().await.catalog)
+    }
+
+    /// Highest flushed WAL sequence for `table`. Missing row is `0`.
+    pub(crate) async fn flushed_seq(&self, table: Table) -> u64 {
+        self.inner.lock().await.flushed[table_index(table)]
+    }
+
+    /// Paths still in `staged_objects`, in path order.
+    #[cfg(test)]
+    pub(crate) async fn staged_paths(&self) -> Result<Vec<String>, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        sqlx::query_scalar("SELECT path FROM staged_objects ORDER BY path")
+            .fetch_all(&mut inner.connection)
+            .await
+            .map_err(CatalogError::db)
     }
 
     /// Record `paths` in `staged_objects`. No precondition.

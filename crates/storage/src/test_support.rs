@@ -495,7 +495,9 @@ fn sum_f64(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
 }
 
 mod fault_store {
+    use std::collections::VecDeque;
     use std::fmt;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, PoisonError};
     use std::time::Duration;
 
@@ -525,27 +527,53 @@ mod fault_store {
     #[derive(Debug, Clone)]
     pub(crate) struct FaultStore {
         inner: Arc<dyn ObjectStore>,
-        fault: Arc<Mutex<Option<FaultKind>>>,
+        fault: Arc<Mutex<VecDeque<FaultKind>>>,
+        /// When set, every upload fails before writing and the queue is left alone.
+        hold: Arc<AtomicBool>,
     }
 
     impl FaultStore {
         pub(crate) fn new(inner: Arc<dyn ObjectStore>) -> Self {
             Self {
                 inner,
-                fault: Arc::new(Mutex::new(None)),
+                fault: Arc::new(Mutex::new(VecDeque::new())),
+                hold: Arc::new(AtomicBool::new(false)),
             }
         }
 
-        /// Arms a one-shot fault. A later upload consumes it.
+        /// Replaces the queue with one fault. A later upload consumes it.
         pub(crate) fn arm(&self, kind: FaultKind) {
-            *self.fault.lock().unwrap_or_else(PoisonError::into_inner) = Some(kind);
+            let mut queue = self.fault.lock().unwrap_or_else(PoisonError::into_inner);
+            queue.clear();
+            queue.push_back(kind);
         }
 
-        fn take(&self) -> Option<FaultKind> {
+        /// Appends a fault. Uploads consume the queue from the front.
+        pub(crate) fn enqueue(&self, kind: FaultKind) {
             self.fault
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .take()
+                .push_back(kind);
+        }
+
+        /// Fail every upload before it writes, until [`Self::release`].
+        pub(crate) fn hold_failures(&self) {
+            self.hold.store(true, Ordering::SeqCst);
+        }
+
+        /// Lets uploads reach the inner store again.
+        pub(crate) fn release(&self) {
+            self.hold.store(false, Ordering::SeqCst);
+        }
+
+        fn take(&self) -> Option<FaultKind> {
+            if self.hold.load(Ordering::SeqCst) {
+                return Some(FaultKind::FailBefore);
+            }
+            self.fault
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .pop_front()
         }
     }
 

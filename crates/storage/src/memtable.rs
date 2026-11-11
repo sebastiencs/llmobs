@@ -5,8 +5,7 @@
 //! has no anchor map.
 //!
 //! Each table has an active memtable and at most one frozen memtable. The
-//! writer inserts into the active one. `freeze` is what the flush task calls
-//! in M2.6; until then only tests call it.
+//! writer inserts into the active one. The flush task calls `freeze`.
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
@@ -171,6 +170,11 @@ impl Memtable {
     /// A [`Self::snapshot`] also includes the frozen batches.
     pub(crate) fn partitions(&self) -> &BTreeMap<PartitionKey, Vec<MemBatch>> {
         &self.active.partitions
+    }
+
+    /// A frozen memtable is waiting to be flushed.
+    pub(crate) fn has_frozen(&self) -> bool {
+        self.frozen.is_some()
     }
 
     /// Moves a non-empty active memtable to frozen and returns it.

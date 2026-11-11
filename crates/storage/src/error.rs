@@ -66,6 +66,15 @@ pub enum OpenError {
     /// Replaying a WAL failed for a reason other than a corrupt record.
     #[error(transparent)]
     WalReplay(#[from] WalError),
+    /// `catalog.db` could not be opened or migrated.
+    #[error(transparent)]
+    Catalog(#[from] CatalogError),
+    /// The object store could not be opened, or a startup cleanup failed.
+    #[error(transparent)]
+    Objects(#[from] ObjectError),
+    /// The shared DataFusion runtime could not be built.
+    #[error("building the query runtime")]
+    Runtime,
 }
 
 /// `append_spans` or `append_scores` failed.
@@ -387,6 +396,59 @@ pub enum ParquetWriteError {
         #[source]
         source: Box<parquet::errors::ParquetError>,
     },
+}
+
+/// A memtable flush failed before the catalog commit.
+///
+/// The frozen memtable stays. The task retries with new file names.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum FlushError {
+    /// Sorting or encoding the frozen batches failed.
+    #[error("flush prepare: {0}")]
+    Prepare(ParquetWriteError),
+    /// A span identity column was missing or null.
+    #[error("flush dedup: {reason}")]
+    Dedup {
+        /// Static reason. Never a cell value.
+        reason: &'static str,
+    },
+    /// Recording the paths in `staged_objects` failed.
+    #[error("flush stage: {0}")]
+    Stage(CatalogError),
+    /// A durable object write failed. The object may already exist.
+    #[error("flush write: {0}")]
+    Write(ObjectError),
+    /// The catalog edit failed. Staged objects stay for GC.
+    #[error("flush commit: {0}")]
+    Commit(CommitError),
+    /// `spawn_blocking` or an upload task panicked.
+    #[error("flush task panicked")]
+    Task,
+    /// A test hook returned a fault.
+    #[error("flush fault")]
+    Fault,
+}
+
+impl FlushError {
+    pub(crate) fn dedup(reason: &'static str) -> Self {
+        Self::Dedup { reason }
+    }
+
+    pub(crate) fn prepare(source: ParquetWriteError) -> Self {
+        Self::Prepare(source)
+    }
+
+    pub(crate) fn stage(source: CatalogError) -> Self {
+        Self::Stage(source)
+    }
+
+    pub(crate) fn write(source: ObjectError) -> Self {
+        Self::Write(source)
+    }
+
+    pub(crate) fn commit(source: CommitError) -> Self {
+        Self::Commit(source)
+    }
 }
 
 impl ParquetWriteError {

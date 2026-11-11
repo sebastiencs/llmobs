@@ -4,8 +4,8 @@
 //! reads only. Local `put_durable` writes a temp file, `sync_all`s it, renames
 //! it into place, and fsyncs the directory. Remote writes go through the store.
 //!
-//! `Storage::open` does not call this yet. M2.6 wires it in and removes leftover
-//! temp files at startup.
+//! `Storage::open` builds one [`Objects`], removes leftover local temp files,
+//! and registers the store on the shared query runtime.
 
 #![allow(dead_code)]
 

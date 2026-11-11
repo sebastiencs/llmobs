@@ -39,14 +39,21 @@ pub(crate) enum HookPoint {
     ObjectDirSync,
     /// After the active memtable is moved to frozen.
     ///
-    /// The flush task pauses here in M2.6.
-    #[allow(dead_code)]
+    /// The flush task pauses here after a new freeze, not on a retry.
     FlushAfterFreeze,
+    /// After every output path is recorded in `staged_objects`.
+    FlushAfterStage,
+    /// After every flushed object is durable.
+    FlushAfterWrite,
+    /// After the catalog commit that publishes the files and drops `frozen`.
+    FlushAfterCommit,
+    /// After WAL segments covered by `flushed_seq` are deleted and the directory is fsynced.
+    FlushAfterTruncate,
 }
 
 #[cfg(test)]
 impl HookPoint {
-    const COUNT: usize = 11;
+    const COUNT: usize = 15;
 
     const fn index(self) -> usize {
         match self {
@@ -61,6 +68,10 @@ impl HookPoint {
             Self::ObjectRename => 8,
             Self::ObjectDirSync => 9,
             Self::FlushAfterFreeze => 10,
+            Self::FlushAfterStage => 11,
+            Self::FlushAfterWrite => 12,
+            Self::FlushAfterCommit => 13,
+            Self::FlushAfterTruncate => 14,
         }
     }
 }
