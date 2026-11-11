@@ -20,7 +20,14 @@ async function main(): Promise<void> {
   if (import.meta.env.DEV && import.meta.env.MODE !== "server") {
     const { isCommonAssetRequest } = await import("msw");
     const { HttpNetworkFrame } = await import("msw/experimental");
-    const { worker } = await import("./mocks/browser");
+    const { readMockMode, worker } = await import("./mocks/browser");
+    if (readMockMode() === "large") {
+      const [{ createDataset }, { largeHandlers }] = await Promise.all([
+        import("./mocks/generated/dataset"),
+        import("./mocks/generated/handlers"),
+      ]);
+      worker.use(...largeHandlers(createDataset({ seed: 1, now: Date.now(), traces: 5000 })));
+    }
     await worker.start({
       quiet: false,
       // The document request for `/` is not an API call. Warn on anything else
