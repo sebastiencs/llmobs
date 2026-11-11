@@ -106,6 +106,8 @@ axum = { version = "0.8.9", default-features = false, features = [
 ] }
 # `ServiceExt::oneshot` for HTTP tests (D151).
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
+# Session cookie parsing (P9). Default features stay off so `axum/tracing` is not enabled (D150).
+axum-extra = { version = "0.12.6", default-features = false, features = ["cookie"] }
 # Field path of a JSON or query error, without the rejected value (P4).
 serde_path_to_error = "0.1.20"
 # Email normalization: trim, NFC, lowercase (P6, D136).

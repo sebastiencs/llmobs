@@ -9,7 +9,8 @@
 mod members;
 mod orgs;
 mod projects;
-mod users;
+pub(crate) mod users;
+pub(crate) mod web_sessions;
 
 use std::future::Future;
 use std::path::{Path, PathBuf};

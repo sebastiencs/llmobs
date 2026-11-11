@@ -36,6 +36,9 @@ const STORAGE_SHUTDOWN: Duration = Duration::from_secs(30);
 /// How often idle rate-limit keys are dropped (D143).
 const PRUNE_EVERY: Duration = Duration::from_secs(60);
 
+/// How often expired web sessions are deleted.
+const PURGE_EVERY: Duration = Duration::from_secs(60 * 60);
+
 /// Why `llmobs serve` stopped before it was listening, or the accept loop failed.
 #[derive(Debug, thiserror::Error)]
 pub enum ServeError {
@@ -87,7 +90,7 @@ pub struct Running {
     serve: Option<JoinHandle<io::Result<()>>>,
     shutdown_tx: Option<oneshot::Sender<()>>,
     state: Option<AppState>,
-    /// Background work. P8 and P16 push handles; shutdown aborts whatever is here.
+    /// Background work. Shutdown aborts whatever is here.
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -190,7 +193,36 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         serve: Some(serve),
         shutdown_tx: Some(shutdown_tx),
         state: Some(state.clone()),
-        tasks: vec![spawn_prune(state)],
+        tasks: vec![spawn_prune(state.clone()), spawn_purge(state)],
+    })
+}
+
+fn spawn_purge(state: AppState) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(PURGE_EVERY);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            let now = state.clock.now_ns();
+            let purged = state
+                .meta
+                .write(move |conn| {
+                    Box::pin(async move {
+                        crate::meta::web_sessions::purge_expired_sessions(conn, now).await
+                    })
+                })
+                .await;
+            match purged {
+                Ok(removed) if removed > 0 => {
+                    tracing::info!(removed, "purged expired sessions");
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::error!(error = %error, "session purge failed");
+                }
+            }
+        }
     })
 }
 

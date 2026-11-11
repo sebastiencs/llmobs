@@ -6,7 +6,7 @@
 #![cfg_attr(not(test), allow(dead_code))] // `llmobs serve` binds this in P5
 
 mod client_ip;
-mod error;
+pub(crate) mod error;
 mod health;
 
 use std::sync::Arc;

@@ -24,6 +24,7 @@ thiserror.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 axum.workspace = true
+axum-extra.workspace = true
 tracing.workspace = true
 serde_path_to_error.workspace = true
 serde_urlencoded.workspace = true
