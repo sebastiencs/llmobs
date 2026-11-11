@@ -16,7 +16,7 @@ fixtures/otlp/
 
 Group directories are `genai`, `openinference`, `openllmetry`, `vercel`, `langfuse`, `laminar`, `google_adk`, `llmobs` (spans from our own SDKs), and `edge` (cross-cutting edge cases). Create a group directory only when it contains a case. Case directory names are kebab-case and name the scenario.
 
-Every case directory contains exactly three files: `case.json`, `input.json`, and `expected.json`. The validation test allows only `README.md` and `prices.json` beside the group directories, and it rejects a group name outside the list above.
+A hand-written case directory contains exactly three files: `case.json`, `input.json`, and `expected.json`. A captured case may omit `expected.json` until bless mode writes it (D118). No other file is allowed in a case directory. The validation test allows only `README.md` and `prices.json` beside the group directories, and it rejects a group name outside the list above.
 
 ## case.json
 
@@ -55,6 +55,8 @@ One OTLP `ExportTraceServiceRequest` in the standard OTLP/JSON encoding (OTLP sp
 This is what an exporter configured with `http/json` sends, and what `POST /v1/traces` accepts with `Content-Type: application/json`. The capture tool converts captured protobuf payloads into this encoding.
 
 ## expected.json
+
+A captured case may be committed before this file exists. The golden test skips that case and prints `awaiting bless: <group>/<case>`. `just fixtures-bless` writes the file, and it is reviewed before it is committed (D118). A hand-written case always has it.
 
 ```json
 {
@@ -120,6 +122,6 @@ Keep each `input.json` under 256 KiB. For a media case, use a tiny blob and lowe
 
 **Hand-written case.** Write `case.json` and `input.json`, then write `expected.json` by hand from spec 02. Run `just fixtures-fmt`, then `just fixtures-check`.
 
-**Captured case.** Once the capture tool exists, it writes `case.json` and `input.json`. Track B's golden test in bless mode (`LLMOBS_BLESS=1`) writes `expected.json`. Review that file line by line before committing it.
+**Captured case.** The capture tool writes `case.json` and `input.json`. The case may be committed before `expected.json` exists. The golden test skips it and prints `awaiting bless: <group>/<case>`. Bless mode (`LLMOBS_BLESS=1`, `just fixtures-bless`) writes `expected.json`. Review that file line by line before committing it.
 
 **Changing an expected output.** Change it only together with the spec change or bug fix that justifies it, in the same commit.

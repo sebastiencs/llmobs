@@ -118,7 +118,10 @@ fn costs() {
     let rows = load_prices();
     let mut failures = loaded.failures;
     for case in loaded.cases {
-        for span in &case.expected.spans {
+        let Some(expected) = &case.expected else {
+            continue;
+        };
+        for span in &expected.spans {
             check_cost(&label(&case), span, &rows, &mut failures);
         }
     }
@@ -197,7 +200,10 @@ fn prices() {
     failures.extend(loaded.failures);
     let cases = loaded.cases;
     for case in &cases {
-        for span in &case.expected.spans {
+        let Some(expected) = &case.expected else {
+            continue;
+        };
+        for span in &expected.spans {
             if span.cost_source != Some(CostSource::Computed) {
                 continue;
             }
@@ -229,7 +235,10 @@ fn prices() {
 
     let mut models = BTreeSet::new();
     for case in &cases {
-        for span in &case.expected.spans {
+        let Some(expected) = &case.expected else {
+            continue;
+        };
+        for span in &expected.spans {
             if let Some(model) = &span.request_model {
                 models.insert(model.clone());
             }
@@ -387,14 +396,14 @@ fn check_group(dir: &Path, group: &str, failures: &mut Vec<String>) {
             files.push(child_name);
         }
         files.sort();
-        let expected = vec![
-            "case.json".to_owned(),
-            "expected.json".to_owned(),
-            "input.json".to_owned(),
-        ];
-        if files != expected {
+        let mut allowed = vec!["case.json".to_owned(), "input.json".to_owned()];
+        if !captured_origin(&entry.path()) || files.iter().any(|file| file == "expected.json") {
+            allowed.insert(1, "expected.json".to_owned());
+        }
+        if files != allowed {
             failures.push(format!(
-                "{group}/{name}: expected case.json, input.json, expected.json; found {}",
+                "{group}/{name}: expected {}; found {}",
+                allowed.join(", "),
                 files.join(", ")
             ));
         }
@@ -406,32 +415,45 @@ fn check_group(dir: &Path, group: &str, failures: &mut Vec<String>) {
     }
 }
 
+fn captured_origin(dir: &Path) -> bool {
+    let Ok(text) = fs::read_to_string(dir.join("case.json")) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    value.get("origin").and_then(serde_json::Value::as_str) == Some("captured")
+}
+
 fn check_expected(case: &Case, failures: &mut Vec<String>) {
+    let Some(expected) = &case.expected else {
+        return;
+    };
     let label = label(case);
-    check_spans_are_exact(case, &label, failures);
+    check_spans_are_exact(case, expected, &label, failures);
     let mut ids = BTreeSet::new();
-    for span in &case.expected.spans {
+    for span in &expected.spans {
         if !ids.insert((span.trace_id, span.span_id)) {
             failures.push(format!("{label}: span {} appears twice", span.span_id));
         }
     }
-    let mut sorted = case.expected.spans.clone();
+    let mut sorted = expected.spans.clone();
     sort_spans(&mut sorted);
-    if case.expected.spans != sorted {
+    if expected.spans != sorted {
         failures.push(format!(
             "{label}: spans are not sorted by (trace_id, start_time, span_id)"
         ));
     }
     let input_ids = input_spans(case);
-    if case.expected.spans.len() + case.expected.rejected_spans as usize != input_ids.len() {
+    if expected.spans.len() + expected.rejected_spans as usize != input_ids.len() {
         failures.push(format!(
             "{label}: spans ({}) + rejected_spans ({}) != input spans ({})",
-            case.expected.spans.len(),
-            case.expected.rejected_spans,
+            expected.spans.len(),
+            expected.rejected_spans,
             input_ids.len()
         ));
     }
-    for span in &case.expected.spans {
+    for span in &expected.spans {
         if span.project_id != case.meta.context.project_id {
             failures.push(format!(
                 "{label}: {} project_id != case context",
@@ -522,7 +544,12 @@ fn check_pair(
 /// `Span` ignores unknown keys, so a misspelled optional key (`cache_write_token`) would
 /// otherwise parse as `None` and pass. Comparing text also pins key order and the
 /// 9-digit timestamps (D64), which parsing alone accepts.
-fn check_spans_are_exact(case: &Case, label: &str, failures: &mut Vec<String>) {
+fn check_spans_are_exact(
+    case: &Case,
+    expected: &support::Expected,
+    label: &str,
+    failures: &mut Vec<String>,
+) {
     let path = case.dir.join("expected.json");
     let raw: serde_json::Value = match fs::read_to_string(&path)
         .map_err(|err| err.to_string())
@@ -538,7 +565,7 @@ fn check_spans_are_exact(case: &Case, label: &str, failures: &mut Vec<String>) {
         failures.push(format!("{label}: expected.json has no spans array"));
         return;
     };
-    for (raw_span, span) in raw_spans.iter().zip(&case.expected.spans) {
+    for (raw_span, span) in raw_spans.iter().zip(&expected.spans) {
         let reserialized = match serde_json::to_value(span) {
             Ok(value) => value,
             Err(err) => {
@@ -557,8 +584,11 @@ fn check_spans_are_exact(case: &Case, label: &str, failures: &mut Vec<String>) {
 }
 
 fn check_media(case: &Case, failures: &mut Vec<String>) {
+    let Some(expected) = &case.expected else {
+        return;
+    };
     let label = label(case);
-    let media = &case.expected.media;
+    let media = &expected.media;
     let hashes: Vec<&str> = media.iter().map(|item| item.sha256.as_str()).collect();
     let mut sorted = hashes.clone();
     sorted.sort_unstable();
@@ -592,7 +622,7 @@ fn check_media(case: &Case, failures: &mut Vec<String>) {
     }
     let listed: BTreeSet<&str> = hashes.iter().copied().collect();
     let mut referenced = BTreeSet::new();
-    for span in &case.expected.spans {
+    for span in &expected.spans {
         for hash in &span.media_refs {
             referenced.insert(hash.as_str());
         }
@@ -874,12 +904,15 @@ fn input_size_failure(case_label: &str, len: u64) -> Option<String> {
 }
 
 fn check_input_times(case: &Case, failures: &mut Vec<String>) {
+    let Some(expected) = &case.expected else {
+        return;
+    };
     let case_label = label(case);
     let ingest = case.meta.context.ingest_time;
     // Rejected spans are absent from expected.json. Only accepted spans must
-    // sit in the 10-second window (fixtures README).
-    let accepted = case
-        .expected
+    // sit in the 10-second window (fixtures README). A captured case that has
+    // not been blessed yet has no accepted set, so this check waits for bless.
+    let accepted = expected
         .spans
         .iter()
         .map(|span| (span.trace_id.to_hex(), span.span_id.to_hex()))
@@ -1182,7 +1215,11 @@ fn span_without_cost_source_cannot_carry_a_cost() {
 fn duplicate_media_sha256_fails() {
     let mut case = empty_case();
     let hash = "ab".repeat(32);
-    case.expected.media = vec![
+    let expected = case
+        .expected
+        .as_mut()
+        .unwrap_or_else(|| panic!("sample case has expected.json"));
+    expected.media = vec![
         support::ExpectedMedia {
             sha256: hash.clone(),
             mime_type: "image/png".to_owned(),
@@ -1338,6 +1375,49 @@ fn directory_names_match_the_readme() {
     fs::remove_dir_all(&root).unwrap_or_else(|err| panic!("{err}"));
 }
 
+#[test]
+fn captured_case_may_omit_expected_json() {
+    let root = std::env::temp_dir().join(format!("llmobs-otlp-captured-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let case_dir = root.join("awaiting");
+    fs::create_dir_all(&case_dir).unwrap_or_else(|err| panic!("{err}"));
+    fs::write(
+        case_dir.join("case.json"),
+        r#"{"description":"captured","origin":"captured","spec_refs":["02"]}"#,
+    )
+    .unwrap_or_else(|err| panic!("{err}"));
+    fs::write(case_dir.join("input.json"), "{}\n").unwrap_or_else(|err| panic!("{err}"));
+
+    let mut failures = Vec::new();
+    check_group(&root, "edge", &mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+
+    fs::write(case_dir.join("notes.txt"), "extra\n").unwrap_or_else(|err| panic!("{err}"));
+    failures.clear();
+    check_group(&root, "edge", &mut failures);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("expected case.json, input.json"))
+    );
+
+    fs::remove_file(case_dir.join("notes.txt")).unwrap_or_else(|err| panic!("{err}"));
+    fs::write(
+        case_dir.join("case.json"),
+        r#"{"description":"hand","origin":"hand_written","spec_refs":["02"]}"#,
+    )
+    .unwrap_or_else(|err| panic!("{err}"));
+    failures.clear();
+    check_group(&root, "edge", &mut failures);
+    assert!(
+        failures.iter().any(|failure| failure.contains(
+            "expected case.json, expected.json, input.json; found case.json, input.json"
+        )),
+        "{failures:?}"
+    );
+    fs::remove_dir_all(&root).unwrap_or_else(|err| panic!("{err}"));
+}
+
 fn bare_span(kind: &str) -> Span {
     serde_json::from_value(serde_json::json!({
         "project_id": "01900000-0000-7000-8000-000000000001",
@@ -1381,11 +1461,11 @@ fn empty_case() -> Case {
             notes: None,
         },
         input: Default::default(),
-        expected: Expected {
+        expected: Some(Expected {
             spans: Vec::new(),
             media: Vec::new(),
             rejected_spans: 0,
-        },
+        }),
     }
 }
 

@@ -38,9 +38,9 @@ pub const GROUPS: &[&str] = &[
     "edge",
 ];
 
-const CASE_FILES: &[&str] = &["case.json", "expected.json", "input.json"];
-
-/// One fixture directory and the three JSON files parsed.
+/// One fixture directory and its JSON files.
+///
+/// `expected` is absent when a captured case has not been blessed yet (D118).
 #[derive(Debug, Clone)]
 pub struct Case {
     /// Group directory name, for example `genai`.
@@ -53,8 +53,8 @@ pub struct Case {
     pub meta: CaseMeta,
     /// `input.json` as an OTLP export request.
     pub input: ExportTraceServiceRequest,
-    /// `expected.json`.
-    pub expected: Expected,
+    /// `expected.json`. `None` for a captured case that is still awaiting bless.
+    pub expected: Option<Expected>,
 }
 
 /// `case.json` after defaults are filled in.
@@ -188,7 +188,7 @@ struct ContextFile {
 /// A broken case is omitted from [`Self::cases`] so the other cases can still be checked.
 #[derive(Debug)]
 pub struct LoadedCases {
-    /// Cases whose three JSON files parsed.
+    /// Cases whose JSON files parsed. A captured case may omit `expected.json`.
     pub cases: Vec<Case>,
     /// `<group>/<name>: <file>: <error>` for each file that was missing or did not parse.
     pub failures: Vec<String>,
@@ -260,20 +260,31 @@ pub fn canonical_json(value: &serde_json::Value) -> String {
 
 fn load_case(group: String, name: String, dir: PathBuf) -> Result<Case, Vec<String>> {
     let mut errors = Vec::new();
-    for file_name in CASE_FILES {
+    for file_name in ["case.json", "input.json"] {
         if !dir.join(file_name).is_file() {
             errors.push(format!("{group}/{name}: missing {file_name}"));
         }
     }
     if !errors.is_empty() {
+        if !dir.join("expected.json").is_file() {
+            errors.push(format!("{group}/{name}: missing expected.json"));
+        }
         return Err(errors);
     }
     let meta = load_meta(&dir.join("case.json"))
         .map_err(|err| format!("{group}/{name}: case.json: {err}"));
     let input = read_json(&dir.join("input.json"))
         .map_err(|err| format!("{group}/{name}: input.json: {err}"));
-    let expected = read_json(&dir.join("expected.json"))
-        .map_err(|err| format!("{group}/{name}: expected.json: {err}"));
+    let expected_path = dir.join("expected.json");
+    let expected = if expected_path.is_file() {
+        read_json(&expected_path)
+            .map(Some)
+            .map_err(|err| format!("{group}/{name}: expected.json: {err}"))
+    } else if matches!(&meta, Ok(meta) if meta.origin == Origin::Captured) {
+        Ok(None)
+    } else {
+        Err(format!("{group}/{name}: missing expected.json"))
+    };
     match (meta, input, expected) {
         (Ok(meta), Ok(input), Ok(expected)) => Ok(Case {
             group,
@@ -541,7 +552,10 @@ fn walk(
 }
 
 mod tests {
-    use super::check_otlp_json;
+    use std::fs;
+    use std::path::Path;
+
+    use super::{check_otlp_json, load_case};
 
     #[test]
     fn otlp_json_accepts_a_minimal_request() {
@@ -603,5 +617,68 @@ mod tests {
                 "edge/two: input.json $.resourceSpans[0].scopeSpans[0].spans[0].attributes[0].value: AnyValue must have exactly one value key".to_owned()
             ]
         );
+    }
+
+    #[test]
+    fn captured_case_loads_without_expected_json() {
+        let dir = temp_case("captured-missing");
+        write_case(&dir, "captured", true);
+        let case = load_case("edge".to_owned(), "awaiting".to_owned(), dir.clone())
+            .unwrap_or_else(|errors| panic!("{}", errors.join("\n")));
+        assert!(case.expected.is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hand_written_case_requires_expected_json() {
+        let dir = temp_case("hand-missing");
+        write_case(&dir, "hand_written", false);
+        let errors = match load_case("edge".to_owned(), "sample".to_owned(), dir.clone()) {
+            Ok(_) => panic!("hand-written case"),
+            Err(errors) => errors,
+        };
+        assert_eq!(
+            errors,
+            vec!["edge/sample: missing expected.json".to_owned()]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn captured_case_rejects_a_broken_expected_json() {
+        let dir = temp_case("captured-broken");
+        write_case(&dir, "captured", true);
+        fs::write(dir.join("expected.json"), "{}\n").unwrap_or_else(|err| panic!("{err}"));
+        let errors = match load_case("edge".to_owned(), "awaiting".to_owned(), dir.clone()) {
+            Ok(_) => panic!("broken expected.json"),
+            Err(errors) => errors,
+        };
+        assert!(
+            errors.iter().any(|error| error.contains("expected.json")),
+            "{errors:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn temp_case(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("llmobs-load-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap_or_else(|err| panic!("{err}"));
+        dir
+    }
+
+    fn write_case(dir: &Path, origin: &str, source: bool) {
+        let source = if source {
+            r#","source":{"instrumentation":"example","instrumentation_version":"1.0.0","language":"python","libraries":{},"captured_at":"2026-01-01T00:00:00.000000000Z"}"#
+        } else {
+            ""
+        };
+        fs::write(
+            dir.join("case.json"),
+            format!(r#"{{"description":"sample","origin":"{origin}"{source},"spec_refs":["02"]}}"#),
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        fs::write(dir.join("input.json"), "{\"resourceSpans\":[]}\n")
+            .unwrap_or_else(|err| panic!("{err}"));
     }
 }

@@ -160,6 +160,7 @@ Competitor research: `research/competitors.md`.
 | D111 | Ingestion | **Rejection reasons are a closed set.** `partial_success.error_message` lists at most 4 reasons with counts, and never a value from the request (spec 02 rule 21). |
 | D112 | Testing | **Robustness tests use proptest** in `just test`. There is no cargo-fuzz (spec 02 § Testing). |
 | D113 | Normalization | **Multi-source research rows are in spec 02.** Behaviours reported by one source only (Vercel v5 + Anthropic exclusive input, event-based TTFT, OpenLLMetry Anthropic and ADK token semantics) are written as pinned by a captured fixture until B2 captures exist (spec 02). |
+| D118 | Captured fixtures | A captured case may be committed with only `case.json` and `input.json`. `expected.json` is written in bless mode when the convention's normalization lands, then reviewed line by line. The fixture validation test accepts a missing `expected.json` for `origin: "captured"` cases only. The golden test skips those cases and lists them as awaiting bless (spec 02 § Testing, `fixtures/otlp/README.md` § Workflows). |
 
 ## Open
 
