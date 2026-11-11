@@ -1,0 +1,83 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "laminar-app"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "lmnr.tracer"
+          },
+          "spans": [
+            {
+              "traceId": "fd5a0000000000000000000000000001",
+              "spanId": "fd5a000000000001",
+              "name": "answer",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "lmnr.span.type",
+                  "value": {
+                    "stringValue": "DEFAULT"
+                  }
+                },
+                {
+                  "key": "lmnr.association.properties.session_id",
+                  "value": {
+                    "stringValue": "sess-1"
+                  }
+                },
+                {
+                  "key": "lmnr.association.properties.user_id",
+                  "value": {
+                    "stringValue": "user-9"
+                  }
+                },
+                {
+                  "key": "lmnr.association.properties.tags",
+                  "value": {
+                    "stringValue": "[\"red\",\"blue\"]"
+                  }
+                },
+                {
+                  "key": "lmnr.association.properties.metadata.customer",
+                  "value": {
+                    "stringValue": "acme"
+                  }
+                },
+                {
+                  "key": "lmnr.span.input",
+                  "value": {
+                    "stringValue": "hello"
+                  }
+                },
+                {
+                  "key": "lmnr.span.path",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "answer"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

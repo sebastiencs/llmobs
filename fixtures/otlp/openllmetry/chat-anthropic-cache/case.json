@@ -1,0 +1,13 @@
+{
+  "description": "OpenLLMetry Anthropic chat whose prompt token count excludes cache, so the safety net adds it back.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules",
+    "02 § Cost computation",
+    "02 § Token semantics"
+  ],
+  "notes": "hand-written from opentelemetry-instrumentation-anthropic 0.63.0 (tracer opentelemetry.instrumentation.anthropic, span anthropic.chat). D113: OpenLLMetry Anthropic input is treated as inclusive and the safety net corrects an exclusive count. prompt_tokens is smaller than cache_read, so input_tokens gains the cache and the warning is input_excludes_cache. The current instrumentor adds cache into the input count itself. Re-check against a B2 capture."
+}

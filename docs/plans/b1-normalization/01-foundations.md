@@ -17,17 +17,17 @@ See [README.md](README.md) for the decisions, the boundaries, the public API and
 - If they are on `main`, build on them.
 - If not, write rule 15 and media step 4 exactly as below, then report the overlap so whoever merges second resolves it.
 
-Check the D numbers in `docs/mvp-decisions.md` on `main`. If D100–D111 are taken, renumber this plan's decisions to the next free numbers, in this directory too.
+D100 and D101 were already taken on this branch (A2: DSL casts and the SQL time window). `main` ended at D82. These decisions are D102–D113.
 
 ### 1. `docs/mvp-decisions.md`
 
-Add D100–D111 from the README's decisions table, one row each, in the file's existing format (`| D… | Area | Decision |`). Keep the text short and point at spec 02 for details.
+Add D102–D113 from the README's decisions table, one row each, in the file's existing format (`| D… | Area | Decision |`). Keep the text short and point at spec 02 for details.
 
 ### 2. Spec 02 § Pipeline
 
 Replace the paragraph under the diagram with:
 
-> Normalization is a pure function in `llmobs-otel`: `normalize(request, ingest_context, price_table) -> Normalized { spans, media, rejections }` (D100, D101, D103). It does no I/O. The server stores each returned media blob through `llmobs-storage` before the WAL append. Re-sends are safe because blobs are content-addressed. `ingest_context` carries the project ID, the ingest time, the project's `retention_days` and the limits.
+> Normalization is a pure function in `llmobs-otel`: `normalize(request, ingest_context, price_table) -> Normalized { spans, media, rejections }` (D102, D103, D105). It does no I/O. The server stores each returned media blob through `llmobs-storage` before the WAL append. Re-sends are safe because blobs are content-addressed. `ingest_context` carries the project ID, the ingest time, the project's `retention_days` and the limits.
 
 In the diagram, add a step `store media` after `compute cost`.
 
@@ -35,15 +35,15 @@ In the diagram, add a step `store media` after `compute cost`.
 
 After the encodings table, add:
 
-> OTLP/JSON follows the OTLP specification strictly (D106): lowerCamelCase fields, hex trace and span IDs, enums as integers, 64-bit integers as decimal strings or numbers. Enum names, base64 IDs and unknown fields fail decoding, and the request gets `400`.
+> OTLP/JSON follows the OTLP specification strictly (D108): lowerCamelCase fields, hex trace and span IDs, enums as integers, 64-bit integers as decimal strings or numbers. Enum names and base64 IDs fail decoding, and the request gets `400`. Unknown fields are ignored.
 
-Check that unknown fields really fail with `with-serde` 0.33.1; N2 has a test for it. If they don't fail, write "unknown fields are ignored" instead, and say so in the report.
+Checked against `opentelemetry-proto` 0.33.1 `with-serde`: generated messages have no `deny_unknown_fields`, so unknown fields are ignored. N2 still pins that.
 
 ### 4. Spec 02 § Convention detection
 
 Add after the precedence paragraph:
 
-> Within one field, the first convention that yields a value wins as a whole. Message lists from two conventions are never merged (D100). Numbered attributes (`gen_ai.prompt.N.*`, `llm.input_messages.N.*`, …) are parsed by index, never matched by a raw key prefix: `gen_ai.prompt.name` is not part of `gen_ai.prompt.N`.
+> Within one field, the first convention that yields a value wins as a whole. Message lists from two conventions are never merged (D102). Numbered attributes (`gen_ai.prompt.N.*`, `llm.input_messages.N.*`, …) are parsed by index, never matched by a raw key prefix: `gen_ai.prompt.name` is not part of `gen_ai.prompt.N`.
 
 Add a **detection table**: a convention is listed in `conventions` when the span has at least one attribute or event matching it.
 
@@ -99,13 +99,13 @@ Apply the rows below from `docs/research/ingestion/genai-mapping.md` § Gap tabl
   - `ai.response.msToFirstChunk`, then `ai.stream.msToFirstChunk` (ms, ×1e6);
   - `langfuse.observation.completion_start_time` (an instant: `ttft = instant − start_time`, null when negative).
 
-  Event-based sources (`ai.stream.firstChunk`, OpenInference "First Token Stream Event") are added only once a captured fixture shows them (D111).
+  Event-based sources (`ai.stream.firstChunk`, OpenInference "First Token Stream Event") are added only once a captured fixture shows them (D113).
 - `request_params` (22): every `gen_ai.request.*` attribute except `gen_ai.request.model`, plus `llm.invocation_parameters` (a JSON object string, expanded), `ai.settings.*` and `langfuse.observation.model.parameters` (a JSON object string, expanded). The key is the suffix after the prefix, as in rule 8.
 - `provider` (9): extend the rule 12 alias table with:
   - the semconv well-known values, kept as they are: `aws.bedrock`, `azure.ai.openai`, `azure.ai.inference`, `gcp.vertex_ai`, `gcp.gemini`, `gcp.gen_ai`, `x_ai`, `ibm.watsonx.ai`, `mistral_ai`, `groq`, `deepseek`, `perplexity`, `cohere`, `anthropic`, `openai`;
   - the Vercel IDs, mapped: `google.generative-ai` → `gcp.gemini`, `google.vertex.*` → `gcp.vertex_ai`, `amazon-bedrock` → `aws.bedrock`, `azure.*` → `azure.ai.openai`, `xai.*` → `x_ai`, `mistral.*` → `mistral_ai`, `<name>.<anything>` → `<name>` otherwise;
   - `xai` → `x_ai`.
-- Reported cost (8): `llmobs.cost.total`, `llm.cost.total`, `gen_ai.usage.cost`, `gen_ai.usage.total_cost` fill `cost_total`. `llm.cost.prompt` and `gen_ai.usage.input_cost` fill `cost_input`. `llm.cost.completion` and `gen_ai.usage.output_cost` fill `cost_output`. Non-numeric values are ignored and stay in `attributes`. D107 applies.
+- Reported cost (8): `llmobs.cost.total`, `llm.cost.total`, `gen_ai.usage.cost`, `gen_ai.usage.total_cost` fill `cost_total`. `llm.cost.prompt` and `gen_ai.usage.input_cost` fill `cost_input`. `llm.cost.completion` and `gen_ai.usage.output_cost` fill `cost_output`. Non-numeric values are ignored and stay in `attributes`. D109 applies.
 
 **Context fields** table:
 - `session_id` (19, 20): add `lmnr.association.properties.session_id`, after `langfuse.session.id`.
@@ -117,17 +117,18 @@ Apply the rows below from `docs/research/ingestion/genai-mapping.md` § Gap tabl
 - `metadata`: add `lmnr.association.properties.metadata.*`.
 - `release`: add `lmnr.span.release` (span) after `langfuse.release`.
 
-**New subsection "Token semantics"**, replacing the current "Token semantics" paragraph, after the usage table (D108). It contains the D108 text plus a per-source table:
+**New subsection "Token semantics"**, replacing the current "Token semantics" paragraph, after the usage table (D110). It contains the D110 text plus a per-source table:
 
 | Source | Input includes cache | Output includes reasoning |
 |---|---|---|
 | GenAI `gen_ai.usage.*` | yes (semconv) | yes |
 | OpenInference `llm.token_count.*` | yes | yes |
 | Vercel v6 (`inputTokenDetails` present) | yes (`noCacheTokens` + cache) | yes |
-| Vercel ≤ v5 + provider `anthropic` | **no** (pinned by a captured fixture, D111) | yes |
+| Vercel ≤ v5 + provider `anthropic` | **no** (pinned by a captured fixture, D113) | yes |
 | Vercel other | yes | yes |
-| OpenLLMetry Anthropic | unverified (D111); treat as yes and rely on the safety net | yes |
-| Google ADK / Gemini native | yes | **no**: thoughts are outside the output, so add `reasoning` to the output |
+| OpenLLMetry Anthropic | unverified (D113); treat as yes and rely on the safety net | yes |
+| Gemini-native `usage_metadata` (`thoughts_token_count`) | yes | **no**: thoughts are outside the output, so add `reasoning` to the output |
+| `gen_ai.usage.*` on an ADK span | unverified (D113); treat as yes | unverified (D113); treat as yes |
 | Langfuse `usage_details` | the `input` key excludes `input_cached_tokens`/`cache_read_input_tokens` | yes |
 
 The Vercel ≤ v5 + Anthropic rule keys on the span's `ai.*` attributes plus the normalized provider. It applies even when the count was read from `gen_ai.usage.input_tokens` on that same span, because Vercel mirrors its own count there.
@@ -143,11 +144,11 @@ Add: per-modality counts (`gen_ai.usage.{audio,image,text}.*`, `llm.token_count.
 
 Add rules 17–21:
 
-17. **Timestamps** (D104). `start_time_unix_nano` and `end_time_unix_nano` above `i64::MAX` reject the span. `end < start` sets `end_time = start_time` and records the warning `end_before_start`. A zero `end_time_unix_nano` (an unended span) counts as `end < start`.
+17. **Timestamps** (D106). `start_time_unix_nano` and `end_time_unix_nano` above `i64::MAX` reject the span. `end < start` sets `end_time = start_time` and records the warning `end_before_start`. A zero `end_time_unix_nano` (an unended span) counts as `end < start`.
 18. **Warnings.** Recoverable oddities are recorded as warning codes in the attribute `llmobs.normalize_warning`: a JSON array of strings, sorted, without duplicates. Codes: `duplicate_key`, `end_before_start`, `input_excludes_cache`, `invalid_event_time`, `invalid_number`, `max_depth`. The set is closed. Adding a code means updating this rule.
-19. **AnyValue limits** (D105). Nesting deeper than 32 levels (array or kvlist inside array or kvlist) is replaced at depth 33 by the string `[llmobs: max depth]`. The attribute name goes into `truncated`, and the `max_depth` warning is recorded. Duplicate keys in one key-value list: the last one wins, and `duplicate_key` is recorded. This applies to attributes, resource attributes, event and link attributes, and nested kvlists.
+19. **AnyValue limits** (D107). Nesting deeper than 32 levels (array or kvlist inside array or kvlist) is replaced at depth 33 by the string `[llmobs: max depth]`. The attribute name goes into `truncated`, and the `max_depth` warning is recorded. Duplicate keys in one key-value list: the last one wins, and `duplicate_key` is recorded. This applies to attributes, resource attributes, event and link attributes, and nested kvlists.
 20. **Numbers.** A field typed as an integer accepts `intValue`, a `doubleValue` with no fractional part, or a string holding a decimal integer. A field typed as a float accepts `intValue`, `doubleValue` or a numeric string. Anything else does not fill the field. The attribute stays in `attributes`, unconsumed, and `invalid_number` is recorded. Negative token counts are invalid numbers.
-21. **Rejection reasons** (D109). The rejection reasons are `invalid_trace_id`, `invalid_span_id`, `timestamp_overflow` and `start_time_out_of_range`. `partial_success.error_message` lists at most 4 of them with counts, for example `rejected 3 spans: invalid_span_id ×2, start_time_out_of_range ×1`, and never any value from the request.
+21. **Rejection reasons** (D111). The rejection reasons are `invalid_trace_id`, `invalid_span_id`, `timestamp_overflow` and `start_time_out_of_range`. `partial_success.error_message` lists at most 4 of them with counts, for example `rejected 3 spans: invalid_span_id ×2, start_time_out_of_range ×1`, and never any value from the request.
 
 Edit rule 15: reference rule 21 for the reasons. Edit the rule 2 bullet "Payload attributes of lower-precedence conventions…": events consumed as payload sources are removed from `events`. That covers `gen_ai.client.inference.operation.details`, the legacy `gen_ai.*.message` events and `gen_ai.choice`.
 
@@ -155,12 +156,12 @@ Edit rule 15: reference rule 21 for the reasons. Edit the rule 2 bullet "Payload
 
 - Step 1: add Vercel `image`/`file` parts (raw base64 in `image`/`data`) to the candidates. The Vercel converter turns them into `blob` parts.
 - Step 3: "sniff MIME if missing" uses a fixed magic-byte table (N14): PNG, JPEG, GIF, WebP, PDF, WAV, MP3, OGG, FLAC, MP4/M4A, WebM. Otherwise it uses the declared type, else `application/octet-stream`.
-- Step 4: as in A1's text, the server stores the blob through `llmobs-storage`. Add "(normalization returns the blob; D101)".
+- Step 4: as in A1's text, the server stores the blob through `llmobs-storage`. Add "(normalization returns the blob; D103)".
 
 ### 8. Spec 02 § Cost computation
 
-- Step 1: reference the reported-cost keys and D107.
-- After the built-in prices paragraph, add D102: "The snapshot is converted by `just prices-update` and committed as `crates/otel/prices/builtin.json`. It is never fetched at build time or at runtime."
+- Step 1: reference the reported-cost keys and D109.
+- After the built-in prices paragraph, add D104: "The snapshot is converted by `just prices-update` and committed as `crates/otel/prices/builtin.json`. It is never fetched at build time or at runtime."
 
 ### 9. Spec 01
 
@@ -338,7 +339,7 @@ pub(crate) const SMALL_ATTRIBUTE_BYTES: usize = 256;
 
 ### `reject.rs`
 
-`RejectReason` (public, `Copy + Ord + Hash`), with snake_case codes per rule 21, `as_str()` and `Display`. `Rejections` has a private `BTreeMap<RejectReason, u64>`, `total()`, `count()` and `message()` per D109:
+`RejectReason` (public, `Copy + Ord + Hash`), with snake_case codes per rule 21, `as_str()` and `Display`. `Rejections` has a private `BTreeMap<RejectReason, u64>`, `total()`, `count()` and `message()` per D111:
 - `None` when the total is 0;
 - else `rejected {total} spans: {code} ×{n}, …`, with reasons sorted by count descending then code, at most 4 of them, then `, … ×{rest}` when more exist. There are only 4 reasons today, but keep the cap;
 - the word is `span` when total is 1.

@@ -1,0 +1,84 @@
+{
+  "resourceSpans": [
+    {
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "f60a0000000000000000000000000001",
+              "spanId": "f60a000000000001",
+              "name": "context",
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "llmobs.session.id",
+                  "value": {
+                    "stringValue": "session-1"
+                  }
+                },
+                {
+                  "key": "llmobs.user.id",
+                  "value": {
+                    "stringValue": "user-1"
+                  }
+                },
+                {
+                  "key": "llmobs.tags",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "billing"
+                        },
+                        {
+                          "stringValue": "eu"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "llmobs.metadata.feature",
+                  "value": {
+                    "stringValue": "search"
+                  }
+                },
+                {
+                  "key": "llmobs.metadata.n",
+                  "value": {
+                    "intValue": "2"
+                  }
+                },
+                {
+                  "key": "llmobs.environment",
+                  "value": {
+                    "stringValue": "staging"
+                  }
+                },
+                {
+                  "key": "llmobs.release",
+                  "value": {
+                    "stringValue": "1.2.3"
+                  }
+                },
+                {
+                  "key": "llmobs.experiment.id",
+                  "value": {
+                    "stringValue": "exp-1"
+                  }
+                },
+                {
+                  "key": "llmobs.dataset_item.id",
+                  "value": {
+                    "stringValue": "item-1"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

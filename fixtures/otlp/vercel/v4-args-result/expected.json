@@ -1,0 +1,46 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fb2a0000000000000000000000000001",
+      "span_id": "fb2a000000000001",
+      "name": "ai.generateText.doGenerate",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "next-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini",
+      "input_tokens": 12,
+      "output_tokens": 4,
+      "total_tokens": 16,
+      "cost_input": 0.000012,
+      "cost_output": 0.000016,
+      "cost_total": 0.000028,
+      "cost_source": "computed",
+      "input": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_4\",\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}]},{\"role\":\"tool\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"call_4\",\"response\":{\"temp\":18},\"toolName\":\"get_weather\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"18 C\"}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "output_preview": "18 C",
+      "attributes": {
+        "ai.model.id": "gpt-4o-mini",
+        "ai.model.provider": "openai.chat",
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.response.finishReason": "stop",
+        "ai.usage.completionTokens": "4",
+        "ai.usage.promptTokens": "12"
+      },
+      "scope_name": "ai",
+      "scope_version": "4.3.19",
+      "conventions": [
+        "vercel"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

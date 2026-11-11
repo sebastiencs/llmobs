@@ -1,0 +1,35 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "f90a0000000000000000000000000001",
+      "span_id": "f90a000000000001",
+      "name": "chat",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "provider": "anthropic",
+      "request_model": "claude-sonnet-4-5",
+      "output_tokens": 100,
+      "reasoning_tokens": 40,
+      "cost_input": 0.0,
+      "cost_output": 0.0015,
+      "cost_total": 0.0015,
+      "cost_source": "computed",
+      "attributes": {
+        "gen_ai.provider.name": "anthropic",
+        "gen_ai.request.model": "claude-sonnet-4-5",
+        "gen_ai.usage.output_tokens": "100",
+        "gen_ai.usage.reasoning.output_tokens": "40"
+      },
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

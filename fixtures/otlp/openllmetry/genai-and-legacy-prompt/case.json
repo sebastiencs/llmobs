@@ -1,0 +1,10 @@
+{
+  "description": "GenAI input and output messages win over flattened OpenLLMetry prompt and completion keys.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Span kind",
+    "02 § Normalization rules"
+  ],
+  "notes": "hand-written. gen_ai.input.messages and gen_ai.output.messages win over gen_ai.prompt.0.* and gen_ai.completion.0.* (rule 13). The legacy keys are payload attributes and are removed (rule 2). Re-check against a B2 capture."
+}

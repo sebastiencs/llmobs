@@ -1,0 +1,8 @@
+{
+  "description": "llmobs input and output in messages, json, and text formats.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Input and output",
+    "02 § Normalization rules / 10"
+  ]
+}

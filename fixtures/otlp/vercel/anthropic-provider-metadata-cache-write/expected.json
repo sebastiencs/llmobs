@@ -1,0 +1,49 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fb5a0000000000000000000000000001",
+      "span_id": "fb5a000000000001",
+      "name": "ai.generateText.doGenerate",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "next-app",
+      "provider": "anthropic",
+      "request_model": "claude-sonnet-4-5",
+      "input_tokens": 120,
+      "output_tokens": 10,
+      "cache_write_tokens": 20,
+      "total_tokens": 130,
+      "cost_input": 0.000375,
+      "cost_output": 0.00015,
+      "cost_total": 0.000525,
+      "cost_source": "computed",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Hello\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Hi\"}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "input_preview": "Hello",
+      "output_preview": "Hi",
+      "attributes": {
+        "ai.model.id": "claude-sonnet-4-5",
+        "ai.model.provider": "anthropic.messages",
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.response.finishReason": "stop",
+        "ai.response.providerMetadata": "{\"anthropic\":{\"cacheCreationInputTokens\":20}}",
+        "ai.usage.inputTokens": "100",
+        "ai.usage.outputTokens": "10"
+      },
+      "scope_name": "ai",
+      "scope_version": "5.0.0",
+      "conventions": [
+        "vercel"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

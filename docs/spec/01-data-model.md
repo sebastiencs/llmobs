@@ -84,7 +84,7 @@ Type notation in this document: "Utf8 (dict)" means a `Utf8` column in memory th
 | `output_preview` | Utf8, nullable | P | Same. |
 | `system_instructions` | Utf8 (JSON), nullable | | |
 | `tool_definitions` | Utf8 (JSON), nullable | | |
-| `attributes` | Map(Utf8, Utf8) | | All span attributes not consumed by normalization; values JSON-encoded. |
+| `attributes` | Map(Utf8, Utf8) | | All span attributes not consumed by normalization; values JSON-encoded. Includes `llmobs.normalize_warning` (02 rule 18) and `llmobs.normalize_error`. |
 | `resource_attributes` | Map(Utf8, Utf8) | | Minus `service.name`. |
 | `scope_name` | Utf8 (dict), nullable | | Instrumentation scope. |
 | `scope_version` | Utf8 (dict), nullable | | |

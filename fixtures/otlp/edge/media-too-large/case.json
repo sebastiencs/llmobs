@@ -1,0 +1,12 @@
+{
+  "description": "A blob over media_max_bytes becomes the dropped marker and is not stored.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Media extraction"
+  ],
+  "settings": {
+    "media_min_bytes": 8,
+    "media_max_bytes": 32
+  },
+  "notes": "The PNG is 70 bytes, above the 32-byte maximum."
+}

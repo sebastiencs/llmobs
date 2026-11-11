@@ -1,0 +1,114 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "openinference-app"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "openinference.instrumentation.openai",
+            "version": "0.1.69"
+          },
+          "spans": [
+            {
+              "traceId": "fa0a0000000000000000000000000001",
+              "spanId": "fa0a000000000001",
+              "name": "ChatCompletion",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "LLM"
+                  }
+                },
+                {
+                  "key": "llm.model_name",
+                  "value": {
+                    "stringValue": "gpt-4o-mini"
+                  }
+                },
+                {
+                  "key": "llm.provider",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt",
+                  "value": {
+                    "intValue": "10"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion",
+                  "value": {
+                    "intValue": "4"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.role",
+                  "value": {
+                    "stringValue": "user"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.contents.0.message_content.type",
+                  "value": {
+                    "stringValue": "text"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.contents.0.message_content.text",
+                  "value": {
+                    "stringValue": "Describe this"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.contents.1.message_content.type",
+                  "value": {
+                    "stringValue": "image"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.contents.1.message_content.image.image.url",
+                  "value": {
+                    "stringValue": "https://example.com/cat.png"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.role",
+                  "value": {
+                    "stringValue": "assistant"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.content",
+                  "value": {
+                    "stringValue": "A cat"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.finish_reason",
+                  "value": {
+                    "stringValue": "stop"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

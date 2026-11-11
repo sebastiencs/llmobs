@@ -1,0 +1,10 @@
+{
+  "description": "Drops the middle of a message list and inserts one placeholder for that run.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Truncation"
+  ],
+  "settings": {
+    "max_attribute_bytes": 273
+  }
+}

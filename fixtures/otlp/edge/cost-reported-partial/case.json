@@ -1,0 +1,7 @@
+{
+  "description": "A reported input cost with no output or total leaves those columns null.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Cost computation"
+  ]
+}

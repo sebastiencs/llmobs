@@ -1,0 +1,13 @@
+{
+  "description": "A Langfuse generation converts OpenAI messages and adds cache back onto an exclusive usage_details input.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Token semantics",
+    "02 § Cost computation",
+    "02 § Normalization rules"
+  ],
+  "notes": "hand-written from langfuse 5.2.0 (tracer langfuse-sdk). Re-check against a B2 capture. usage_details.input excludes input_cached_tokens, so the input column is 140."
+}

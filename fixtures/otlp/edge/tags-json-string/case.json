@@ -1,0 +1,8 @@
+{
+  "description": "Tags read from a JSON-array string, and a comma-separated string that stays in attributes.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Context fields",
+    "02 § Normalization rules / 2"
+  ]
+}

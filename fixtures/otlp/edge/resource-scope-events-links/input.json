@@ -1,0 +1,85 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "api"
+            }
+          },
+          {
+            "key": "host.id",
+            "value": {
+              "intValue": "7"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "demo",
+            "version": "1.2.3",
+            "attributes": [
+              {
+                "key": "scope.flag",
+                "value": {
+                  "stringValue": "yes"
+                }
+              }
+            ]
+          },
+          "spans": [
+            {
+              "traceId": "f20a0000000000000000000000000001",
+              "spanId": "f20a000000000001",
+              "name": "call",
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "status": {
+                "code": 2,
+                "message": "failed"
+              },
+              "events": [
+                {
+                  "timeUnixNano": "1767225590000000000",
+                  "name": "start"
+                },
+                {
+                  "timeUnixNano": "1767225590000000000",
+                  "name": "note",
+                  "attributes": [
+                    {
+                      "key": "msg",
+                      "value": {
+                        "stringValue": "hello"
+                      }
+                    },
+                    {
+                      "key": "n",
+                      "value": {
+                        "intValue": "2"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "links": [
+                {
+                  "traceId": "0102",
+                  "spanId": "f20a0000000000bb"
+                },
+                {
+                  "traceId": "f20a00000000000000000000000000aa",
+                  "spanId": "f20a0000000000aa"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

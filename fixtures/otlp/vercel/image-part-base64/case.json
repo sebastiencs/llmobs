@@ -1,0 +1,13 @@
+{
+  "description": "An image part with raw base64 becomes a blob and is extracted as media.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Input / output",
+    "02 § Normalization rules",
+    "02 § Media extraction"
+  ],
+  "notes": "hand-written from the ai package telemetry (getTracer(\"ai\")); re-check against a B2 capture",
+  "settings": {
+    "media_min_bytes": 8
+  }
+}

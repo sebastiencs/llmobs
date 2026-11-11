@@ -1,0 +1,27 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "f77a0000000000000000000000000001",
+      "span_id": "f77a000000000001",
+      "name": "chain",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "attributes": {
+        "gen_ai.usage.input_tokens": "99",
+        "gen_ai.usage.output_tokens": "5",
+        "llmobs.span.kind": "chain"
+      },
+      "conventions": [
+        "llmobs",
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

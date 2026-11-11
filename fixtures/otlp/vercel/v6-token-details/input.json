@@ -1,0 +1,69 @@
+{
+  "resourceSpans": [
+    {
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "f72a0000000000000000000000000001",
+              "spanId": "f72a000000000001",
+              "name": "v6",
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "ai.operationId",
+                  "value": {
+                    "stringValue": "ai.generateText.doGenerate"
+                  }
+                },
+                {
+                  "key": "ai.model.id",
+                  "value": {
+                    "stringValue": "custom-model"
+                  }
+                },
+                {
+                  "key": "ai.model.provider",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "ai.usage.inputTokenDetails.noCacheTokens",
+                  "value": {
+                    "intValue": "100"
+                  }
+                },
+                {
+                  "key": "ai.usage.inputTokenDetails.cacheReadTokens",
+                  "value": {
+                    "intValue": "20"
+                  }
+                },
+                {
+                  "key": "ai.usage.inputTokenDetails.cacheWriteTokens",
+                  "value": {
+                    "intValue": "10"
+                  }
+                },
+                {
+                  "key": "ai.usage.outputTokens",
+                  "value": {
+                    "intValue": "40"
+                  }
+                },
+                {
+                  "key": "ai.usage.outputTokenDetails.reasoningTokens",
+                  "value": {
+                    "intValue": "15"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

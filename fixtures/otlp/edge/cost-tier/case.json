@@ -1,0 +1,7 @@
+{
+  "description": "Input at the tier threshold uses the tier's input price and the row's output price.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Cost computation"
+  ]
+}

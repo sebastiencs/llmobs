@@ -2276,10 +2276,13 @@ dependencies = [
  "base64 0.23.1",
  "llmobs-core",
  "opentelemetry-proto",
+ "proptest",
+ "prost",
  "regex",
  "serde",
  "serde_json",
  "sha2",
+ "thiserror",
 ]
 
 [[package]]

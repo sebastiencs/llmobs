@@ -1,0 +1,8 @@
+{
+  "description": "An end before the start, and a zero end, are clamped to the start and kept.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Normalization rules / 17",
+    "02 § Normalization rules / 18"
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fd3a0000000000000000000000000001",
+      "span_id": "fd3a000000000001",
+      "name": "answer",
+      "span_kind": "span",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "error",
+      "status_message": "rate limited",
+      "service_name": "langfuse-app",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"from trace\"}]}]",
+      "input_format": "messages",
+      "input_preview": "from trace",
+      "attributes": {
+        "langfuse.observation.level": "ERROR",
+        "langfuse.observation.status_message": "rate limited",
+        "langfuse.observation.type": "span"
+      },
+      "scope_name": "langfuse-sdk",
+      "scope_version": "5.2.0",
+      "conventions": [
+        "langfuse"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

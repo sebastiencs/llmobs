@@ -1,0 +1,11 @@
+{
+  "description": "A Traceloop workflow, task, and tool span store entity JSON as-is and copy the workflow name into metadata.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Context fields",
+    "02 § Normalization rules"
+  ],
+  "notes": "hand-written from traceloop-sdk 0.63.0 (tracer traceloop.tracer, get_tracer with no version). entity.input is the SDK {args, kwargs} JSON. entity.output is stored without unwrapping an output key. workflow and task map to chain. Re-check against a B2 capture."
+}

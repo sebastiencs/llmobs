@@ -1,0 +1,45 @@
+{
+  "resourceSpans": [
+    {
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "f82a0000000000000000000000000001",
+              "spanId": "f82a000000000001",
+              "name": "chat",
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "events": [
+                {
+                  "timeUnixNano": "1767225590000000000",
+                  "name": "gen_ai.client.inference.operation.details",
+                  "attributes": [
+                    {
+                      "key": "gen_ai.input.messages",
+                      "value": {
+                        "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"ping\"}]}]"
+                      }
+                    },
+                    {
+                      "key": "gen_ai.output.messages",
+                      "value": {
+                        "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"pong\"}]}]"
+                      }
+                    },
+                    {
+                      "key": "gen_ai.system_instructions",
+                      "value": {
+                        "stringValue": "[{\"type\":\"text\",\"content\":\"rules\"}]"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

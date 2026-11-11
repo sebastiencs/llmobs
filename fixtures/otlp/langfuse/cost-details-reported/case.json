@@ -1,0 +1,10 @@
+{
+  "description": "Langfuse cost_details is a reported cost and the price table is not used.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Cost computation",
+    "02 § Mapping tables / Span kind",
+    "02 § Normalization rules"
+  ],
+  "notes": "hand-written from langfuse 5.2.0 (tracer langfuse-sdk). Re-check against a B2 capture. D109: input and output are reported, and total is their sum."
+}

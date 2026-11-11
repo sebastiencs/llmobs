@@ -1,0 +1,36 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fc4a0000000000000000000000000001",
+      "span_id": "fc4a000000000001",
+      "name": "openai.chat",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "mixed-app",
+      "operation": "chat",
+      "cost_source": "none",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"from genai\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"genai reply\"}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "input_preview": "from genai",
+      "output_preview": "genai reply",
+      "attributes": {
+        "gen_ai.operation.name": "chat"
+      },
+      "scope_name": "opentelemetry.instrumentation.openai.v1",
+      "scope_version": "0.63.0",
+      "conventions": [
+        "genai",
+        "openllmetry"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

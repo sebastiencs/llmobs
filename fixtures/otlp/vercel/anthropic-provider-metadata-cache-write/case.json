@@ -1,0 +1,11 @@
+{
+  "description": "Before v6, Anthropic cache-write tokens are only in ai.response.providerMetadata, and the input count is exclusive.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Input / output",
+    "02 § Normalization rules",
+    "02 § Token semantics",
+    "02 § Cost computation"
+  ],
+  "notes": "pinned by hand from Langfuse's providerMetadata reading; re-check against a B2 capture (D113)"
+}

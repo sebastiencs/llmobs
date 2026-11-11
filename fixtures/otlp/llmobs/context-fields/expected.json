@@ -1,0 +1,46 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "f60a0000000000000000000000000001",
+      "span_id": "f60a000000000001",
+      "name": "context",
+      "span_kind": "span",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "session_id": "session-1",
+      "user_id": "user-1",
+      "environment": "staging",
+      "release": "1.2.3",
+      "tags": [
+        "billing",
+        "eu"
+      ],
+      "metadata": {
+        "feature": "search",
+        "llmobs.dataset_item_id": "item-1",
+        "llmobs.experiment_id": "exp-1",
+        "n": "2"
+      },
+      "attributes": {
+        "llmobs.dataset_item.id": "item-1",
+        "llmobs.environment": "staging",
+        "llmobs.experiment.id": "exp-1",
+        "llmobs.metadata.feature": "search",
+        "llmobs.metadata.n": "2",
+        "llmobs.release": "1.2.3",
+        "llmobs.session.id": "session-1",
+        "llmobs.tags": "[\"billing\",\"eu\"]",
+        "llmobs.user.id": "user-1"
+      },
+      "conventions": [
+        "llmobs"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

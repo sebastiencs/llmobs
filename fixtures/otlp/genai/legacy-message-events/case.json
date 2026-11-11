@@ -1,0 +1,8 @@
+{
+  "description": "Legacy GenAI message events become input messages, and gen_ai.choice becomes the output.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Input and output"
+  ],
+  "notes": "shape as emitted by Strands/Logfire bridges; re-check against a B2 capture"
+}

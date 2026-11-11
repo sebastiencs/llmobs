@@ -1,0 +1,93 @@
+{
+  "resourceSpans": [
+    {
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "f83a0000000000000000000000000001",
+              "spanId": "f83a000000000001",
+              "name": "chat",
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "events": [
+                {
+                  "timeUnixNano": "1767225590000000000",
+                  "name": "gen_ai.system.message",
+                  "attributes": [
+                    {
+                      "key": "content",
+                      "value": {
+                        "stringValue": "be brief"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "timeUnixNano": "1767225590000000000",
+                  "name": "gen_ai.user.message",
+                  "attributes": [
+                    {
+                      "key": "content",
+                      "value": {
+                        "stringValue": "hi"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "timeUnixNano": "1767225590000000000",
+                  "name": "gen_ai.assistant.message",
+                  "attributes": [
+                    {
+                      "key": "content",
+                      "value": {
+                        "stringValue": "calling"
+                      }
+                    },
+                    {
+                      "key": "tool_calls",
+                      "value": {
+                        "stringValue": "[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{}\"}}]"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "timeUnixNano": "1767225590000000000",
+                  "name": "gen_ai.tool.message",
+                  "attributes": [
+                    {
+                      "key": "tool_call_id",
+                      "value": {
+                        "stringValue": "call_1"
+                      }
+                    },
+                    {
+                      "key": "content",
+                      "value": {
+                        "stringValue": "found"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "timeUnixNano": "1767225590000000000",
+                  "name": "gen_ai.choice",
+                  "attributes": [
+                    {
+                      "key": "content",
+                      "value": {
+                        "stringValue": "done"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

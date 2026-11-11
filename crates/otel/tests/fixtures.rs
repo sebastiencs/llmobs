@@ -54,6 +54,7 @@ fn case_json() {
             ));
         }
         check_media_bounds(&case, &mut failures);
+        check_retention(&case, &mut failures);
     }
     finish(&failures);
 }
@@ -242,22 +243,49 @@ fn prices() {
         for (row, pattern) in rows.iter().zip(compiled.iter()) {
             if pattern.is_match(model) {
                 let key = row.provider.clone().unwrap_or_default();
-                hits.entry(key).or_default().push(row.model_name.as_str());
+                hits.entry(key)
+                    .or_default()
+                    .push(row.match_pattern.as_str());
             }
         }
-        for (provider, names) in hits {
-            if names.len() > 1 {
+        for (provider, patterns) in hits {
+            let mut unique = patterns;
+            unique.sort_unstable();
+            unique.dedup();
+            if unique.len() > 1 {
                 let provider = if provider.is_empty() {
                     "null".to_owned()
                 } else {
                     provider
                 };
                 failures.push(format!(
-                    "prices.json: provider {provider} has {} rows matching model {model}: {}",
-                    names.len(),
-                    names.join(", ")
+                    "prices.json: provider {provider} has {} patterns matching model {model}: {}",
+                    unique.len(),
+                    unique.join(", ")
                 ));
             }
+        }
+    }
+    for row in &rows {
+        check_price_values(&row.model_name, "row", row_prices(row), &mut failures);
+        let Some(tiers) = &row.tiers else {
+            continue;
+        };
+        let mut mins = BTreeSet::new();
+        for tier in tiers {
+            if tier.min_input_tokens < 0 {
+                failures.push(format!(
+                    "prices.json: {}: tier min_input_tokens is negative",
+                    row.model_name
+                ));
+            }
+            if !mins.insert(tier.min_input_tokens) {
+                failures.push(format!(
+                    "prices.json: {}: two tiers share min_input_tokens {}",
+                    row.model_name, tier.min_input_tokens
+                ));
+            }
+            check_price_values(&row.model_name, "tier", tier_prices(tier), &mut failures);
         }
     }
     finish(&failures);
@@ -702,6 +730,33 @@ fn compare_cost(
 }
 
 fn recompute(span: &Span, row: &PriceRow) -> (Option<f64>, Option<f64>, Option<f64>) {
+    let tokens = span.input_tokens.unwrap_or(0).max(0);
+    let tier = row.tiers.as_ref().and_then(|tiers| {
+        tiers
+            .iter()
+            .fold(None, |best: Option<&llmobs_otel::PriceTier>, tier| {
+                if tier.min_input_tokens > tokens {
+                    return best;
+                }
+                match best {
+                    Some(current) if current.min_input_tokens >= tier.min_input_tokens => {
+                        Some(current)
+                    }
+                    _ => Some(tier),
+                }
+            })
+    });
+    let price_input = tier.and_then(|tier| tier.price_input).or(row.price_input);
+    let price_output = tier.and_then(|tier| tier.price_output).or(row.price_output);
+    let price_cache_read = tier
+        .and_then(|tier| tier.price_cache_read)
+        .or(row.price_cache_read);
+    let price_cache_write = tier
+        .and_then(|tier| tier.price_cache_write)
+        .or(row.price_cache_write);
+    let price_reasoning = tier
+        .and_then(|tier| tier.price_reasoning)
+        .or(row.price_reasoning);
     let input = span.input_tokens.unwrap_or(0) as f64;
     let output = span.output_tokens.unwrap_or(0) as f64;
     let cache_read = span.cache_read_tokens.unwrap_or(0) as f64;
@@ -710,17 +765,17 @@ fn recompute(span: &Span, row: &PriceRow) -> (Option<f64>, Option<f64>, Option<f
     let uncached = (input - cache_read - cache_write).max(0.0);
     let non_reasoning = (output - reasoning).max(0.0);
     let cost_input = priced_part(&[
-        charge(uncached, row.price_input),
-        charge(cache_read, row.price_cache_read),
-        charge(cache_write, row.price_cache_write),
+        charge(uncached, price_input),
+        charge(cache_read, price_cache_read),
+        charge(cache_write, price_cache_write),
     ])
     .map(|cost| cost / 1e6);
     if span.span_kind == SpanKind::Embedding {
         return (cost_input, None, cost_input);
     }
-    let reasoning_price = row.price_reasoning.or(row.price_output);
+    let reasoning_price = price_reasoning.or(price_output);
     let cost_output = priced_part(&[
-        charge(non_reasoning, row.price_output),
+        charge(non_reasoning, price_output),
         charge(reasoning, reasoning_price),
     ])
     .map(|cost| cost / 1e6);
@@ -765,8 +820,9 @@ fn pick_price<'a>(
         .collect();
     matches.sort_by(|left, right| {
         right
-            .valid_from
-            .cmp(&left.valid_from)
+            .scope
+            .cmp(&left.scope)
+            .then(right.valid_from.cmp(&left.valid_from))
             .then(right.match_pattern.len().cmp(&left.match_pattern.len()))
     });
     matches.first().copied()
@@ -783,7 +839,7 @@ fn price_row_matches(
         return false;
     }
     if let Some(row_provider) = &row.provider
-        && Some(row_provider.as_str()) != provider
+        && provider.is_some_and(|span_provider| span_provider != row_provider)
     {
         return false;
     }
@@ -820,9 +876,18 @@ fn input_size_failure(case_label: &str, len: u64) -> Option<String> {
 fn check_input_times(case: &Case, failures: &mut Vec<String>) {
     let case_label = label(case);
     let ingest = case.meta.context.ingest_time;
+    // Rejected spans are absent from expected.json. Only accepted spans must
+    // sit in the 10-second window (fixtures README).
+    let accepted = case
+        .expected
+        .spans
+        .iter()
+        .map(|span| (span.trace_id.to_hex(), span.span_id.to_hex()))
+        .collect::<BTreeSet<_>>();
     for resource in &case.input.resource_spans {
         for scope in &resource.scope_spans {
             for span in &scope.spans {
+                let trace_id = hex_encode(&span.trace_id);
                 let span_id = hex_encode(&span.span_id);
                 let (Some(start), Some(end)) = (
                     i64::try_from(span.start_time_unix_nano).ok(),
@@ -833,9 +898,21 @@ fn check_input_times(case: &Case, failures: &mut Vec<String>) {
                     ));
                     continue;
                 };
+                if !accepted.contains(&(trace_id, span_id.clone())) {
+                    continue;
+                }
                 check_span_window(&case_label, &span_id, start, end, ingest, failures);
             }
         }
+    }
+}
+
+fn check_retention(case: &Case, failures: &mut Vec<String>) {
+    if case.meta.settings.retention_days == Some(0) {
+        failures.push(format!(
+            "{}: retention_days must be an integer >= 1",
+            label(case)
+        ));
     }
 }
 
@@ -1128,6 +1205,43 @@ fn duplicate_media_sha256_fails() {
 }
 
 #[test]
+fn retention_days_zero_fails() {
+    let mut case = empty_case();
+    case.meta.settings.retention_days = Some(0);
+    let mut failures = Vec::new();
+    check_retention(&case, &mut failures);
+    assert_eq!(
+        failures,
+        vec!["edge/sample: retention_days must be an integer >= 1".to_owned()]
+    );
+}
+
+#[test]
+fn rejected_spans_skip_the_ingest_window() {
+    use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span};
+    let mut case = empty_case();
+    case.input.resource_spans.push(ResourceSpans {
+        scope_spans: vec![ScopeSpans {
+            spans: vec![Span {
+                trace_id: vec![0x11; 16],
+                span_id: vec![0x22; 8],
+                start_time_unix_nano: 0,
+                end_time_unix_nano: 0,
+                ..Span::default()
+            }],
+            ..ScopeSpans::default()
+        }],
+        ..ResourceSpans::default()
+    });
+    let mut failures = Vec::new();
+    check_input_times(&case, &mut failures);
+    assert!(
+        failures.is_empty(),
+        "a span missing from expected.json is rejected and not window-checked: {failures:?}"
+    );
+}
+
+#[test]
 fn media_min_bytes_above_max_fails() {
     let mut case = empty_case();
     case.meta.settings.media_min_bytes = 32;
@@ -1258,6 +1372,7 @@ fn empty_case() -> Case {
                 max_attribute_bytes: 8,
                 media_min_bytes: 1,
                 media_max_bytes: 10,
+                retention_days: None,
             },
             context: Context {
                 project_id,
@@ -1312,6 +1427,7 @@ fn null_reasoning_price_uses_the_output_price() {
 
 fn sample_price() -> PriceRow {
     PriceRow {
+        scope: llmobs_otel::PriceScope::Builtin,
         model_name: "demo".to_owned(),
         match_pattern: "demo".to_owned(),
         provider: None,
@@ -1322,5 +1438,42 @@ fn sample_price() -> PriceRow {
         price_cache_write: Some(3.75),
         price_reasoning: None,
         tiers: None,
+    }
+}
+
+fn row_prices(row: &PriceRow) -> [Option<f64>; 5] {
+    [
+        row.price_input,
+        row.price_output,
+        row.price_cache_read,
+        row.price_cache_write,
+        row.price_reasoning,
+    ]
+}
+
+fn tier_prices(tier: &llmobs_otel::PriceTier) -> [Option<f64>; 5] {
+    [
+        tier.price_input,
+        tier.price_output,
+        tier.price_cache_read,
+        tier.price_cache_write,
+        tier.price_reasoning,
+    ]
+}
+
+fn check_price_values(
+    model: &str,
+    kind: &str,
+    prices: [Option<f64>; 5],
+    failures: &mut Vec<String>,
+) {
+    for price in prices {
+        if let Some(price) = price
+            && (!price.is_finite() || price < 0.0)
+        {
+            failures.push(format!(
+                "prices.json: {model} {kind} has a negative or non-finite price"
+            ));
+        }
     }
 }

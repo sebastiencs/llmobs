@@ -1,0 +1,46 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fa0a0000000000000000000000000001",
+      "span_id": "fa0a000000000001",
+      "name": "ChatCompletion",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "openinference-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini",
+      "input_tokens": 10,
+      "output_tokens": 4,
+      "total_tokens": 14,
+      "cost_input": 0.00001,
+      "cost_output": 0.000016,
+      "cost_total": 0.000026,
+      "cost_source": "computed",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Describe this\"},{\"type\":\"uri\",\"modality\":\"image\",\"uri\":\"https://example.com/cat.png\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"A cat\"}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "input_preview": "Describe this",
+      "output_preview": "A cat",
+      "attributes": {
+        "llm.model_name": "gpt-4o-mini",
+        "llm.provider": "openai",
+        "llm.token_count.completion": "4",
+        "llm.token_count.prompt": "10",
+        "openinference.span.kind": "LLM"
+      },
+      "scope_name": "openinference.instrumentation.openai",
+      "scope_version": "0.1.69",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

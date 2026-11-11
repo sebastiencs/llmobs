@@ -1,0 +1,7 @@
+{
+  "description": "Cache-write tokens with a null unit price null the input cost and the total.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Cost computation"
+  ]
+}

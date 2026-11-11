@@ -1,0 +1,10 @@
+{
+  "description": "Retriever document attributes become an output JSON array in index order, and the query stays text.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Input / output",
+    "02 § Normalization rules",
+    "02 § Mapping tables / Span kind"
+  ],
+  "notes": "hand-written from openinference-instrumentation-llama-index; re-check against a B2 capture"
+}

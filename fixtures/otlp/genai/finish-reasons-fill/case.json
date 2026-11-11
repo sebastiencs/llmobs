@@ -1,0 +1,7 @@
+{
+  "description": "A missing output finish reason is filled from gen_ai.response.finish_reasons, which stays a consumed attribute.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Normalization rules / 16"
+  ]
+}

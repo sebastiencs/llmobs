@@ -1,0 +1,40 @@
+{
+  "resourceSpans": [
+    {
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "f11a0000000000000000000000000001",
+              "spanId": "f11a000000000001",
+              "name": "year-1999",
+              "startTimeUnixNano": "946598400000000000",
+              "endTimeUnixNano": "946598401000000000"
+            },
+            {
+              "traceId": "f11a0000000000000000000000000002",
+              "spanId": "f11a000000000002",
+              "name": "eight-days",
+              "startTimeUnixNano": "1766534400000000000",
+              "endTimeUnixNano": "1766534401000000000"
+            },
+            {
+              "traceId": "f11a0000000000000000000000000003",
+              "spanId": "f11a000000000003",
+              "name": "plus-25h",
+              "startTimeUnixNano": "1767315600000000000",
+              "endTimeUnixNano": "1767315601000000000"
+            },
+            {
+              "traceId": "f11a0000000000000000000000000004",
+              "spanId": "f11a000000000004",
+              "name": "kept",
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

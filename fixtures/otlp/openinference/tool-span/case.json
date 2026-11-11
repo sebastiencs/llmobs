@@ -1,0 +1,10 @@
+{
+  "description": "A tool span stores input.value and output.value. tool.name and tool.parameters stay in attributes.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Input / output",
+    "02 § Normalization rules",
+    "02 § Mapping tables / Span kind"
+  ],
+  "notes": "hand-written from openinference-instrumentation-llama-index; re-check against a B2 capture"
+}

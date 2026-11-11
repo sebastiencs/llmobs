@@ -1,0 +1,7 @@
+{
+  "description": "An embedding span prices input only and leaves the output cost null.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Cost computation"
+  ]
+}

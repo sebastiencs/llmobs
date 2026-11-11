@@ -1,0 +1,10 @@
+{
+  "description": "A chain span stores input.value as JSON and output.value as text from the mime types.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Input / output",
+    "02 § Normalization rules",
+    "02 § Mapping tables / Span kind"
+  ],
+  "notes": "hand-written from openinference-instrumentation-langchain; re-check against a B2 capture"
+}

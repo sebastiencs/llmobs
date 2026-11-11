@@ -111,6 +111,8 @@ pub struct Settings {
     pub media_min_bytes: u64,
     /// `media.max_bytes`.
     pub media_max_bytes: u64,
+    /// Project retention. `None` means the project keeps spans forever.
+    pub retention_days: Option<u32>,
 }
 
 /// Project and clock used while normalizing the case.
@@ -146,32 +148,8 @@ pub struct ExpectedMedia {
     pub size_bytes: u64,
 }
 
-/// One row of `prices.json`. Prices are USD per 1M tokens.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PriceRow {
-    /// Display name.
-    pub model_name: String,
-    /// Anchored, case-insensitive regex matched against the span model.
-    pub match_pattern: String,
-    /// When set, the row matches only this provider.
-    pub provider: Option<String>,
-    /// Row applies at span start times at or after this instant.
-    #[serde(with = "llmobs_core::time_serde")]
-    pub valid_from: i64,
-    /// USD per 1M uncached input tokens.
-    pub price_input: Option<f64>,
-    /// USD per 1M output tokens. Null on embedding-only rows.
-    pub price_output: Option<f64>,
-    /// USD per 1M cache-read tokens.
-    pub price_cache_read: Option<f64>,
-    /// USD per 1M cache-write tokens.
-    pub price_cache_write: Option<f64>,
-    /// USD per 1M reasoning tokens. Null means use `price_output`.
-    pub price_reasoning: Option<f64>,
-    /// Long-context tiers. Fixtures ship `null`.
-    pub tiers: Option<serde_json::Value>,
-}
+/// One row of `prices.json`. The normalizer's [`llmobs_otel::PriceRow`].
+pub use llmobs_otel::PriceRow;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -195,6 +173,7 @@ struct SettingsFile {
     max_attribute_bytes: Option<u64>,
     media_min_bytes: Option<u64>,
     media_max_bytes: Option<u64>,
+    retention_days: Option<u32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -343,6 +322,7 @@ fn load_meta(path: &Path) -> Result<CaseMeta, String> {
                 .settings
                 .media_max_bytes
                 .unwrap_or(DEFAULT_MEDIA_MAX_BYTES),
+            retention_days: file.settings.retention_days,
         },
         context: Context {
             project_id: file.context.project_id.unwrap_or(defaults.project_id),

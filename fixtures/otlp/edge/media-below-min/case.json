@@ -1,0 +1,7 @@
+{
+  "description": "A blob under media_min_bytes stays inline and creates no media reference.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Media extraction"
+  ]
+}
