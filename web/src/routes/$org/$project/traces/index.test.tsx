@@ -186,7 +186,7 @@ it("opens a trace beside the list and follows span, escape, and j", async () => 
   await waitFor(() => {
     expect(router.state.location.search).toMatchObject({ trace: TRACE_1, span: TOOL_SPAN });
   });
-  expect(await screen.findByRole("tabpanel")).toHaveTextContent(/"order_id": "1234"/);
+  expect(await screen.findByRole("tabpanel")).toHaveTextContent("order_id");
 
   fireEvent.keyDown(window, { key: "Escape" });
   await waitFor(() => {

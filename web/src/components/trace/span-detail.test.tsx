@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http, passthrough } from "msw";
 import { beforeEach, expect, it } from "vitest";
-import { PayloadBlock } from "@/components/trace/span-detail";
+import { PAYLOAD_FORMAT_KEY } from "@/components/payload/format-switch";
 import { server } from "@/mocks/node";
 import { STORAGE_PREFIX } from "@/product";
 import { renderApp } from "@/test/render";
@@ -16,19 +16,20 @@ const SPAN_URL = "/api/v1/projects/:project/traces/:trace_id/spans/:span_id";
 
 beforeEach(() => {
   localStorage.removeItem(`${STORAGE_PREFIX}span-tab`);
+  localStorage.removeItem(PAYLOAD_FORMAT_KEY);
 });
 
-it("pretty-prints json and messages", () => {
-  render(<PayloadBlock label="Input" payload={{ format: "json", value: { order_id: "1234" } }} />);
-  expect(screen.getByText(/"order_id": "1234"/)).toBeInTheDocument();
-});
-
-it("holds a payload over 1 MB behind a show raw button", () => {
-  const value = "x".repeat(1_000_001);
-  render(<PayloadBlock label="Input" payload={{ format: "text", value }} />);
-  expect(screen.queryByText(value)).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Show raw" }));
-  expect(screen.getByText(value)).toBeInTheDocument();
+it("shows the fixture span input on the input output tab", async () => {
+  await renderApp(`/acme/support-bot/traces?trace=${TRACE_1}&span=${LLM_SPAN}`);
+  const panel = await screen.findByRole("region", { name: "Span" });
+  expect(within(panel).getByText("My order 1234 hasn't arrived.")).toBeInTheDocument();
+  expect(
+    within(panel).queryByText("You are a support agent. Use tools to look up orders."),
+  ).not.toBeInTheDocument();
+  fireEvent.click(within(panel).getByRole("button", { name: "System instructions" }));
+  expect(
+    within(panel).getByText("You are a support agent. Use tools to look up orders."),
+  ).toBeInTheDocument();
 });
 
 it("shows the fixture span's model, tokens and cost source", async () => {

@@ -2,6 +2,7 @@ import { Plus } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import type { Schema } from "@/api/types";
 import { CopyButton } from "@/components/copy-button";
+import { JsonView } from "@/components/payload/json-view";
 import {
   attributeEntries,
   EventsList,
@@ -146,14 +147,14 @@ function KvRow({
   onAddFilter?: (conjunct: string) => void;
 }) {
   const text = valueText(value);
-  const json = text.includes("\n");
+  const json = jsonContainer(value);
   return (
     <li className="grid min-h-6 grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto] items-center gap-2 border-b">
       <span className="truncate font-mono text-xs">{name}</span>
-      {json ? (
-        <pre className="overflow-auto font-mono text-xs whitespace-pre-wrap">{text}</pre>
-      ) : (
+      {json === undefined ? (
         <span className="truncate font-mono text-xs">{text}</span>
+      ) : (
+        <JsonView value={json} />
       )}
       <span className="flex items-center">
         {conjunct && onAddFilter ? (
@@ -177,6 +178,24 @@ function matches(key: string, value: unknown, query: string): boolean {
     return true;
   }
   return key.toLowerCase().includes(query) || valueText(value).toLowerCase().includes(query);
+}
+
+function jsonContainer(value: unknown): unknown {
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (parsed !== null && typeof parsed === "object") {
+        return parsed;
+      }
+    } catch {
+      return undefined;
+    }
+    return undefined;
+  }
+  if (value !== null && typeof value === "object") {
+    return value;
+  }
+  return undefined;
 }
 
 function mapConjunct(column: MapColumn, key: string, value: string): string {
