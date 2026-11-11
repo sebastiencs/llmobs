@@ -7,7 +7,7 @@ U7 built the trace view's frame:
 - the combined tree and timeline grid;
 - a span detail with a plain Input/Output tab.
 
-These sub-phases complete it as spec 11 § Trace view describes, with D122's Transcript mode. Everything here lives in `web/src/components/trace/` and `web/src/components/payload/`. The traces page split, the spans page split and the full page (U19) render the same `TraceView`.
+These sub-phases complete it as spec 11 § Trace view describes, with D126's Transcript mode. Everything here lives in `web/src/components/trace/` and `web/src/components/payload/`. The traces page split, the spans page split and the full page (U19) render the same `TraceView`.
 
 ---
 
@@ -215,11 +215,11 @@ The Chat tab is the default tab when the span has `messages` input or output (U1
 
 **Commit:** `web: trace header, scores tab and trace page`
 
-### Scores tab (read-only, D119)
+### Scores tab (read-only, D123)
 
 - `list_scores` with `trace_id` (and `span_id` when a span is selected; the trace's own scores when the root is selected). Show both groups: "On this span" and "On this trace".
 - **A table:** name, value (numeric with 3 decimals, boolean ✓/✗, categorical or text value), source, reason (truncated, full on hover), author or evaluator (whichever is present), updated time. Sorted by name.
-- **Empty state:** "No scores". The annotation form is not in this plan (D119).
+- **Empty state:** "No scores". The annotation form is not in this plan (D123).
 
 ### `TraceHeader` (replaces U7's header)
 
@@ -253,7 +253,7 @@ The Chat tab is the default tab when the span has `messages` input or output (U1
 
 **Commit:** `web: transcript mode for agent traces`
 
-D122. A segmented control in the trace toolbar, **Tree | Transcript**, writes `mode`. In Transcript mode, the left pane shows the transcript instead of the tree grid. The span detail pane stays, and clicking a turn selects its span.
+D126. A segmented control in the trace toolbar, **Tree | Transcript**, writes `mode`. In Transcript mode, the left pane shows the transcript instead of the tree grid. The span detail pane stays, and clicking a turn selects its span.
 
 ### `lib/transcript.ts` (pure)
 

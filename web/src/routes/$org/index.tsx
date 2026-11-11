@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { FolderOpen, Loader2 } from "lucide-react";
 import { $api } from "@/api/client";
 import { projectListInit, projectListOptions } from "@/api/queries";
@@ -49,7 +49,7 @@ function OrgHome() {
   const rows = projects.data.pages.flatMap((page) => page.data);
 
   return (
-    <div className="flex flex-col gap-6">
+    <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 overflow-auto px-4 py-6">
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-medium">{membership?.name ?? org}</h1>
         <h2 className="text-sm text-muted-foreground">Projects</h2>
@@ -57,7 +57,7 @@ function OrgHome() {
       {rows.length === 0 ? (
         <EmptyState icon={FolderOpen} title="No projects yet" />
       ) : (
-        <ProjectTable rows={rows} />
+        <ProjectTable org={org} rows={rows} />
       )}
       {projects.hasNextPage ? (
         <Button
@@ -73,11 +73,11 @@ function OrgHome() {
           Load more
         </Button>
       ) : null}
-    </div>
+    </main>
   );
 }
 
-function ProjectTable({ rows }: { rows: Schema<"Project">[] }) {
+function ProjectTable({ org, rows }: { org: string; rows: Schema<"Project">[] }) {
   return (
     <Table aria-label="Projects">
       <TableHeader>
@@ -91,8 +91,15 @@ function ProjectTable({ rows }: { rows: Schema<"Project">[] }) {
       <TableBody>
         {rows.map((project) => (
           <TableRow key={project.id}>
-            {/* The traces track links the name to `/$org/$project/traces`. */}
-            <TableCell>{project.name}</TableCell>
+            <TableCell>
+              <Link
+                to="/$org/$project/traces"
+                params={{ org, project: project.slug }}
+                className="focus-ring rounded-sm hover:underline"
+              >
+                {project.name}
+              </Link>
+            </TableCell>
             <TableCell className="font-mono">{project.slug}</TableCell>
             <TableCell>
               <Badge variant="secondary">{roleLabel(project.role)}</Badge>
@@ -107,12 +114,12 @@ function ProjectTable({ rows }: { rows: Schema<"Project">[] }) {
 
 function ProjectsPending() {
   return (
-    <div className="flex flex-col gap-3">
+    <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-3 overflow-auto px-4 py-6">
       <Skeleton className="h-8 w-40" />
       <Skeleton className="h-10 w-full" />
       <Skeleton className="h-10 w-full" />
       <Skeleton className="h-10 w-full" />
-    </div>
+    </main>
   );
 }
 
