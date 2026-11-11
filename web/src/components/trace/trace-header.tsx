@@ -52,11 +52,13 @@ export function TraceHeader({
           <div className="ml-auto flex shrink-0 items-center gap-1">
             {live ? (
               <span className="inline-flex items-center gap-1">
-                <span
-                  role="status"
-                  aria-label={live.status}
-                  className={cn("size-2 shrink-0 rounded-full", LIVE_DOT[live.status])}
-                />
+                <span role="status" className="inline-flex">
+                  <span
+                    aria-hidden="true"
+                    className={cn("size-2 shrink-0 rounded-full", LIVE_DOT[live.status])}
+                  />
+                  <span className="sr-only">{live.status}</span>
+                </span>
                 <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
                   Live
                 </Badge>
@@ -104,7 +106,7 @@ export function TraceHeader({
               <Link
                 to="/$org/$project/sessions/$sessionId"
                 params={{ org, project, sessionId: trace.session_id }}
-                className="text-foreground underline-offset-2 hover:underline"
+                className="focus-ring rounded-sm text-foreground underline-offset-2 hover:underline"
               >
                 {trace.session_id}
               </Link>
@@ -116,7 +118,7 @@ export function TraceHeader({
               <Link
                 to="/$org/$project/users/$userId"
                 params={{ org, project, userId: trace.user_id }}
-                className="text-foreground underline-offset-2 hover:underline"
+                className="focus-ring rounded-sm text-foreground underline-offset-2 hover:underline"
               >
                 {trace.user_id}
               </Link>

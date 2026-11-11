@@ -25,7 +25,12 @@ export function MediaChip({
   );
   if (!href) return body;
   return (
-    <a href={href} target="_blank" rel="noreferrer">
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="rounded-sm outline-none focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2 focus-visible:outline-solid"
+    >
       {body}
     </a>
   );

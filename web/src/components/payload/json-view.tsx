@@ -70,6 +70,10 @@ export function JsonView({
     count: virtual ? visible.length : 0,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ROW_HEIGHT,
+    measureElement: (element) => {
+      const height = element.getBoundingClientRect().height;
+      return height > 0 ? height : ROW_HEIGHT;
+    },
     overscan: 12,
   });
 
@@ -130,7 +134,7 @@ export function JsonView({
         />
       </div>
       {virtual ? (
-        <div ref={scrollRef} className="h-80 overflow-auto">
+        <div ref={scrollRef} data-scroll-container className="h-80 overflow-auto">
           <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
             {virtualizer.getVirtualItems().map((item) => {
               const row = rowAt(item.index);

@@ -385,7 +385,7 @@ export function TreeGrid({
         aria-rowcount={rows.length + 1}
         aria-colcount={5}
         tabIndex={0}
-        className="relative flex min-h-0 flex-1 flex-col outline-none"
+        className="relative flex min-h-0 flex-1 flex-col outline-none focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 focus-visible:outline-solid"
         onKeyDown={onKeyDown}
         onPointerMove={onPointerMove}
         onPointerLeave={() => setNeedle(null)}

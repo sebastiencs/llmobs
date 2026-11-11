@@ -95,7 +95,7 @@ function ProjectTable({ org, rows }: { org: string; rows: Schema<"Project">[] })
               <Link
                 to="/$org/$project/traces"
                 params={{ org, project: project.slug }}
-                className="hover:underline"
+                className="focus-ring rounded-sm hover:underline"
               >
                 {project.name}
               </Link>

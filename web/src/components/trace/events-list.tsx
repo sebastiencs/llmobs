@@ -121,7 +121,7 @@ export function LinksList({
                 to="/$org/$project/traces"
                 params={{ org, project }}
                 search={{ trace: link.trace_id, span: link.span_id }}
-                className="underline"
+                className="focus-ring rounded-sm underline"
               >
                 Open trace
               </Link>

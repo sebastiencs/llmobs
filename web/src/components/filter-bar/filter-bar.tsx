@@ -137,7 +137,7 @@ function Chips({
           >
             <button
               type="button"
-              className="truncate px-1.5"
+              className="focus-ring truncate rounded-sm px-1.5"
               onClick={() => onEditText({ from: part.start, to: part.end })}
             >
               {part.text}
@@ -158,14 +158,14 @@ function Chips({
       <button
         type="button"
         aria-label="Edit filter"
-        className="h-6 min-w-8 flex-1 truncate px-1 text-left text-xs text-muted-foreground"
+        className="focus-ring h-6 min-w-8 flex-1 truncate rounded-sm px-1 text-left text-xs text-muted-foreground"
         onClick={() => onEditText()}
       >
         {conjuncts.length === 0 ? placeholder : ""}
       </button>
       <button
         type="button"
-        className="shrink-0 px-1 text-xs text-muted-foreground"
+        className="focus-ring shrink-0 rounded-sm px-1 text-xs text-muted-foreground"
         onClick={() => onEditText()}
       >
         Edit as text
@@ -189,7 +189,7 @@ function ChipShell({
       <button
         type="button"
         aria-label={`Remove ${text}`}
-        className="px-1 text-muted-foreground"
+        className="focus-ring rounded-sm px-1 text-muted-foreground"
         onClick={(event) => {
           event.stopPropagation();
           onRemove();
@@ -225,7 +225,7 @@ function ChipEditor({
     <Popover open={open} onOpenChange={setOpen}>
       <ChipShell text={text} onRemove={onRemove}>
         <PopoverTrigger asChild>
-          <button type="button" className="truncate px-1.5">
+          <button type="button" className="focus-ring truncate rounded-sm px-1.5">
             {text}
           </button>
         </PopoverTrigger>

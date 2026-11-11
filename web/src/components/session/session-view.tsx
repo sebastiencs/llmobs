@@ -127,7 +127,7 @@ function SessionHeader({ session }: { session: Schema<"SessionSummary"> }) {
           <Link
             to="/$org/$project/users/$userId"
             params={{ org, project, userId: session.user_id }}
-            className="font-mono underline-offset-2 hover:underline"
+            className="focus-ring rounded-sm font-mono underline-offset-2 hover:underline"
           >
             {session.user_id}
           </Link>
@@ -246,7 +246,7 @@ function Turn({
     >
       <button
         type="button"
-        className="flex w-full items-center gap-2 text-left text-xs"
+        className="focus-ring flex w-full items-center gap-2 rounded-sm text-left text-xs"
         aria-current={selected ? "true" : undefined}
         onClick={onSelect}
       >

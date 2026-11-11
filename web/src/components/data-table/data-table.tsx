@@ -208,7 +208,7 @@ export function DataTable<Row extends RowData>({
       aria-rowcount={rows.length + 1 + (isFetchingNextPage ? 1 : 0)}
       aria-colcount={columns.length}
       tabIndex={0}
-      className="flex min-h-0 flex-1 flex-col outline-none"
+      className="flex min-h-0 flex-1 flex-col outline-none focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 focus-visible:outline-solid"
       onKeyDown={onKeyDown}
     >
       {headerGroup ? (

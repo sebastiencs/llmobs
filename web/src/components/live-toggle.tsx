@@ -68,10 +68,9 @@ export function LiveToggle({
 
 function LiveDot({ status }: { status: Exclude<StreamStatus, "closed"> }) {
   return (
-    <span
-      role="status"
-      aria-label={status}
-      className={cn("size-2 shrink-0 rounded-full", DOT[status])}
-    />
+    <span role="status" className="inline-flex">
+      <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", DOT[status])} />
+      <span className="sr-only">{status}</span>
+    </span>
   );
 }

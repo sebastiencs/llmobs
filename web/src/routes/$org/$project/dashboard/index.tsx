@@ -166,7 +166,7 @@ function GroupBy({
       <span id="dashboard-group-label">Group by</span>
       <select
         aria-labelledby="dashboard-group-label"
-        className="h-6 rounded-md border border-border bg-background px-1.5 text-foreground text-xs"
+        className="focus-ring h-6 rounded-md border border-border bg-background px-1.5 text-foreground text-xs"
         value={value ?? ""}
         onChange={(event) => {
           const next = event.target.value;

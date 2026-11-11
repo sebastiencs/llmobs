@@ -315,7 +315,7 @@ function BucketBar({
         <button
           type="button"
           aria-label={bucketLabel(time)}
-          className="block h-full w-full cursor-pointer border-0 bg-transparent p-0"
+          className="focus-ring block h-full w-full cursor-pointer border-0 bg-transparent p-0"
           onClick={() => onBucket(time)}
         />
       </foreignObject>
@@ -353,7 +353,7 @@ function lineDot(dataKey: string, onBucket: (timeMs: number) => void, showMarker
           <button
             type="button"
             aria-label={bucketLabel(time)}
-            className="block size-full cursor-pointer border-0 bg-transparent p-0"
+            className="focus-ring block size-full cursor-pointer border-0 bg-transparent p-0"
             onClick={() => onBucket(time)}
           />
         </foreignObject>

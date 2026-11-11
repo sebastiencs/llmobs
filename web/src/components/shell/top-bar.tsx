@@ -9,7 +9,10 @@ import { PRODUCT_NAME } from "@/product";
 export function TopBar() {
   return (
     <header className="flex h-[40px] shrink-0 items-center gap-2 border-b px-3">
-      <Link to="/" className="font-medium">
+      <Link
+        to="/"
+        className="rounded-sm font-medium outline-none focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2 focus-visible:outline-solid"
+      >
         {PRODUCT_NAME}
       </Link>
       <OrgSwitcher />

@@ -33,7 +33,7 @@ function KpiTile({ tile, kpi }: { tile: (typeof TILES)[number]; kpi?: Schema<"Kp
     <Tooltip>
       <TooltipTrigger
         type="button"
-        className="flex h-16 flex-col justify-center rounded-md border px-3 text-left"
+        className="focus-ring flex h-16 flex-col justify-center rounded-md border px-3 text-left"
         aria-label={`${tile.label}: ${delta.value === undefined ? "—" : formatKpi(tile.metric, delta.value)}`}
       >
         <span className="text-muted-foreground text-xs">{tile.label}</span>

@@ -38,7 +38,8 @@ const editorTheme = EditorView.theme({
     backgroundColor: "transparent",
   },
   "&.cm-focused": {
-    outline: "none",
+    outline: "2px solid var(--ring)",
+    outlineOffset: "1px",
   },
   ".cm-scroller": {
     fontFamily: "var(--font-mono), ui-monospace, monospace",

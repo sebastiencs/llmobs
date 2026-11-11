@@ -75,7 +75,7 @@ export function SpanHeader({ span, detached }: { span: Schema<"SpanDetail">; det
             <Link
               to="/$org/$project/sessions/$sessionId"
               params={{ org, project, sessionId: span.session_id }}
-              className="underline-offset-2 hover:underline"
+              className="focus-ring rounded-sm underline-offset-2 hover:underline"
             >
               {span.session_id}
             </Link>
@@ -86,7 +86,7 @@ export function SpanHeader({ span, detached }: { span: Schema<"SpanDetail">; det
             <Link
               to="/$org/$project/users/$userId"
               params={{ org, project, userId: span.user_id }}
-              className="underline-offset-2 hover:underline"
+              className="focus-ring rounded-sm underline-offset-2 hover:underline"
             >
               {span.user_id}
             </Link>

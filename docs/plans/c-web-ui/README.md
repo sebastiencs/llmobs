@@ -1,3 +1,5 @@
+Status: U1–U29 done on 2026-11-11
+
 # C · Web UI on mocks
 
 Track C of Wave 1 builds the observability pages of spec 11 in `web/`. They run against the MSW mocks from `fixtures/api/` (D72, D76) and against a seeded mock generator in `web/` (D131). A real server is not needed. The pages in scope are the ones whose API contract exists today in `crates/server/openapi.json`:
