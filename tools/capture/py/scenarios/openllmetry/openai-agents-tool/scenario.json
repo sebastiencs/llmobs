@@ -1,0 +1,47 @@
+{
+  "description": "OpenAI Agents SDK with one function tool, traced by OpenLLMetry.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "TRACELOOP_TRACE_CONTENT is true, which is also the default, so message content is recorded on spans as gen_ai.input.messages and gen_ai.output.messages. TRACELOOP_METRICS_ENABLED is false. These packages have no TRACELOOP_TELEMETRY switch. OpenAIAgentsInstrumentor is constructed with replace_existing_processors, which clears the Agents SDK processor that exports to api.openai.com. The default client is pointed at the mock with use_for_tracing false. The capture keeps five spans: Agent Workflow, the weather agent, the response, the tool, and the second response. Token counts are copied from the Responses usage: input 82 then 131, output 17 then 12, cache_read 0 then 64, reasoning 0. Finish reasons are mapped from tool_calls to tool_call, then stop. The model is recorded as gen_ai.response.model.",
+  "instrumentation": "opentelemetry-instrumentation-openai-agents",
+  "libraries": [
+    "openai",
+    "openai-agents",
+    "opentelemetry-instrumentation-openai-agents",
+    "opentelemetry-sdk",
+    "opentelemetry-semantic-conventions-ai"
+  ],
+  "env": {
+    "TRACELOOP_TRACE_CONTENT": "true",
+    "TRACELOOP_METRICS_ENABLED": "false"
+  },
+  "turns": [
+    {
+      "api": "openai.responses",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": {
+        "tool_calls": [
+          {
+            "id": "call_weather_1",
+            "name": "get_weather",
+            "arguments": { "city": "Paris" }
+          }
+        ]
+      },
+      "finish": "tool_calls",
+      "usage": { "input": 82, "output": 17 }
+    },
+    {
+      "api": "openai.responses",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": { "text": "It is 18 °C and sunny in Paris." },
+      "finish": "stop",
+      "usage": { "input": 131, "output": 12, "cache_read": 64 }
+    }
+  ]
+}

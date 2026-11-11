@@ -268,8 +268,19 @@ For each committed span, matching online rules (06) with `target = span` are eva
 The fixture format is defined in `fixtures/otlp/README.md` (D66). Each case is a directory `fixtures/otlp/<group>/<case>/` with `case.json` (metadata, settings), `input.json` (OTLP/JSON `ExportTraceServiceRequest`) and `expected.json` (normalized spans in `llmobs_core::Span` JSON, extracted media, rejected count). Fixtures use the fixed test price table `fixtures/otlp/prices.json`, not the embedded LiteLLM snapshot (D67).
 
 - Hand-written cases pin this spec's rules (Phase 0 step 3).
-- Captured cases come from real instrumentations: OpenAI via OpenInference, OpenAI via OpenLLMetry, Vercel AI SDK v5/v6 generateText + streamText + tool calls, Anthropic with cache tokens, Gemini multimodal, LangChain, LangGraph, OpenAI Agents SDK, Google ADK, Laminar, Langfuse SDK v3. They are recorded by `tools/capture`, and their expected outputs are blessed by the golden test and then reviewed.
-A captured case may be committed before its `expected.json`. The golden test skips it until bless mode writes that file, which is then reviewed (`fixtures/otlp/README.md` § Workflows, D118).
+- Captured cases are recorded by `tools/capture` against a local mock of the provider HTTP APIs (D114, D115). The `llmobs` group is not captured; spec 10's SDK integration tests cover it (D121).
+
+| Convention or library | OpenAI | Anthropic | Gemini | Frameworks and own spans |
+|---|---|---|---|---|
+| Official OTel GenAI | v2 client | — | `google-genai` client | — |
+| OpenInference | client | client | client | LangChain, LangGraph, OpenAI Agents SDK, Google ADK |
+| OpenLLMetry | client | client | client, where a current instrumentation exists | LangChain, LangGraph, OpenAI Agents SDK, where an instrumentation exists; Traceloop SDK |
+| Vercel AI SDK v5, v6 and v7 | client | client | — | the SDK's own spans (TypeScript) |
+| Langfuse SDK (Python, 5.x) | drop-in client | — | — | the SDK's own observations |
+| Laminar (Python) | client | — | — | the SDK's own spans |
+| Google ADK | — | — | native model calls | native agent spans |
+
+A captured case may be committed before its `expected.json`. The golden test skips it until bless mode writes that file, which is then reviewed ([`fixtures/otlp/README.md` § Workflows](../../fixtures/otlp/README.md#workflows), D118).
 
 - Golden test (`llmobs-otel`): normalize every `input.json` that has an `expected.json` and compare them. Costs are compared with a `1e-12` tolerance; everything else exactly. A case without `expected.json` is listed as awaiting bless.
 - Property tests: normalization never panics on arbitrary attribute maps (proptest, in `just test`). There is no cargo-fuzz (D112).

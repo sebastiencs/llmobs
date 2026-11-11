@@ -1,0 +1,42 @@
+{
+  "description": "LangChain ChatOpenAI with one bound tool: a tool call, the tool run, then the answer.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Only LangChainInstrumentor is enabled. OpenInference records message content by default, and this scenario sets no content-capture environment variable. ChatOpenAI is pointed at the mock. The first chat completion calls get_weather, LangChain runs that tool, and the second completion returns the answer. bind_tools().invoke emits no chain span, so the capture is three root spans: LLM, TOOL, LLM. Token counts are copied. The second span's prompt is 131 and prompt_details.cache_read is 64. Audio, reasoning, and the first span's cache_read are written as 0. llm.finish_reason is tool_calls, then stop, on the span only. LangChain run ids are pinned to a counter so the lc_run message ids stay stable.",
+  "instrumentation": "openinference-instrumentation-langchain",
+  "libraries": [
+    "langchain",
+    "langchain-openai",
+    "openinference-instrumentation-langchain",
+    "opentelemetry-sdk"
+  ],
+  "turns": [
+    {
+      "api": "openai.chat",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": {
+        "tool_calls": [
+          {
+            "id": "call_weather_1",
+            "name": "get_weather",
+            "arguments": { "city": "Paris" }
+          }
+        ]
+      },
+      "finish": "tool_calls",
+      "usage": { "input": 82, "output": 17 }
+    },
+    {
+      "api": "openai.chat",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": { "text": "It is 18 °C and sunny in Paris." },
+      "finish": "stop",
+      "usage": { "input": 131, "output": 12, "cache_read": 64 }
+    }
+  ]
+}

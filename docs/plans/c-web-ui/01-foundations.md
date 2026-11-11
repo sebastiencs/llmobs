@@ -18,32 +18,32 @@ all on both the contract mocks and the large generated dataset.
 
 **Commit:** `docs: record the web UI decisions`
 
-1. **Decisions.** The numbers are D121–D132 (B2 holds D119–D120; mapping in the README). Add them to the decision table as written in [README.md § Decisions](README.md#decisions), one row each, in the existing table style. Keep the topic column short: `UI scope`, `UI layout`, `Trace view`, `UI tokens`, `Charts`, `Filter bar`, `Times`, `UI mocks`, `UI tests`, `UI lists`, `Live mode`. D123 and D124 share `Trace view`. D126 replaces ECharts: also edit D-row text elsewhere in `mvp-decisions.md` only if a row names ECharts. If one does, say so in the report and change only that word.
+1. **Decisions.** The numbers are D123–D134 (A1 holds D119–D120 and B2 D121–D122; mapping in the README). Add them to the decision table as written in [README.md § Decisions](README.md#decisions), one row each, in the existing table style. Keep the topic column short: `UI scope`, `UI layout`, `Trace view`, `UI tokens`, `Charts`, `Filter bar`, `Times`, `UI mocks`, `UI tests`, `UI lists`, `Live mode`. D125 and D126 share `Trace view`. D128 replaces ECharts: also edit D-row text elsewhere in `mvp-decisions.md` only if a row names ECharts. If one does, say so in the report and change only that word.
 2. **Spec 11.** Edit in place, no "previously" notes:
-   - **Stack line:** ECharts → Recharts through shadcn `chart` (D126). Add JetBrains Mono beside Inter (D125).
+   - **Stack line:** ECharts → Recharts through shadcn `chart` (D128). Add JetBrains Mono beside Inter (D127).
    - **New § Layout and density** after § Navigation:
-     - the top bar and collapsible sidebar (D122);
+     - the top bar and collapsible sidebar (D124);
      - the 13 px base and fixed 28 px rows;
      - mono for IDs and numbers;
      - dark by default;
-     - times local with a UTC setting, RFC 3339 on hover (D128).
-   - **§ Navigation:** add `/:org/:project/spans`. Mark the routes not yet built by this track as "(own plan, once its API contract exists; D121)". Keep them listed, because spec 11 remains the full product UI.
+     - times local with a UTC setting, RFC 3339 on hover (D130).
+   - **§ Navigation:** add `/:org/:project/spans`. Mark the routes not yet built by this track as "(own plan, once its API contract exists; D123)". Keep them listed, because spec 11 remains the full product UI.
    - **§ Traces (list):**
-     - row click → **resizable split** with `?trace=` (D123), replacing "wide drawer";
-     - bulk actions marked as D121;
+     - row click → **resizable split** with `?trace=` (D125), replacing "wide drawer";
+     - bulk actions marked as D123;
      - list the URL params from [README.md § Route and URL map](README.md#route-and-url-map-at-the-end-of-c).
    - **§ Trace view:**
-     - the left pane is the **combined tree + timeline grid** (D124), replacing "toggle to a timeline";
+     - the left pane is the **combined tree + timeline grid** (D126), replacing "toggle to a timeline";
      - add the **Transcript** toggle (`mode=transcript`);
-     - Scores tab: read-only until `POST /scores` has a contract (D121);
-     - trace header actions: copy link and copy ID now, the others D121.
-   - **New § Spans (list):** same table, filter bar and split as Traces, over `GET /spans` (D131).
-   - **§ Filter bar:** add a short subsection describing D127 (text is the truth, chip shapes, server validation, no facet sidebar yet).
+     - Scores tab: read-only until `POST /scores` has a contract (D123);
+     - trace header actions: copy link and copy ID now, the others D123.
+   - **New § Spans (list):** same table, filter bar and split as Traces, over `GET /spans` (D133).
+   - **§ Filter bar:** add a short subsection describing D129 (text is the truth, chip shapes, server validation, no facet sidebar yet).
    - **§ Dashboard:** "ECharts" → "Recharts"; empty buckets are gaps for rates and percentiles.
-   - **§ Quality bar:** add "verified by bounded rendered-row counts in tests (D130)".
+   - **§ Quality bar:** add "verified by bounded rendered-row counts in tests (D132)".
 3. **Spec 04 § Saved views.** The `state` column comment becomes `-- JSON owned by the UI: the list page's search params (range|from+to, filter, search, sort, order, eval, exp, cols) or {query, params} for SQL`. That matches spec 09 § Response shapes ("its URL search params"). Keep the sentence about relative time ranges, rewritten as "Preset ranges are stored relative (`range: "24h"`)".
-4. **Spec 05 § UI builder.** The text is the truth (D127): chips are a parse of simple shapes, not a second view of the same AST.
-5. **Research README.** Replace § Open questions with "Answered (2026-11-11)": Transcript ships as a toggle (D124); no facet sidebar yet (D127, R3); traces and spans are separate pages (D131).
+4. **Spec 05 § UI builder.** The text is the truth (D129): chips are a parse of simple shapes, not a second view of the same AST.
+5. **Research README.** Replace § Open questions with "Answered (2026-11-11)": Transcript ships as a toggle (D126); no facet sidebar yet (D129, R3); traces and spans are separate pages (D133).
 
 **Checks:** `just check` (docs only, but run it).
 
@@ -136,7 +136,7 @@ User menu: add a "Show times in UTC" checkbox item bound to the setting.
 
 **Commit:** `web: seeded large mock dataset`
 
-Purpose (D129): dense pages and the 10 000-span target need volume that the 6-trace example project doesn't have.
+Purpose (D131): dense pages and the 10 000-span target need volume that the 6-trace example project doesn't have.
 
 **Files:**
 - `generated/random.ts`: `mulberry32(seed)` → `() => number`. No `Math.random` anywhere in `generated/`.
@@ -198,7 +198,7 @@ Purpose (D129): dense pages and the 10 000-span target need volume that the 6-tr
   - `UserMenu`.
 
   The ⌘K button comes with U24.
-- **Sidebar** (`shell/project-sidebar.tsx`). The shadcn `sidebar` component, `collapsible="icon"`. Its open state is in localStorage `${STORAGE_PREFIX}sidebar` (shadcn's cookie default is replaced by localStorage). Items come from one array in `shell/nav.ts`: `{to, label, icon}`. **This sub-phase adds only "Traces"**. Each later page sub-phase appends its entry, so the sidebar never links to a missing page (D122). The active item is highlighted; `⌘B` / `Ctrl+B` toggles the sidebar (shadcn default).
+- **Sidebar** (`shell/project-sidebar.tsx`). The shadcn `sidebar` component, `collapsible="icon"`. Its open state is in localStorage `${STORAGE_PREFIX}sidebar` (shadcn's cookie default is replaced by localStorage). Items come from one array in `shell/nav.ts`: `{to, label, icon}`. **This sub-phase adds only "Traces"**. Each later page sub-phase appends its entry, so the sidebar never links to a missing page (D124). The active item is highlighted; `⌘B` / `Ctrl+B` toggles the sidebar (shadcn default).
 - **Org layout** (`$org/route.tsx`): the top bar plus `<Outlet/>`. The `max-w-5xl` container moves into the org home route only, so project pages use the full width.
 - **Project layout** (`$org/$project/route.tsx`):
   - the loader `ensureQueryData` of `get_project` with `projectRef(org, project)`. A 404 `Problem` means `notFound()`;
@@ -263,7 +263,7 @@ interface DataTableProps<Row> {
 - **Keyboard:** the grid container is focusable (`tabIndex=0`).
   - ↑/↓ and k/j move the focused row; Home/End go to the first and last loaded row; Enter activates.
   - The focused row scrolls into view (`virtualizer.scrollToIndex`).
-  - When `selectedRowId` is set and the focus moves, `onSelectionMove` fires, so the open trace follows the focus (D123).
+  - When `selectedRowId` is set and the focus moves, `onSelectionMove` fires, so the open trace follows the focus (D125).
 - **Empty state:** when `rows.length === 0` and not loading.
 
 `components/data-table/use-infinite-list.ts`: a small helper around `useInfiniteQuery` + `api.GET`, shaped like `projectListOptions`. It flattens `pages[].data`, keeps the `next_cursor` logic, and is typed per operation. Keep it concrete for the operations that use it; don't build a generic over all paths if typing fights back. Two or three explicit option factories are fine.
@@ -361,7 +361,7 @@ Input: `TreeSpan[]` (pre-order with `depth`, spec 09 § Response shapes). All fu
   - **tabs:** "Input / Output" only, in this sub-phase. It shows `input` and `output` as `<pre>` blocks of pretty JSON for `json` and `messages`, or the text for `text`, with a 1 MB rendering cap: beyond it, a "show raw" button. U16–U19 add the other tabs and the real viewers.
   - While loading, skeleton lines; on error, an inline `Problem` title.
 
-### Traces page integration (D123)
+### Traces page integration (D125)
 
 - With `?trace=` set, the page becomes a horizontal resizable split: the list on the left (default 40 %) and `TraceView` on the right. The ratio persists in `${STORAGE_PREFIX}split.traces`.
 - The list keeps its scroll and its selected row.

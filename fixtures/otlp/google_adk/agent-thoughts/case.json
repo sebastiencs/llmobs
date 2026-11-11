@@ -1,0 +1,23 @@
+{
+  "description": "A Google ADK agent with thinking enabled, answered with reasoning plus text.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "google-adk",
+    "instrumentation_version": "2.14.0",
+    "language": "python",
+    "libraries": {
+      "google-adk": "2.14.0",
+      "google-genai": "2.34.0",
+      "opentelemetry-sdk": "1.45.2"
+    },
+    "captured_at": "2026-11-11T15:13:23Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Token semantics"
+  ],
+  "notes": "google-adk 2.14.0. The runner sets GOOGLE_API_KEY, so the Gemini client uses the API-key path and does not probe the metadata server. Gemini.base_url is the mock. Cloud Trace export is started only by the ADK CLI server, which this scenario does not run. ADK_EXPERIMENTAL_TELEMETRY is false. ADK_TELEMETRY_SCHEMA_VERSION_OPT_IN is 1. ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS is true. Thinking is enabled with include_thoughts and thinking_budget 64. Covers D113 (ADK token semantics): gen_ai.usage.output_tokens is 20, the sum of candidates_token_count 14 and thoughts_token_count 6, and gen_ai.usage.reasoning.output_tokens is 6. call_llm also sets gen_ai.usage.experimental.reasoning_tokens_limit 64. Event ids come from set_id_provider, a counter of capture-N. The session id is session-1 and the user id is user-1. prices.json has no Gemini model row."
+}

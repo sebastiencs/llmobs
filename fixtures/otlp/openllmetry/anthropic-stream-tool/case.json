@@ -1,0 +1,24 @@
+{
+  "description": "One streamed Anthropic message with text and a tool call, traced by OpenLLMetry.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "opentelemetry-instrumentation-anthropic",
+    "instrumentation_version": "0.62.4",
+    "language": "python",
+    "libraries": {
+      "anthropic": "2.4.0",
+      "opentelemetry-instrumentation-anthropic": "0.62.4",
+      "opentelemetry-sdk": "1.45.2",
+      "opentelemetry-semantic-conventions-ai": "0.5.1"
+    },
+    "captured_at": "2026-11-11T12:42:31Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "TRACELOOP_TRACE_CONTENT is true, which is also the default, so message content is recorded on spans as gen_ai.input.messages and gen_ai.output.messages. TRACELOOP_METRICS_ENABLED is false. ANTHROPIC_OPEN_TELEMETRY is false, which turns off the Anthropic SDK's own spans. These provider packages have no TRACELOOP_TELEMETRY switch and no vendor export URL; spans go through the harness tracer provider. gen_ai.prompt.N is not written. The mock waits 120 ms before the first chunk and splits the text and the tool arguments into 4 chunks each. Anthropic streams include usage without a separate request flag. Input 40 is copied. The stream starts with output_tokens 1 and ends with the scripted 18, and the instrumentor adds those, so gen_ai.usage.output_tokens is 19. Cache read and cache write are written as 0. Duration is a metric, and metrics are disabled, so the span has no timing attribute."
+}

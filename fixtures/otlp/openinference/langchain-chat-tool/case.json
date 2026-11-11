@@ -1,0 +1,24 @@
+{
+  "description": "LangChain ChatOpenAI with one bound tool: a tool call, the tool run, then the answer.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "openinference-instrumentation-langchain",
+    "instrumentation_version": "0.1.81",
+    "language": "python",
+    "libraries": {
+      "langchain": "1.4.8",
+      "langchain-openai": "1.7.3",
+      "openinference-instrumentation-langchain": "0.1.81",
+      "opentelemetry-sdk": "1.45.2"
+    },
+    "captured_at": "2026-11-11T11:37:43Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Only LangChainInstrumentor is enabled. OpenInference records message content by default, and this scenario sets no content-capture environment variable. ChatOpenAI is pointed at the mock. The first chat completion calls get_weather, LangChain runs that tool, and the second completion returns the answer. bind_tools().invoke emits no chain span, so the capture is three root spans: LLM, TOOL, LLM. Token counts are copied. The second span's prompt is 131 and prompt_details.cache_read is 64. Audio, reasoning, and the first span's cache_read are written as 0. llm.finish_reason is tool_calls, then stop, on the span only. LangChain run ids are pinned to a counter so the lc_run message ids stay stable."
+}

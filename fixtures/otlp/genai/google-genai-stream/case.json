@@ -1,0 +1,24 @@
+{
+  "description": "One streamed Gemini answer with a reasoning part, traced by the official OTel Google GenAI instrumentation.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "opentelemetry-instrumentation-google-genai",
+    "instrumentation_version": "1.1b1",
+    "language": "python",
+    "libraries": {
+      "google-genai": "2.34.0",
+      "opentelemetry-instrumentation-google-genai": "1.1b1",
+      "opentelemetry-sdk": "1.45.2",
+      "opentelemetry-util-genai": "1.1b0"
+    },
+    "captured_at": "2026-11-11T11:05:52Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Content is requested on spans: OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental and OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=span_only. GoogleGenAiSdkInstrumentor sets OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT=true while instrumenting generate_content; this span has no events. The mock waits 120 ms before the first chunk and splits reasoning and text into 4 chunks each. gen_ai.response.time_to_first_chunk is set. The instrumentor adds thoughtsTokenCount 6 to candidatesTokenCount 14 and writes gen_ai.usage.output_tokens 20, plus gen_ai.usage.reasoning.output_tokens 6. Output messages are one text part per chunk, and the reasoning text is not marked as a thought. prices.json has no Gemini model row."
+}

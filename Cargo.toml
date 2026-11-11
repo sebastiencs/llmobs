@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "tools/capture"]
 
 [workspace.package]
 version = "0.0.0"
@@ -72,6 +72,15 @@ parquet = { version = "59.2", default-features = false, features = [
     "flate2-zlib-rs",
 ] }
 object_store = "0.13"
+# catalog.db (D39). `macros` exists for `sqlx::migrate!` only. Queries use the
+# runtime API, not `query!`, so no `DATABASE_URL` is required. `sqlite` bundles
+# SQLite so the binary does not need a system library.
+sqlx = { version = "0.9.0", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+    "migrate",
+    "macros",
+] }
 
 # --- runtime basics ---
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "fs", "io-util"] }
@@ -113,11 +122,18 @@ base64 = "0.23.1"
 # OpenAPI 3.1 schemas. `uuid` enables the `format: uuid` schema. Do not enable
 # `preserve_order` or `preserve_path_order`: default `BTreeMap`s keep the document sorted.
 utoipa = { version = "6.0.0", features = ["uuid"] }
-# Same major as axum 0.8's query decoding. Axum is not a dependency yet.
+# Same major as axum 0.8's query decoding.
 serde_urlencoded = "0.7.1"
 tempfile = "3.27.0"
 # OTLP property tests in llmobs-otel. MSRV 1.88. Tests enable `std` only.
 proptest = "1.12.0"
+# Capture mock. Default features serve HTTP/1.1 JSON and SSE.
+axum = "0.8.9"
+# axum 0.8.9's body trait. The streaming mock implements it; axum does not re-export `Frame`.
+http-body = "1.1.0"
+# Dev-dependencies of llmobs-capture, for `oneshot` tests of the axum apps.
+tower = "0.5.3"
+http-body-util = "0.1.5"
 
 [profile.dev]
 debug = "line-tables-only"

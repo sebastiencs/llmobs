@@ -123,3 +123,28 @@ fixtures-bless:
 # by hand. This recipe does not fetch it.
 prices-update litellm_json:
     LLMOBS_LITELLM_JSON={{litellm_json}} cargo test -p llmobs-otel --test prices -- refresh
+
+# Fixture capture
+
+# Capture OTLP fixtures from real instrumentations (tools/capture), e.g. `just capture openinference/openai-chat-tool`
+capture +cases: capture-py-sync capture-ts-sync
+    cargo run -q -p llmobs-capture -- run {{cases}}
+
+# Recapture every scenario
+capture-all: capture-py-sync capture-ts-sync
+    cargo run -q -p llmobs-capture -- run --all
+
+# Install the Python capture project (tools/capture/py)
+capture-py-sync:
+    cd tools/capture/py && uv sync --locked
+
+# Install the TypeScript capture project (tools/capture/ts)
+capture-ts-sync:
+    pnpm --dir tools/capture/ts install --frozen-lockfile
+
+# Lint and type-check the capture scenarios, then recapture every scenario and compare (timing excluded)
+check-capture: capture-py-sync capture-ts-sync
+    cd tools/capture/py && uv run ruff format --check && uv run ruff check && uv run mypy
+    pnpm --dir tools/capture/ts run typecheck
+    pnpm exec biome check tools/capture/ts
+    cargo run -q -p llmobs-capture -- run --all --check

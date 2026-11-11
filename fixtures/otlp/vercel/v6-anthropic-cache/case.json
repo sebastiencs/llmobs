@@ -1,0 +1,24 @@
+{
+  "description": "Vercel AI SDK v6 generateText with an Anthropic prompt marked for cache.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "ai",
+    "instrumentation_version": "6.0.322",
+    "language": "typescript",
+    "libraries": {
+      "@ai-sdk/anthropic": "3.0.138",
+      "@opentelemetry/api": "1.9.0",
+      "@opentelemetry/sdk-trace-node": "2.12.0",
+      "ai": "6.0.322"
+    },
+    "captured_at": "2026-11-11T12:27:55Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Telemetry is enabled through experimental_telemetry. recordInputs and recordOutputs stay at their defaults, which record message content on spans. The system message sets providerOptions.anthropic.cacheControl to ephemeral. Scripted usage is input 2100, output 40, cache_read 1800, cache_write 200. The spans copy an inclusive input of 2100. inputTokenDetails holds noCacheTokens 100, cacheReadTokens 1800, and cacheWriteTokens 200, so the cache write does not depend on providerMetadata. providerMetadata.anthropic.cacheCreationInputTokens is still 200. ai.response.timestamp is the process clock."
+}

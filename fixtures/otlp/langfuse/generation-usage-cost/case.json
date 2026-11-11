@@ -1,0 +1,22 @@
+{
+  "description": "One plain OpenAI chat completion inside a manual generation that records usage_details, cost_details, model parameters, and completion_start_time.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "langfuse",
+    "instrumentation_version": "5.1.0",
+    "language": "python",
+    "libraries": {
+      "langfuse": "5.1.0",
+      "openai": "3.45.0",
+      "opentelemetry-sdk": "1.45.2"
+    },
+    "captured_at": "2026-11-11T13:11:39Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Langfuse 5.1.0 exports to {base_url}/api/public/otel/v1/traces. base_url is the receiver origin. LANGFUSE_PUBLIC_KEY is capture-public-key and LANGFUSE_SECRET_KEY is capture-secret-key. LANGFUSE_MEDIA_UPLOAD_ENABLED is false. LANGFUSE_OTEL_COMPRESSION is none and the client also passes otel_compression none, because the receiver rejects a non-identity content encoding and the SDK default is gzip. There is no separate anonymous-telemetry switch in 5.1.0. The client installs its own tracer provider, so the scenario does not call harness.setup. One span, weather-generation, on scope langfuse-sdk 5.1.0. The OpenAI client is the plain SDK, so the span does not copy provider usage and there is no second span. usage_details is written as input 24, output 12, input_cached_tokens 8, and output_reasoning_tokens 3. cost_details is written as input 1, output 2, and total 3. model.parameters is temperature 0 and max_tokens 64. completion_start_time is the current UTC time after the mock returns. The SDK JSON-encodes that datetime, so the attribute is a quoted RFC 3339 string with microseconds and a Z suffix, listed as rfc3339. Pins N21 usage, reported cost (D109), and time to first token."
+}

@@ -1,0 +1,33 @@
+{
+  "description": "One streamed OpenAI chat answer with usage included, traced by the official OTel OpenAI instrumentation.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Content is requested on spans: OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental and OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=span_only. The client sets stream_options.include_usage. The mock waits 120 ms before the first chunk and splits the answer into 4 chunks. The span has no gen_ai.response.time_to_first_chunk and no gen_ai.response.finish_reasons; this chat stream wrapper does not record per-chunk timing on the span.",
+  "instrumentation": "opentelemetry-instrumentation-openai-v2",
+  "libraries": [
+    "openai",
+    "opentelemetry-instrumentation-openai-v2",
+    "opentelemetry-sdk",
+    "opentelemetry-util-genai"
+  ],
+  "env": {
+    "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "span_only"
+  },
+  "turns": [
+    {
+      "api": "openai.chat",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": { "text": "Clear skies over the harbor." },
+      "finish": "stop",
+      "usage": { "input": 20, "output": 8 },
+      "ttft_ms": 120,
+      "chunks": 4
+    }
+  ]
+}

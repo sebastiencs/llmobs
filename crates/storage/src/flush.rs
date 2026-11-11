@@ -1,0 +1,576 @@
+//! One flush task per table.
+//!
+//! The task freezes the active memtable, writes one level-0 Parquet file per
+//! partition, commits those files, and truncates WAL segments the commit
+//! covers. A failure before the commit keeps the frozen view and retries with
+//! new file names. Truncation failure is remembered and retried without
+//! writing the files again.
+
+use std::collections::HashMap;
+use std::future::Future;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
+
+use arrow::array::{Array, AsArray, RecordBatch, UInt32Array};
+use arrow::compute::{concat_batches, take_record_batch};
+use arrow::datatypes::TimestampNanosecondType;
+use bytes::Bytes;
+use tokio::sync::{Notify, watch};
+use tokio::task::JoinHandle;
+
+use crate::catalog::{Catalog, CatalogEdit, Committer, FileMeta};
+use crate::error::FlushError;
+use crate::hooks::{HookPoint, Hooks};
+use crate::memtable::{FrozenView, MemBatch, Memtable};
+use crate::objects::Objects;
+use crate::parquet::write_file;
+use crate::read_state::{Published, ReadState};
+use crate::wal::writer::WriterShared;
+use crate::wal::{Table, truncate_segments};
+
+const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
+const MAX_BACKOFF: Duration = Duration::from_secs(60);
+/// How often an idle task looks for a memtable the size notify did not report.
+///
+/// The writer notifies only at `flush.max_bytes`. A smaller memtable still has
+/// to start its age deadline.
+const IDLE_POLL: Duration = Duration::from_millis(50);
+
+struct PreparedFile {
+    meta: FileMeta,
+    bytes: Bytes,
+}
+
+struct FlushParams {
+    table: Table,
+    dir: PathBuf,
+    shared: Arc<WriterShared>,
+    committer: Arc<Committer>,
+    objects: Arc<Objects>,
+    published: Arc<Published>,
+    hooks: Hooks,
+    max_bytes: u64,
+    max_age: Duration,
+    upload_concurrency: usize,
+    stop: watch::Receiver<bool>,
+    notify: Arc<Notify>,
+}
+
+/// What one flush task needs. Split out so `spawn` stays under the argument limit.
+#[derive(Debug)]
+pub(crate) struct FlushStart {
+    /// Table this task flushes.
+    pub table: Table,
+    /// WAL directory for `table`.
+    pub dir: PathBuf,
+    /// Writer state, including the memtable and the size notify.
+    pub shared: Arc<WriterShared>,
+    /// Catalog writer. Shared with the other table's task.
+    pub committer: Arc<Committer>,
+    /// Where the Parquet files are written.
+    pub objects: Arc<Objects>,
+    /// Published memtables and catalog.
+    pub published: Arc<Published>,
+    /// Pause and fault points.
+    pub hooks: Hooks,
+    /// `flush.max_bytes`.
+    pub max_bytes: u64,
+    /// `flush.max_age`.
+    pub max_age: Duration,
+    /// `flush.upload_concurrency`.
+    pub upload_concurrency: usize,
+}
+
+/// A running flush task. Shutdown asks it to finish; drop cancels it.
+#[derive(Debug)]
+pub(crate) struct FlushHandle {
+    stop: watch::Sender<bool>,
+    notify: Arc<Notify>,
+    task: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl FlushHandle {
+    /// Wakes the task and tells it to flush once more, then exit.
+    pub(crate) fn request_stop(&self) {
+        let _ = self.stop.send(true);
+        self.notify.notify_waiters();
+    }
+
+    /// Takes the task so the caller can wait for it.
+    pub(crate) fn take_task(&self) -> Option<JoinHandle<()>> {
+        self.task
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    }
+
+    /// Cancels the task. A task already taken by shutdown is left alone.
+    pub(crate) fn abort(&self) {
+        self.request_stop();
+        if let Some(task) = self.take_task() {
+            task.abort();
+        }
+    }
+}
+
+/// Starts the task. It loops until [`FlushHandle::request_stop`] and the
+/// memtable has been committed, retrying a failed flush until then.
+pub(crate) fn spawn(start: FlushStart) -> FlushHandle {
+    let (stop_tx, stop) = watch::channel(false);
+    let notify = Arc::clone(&start.shared.flush_notify);
+    let params = FlushParams {
+        table: start.table,
+        dir: start.dir,
+        shared: start.shared,
+        committer: start.committer,
+        objects: start.objects,
+        published: start.published,
+        hooks: start.hooks,
+        max_bytes: start.max_bytes,
+        max_age: start.max_age,
+        upload_concurrency: start.upload_concurrency,
+        stop,
+        notify: Arc::clone(&notify),
+    };
+    let task = tokio::spawn(async move {
+        let work: std::pin::Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(run(params));
+        work.await;
+    });
+    FlushHandle {
+        stop: stop_tx,
+        notify,
+        task: Mutex::new(Some(task)),
+    }
+}
+
+async fn run(mut params: FlushParams) {
+    let mut pending: Option<u64> = None;
+    let mut backoff = INITIAL_BACKOFF;
+    loop {
+        if let Some(seq) = pending {
+            match truncate_flushed(&params, seq).await {
+                Ok(()) => pending = None,
+                Err(error) => {
+                    log_truncate(params.table, &error);
+                    sleep_backoff(&mut params.stop, backoff).await;
+                    backoff = next_backoff(backoff);
+                    continue;
+                }
+            }
+        }
+        match flush_once(&params).await {
+            Ok(None) => {
+                backoff = INITIAL_BACKOFF;
+                if stopping(&params.stop) {
+                    break;
+                }
+                wait_until_due(&params).await;
+            }
+            Ok(Some(seq)) => {
+                backoff = INITIAL_BACKOFF;
+                match truncate_flushed(&params, seq).await {
+                    Ok(()) => {}
+                    Err(error) => {
+                        log_truncate(params.table, &error);
+                        pending = Some(seq);
+                    }
+                }
+            }
+            Err(_) => {
+                sleep_backoff(&mut params.stop, backoff).await;
+                backoff = next_backoff(backoff);
+            }
+        }
+    }
+}
+
+fn stopping(stop: &watch::Receiver<bool>) -> bool {
+    *stop.borrow()
+}
+
+fn next_backoff(current: Duration) -> Duration {
+    current.saturating_mul(2).min(MAX_BACKOFF)
+}
+
+async fn sleep_backoff(stop: &mut watch::Receiver<bool>, backoff: Duration) {
+    tokio::select! {
+        () = tokio::time::sleep(backoff) => {}
+        result = stop.changed() => {
+            let _ = result;
+        }
+    }
+}
+
+async fn wait_until_due(params: &FlushParams) {
+    loop {
+        if stopping(&params.stop) {
+            return;
+        }
+        let notified = params.notify.notified();
+        tokio::pin!(notified);
+        let (ready, due) = flush_wait(&params.shared, params.max_bytes, params.max_age);
+        if ready {
+            return;
+        }
+        let sleep_for = due.unwrap_or(IDLE_POLL);
+        let sleep = tokio::time::sleep(sleep_for);
+        tokio::pin!(sleep);
+        let mut stop = params.stop.clone();
+        tokio::select! {
+            () = &mut notified => {}
+            () = &mut sleep => {}
+            result = stop.changed() => {
+                let _ = result;
+            }
+        }
+    }
+}
+
+fn flush_due(memtable: &Memtable, params: &FlushParams) -> bool {
+    if memtable.has_frozen() || stopping(&params.stop) {
+        return true;
+    }
+    let over_size = u64::try_from(memtable.active_bytes()).unwrap_or(u64::MAX) >= params.max_bytes;
+    let aged = memtable
+        .active_oldest()
+        .is_some_and(|oldest| oldest.elapsed() >= params.max_age);
+    over_size || aged
+}
+
+fn flush_wait(
+    shared: &WriterShared,
+    max_bytes: u64,
+    max_age: Duration,
+) -> (bool, Option<Duration>) {
+    let memtable = shared
+        .memtable()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let over_size = u64::try_from(memtable.active_bytes()).unwrap_or(u64::MAX) >= max_bytes;
+    let aged = memtable
+        .active_oldest()
+        .is_some_and(|oldest| oldest.elapsed() >= max_age);
+    let ready = memtable.has_frozen() || over_size || aged;
+    let due = memtable
+        .active_oldest()
+        .map(|oldest| max_age.saturating_sub(oldest.elapsed()));
+    (ready, due)
+}
+
+/// `Some(seq)` was committed. `None` means there was nothing to freeze.
+async fn flush_once(params: &FlushParams) -> Result<Option<u64>, FlushError> {
+    let (fresh, view) = {
+        let mut memtable = params
+            .shared
+            .memtable()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let triggered = flush_due(&memtable, params);
+        let fresh = !memtable.has_frozen();
+        let view = triggered.then(|| memtable.freeze()).flatten();
+        (fresh && view.is_some(), view)
+    };
+    let Some(view) = view else {
+        return Ok(None);
+    };
+    let partitions = view.partitions.len();
+    let max_seq = view.max_seq;
+    if fresh {
+        params.hooks.pause(HookPoint::FlushAfterFreeze);
+        if params.hooks.fail(HookPoint::FlushAfterFreeze).is_some() {
+            return Err(log_retry(params.table, partitions, FlushError::Fault));
+        }
+    }
+    let table = params.table;
+    let prepared = match tokio::task::spawn_blocking(move || prepare(table, &view)).await {
+        Ok(Ok(prepared)) => prepared,
+        Ok(Err(error)) => return Err(log_retry(table, partitions, error)),
+        Err(_) => return Err(log_retry(table, partitions, FlushError::Task)),
+    };
+    let paths: Vec<String> = prepared.iter().map(|file| file.meta.path.clone()).collect();
+    if let Err(error) = params.committer.stage(&paths).await {
+        return Err(log_retry(
+            params.table,
+            partitions,
+            FlushError::stage(error),
+        ));
+    }
+    params.hooks.pause(HookPoint::FlushAfterStage);
+    if params.hooks.fail(HookPoint::FlushAfterStage).is_some() {
+        return Err(log_retry(params.table, partitions, FlushError::Fault));
+    }
+    if let Err(error) = put_all(&params.objects, &prepared, params.upload_concurrency).await {
+        return Err(log_retry(params.table, partitions, error));
+    }
+    params.hooks.pause(HookPoint::FlushAfterWrite);
+    if params.hooks.fail(HookPoint::FlushAfterWrite).is_some() {
+        return Err(log_retry(params.table, partitions, FlushError::Fault));
+    }
+    let edit = CatalogEdit {
+        add: prepared.into_iter().map(|file| file.meta).collect(),
+        remove: Vec::new(),
+        flushed_seq: Some((params.table, max_seq)),
+    };
+    let published = Arc::clone(&params.published);
+    let shared = Arc::clone(&params.shared);
+    let table = params.table;
+    if let Err(error) = params
+        .committer
+        .commit(&edit, move |catalog| {
+            publish_flush(table, &shared, &published, catalog);
+        })
+        .await
+    {
+        return Err(log_retry(table, partitions, FlushError::commit(error)));
+    }
+    params.hooks.pause(HookPoint::FlushAfterCommit);
+    if let Some(error) = params.hooks.fail(HookPoint::FlushAfterCommit) {
+        // The commit is durable. Retrying it would write a second copy.
+        tracing::warn!(
+            table = params.table.name(),
+            %error,
+            "flush commit hook failed after the catalog commit"
+        );
+    }
+    Ok(Some(max_seq))
+}
+
+fn log_retry(table: Table, partitions: usize, error: FlushError) -> FlushError {
+    tracing::warn!(
+        table = table.name(),
+        partitions,
+        %error,
+        "flush failed; retrying"
+    );
+    error
+}
+
+fn publish_flush(
+    table: Table,
+    shared: &WriterShared,
+    published: &Published,
+    catalog: &Arc<Catalog>,
+) {
+    // Lock order: memtable, then `Published`. The committer mutex is already held.
+    let mut memtable = shared
+        .memtable()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    memtable.drop_frozen();
+    let snapshot = memtable.snapshot();
+    let bytes = u64::try_from(memtable.bytes()).unwrap_or(u64::MAX);
+    published.replace(|state| match table {
+        Table::Spans => ReadState {
+            spans: Arc::clone(&snapshot),
+            scores: Arc::clone(&state.scores),
+            catalog: Arc::clone(catalog),
+        },
+        Table::Scores => ReadState {
+            spans: Arc::clone(&state.spans),
+            scores: Arc::clone(&snapshot),
+            catalog: Arc::clone(catalog),
+        },
+    });
+    shared.set_memtable_bytes(bytes);
+}
+
+fn prepare(table: Table, view: &FrozenView) -> Result<Vec<PreparedFile>, FlushError> {
+    let mut files = Vec::new();
+    for (key, batches) in view.partitions.iter() {
+        if batches.is_empty() {
+            continue;
+        }
+        let written = match table {
+            Table::Spans => {
+                let batch = dedup_spans(batches)?;
+                write_file(table, 0, &[Arc::new(batch)]).map_err(FlushError::prepare)?
+            }
+            Table::Scores => {
+                let refs: Vec<Arc<RecordBatch>> = batches
+                    .iter()
+                    .map(|batch| Arc::clone(&batch.batch))
+                    .collect();
+                write_file(table, 0, &refs).map_err(FlushError::prepare)?
+            }
+        };
+        let (path, id) = Objects::table_file_path(table, key.project, key.day, 0);
+        let size = u64::try_from(written.bytes.len()).unwrap_or(u64::MAX);
+        files.push(PreparedFile {
+            meta: FileMeta {
+                id,
+                table,
+                project: key.project,
+                day: key.day,
+                level: 0,
+                path,
+                size,
+                footer_size: written.footer_size,
+                rows: written.rows,
+                min_time: written.min_time,
+                max_time: written.max_time,
+                min_ingest_time: written.min_ingest_time,
+                max_ingest_time: written.max_ingest_time,
+                fully_merged: false,
+            },
+            bytes: written.bytes,
+        });
+    }
+    if files.is_empty() {
+        return Err(FlushError::dedup("empty flush"));
+    }
+    Ok(files)
+}
+
+/// Keeps the greatest `ingest_time` for each `(trace_id, span_id)`.
+///
+/// Batches are in WAL order. An equal `ingest_time` keeps the later row.
+fn dedup_spans(batches: &[MemBatch]) -> Result<RecordBatch, FlushError> {
+    let schema = batches[0].batch.schema();
+    let refs: Vec<&RecordBatch> = batches.iter().map(|batch| batch.batch.as_ref()).collect();
+    let combined = concat_batches(&schema, refs)
+        .map_err(|source| FlushError::prepare(crate::error::ParquetWriteError::arrow(source)))?;
+    let trace = fixed(&combined, llmobs_core::schema::spans::TRACE_ID)?;
+    let span = fixed(&combined, llmobs_core::schema::spans::SPAN_ID)?;
+    let ingest = combined
+        .column_by_name(llmobs_core::schema::spans::INGEST_TIME)
+        .and_then(|column| column.as_primitive_opt::<TimestampNanosecondType>())
+        .ok_or_else(|| FlushError::dedup("missing identity column"))?;
+    let mut best: HashMap<(Vec<u8>, Vec<u8>), (i64, usize)> = HashMap::new();
+    for row in 0..combined.num_rows() {
+        if trace.is_null(row) || span.is_null(row) || ingest.is_null(row) {
+            return Err(FlushError::dedup("null span identity"));
+        }
+        let key = (trace.value(row).to_vec(), span.value(row).to_vec());
+        let time = ingest.value(row);
+        match best.get(&key) {
+            Some((kept, _)) if *kept > time => {}
+            _ => {
+                best.insert(key, (time, row));
+            }
+        }
+    }
+    let mut rows = Vec::with_capacity(best.len());
+    for (_, row) in best.into_values() {
+        rows.push(u32::try_from(row).map_err(|_| FlushError::dedup("row index"))?);
+    }
+    rows.sort_unstable();
+    take_record_batch(&combined, &UInt32Array::from(rows))
+        .map_err(|source| FlushError::prepare(crate::error::ParquetWriteError::arrow(source)))
+}
+
+fn fixed<'a>(
+    batch: &'a RecordBatch,
+    name: &str,
+) -> Result<&'a arrow::array::FixedSizeBinaryArray, FlushError> {
+    batch
+        .column_by_name(name)
+        .and_then(|column| column.as_fixed_size_binary_opt())
+        .ok_or_else(|| FlushError::dedup("missing identity column"))
+}
+
+async fn put_all(
+    objects: &Arc<Objects>,
+    files: &[PreparedFile],
+    concurrency: usize,
+) -> Result<(), FlushError> {
+    let concurrency = concurrency.max(1);
+    let mut start = 0;
+    while start < files.len() {
+        let end = (start + concurrency).min(files.len());
+        put_chunk(objects, &files[start..end]).await?;
+        start = end;
+    }
+    Ok(())
+}
+
+async fn put_chunk(objects: &Arc<Objects>, files: &[PreparedFile]) -> Result<(), FlushError> {
+    let mut set = tokio::task::JoinSet::new();
+    for file in files {
+        let objects = Arc::clone(objects);
+        let path = file.meta.path.clone();
+        let bytes = file.bytes.clone();
+        set.spawn(async move { objects.put_durable(&path, bytes).await });
+    }
+    while let Some(joined) = set.join_next().await {
+        match joined {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(FlushError::write(error)),
+            Err(_) => return Err(FlushError::Task),
+        }
+    }
+    Ok(())
+}
+
+async fn truncate_flushed(params: &FlushParams, seq: u64) -> Result<(), std::io::Error> {
+    let dir = params.dir.clone();
+    let outcome = tokio::task::spawn_blocking(move || truncate_segments(&dir, seq))
+        .await
+        .map_err(std::io::Error::other)??;
+    params.hooks.pause(HookPoint::FlushAfterTruncate);
+    if let Some(error) = params.hooks.fail(HookPoint::FlushAfterTruncate) {
+        tracing::warn!(
+            table = params.table.name(),
+            deleted = outcome.deleted,
+            %error,
+            "flush truncate hook failed after the directory was updated"
+        );
+    }
+    Ok(())
+}
+
+fn log_truncate(table: Table, error: &std::io::Error) {
+    tracing::warn!(
+        table = table.name(),
+        %error,
+        "wal truncate failed; retrying on the next flush"
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::Array;
+
+    use super::dedup_spans;
+    use crate::memtable::MemBatch;
+    use crate::wal::spans_named;
+
+    fn batch(starts: &[i64], name: &str) -> MemBatch {
+        let batch = spans_named(starts, name);
+        MemBatch {
+            batch: std::sync::Arc::new(batch.clone()),
+            min_time: starts[0],
+            max_time: *starts.last().unwrap(),
+            bytes: batch.get_array_memory_size(),
+        }
+    }
+
+    fn names(batch: &arrow::array::RecordBatch) -> Vec<String> {
+        let column = batch
+            .column_by_name(llmobs_core::schema::spans::NAME)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .unwrap();
+        (0..column.len())
+            .map(|index| column.value(index).to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn dedup_keeps_the_greatest_ingest_time_and_the_later_tie() {
+        let older = batch(&[10], "old");
+        let newer = batch(&[500], "new");
+        let kept = dedup_spans(&[older, newer]).unwrap();
+        assert_eq!(names(&kept), vec!["new".to_owned()]);
+
+        let first = batch(&[10], "first");
+        let second = batch(&[10], "second");
+        let tied = dedup_spans(&[first, second]).unwrap();
+        assert_eq!(names(&tied), vec!["second".to_owned()]);
+
+        let both = batch(&[10, 11], "both");
+        let distinct = dedup_spans(&[both]).unwrap();
+        assert_eq!(distinct.num_rows(), 2);
+    }
+}

@@ -1,6 +1,6 @@
 # C · Web UI on mocks
 
-Track C of Wave 1 builds the observability pages of spec 11 in `web/`. They run against the MSW mocks from `fixtures/api/` (D72, D76) and against a seeded mock generator in `web/` (D129). A real server is not needed. The pages in scope are the ones whose API contract exists today in `crates/server/openapi.json`:
+Track C of Wave 1 builds the observability pages of spec 11 in `web/`. They run against the MSW mocks from `fixtures/api/` (D72, D76) and against a seeded mock generator in `web/` (D131). A real server is not needed. The pages in scope are the ones whose API contract exists today in `crates/server/openapi.json`:
 - the traces and spans lists;
 - the trace view;
 - sessions and users;
@@ -36,29 +36,29 @@ The plan has 29 sub-phases, **U1–U29**. One agent does each one, in order, and
 
 These were settled with the user on 2026-11-11. U1 writes them into `docs/mvp-decisions.md` and spec 11.
 
-**Numbering:** U1 checked on 2026-11-11. `main` ends at D113. This branch already had D118, and B2's plan has D114–D120, so the draft IDs D119–D130 moved to **D121–D132**: D119→D121, D120→D122, D121→D123, D122→D124, D123→D125, D124→D126, D125→D127, D126→D128, D127→D129, D128→D130, D129→D131, D130→D132.
+**Numbering:** U1 checked on 2026-11-11. `main` ends at D113. This branch already had D118, and B2's plan has D114–D120, so the draft IDs D119–D130 moved to D121–D132. When `main` was merged in, A1's M2 held D119–D120 and B2 held D121–D122, so they moved again to **D123–D134**: draft D119→D123, D120→D124, D121→D125, D122→D126, D123→D127, D124→D128, D125→D129, D126→D130, D127→D131, D128→D132, D129→D133, D130→D134.
 
 | # | Decision | Source |
 |---|---|---|
-| D121 | **C's scope is the pages whose API contract exists.** The pages are traces, spans, the trace view, sessions, users, the dashboard, saved views, the filter bar, the ⌘K palette and live mode. Several pages and actions have no contract yet, and the tracks that own them add it; they get their own UI plans then. Those are: the SQL console (`/sql`), datasets, experiments, evaluators and online rules, alerts, settings, API keys, members, login/signup/setup, bulk actions (add to dataset, delete, export), the annotation form, "run evaluator on this trace", and GDPR deletion. C only requests contracts; it never writes them. | User |
-| D122 | **Layout.** A thin top bar (product, org/project switcher, ⌘K, theme, user) and a **collapsible left sidebar** with the project pages. The sidebar collapses to icons and its state is in localStorage. It lists only pages that exist. | User |
-| D123 | **A trace opens in a resizable split beside the list.** Clicking a row sets `?trace=<id>` and the list keeps its scroll and selection. j/k (or ↑/↓) move between rows and the open trace follows; Esc closes the split. The split ratio is in localStorage. The same trace view is also a full page at `/:org/:project/traces/:traceId` for links. Inside the trace view, the span tree and the span detail are a second resizable split. There is no drawer and no modal. | User |
-| D124 | **The span tree and the timeline are one combined grid.** Each virtualized row has an indented name (kind icon, status), right-aligned duration, tokens and cost, and a bar on a shared time axis. It has the same rows, selection and scroll as the tree. A **Transcript** toggle shows the trace's LLM and tool spans in order as one conversation. The combined grid is the default, and the mode is remembered in the URL (`mode=transcript`). | User, research |
-| D125 | **Visual tokens.** Inter (already bundled) for text and JetBrains Mono (bundled, `@fontsource-variable/jetbrains-mono`) for IDs, numbers in tables, JSON and code. The base text is 13 px. Table rows are a **fixed 28 px**, single-line, with previews truncated and full on hover. Theme: **dark by default**; light and system stay selectable. Status and span-kind colours are tokens (U2). No external network calls (spec 11 § Quality bar). | User |
-| D126 | **Charts use Recharts through shadcn's `chart` component**, not ECharts. Recharts is in the dashboard route's chunk only. Empty buckets show as gaps for rates and percentiles. | User |
-| D127 | **In the filter bar, the text is the truth.** One single-line CodeMirror editor holds the DSL (spec 05). A small client parser splits top-level `AND` conjuncts and recognises simple shapes (`column op literal`, `IS [NOT] NULL`, `[NOT] IN (…)`, `@>`, `score('n') op x`, `has_score('n')`) as editable chips. Everything else is a raw chip. The server stays the validator: a `400 invalid_filter` underlines the position and shows the message. A broken filter is never applied silently. Autocomplete comes from `GET /schema`. There is no facet sidebar in this plan. | User, research |
-| D128 | **Times.** Local time zone by default, with a "Show times in UTC" setting in the user menu (localStorage). The full RFC 3339 with nanoseconds is in the tooltip and in what copy puts on the clipboard. | User |
-| D129 | **Mock data.** `fixtures/api/` stays the small contract-checked set. A seeded, deterministic generator in `web/src/mocks/generated/` (typed by `schema.gen.ts`) produces thousands of traces and one 10 000-span trace. `just web-dev` switches to it with `?mock=large`, and tests use it through `server.use`. Saved views get stateful in-memory handlers in `web/src/mocks/` for POST, PATCH and DELETE. | User |
-| D130 | **Tests are Vitest and Testing Library only** (D74). Page tests run on the MSW mocks with `server.use` overrides and never mock modules. Pure modules (tree rows, the timeline scale, the DSL chip parser, URL state, formatters) get unit tests. The quality-bar targets are checked by bounded rendered-row counts and by pure-function tests on 10 000 spans, not by timing. The U8 gate covers visuals. There is no Playwright. | User |
-| D131 | **Main lists.** Traces (one row per trace) and Spans (one row per span) are separate pages with the same table and filter bar, as in spec 11. There is no spans-first default. | User |
-| D132 | **Live mode is in this plan** (U26–U28). It uses `EventSource` on `/traces/stream` and `/traces/{id}/stream` (spec 09 § SSE), mocked with MSW's `sse()`. | User |
+| D123 | **C's scope is the pages whose API contract exists.** The pages are traces, spans, the trace view, sessions, users, the dashboard, saved views, the filter bar, the ⌘K palette and live mode. Several pages and actions have no contract yet, and the tracks that own them add it; they get their own UI plans then. Those are: the SQL console (`/sql`), datasets, experiments, evaluators and online rules, alerts, settings, API keys, members, login/signup/setup, bulk actions (add to dataset, delete, export), the annotation form, "run evaluator on this trace", and GDPR deletion. C only requests contracts; it never writes them. | User |
+| D124 | **Layout.** A thin top bar (product, org/project switcher, ⌘K, theme, user) and a **collapsible left sidebar** with the project pages. The sidebar collapses to icons and its state is in localStorage. It lists only pages that exist. | User |
+| D125 | **A trace opens in a resizable split beside the list.** Clicking a row sets `?trace=<id>` and the list keeps its scroll and selection. j/k (or ↑/↓) move between rows and the open trace follows; Esc closes the split. The split ratio is in localStorage. The same trace view is also a full page at `/:org/:project/traces/:traceId` for links. Inside the trace view, the span tree and the span detail are a second resizable split. There is no drawer and no modal. | User |
+| D126 | **The span tree and the timeline are one combined grid.** Each virtualized row has an indented name (kind icon, status), right-aligned duration, tokens and cost, and a bar on a shared time axis. It has the same rows, selection and scroll as the tree. A **Transcript** toggle shows the trace's LLM and tool spans in order as one conversation. The combined grid is the default, and the mode is remembered in the URL (`mode=transcript`). | User, research |
+| D127 | **Visual tokens.** Inter (already bundled) for text and JetBrains Mono (bundled, `@fontsource-variable/jetbrains-mono`) for IDs, numbers in tables, JSON and code. The base text is 13 px. Table rows are a **fixed 28 px**, single-line, with previews truncated and full on hover. Theme: **dark by default**; light and system stay selectable. Status and span-kind colours are tokens (U2). No external network calls (spec 11 § Quality bar). | User |
+| D128 | **Charts use Recharts through shadcn's `chart` component**, not ECharts. Recharts is in the dashboard route's chunk only. Empty buckets show as gaps for rates and percentiles. | User |
+| D129 | **In the filter bar, the text is the truth.** One single-line CodeMirror editor holds the DSL (spec 05). A small client parser splits top-level `AND` conjuncts and recognises simple shapes (`column op literal`, `IS [NOT] NULL`, `[NOT] IN (…)`, `@>`, `score('n') op x`, `has_score('n')`) as editable chips. Everything else is a raw chip. The server stays the validator: a `400 invalid_filter` underlines the position and shows the message. A broken filter is never applied silently. Autocomplete comes from `GET /schema`. There is no facet sidebar in this plan. | User, research |
+| D130 | **Times.** Local time zone by default, with a "Show times in UTC" setting in the user menu (localStorage). The full RFC 3339 with nanoseconds is in the tooltip and in what copy puts on the clipboard. | User |
+| D131 | **Mock data.** `fixtures/api/` stays the small contract-checked set. A seeded, deterministic generator in `web/src/mocks/generated/` (typed by `schema.gen.ts`) produces thousands of traces and one 10 000-span trace. `just web-dev` switches to it with `?mock=large`, and tests use it through `server.use`. Saved views get stateful in-memory handlers in `web/src/mocks/` for POST, PATCH and DELETE. | User |
+| D132 | **Tests are Vitest and Testing Library only** (D74). Page tests run on the MSW mocks with `server.use` overrides and never mock modules. Pure modules (tree rows, the timeline scale, the DSL chip parser, URL state, formatters) get unit tests. The quality-bar targets are checked by bounded rendered-row counts and by pure-function tests on 10 000 spans, not by timing. The U8 gate covers visuals. There is no Playwright. | User |
+| D133 | **Main lists.** Traces (one row per trace) and Spans (one row per span) are separate pages with the same table and filter bar, as in spec 11. There is no spans-first default. | User |
+| D134 | **Live mode is in this plan** (U26–U28). It uses `EventSource` on `/traces/stream` and `/traces/{id}/stream` (spec 09 § SSE), mocked with MSW's `sse()`. | User |
 
 ## Boundaries
 
 ```
 web/  ── openapi-fetch / openapi-react-query ──▶  crates/server/openapi.json (contract, D69)
 web/src/mocks/handlers.ts  ◀── fixtures/api/manifest.json + responses (D72, generated by `just api-examples`)
-web/src/mocks/generated/   seeded large dataset (D129), dev + tests only, never in dist/
+web/src/mocks/generated/   seeded large dataset (D131), dev + tests only, never in dist/
 web/src/mocks/saved-views.ts  stateful POST/PATCH/DELETE for saved views (dev + tests)
 ```
 
@@ -73,7 +73,7 @@ None of these blocks this plan. They are recorded in U1's decision log and in th
 
 | # | For | Request |
 |---|---|---|
-| R1 | server / contract owners | Contracts for the pages excluded by D121: `POST /sql` (D98, D101), `POST /scores` and `/score-definitions` (annotation form), `/api-keys` (the onboarding snippet's key prefix), datasets, experiments, evaluators, online rules, alerts, channels, members, models, deletions and the auth forms. |
+| R1 | server / contract owners | Contracts for the pages excluded by D123: `POST /sql` (D98, D101), `POST /scores` and `/score-definitions` (annotation form), `/api-keys` (the onboarding snippet's key prefix), datasets, experiments, evaluators, online rules, alerts, channels, members, models, deletions and the auth forms. |
 | R2 | server / A2 | **Batch span payloads for Transcript.** U20 fetches each LLM and tool span's detail separately (bounded concurrency, first 50). An endpoint returning the payloads of several spans of one trace (for example `GET /traces/{trace_id}/spans?ids=…&fields=input,output`) would turn N requests into one. |
 | R3 | server / A2 | **Value suggestions for autocomplete** (future facet sidebar): distinct values with counts for low-cardinality columns (`status`, `model`, `environment`, `release`, `tags`, `span_kind`), scoped by the current filter and time range. |
 
@@ -95,7 +95,7 @@ Looked up on 2026-11-11. Each is the newest release at least 7 days old.
 
 | Package | Version | Added in | For |
 |---|---|---|---|
-| `@fontsource-variable/jetbrains-mono` | 5.3.0 | U2 | mono font (D125) |
+| `@fontsource-variable/jetbrains-mono` | 5.3.0 | U2 | mono font (D127) |
 | `@tanstack/react-table` | 9.3.1 | U6 | column model: visibility, sizing, order, sorting state. **v9 changed the API compared with v8**: follow the v9 types in `node_modules`, not v8 examples. |
 | `@tanstack/react-virtual` | 3.14.26 | U6 | row virtualization |
 | `react-resizable-panels` | 4.17.0 | U7 | splits (through shadcn `resizable`) |

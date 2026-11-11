@@ -1,0 +1,362 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "main.py"
+            }
+          }
+        ],
+        "droppedAttributesCount": 0,
+        "entityRefs": []
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "lmnr.tracer",
+            "version": "",
+            "attributes": [],
+            "droppedAttributesCount": 0
+          },
+          "spans": [
+            {
+              "traceId": "a398469a9572bd282d459d34c20a4a06",
+              "spanId": "c272b6d7f49f73df",
+              "traceState": "",
+              "parentSpanId": "",
+              "flags": 256,
+              "name": "answer-weather",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225590057000000",
+              "attributes": [
+                {
+                  "key": "lmnr.span.type",
+                  "value": {
+                    "stringValue": "DEFAULT"
+                  }
+                },
+                {
+                  "key": "lmnr.span.path",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "answer-weather"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "lmnr.span.ids_path",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "00000000-0000-0000-c272-b6d7f49f73df"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "lmnr.span.instrumentation_source",
+                  "value": {
+                    "stringValue": "python"
+                  }
+                },
+                {
+                  "key": "lmnr.span.sdk_version",
+                  "value": {
+                    "stringValue": "0.8.8"
+                  }
+                },
+                {
+                  "key": "lmnr.span.language_version",
+                  "value": {
+                    "stringValue": "python@3.13"
+                  }
+                },
+                {
+                  "key": "lmnr.span.release",
+                  "value": {
+                    "stringValue": "capture"
+                  }
+                },
+                {
+                  "key": "lmnr.association.properties.metadata.feature",
+                  "value": {
+                    "stringValue": "weather"
+                  }
+                },
+                {
+                  "key": "lmnr.association.properties.session_id",
+                  "value": {
+                    "stringValue": "session-1"
+                  }
+                },
+                {
+                  "key": "lmnr.association.properties.user_id",
+                  "value": {
+                    "stringValue": "user-1"
+                  }
+                },
+                {
+                  "key": "lmnr.association.properties.tags",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "weather"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "lmnr.span.input",
+                  "value": {
+                    "stringValue": "{\"city\":\"Paris\"}"
+                  }
+                },
+                {
+                  "key": "lmnr.span.output",
+                  "value": {
+                    "stringValue": "\"It is 18 °C and sunny in Paris.\""
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "a398469a9572bd282d459d34c20a4a06",
+              "spanId": "7f3803b6bd2d6627",
+              "traceState": "",
+              "parentSpanId": "c272b6d7f49f73df",
+              "flags": 256,
+              "name": "openai.chat",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590015000000",
+              "endTimeUnixNano": "1767225590056000000",
+              "attributes": [
+                {
+                  "key": "lmnr.span.type",
+                  "value": {
+                    "stringValue": "LLM"
+                  }
+                },
+                {
+                  "key": "lmnr.span.parent_path",
+                  "value": {
+                    "arrayValue": {
+                      "values": []
+                    }
+                  }
+                },
+                {
+                  "key": "lmnr.span.parent_ids_path",
+                  "value": {
+                    "arrayValue": {
+                      "values": []
+                    }
+                  }
+                },
+                {
+                  "key": "lmnr.span.path",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "answer-weather"
+                        },
+                        {
+                          "stringValue": "openai.chat"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "lmnr.span.ids_path",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "00000000-0000-0000-c272-b6d7f49f73df"
+                        },
+                        {
+                          "stringValue": "00000000-0000-0000-7f38-03b6bd2d6627"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "lmnr.span.instrumentation_source",
+                  "value": {
+                    "stringValue": "python"
+                  }
+                },
+                {
+                  "key": "lmnr.span.sdk_version",
+                  "value": {
+                    "stringValue": "0.8.8"
+                  }
+                },
+                {
+                  "key": "lmnr.span.language_version",
+                  "value": {
+                    "stringValue": "python@3.13"
+                  }
+                },
+                {
+                  "key": "lmnr.span.release",
+                  "value": {
+                    "stringValue": "capture"
+                  }
+                },
+                {
+                  "key": "lmnr.association.properties.user_id",
+                  "value": {
+                    "stringValue": "user-1"
+                  }
+                },
+                {
+                  "key": "lmnr.association.properties.session_id",
+                  "value": {
+                    "stringValue": "session-1"
+                  }
+                },
+                {
+                  "key": "lmnr.association.properties.metadata.feature",
+                  "value": {
+                    "stringValue": "weather"
+                  }
+                },
+                {
+                  "key": "lmnr.span.instrumentation_scope.name",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "lmnr.span.instrumentation_scope.version",
+                  "value": {
+                    "stringValue": "3.45.0"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "llm.headers",
+                  "value": {
+                    "stringValue": "None"
+                  }
+                },
+                {
+                  "key": "llm.is_streaming",
+                  "value": {
+                    "boolValue": false
+                  }
+                },
+                {
+                  "key": "gen_ai.request.base_url",
+                  "value": {
+                    "stringValue": "https://api.openai.com/v1/"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"content\":\"What's the weather in Paris?\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "chatcmpl-capture-1"
+                  }
+                },
+                {
+                  "key": "openai.response.system_fingerprint",
+                  "value": {
+                    "stringValue": "fp_capture"
+                  }
+                },
+                {
+                  "key": "llm.usage.total_tokens",
+                  "value": {
+                    "intValue": "36"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "12"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "24"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read_input_tokens",
+                  "value": {
+                    "intValue": "8"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.reasoning_tokens",
+                  "value": {
+                    "intValue": "3"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"finish_reason\":\"stop\",\"index\":0,\"logprobs\":null,\"message\":{\"content\":\"It is 18 °C and sunny in Paris.\",\"refusal\":null,\"role\":\"assistant\",\"annotations\":null,\"audio\":null,\"function_call\":null,\"tool_calls\":null}}]"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            }
+          ],
+          "schemaUrl": ""
+        }
+      ],
+      "schemaUrl": ""
+    }
+  ]
+}

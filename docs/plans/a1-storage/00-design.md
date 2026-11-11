@@ -67,10 +67,10 @@ impl Storage {
     pub async fn append_spans(&self, project: ProjectId, batch: RecordBatch) -> Result<AppendReceipt, AppendError>;
     pub async fn append_scores(&self, project: ProjectId, batch: RecordBatch) -> Result<AppendReceipt, AppendError>;
 
-    /// A `SessionContext` configured for one query (memory cap, parallelism) and the
-    /// project's providers (`spans`, `traces`, `scores`), all bound to one read snapshot.
-    /// Nothing is registered by name: the query layer registers its views (D89).
-    pub fn query(&self, project: ProjectId, options: QueryOptions) -> Result<ProjectQuery, QueryError>;
+    /// The project's providers, all bound to one read snapshot. No session is built:
+    /// the query layer registers its views on `runtime` (D89, D91).
+    /// `traces` is an empty table until M3.
+    pub fn query(&self, project: ProjectId) -> Result<ProjectQuery, QueryError>;
 
     /// Idempotent by `deletion.id`. Rows in scope are hidden from every query once this returns.
     pub async fn register_deletion(&self, deletion: Deletion) -> Result<(), DeletionError>;
@@ -85,14 +85,31 @@ impl Storage {
     pub async fn put_media(&self, project: ProjectId, media: MediaBlob) -> Result<(), StorageError>;
     pub async fn get_media(&self, project: ProjectId, sha256: &Sha256, range: Option<Range<u64>>) -> Result<MediaRead, StorageError>;
 
-    /// Disk space, WAL state and backlog, for `/healthz` and metrics.
+    /// Writer failure flags and memtable bytes. Does no I/O.
     pub fn health(&self) -> StorageHealth;
-    /// Flushes both memtables and waits for the background tasks to stop.
-    pub async fn shutdown(self) -> Result<(), StorageError>;
+    /// Flushes both memtables, stops the background tasks, and releases the directory lock.
+    /// The value stays usable for a query of what was just flushed.
+    pub async fn shutdown(&self) -> Result<(), StorageError>;
+
+    /// One staged-object collection. `max_age` of zero collects every row already written.
+    /// The background task uses one hour. Hidden from the server API; the crash harness calls it.
+    #[doc(hidden)]
+    pub async fn collect_staged(&self, max_age: Duration) -> Result<(), GcError>;
+}
+
+pub struct ProjectQuery {
+    pub spans: Arc<dyn TableProvider>,   // stored schema, binary ids, project_id included
+    pub traces: Arc<dyn TableProvider>,  // empty MemTable until M3
+    pub scores: Arc<dyn TableProvider>,  // stored schema; latest live row per score_id
+    pub runtime: Arc<RuntimeEnv>,        // object store and metadata cache; default memory pool until M6
+    pub target_partitions: NonZeroUsize,
 }
 ```
 
-- `StorageConfig` is the storage section of the server config (D59). It is `serde` with `deny_unknown_fields`, and its defaults are the values in spec 03. Its fields are listed in § Configuration.
+- `StorageConfig` is the storage section of the server config (D59). It is `serde` with `deny_unknown_fields`, and its defaults are the values in spec 03. The fields that exist after M2 are listed in § Configuration; later milestones add theirs when they are implemented.
+- `ProjectQuery` is what `query` returns. A2 builds the session from `runtime` and `target_partitions` and does not look inside the providers (D91).
+- `GcError` is public because `collect_staged` returns it. The other storage errors stay public as well (`OpenError`, `AppendError`, `QueryError`, `StorageError`, and the catalog, object and WAL enums the library already exposes).
+- `register_deletion`, `deletion_status`, `apply_retention`, `drop_project`, `put_media` and `get_media` are the later-milestone surface. They are not implemented.
 - `AppendReceipt { seq, rows }`.
 - Errors are `thiserror` enums, one per operation: `OpenError`, `AppendError`, `QueryError`, `DeletionError`, and `StorageError` for the rest. `AppendError` separates the cases the server maps to HTTP:
   - `Backpressure` (429);
@@ -316,26 +333,28 @@ Tables (migrations owned by `llmobs-storage`, `sqlx::migrate!` like the server's
 
 - One process-wide DataFusion memory pool of `query.max_memory_total` (default 50% of RAM, at most 8 GiB), with each query capped at `query.max_memory` (default 2 GiB), spilling to `<data_dir>/tmp` (G21).
 - **Admission.** A query that can't reserve its initial memory waits up to `query.admission_wait` (default 5 s), then fails with a "busy" error that the server maps to 503.
-- **Metadata cache.** M2 first checks whether DataFusion 55's built-in file metadata cache covers footers and page indexes (G22). The custom `ParquetFileReaderFactory` of spec 03 §4 is written only for what is missing (bloom filters are the likely gap).
+- **Metadata cache.** DataFusion 55's built-in file metadata cache is enough (G22, M2). `query.metadata_cache_bytes` (default 512 MiB; zero disables it) limits that cache. It holds decoded footers and, when configured, column and offset indexes. Bloom-filter bitsets are not in it: a pruning read fetches the bitset from the object. There is no custom `ParquetFileReaderFactory`. On a flushed file whose one row group contained the queried `trace_id`, the bloom was evaluated (`1 total → 1 matched`) and did not prune; the page index was not loaded because the row-group statistics already matched.
 - **S3 read cache** (M6). In S3 mode every page read is a ranged GET: tens of milliseconds each, and charged per request. Parseable (hot tier), OpenObserve (disk cache) and GreptimeDB (read and write caches) all keep data locally for that reason.
   - A bounded on-disk cache under `<data_dir>/cache/` holds byte ranges of data files, keyed by file id and range.
   - Files are immutable, so entries never go stale. Eviction is LRU by bytes (`query.read_cache_bytes`, default 10% of the disk, at most 100 GiB). Entries of obsolete files are dropped when GC deletes the file.
   - A flush or compaction in S3 mode also writes its fresh output into the cache, since recent data is what gets read.
   - In local mode the cache is off: the files are already local.
-  - It sits in the same reader factory as the metadata cache, so the providers don't see it.
+  - The metadata cache is DataFusion's built-in cache, so this read cache does not share a reader factory with it. M6 decides how the byte cache is attached.
   - Until M6 lands, S3 mode is correct but not fast. That is a documented MVP limit if M6 slips.
 
 ## Configuration
 
 `StorageConfig`, the `[storage]` section (D90). Sizes are strings with a binary unit (`"256MiB"`), durations strings with a unit (`"120s"`). Defaults are spec 03's unless stated here. Each milestone adds the fields it uses, and no earlier (AGENTS.md § No placeholders).
 
-- top level: `data_dir`, `object_store` (`local` or `s3://bucket/prefix`; credentials from the standard AWS environment), `min_free_bytes`;
+Present after M2:
+
+- top level: `data_dir`; `object_store` (`file://<absolute path>` or `s3://<bucket>[/<prefix>]`; absent means `file://<data_dir>/objects`); `s3` (`region`, `endpoint`, `force_path_style`, `allow_http`; credentials stay in the standard `AWS_*` environment);
 - `wal`: `sync` (`"always"` or a duration), `segment_bytes`, `group_max_bytes`, `group_max_wait`, `skip_corrupt`;
 - `flush`: `max_bytes`, `max_age`, `upload_concurrency` (default 8, D84);
 - `memtable`: `hard_limit`;
-- `compaction`: `threads`, `target_file_size`, `l0_max_files`, `l0_max_bytes`, `l0_max_age`, `close_delay`, `size_ratio`, `max_memory`;
-- `query`: `max_memory_total`, `max_memory`, `target_partitions`, `metadata_cache_bytes`, `read_cache_bytes` (S3 mode only), `trace_lookback`, `admission_wait`;
-- `gc.grace`, `deletion.max_delay`, `anchor.window`.
+- `query`: `target_partitions` (default: the process parallelism), `metadata_cache_bytes` (default 512 MiB).
+
+Later milestones add, when they implement them: `min_free_bytes`; `compaction.*`; `query.max_memory_total`, `query.max_memory`, `query.read_cache_bytes`, `query.trace_lookback`, `query.admission_wait`; `gc.grace`; `deletion.max_delay`; `anchor.window`.
 
 ## Testing
 
@@ -347,7 +366,7 @@ AGENTS.md requires crash-recovery and concurrency tests for storage. The tools, 
   - every catalog row's object exists;
   - `flushed_seq` never decreases.
 
-  M1 checks the WAL invariants that exist then: every acknowledged batch is present with its row count, every stored batch is complete or absent, no `span_id` appears twice, and sequence numbers increase across runs and never repeat. The catalog, `flushed_seq` and post-compaction checks arrive with M2 and M4.
+  M1 checks the WAL invariants: every acknowledged batch is present with its row count, every stored batch is complete or absent, no `span_id` appears twice, and sequence numbers increase across runs and never repeat. M2 also checks that every catalog object's size matches, that `flushed_seq` never decreases, and that a zero-age collection after the run leaves no staged row from before the final open and no temp file. Post-compaction checks arrive with M4. Deterministic aborts cover each flush hook.
 
   Runs a fixed number of iterations in `just test` and many more in a manual soak mode.
 - **Pause points.** Test-only hooks (`#[cfg(test)]`, inside the crate) that block a task at a named step (after the WAL write, after the Parquet write, before the commit, after the commit, before WAL deletion). They make race tests deterministic: a query during a flush, a compaction racing a deletion, a retention racing a flush.
@@ -415,7 +434,11 @@ Each milestone ends merged, with `just check` green, and gets its own implementa
 
 ## Open questions for the milestone plans
 
-These are left to the plan that needs them, because the answer depends on code or measurements:
-- Does DataFusion 55's file metadata cache include bloom filters? (M2)
-- Is MinIO available for an S3 integration test in CI, or does S3 coverage rely on the fault-injecting wrapper around `InMemory`? (M2)
+Answered in M2:
+
+- DataFusion 55's file metadata cache does **not** include bloom-filter bitsets. It caches footers and page indexes (column and offset indexes) up to `query.metadata_cache_bytes`. Bloom pruning still runs: the bitset is read from the object. No custom reader factory was written (§ Query resources).
+- A real S3 server is not part of CI (D119). S3 coverage there is `FaultStore` around `InMemory`. `crates/storage/tests/s3.rs` runs when `LLMOBS_TEST_S3_ENDPOINT` is set. The `minio/minio` image is no longer published, so the test's doc comment uses Versity Gateway (`versity/versitygw:v1.11.0`). After M2 merged, the test passed against it, including a multipart upload.
+
+Still open:
+
 - What is the exact `start_time` histogram used to cut compaction slices? (M4)

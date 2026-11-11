@@ -1,0 +1,210 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.45.2"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "capture-app"
+            }
+          }
+        ],
+        "droppedAttributesCount": 0,
+        "entityRefs": []
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "openinference.instrumentation.openai",
+            "version": "0.1.69",
+            "attributes": [],
+            "droppedAttributesCount": 0
+          },
+          "spans": [
+            {
+              "traceId": "981f0ab2d3042624bc5d46fc1d8a6bf7",
+              "spanId": "e9410536d9b35ae8",
+              "traceState": "",
+              "parentSpanId": "",
+              "flags": 256,
+              "name": "CreateEmbeddings",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225590035000000",
+              "attributes": [
+                {
+                  "key": "llm.system",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"model\": \"text-embedding-3-small\", \"input\": [\"alpha\", \"beta\"], \"dimensions\": 8, \"encoding_format\": \"base64\"}"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "{\"data\":[{\"embedding\":[-0.5,-0.4000000059604645,-0.30000001192092896,-0.19999998807907104,-0.09999999403953552,0.0,0.10000002384185791,0.19999998807907104],\"index\":0,\"object\":\"embedding\"},{\"embedding\":[0.19999998807907104,0.30000001192092896,0.3999999761581421,0.5,-0.5,-0.4000000059604645,-0.30000001192092896,-0.19999998807907104],\"index\":1,\"object\":\"embedding\"}],\"model\":\"text-embedding-3-small\",\"object\":\"list\",\"usage\":{\"prompt_tokens\":6,\"total_tokens\":6}}"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "embedding.invocation_parameters",
+                  "value": {
+                    "stringValue": "{\"model\": \"text-embedding-3-small\", \"dimensions\": 8, \"encoding_format\": \"base64\"}"
+                  }
+                },
+                {
+                  "key": "embedding.embeddings.0.embedding.text",
+                  "value": {
+                    "stringValue": "alpha"
+                  }
+                },
+                {
+                  "key": "embedding.embeddings.1.embedding.text",
+                  "value": {
+                    "stringValue": "beta"
+                  }
+                },
+                {
+                  "key": "llm.token_count.total",
+                  "value": {
+                    "intValue": "6"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt",
+                  "value": {
+                    "intValue": "6"
+                  }
+                },
+                {
+                  "key": "embedding.model_name",
+                  "value": {
+                    "stringValue": "text-embedding-3-small"
+                  }
+                },
+                {
+                  "key": "embedding.embeddings.0.embedding.vector",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "doubleValue": -0.5
+                        },
+                        {
+                          "doubleValue": -0.4000000059604645
+                        },
+                        {
+                          "doubleValue": -0.30000001192092896
+                        },
+                        {
+                          "doubleValue": -0.19999998807907104
+                        },
+                        {
+                          "doubleValue": -0.09999999403953552
+                        },
+                        {
+                          "doubleValue": 0.0
+                        },
+                        {
+                          "doubleValue": 0.10000002384185792
+                        },
+                        {
+                          "doubleValue": 0.19999998807907104
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "embedding.embeddings.1.embedding.vector",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "doubleValue": 0.19999998807907104
+                        },
+                        {
+                          "doubleValue": 0.30000001192092896
+                        },
+                        {
+                          "doubleValue": 0.3999999761581421
+                        },
+                        {
+                          "doubleValue": 0.5
+                        },
+                        {
+                          "doubleValue": -0.5
+                        },
+                        {
+                          "doubleValue": -0.4000000059604645
+                        },
+                        {
+                          "doubleValue": -0.30000001192092896
+                        },
+                        {
+                          "doubleValue": -0.19999998807907104
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "EMBEDDING"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": {
+                "message": "",
+                "code": 1
+              }
+            }
+          ],
+          "schemaUrl": ""
+        }
+      ],
+      "schemaUrl": ""
+    }
+  ]
+}

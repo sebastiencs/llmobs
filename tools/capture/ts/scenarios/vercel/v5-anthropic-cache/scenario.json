@@ -1,0 +1,23 @@
+{
+  "description": "Vercel AI SDK v5 generateText with an Anthropic prompt marked for cache.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Telemetry is enabled on the call. recordInputs and recordOutputs stay at their defaults, which record message content on spans. The Anthropic base URL already includes /v1, and the client appends /messages. The system message sets providerOptions.anthropic.cacheControl to ephemeral. Scripted usage is input 2100, output 40, cache_read 1800, cache_write 200. The spans copy Anthropic's raw input_tokens of 100 and output_tokens of 40. Cache read and cache write are not usage attributes. Cache write is only in ai.response.providerMetadata, as anthropic.cacheCreationInputTokens and anthropic.usage.cache_creation_input_tokens. ai.response.timestamp is the process clock. Covers D113 (Vercel v5 + Anthropic exclusive input, cache write only in ai.response.providerMetadata).",
+  "instrumentation": "ai",
+  "libraries": ["ai", "@ai-sdk/anthropic", "@opentelemetry/api", "@opentelemetry/sdk-trace-node"],
+  "timestamp_attributes": [{ "key": "ai.response.timestamp", "format": "rfc3339" }],
+  "turns": [
+    {
+      "api": "anthropic.messages",
+      "model": "claude-sonnet-4-5",
+      "message": { "text": "It is 18 °C and sunny in Paris." },
+      "finish": "stop",
+      "usage": { "input": 2100, "output": 40, "cache_read": 1800, "cache_write": 200 }
+    }
+  ]
+}

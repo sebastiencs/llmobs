@@ -130,6 +130,6 @@ Target: a dense developer-tool UI, closer to Laminar, Datadog, Linear and Grafan
 
 ## Answered (2026-11-11)
 
-- Transcript ships as a toggle on the combined tree (D124).
-- No facet sidebar yet (D127, R3 in the C plan).
-- Traces and spans are separate pages (D131). There is no spans-first default.
+- Transcript ships as a toggle on the combined tree (D126).
+- No facet sidebar yet (D129, R3 in the C plan).
+- Traces and spans are separate pages (D133). There is no spans-first default.

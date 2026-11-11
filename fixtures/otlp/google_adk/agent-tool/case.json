@@ -1,0 +1,23 @@
+{
+  "description": "A Google ADK agent with one function tool, run once through an in-memory session.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "google-adk",
+    "instrumentation_version": "2.14.0",
+    "language": "python",
+    "libraries": {
+      "google-adk": "2.14.0",
+      "google-genai": "2.34.0",
+      "opentelemetry-sdk": "1.45.2"
+    },
+    "captured_at": "2026-11-11T15:13:21Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Token semantics"
+  ],
+  "notes": "google-adk 2.14.0. The runner sets GOOGLE_API_KEY, so the Gemini client uses the API-key path and does not probe the metadata server. Gemini.base_url is the mock. Cloud Trace export is started only by the ADK CLI server, which this scenario does not run. ADK_EXPERIMENTAL_TELEMETRY is false. ADK_TELEMETRY_SCHEMA_VERSION_OPT_IN is 1: 2.14's default schema 2 drops the call_llm span, and schema 1 keeps gcp.vertex.agent.llm_request and llm_response. ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS is true, which is also the default. Event ids come from set_id_provider, a counter of capture-N. The session id is session-1 and the user id is user-1. Spans: invocation, invoke_agent weather_agent, then for each model turn a call_llm with a child generate_content, and execute_tool get_weather between the turns. Token counts are the scripted inclusive numbers, input 40 output 12 then input 58 output 16. The tool-call turn's finish reason is stop, because the Gemini body uses STOP. ADK appends an internal-name sentence to the system instruction. gen_ai.agent.description is an empty string. prices.json has no Gemini model row."
+}

@@ -59,7 +59,7 @@ Parsed with `sqlparser::Parser::parse_expr` (DataFusion dialect), then validated
 
 ### UI builder
 
-The filter text is the truth (D127, spec 11 § Filter bar). One editor holds the DSL. A client parser splits top-level `AND` conjuncts and recognises simple shapes as editable chips; anything else is a raw chip. The server stays the validator.
+The filter text is the truth (D129, spec 11 § Filter bar). One editor holds the DSL. A client parser splits top-level `AND` conjuncts and recognises simple shapes as editable chips; anything else is a raw chip. The server stays the validator.
 
 ### Saved views
 
