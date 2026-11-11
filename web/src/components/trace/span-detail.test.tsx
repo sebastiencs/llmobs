@@ -22,6 +22,7 @@ beforeEach(() => {
 it("shows the fixture span input on the input output tab", async () => {
   await renderApp(`/acme/support-bot/traces?trace=${TRACE_1}&span=${LLM_SPAN}`);
   const panel = await screen.findByRole("region", { name: "Span" });
+  fireEvent.mouseDown(within(panel).getByRole("tab", { name: "Input / Output" }));
   expect(within(panel).getByText("My order 1234 hasn't arrived.")).toBeInTheDocument();
   expect(
     within(panel).queryByText("You are a support agent. Use tools to look up orders."),
@@ -111,6 +112,89 @@ it("keeps a long exception stacktrace collapsed", async () => {
   expect(within(panel).queryByText("at caller-12")).not.toBeInTheDocument();
   fireEvent.click(within(panel).getByRole("button", { name: "Show stacktrace" }));
   expect(within(panel).getByText(/at caller-12/)).toBeInTheDocument();
+});
+
+const TRACE_4 = "a1000000000000000000000000000004";
+const MEDIA_SPAN = "b100000000000043";
+const MEDIA_SHA = "497790947d4666760ce38f3c00e852c71fdb66cae849bae8e9ede352719e1581";
+
+it("renders the fixture image on the chat tab", async () => {
+  await renderApp(`/acme/support-bot/traces?trace=${TRACE_4}&span=${MEDIA_SPAN}`);
+  const panel = await screen.findByRole("region", { name: "Span" });
+  expect(within(panel).getByRole("tab", { name: "Chat", selected: true })).toBeInTheDocument();
+  const img = panel.querySelector("img");
+  expect(img).toHaveAttribute("src", `/api/v1/projects/acme%2Fsupport-bot/media/${MEDIA_SHA}`);
+  expect(img).toHaveAttribute("loading", "lazy");
+});
+
+it("links a tool call to its response", async () => {
+  server.use(
+    http.get(SPAN_URL, ({ params }) => {
+      if (params.span_id !== LLM_SPAN) return passthrough();
+      return HttpResponse.json({
+        ...llmSpan,
+        input: {
+          format: "messages",
+          value: [
+            {
+              role: "assistant",
+              parts: [
+                {
+                  type: "tool_call",
+                  id: "call_9",
+                  name: "lookup",
+                  arguments: { order_id: "9" },
+                },
+              ],
+            },
+          ],
+        },
+        output: {
+          format: "messages",
+          value: [
+            {
+              role: "tool",
+              parts: [
+                { type: "tool_call_response", id: "call_9", response: { status: "shipped" } },
+              ],
+            },
+          ],
+        },
+      });
+    }),
+  );
+  await renderApp(`/acme/support-bot/traces?trace=${TRACE_1}&span=${LLM_SPAN}`);
+  const panel = await screen.findByRole("region", { name: "Span" });
+  const call = document.getElementById("tool-call-call_9");
+  const response = document.getElementById("tool-response-call_9");
+  if (!(call instanceof HTMLElement) || !(response instanceof HTMLElement)) {
+    throw new Error("missing tool link");
+  }
+  expect(panel.contains(call)).toBe(true);
+  expect(panel.contains(response)).toBe(true);
+  expect(within(call).getByRole("button", { name: "→ response" })).toBeInTheDocument();
+  expect(within(response).getByRole("button", { name: "lookup" })).toBeInTheDocument();
+  fireEvent.click(within(response).getByRole("button", { name: "lookup" }));
+  expect(document.getElementById("tool-call-call_9")).toBe(call);
+});
+
+it("keeps a stored input output tab on a messages span", async () => {
+  localStorage.setItem(`${STORAGE_PREFIX}span-tab`, "io");
+  await renderApp(`/acme/support-bot/traces?trace=${TRACE_1}&span=${LLM_SPAN}`);
+  const panel = await screen.findByRole("region", { name: "Span" });
+  expect(
+    within(panel).getByRole("tab", { name: "Input / Output", selected: true }),
+  ).toBeInTheDocument();
+});
+
+it("falls back when the stored chat tab does not apply", async () => {
+  localStorage.setItem(`${STORAGE_PREFIX}span-tab`, "chat");
+  await renderApp(`/acme/support-bot/traces?trace=${TRACE_1}&span=b100000000000013`);
+  const panel = await screen.findByRole("region", { name: "Span" });
+  expect(within(panel).queryByRole("tab", { name: "Chat" })).not.toBeInTheDocument();
+  expect(
+    within(panel).getByRole("tab", { name: "Input / Output", selected: true }),
+  ).toBeInTheDocument();
 });
 
 it("appends an attribute filter on the traces page", async () => {

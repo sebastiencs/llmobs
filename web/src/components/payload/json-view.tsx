@@ -3,6 +3,7 @@ import { cn } from "cn";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { type ReactNode, useMemo, useRef, useState } from "react";
 import { CopyButton } from "@/components/copy-button";
+import { MediaChip } from "@/components/payload/media-chip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -251,11 +252,7 @@ function JsonPrimitive({
   onToggle: () => void;
 }) {
   if (row.kind === "string" && row.preview.startsWith("media://")) {
-    return (
-      <span className="rounded bg-muted px-1 text-muted-foreground">
-        <Highlight text={row.preview} query={query} />
-      </span>
-    );
+    return <MediaChip uri={row.preview} />;
   }
   if (row.kind === "string" && row.preview.length > STRING_LIMIT && !open) {
     const shown = `${row.preview.slice(0, STRING_LIMIT)}… (${row.preview.length} chars)`;

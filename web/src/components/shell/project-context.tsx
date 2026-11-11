@@ -20,8 +20,12 @@ export function ProjectProvider({
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>;
 }
 
+export function useOptionalProject(): ProjectContextValue | null {
+  return useContext(ProjectContext);
+}
+
 export function useProject(): ProjectContextValue {
-  const value = useContext(ProjectContext);
+  const value = useOptionalProject();
   if (!value) {
     throw new Error("useProject must be used within a project route");
   }

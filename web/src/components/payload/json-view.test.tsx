@@ -40,6 +40,8 @@ it("truncates a long string until it is expanded", () => {
 
 it("renders a media reference as a chip", () => {
   render(<JsonView value="media://abc123" />);
-  expect(screen.getByText("media://abc123")).toBeInTheDocument();
+  expect(screen.getByText("abc123")).toBeInTheDocument();
+  expect(screen.getByText("file")).toBeInTheDocument();
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /chars/ })).not.toBeInTheDocument();
 });
