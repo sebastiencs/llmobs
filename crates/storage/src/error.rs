@@ -66,6 +66,15 @@ pub enum OpenError {
     /// Replaying a WAL failed for a reason other than a corrupt record.
     #[error(transparent)]
     WalReplay(#[from] WalError),
+    /// `catalog.db` could not be opened or migrated.
+    #[error(transparent)]
+    Catalog(#[from] CatalogError),
+    /// The object store could not be opened, or a startup cleanup failed.
+    #[error(transparent)]
+    Objects(#[from] ObjectError),
+    /// The shared DataFusion runtime could not be built.
+    #[error("building the query runtime")]
+    Runtime,
 }
 
 /// `append_spans` or `append_scores` failed.
@@ -189,6 +198,288 @@ impl WalError {
             action,
             path: path.to_path_buf(),
             source,
+        }
+    }
+}
+
+/// Opening or reading `catalog.db` failed.
+///
+/// `what` is a static description. The message never includes a cell value.
+#[derive(Debug, thiserror::Error)]
+pub enum CatalogError {
+    /// The database file could not be opened.
+    #[error("catalog {path}: {source}")]
+    Open {
+        /// `<data_dir>/catalog.db`.
+        path: PathBuf,
+        /// The SQLite error.
+        #[source]
+        source: sqlx::Error,
+    },
+    /// A migration could not be applied.
+    #[error("catalog migration: {source}")]
+    Migrate {
+        /// The migration error.
+        #[source]
+        source: sqlx::migrate::MigrateError,
+    },
+    /// A query failed.
+    #[error("catalog database: {source}")]
+    Db {
+        /// The SQLite error.
+        #[source]
+        source: sqlx::Error,
+    },
+    /// A stored value is not one the catalog can represent.
+    #[error("corrupt catalog: {what}")]
+    Corrupt {
+        /// Static description, for example `unknown table_name`.
+        what: &'static str,
+    },
+}
+
+/// One staged-object collection failed.
+///
+/// [`GcError::Object`] names the key. Keys contain project ids, so callers log
+/// this error at debug.
+#[derive(Debug, thiserror::Error)]
+pub enum GcError {
+    /// `catalog.db` rejected the read or the row delete.
+    #[error(transparent)]
+    Catalog(#[from] CatalogError),
+    /// The object store rejected the delete.
+    #[error(transparent)]
+    Object(#[from] ObjectError),
+    /// A test fault armed at [`crate::hooks::HookPoint::GcBeforeDelete`].
+    #[error("staged collection was interrupted")]
+    Fault,
+}
+
+impl CatalogError {
+    pub(crate) fn db(source: sqlx::Error) -> Self {
+        Self::Db { source }
+    }
+
+    pub(crate) fn corrupt(what: &'static str) -> Self {
+        Self::Corrupt { what }
+    }
+}
+
+/// A catalog commit failed.
+///
+/// A conflict leaves the staged objects in place. After either variant the
+/// in-memory catalog is unchanged.
+#[derive(Debug, thiserror::Error)]
+pub enum CommitError {
+    /// A precondition failed and the transaction rolled back.
+    #[error("catalog conflict: {reason}")]
+    Conflict {
+        /// Static reason. Never a path or a cell value.
+        reason: &'static str,
+    },
+    /// SQLite failed, or an injected `CatalogCommit` fault fired.
+    #[error("catalog database: {source}")]
+    Db {
+        /// The SQLite error, or the injected fault wrapped as I/O.
+        #[source]
+        source: sqlx::Error,
+    },
+}
+
+impl CommitError {
+    pub(crate) fn db(source: sqlx::Error) -> Self {
+        Self::Db { source }
+    }
+
+    pub(crate) fn conflict(reason: &'static str) -> Self {
+        Self::Conflict { reason }
+    }
+}
+
+/// An object-store read, write, or delete failed.
+///
+/// `path` is an object key or a filesystem path. The message never includes
+/// object bytes.
+#[derive(Debug, thiserror::Error)]
+pub enum ObjectError {
+    /// A local filesystem call failed.
+    #[error("{action} {path}: {source}")]
+    Io {
+        /// What was being done, for example `writing object`.
+        action: &'static str,
+        /// Filesystem path involved in the failed call.
+        path: PathBuf,
+        /// The filesystem error.
+        #[source]
+        source: io::Error,
+    },
+    /// The final object name is already present.
+    ///
+    /// Names are unique, so this is a caller bug or a retried upload that
+    /// actually landed.
+    #[error("object already exists: {path}")]
+    AlreadyExists {
+        /// Relative object key.
+        path: String,
+    },
+    /// A remote `put` or multipart upload failed.
+    ///
+    /// The object may already exist: a failed completion is ambiguous. The
+    /// flush retries under a new name and leaves this key for GC.
+    #[error("object upload {path}: {source}")]
+    Upload {
+        /// Object key that was being written.
+        path: String,
+        /// The object-store error.
+        #[source]
+        source: Box<object_store::Error>,
+    },
+    /// A store operation other than an upload failed.
+    #[error("object store {action} {path}: {source}")]
+    Store {
+        /// What was being done, for example `deleting object`.
+        action: &'static str,
+        /// Object key.
+        path: String,
+        /// The object-store error.
+        #[source]
+        source: Box<object_store::Error>,
+    },
+    /// The object key is not a relative path of normal segments.
+    #[error("invalid object path")]
+    InvalidPath,
+    /// The S3 client or the local store could not be built.
+    #[error("object store client: {source}")]
+    Client {
+        /// The object-store error. It does not include credentials.
+        #[source]
+        source: Box<object_store::Error>,
+    },
+}
+
+impl ObjectError {
+    pub(crate) fn io(action: &'static str, path: &Path, source: io::Error) -> Self {
+        Self::Io {
+            action,
+            path: path.to_path_buf(),
+            source,
+        }
+    }
+
+    pub(crate) fn upload(path: &str, source: object_store::Error) -> Self {
+        Self::Upload {
+            path: path.to_owned(),
+            source: Box::new(source),
+        }
+    }
+
+    pub(crate) fn store(action: &'static str, path: &str, source: object_store::Error) -> Self {
+        Self::Store {
+            action,
+            path: path.to_owned(),
+            source: Box::new(source),
+        }
+    }
+
+    pub(crate) fn client(source: object_store::Error) -> Self {
+        Self::Client {
+            source: Box::new(source),
+        }
+    }
+}
+
+/// Encoding a partition as one Parquet file failed.
+///
+/// The message names the table or a static reason. It never includes row content.
+#[derive(Debug, thiserror::Error)]
+pub enum ParquetWriteError {
+    /// The batches cannot be written: empty, the wrong schema, or a bad level.
+    #[error("parquet write: {reason}")]
+    Invalid {
+        /// Static reason. Never a cell value.
+        reason: &'static str,
+    },
+    /// An Arrow kernel failed while sorting or measuring the batches.
+    #[error("parquet write: {source}")]
+    Arrow {
+        /// The Arrow error.
+        #[source]
+        source: ArrowError,
+    },
+    /// The Parquet writer failed.
+    #[error("parquet write: {source}")]
+    Parquet {
+        /// The Parquet error.
+        #[source]
+        source: Box<parquet::errors::ParquetError>,
+    },
+}
+
+/// A memtable flush failed before the catalog commit.
+///
+/// The frozen memtable stays. The task retries with new file names.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum FlushError {
+    /// Sorting or encoding the frozen batches failed.
+    #[error("flush prepare: {0}")]
+    Prepare(ParquetWriteError),
+    /// A span identity column was missing or null.
+    #[error("flush dedup: {reason}")]
+    Dedup {
+        /// Static reason. Never a cell value.
+        reason: &'static str,
+    },
+    /// Recording the paths in `staged_objects` failed.
+    #[error("flush stage: {0}")]
+    Stage(CatalogError),
+    /// A durable object write failed. The object may already exist.
+    #[error("flush write: {0}")]
+    Write(ObjectError),
+    /// The catalog edit failed. Staged objects stay for GC.
+    #[error("flush commit: {0}")]
+    Commit(CommitError),
+    /// `spawn_blocking` or an upload task panicked.
+    #[error("flush task panicked")]
+    Task,
+    /// A test hook returned a fault.
+    #[error("flush fault")]
+    Fault,
+}
+
+impl FlushError {
+    pub(crate) fn dedup(reason: &'static str) -> Self {
+        Self::Dedup { reason }
+    }
+
+    pub(crate) fn prepare(source: ParquetWriteError) -> Self {
+        Self::Prepare(source)
+    }
+
+    pub(crate) fn stage(source: CatalogError) -> Self {
+        Self::Stage(source)
+    }
+
+    pub(crate) fn write(source: ObjectError) -> Self {
+        Self::Write(source)
+    }
+
+    pub(crate) fn commit(source: CommitError) -> Self {
+        Self::Commit(source)
+    }
+}
+
+impl ParquetWriteError {
+    pub(crate) fn invalid(reason: &'static str) -> Self {
+        Self::Invalid { reason }
+    }
+
+    pub(crate) fn arrow(source: ArrowError) -> Self {
+        Self::Arrow { source }
+    }
+
+    pub(crate) fn parquet(source: parquet::errors::ParquetError) -> Self {
+        Self::Parquet {
+            source: Box::new(source),
         }
     }
 }

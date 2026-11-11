@@ -23,7 +23,9 @@ Configuration keys named in this spec (`wal.sync`, `flush.max_bytes`, …) live 
     media/<project_id>/<sha256>
 ```
 
-With `storage.object_store = s3://bucket/prefix`, the `objects/` tree lives in the bucket; `catalog.db`, `meta.db` and `wal/` stay on local disk, which **must be persistent** (an ephemeral disk loses up to `flush.max_age` of acknowledged data on machine loss — documented).
+With `storage.object_store = s3://bucket/prefix`, the `objects/` tree lives in the bucket; `catalog.db`, `meta.db` and `wal/` stay on local disk, which **must be persistent** (an ephemeral disk loses up to `flush.max_age` of acknowledged data on machine loss — documented). Absent, `object_store` is `file://<data_dir>/objects`. A local path is `file://<absolute path>`.
+
+A local object write lands in the destination directory as `.<filename>.tmp-<uuidv7>`, then `sync_all`, rename onto `<filename>`, and an fsync of that directory. Startup deletes leftover files whose names start with `.` and contain `.tmp-`.
 
 **Partition key:** `(project_id, day)`.
 - For `spans` and `traces`, `day` is the trace's **anchor day** (§ Trace anchor). It equals the UTC date of the row's own `start_time` or differs from it by at most one day.
@@ -68,7 +70,7 @@ The `wal/<table>/` directory is fsynced when a segment is created or deleted.
 
 **Write errors are final.** If a write or `fdatasync` fails, the writer fails every pending ack (`WalFailed`), refuses further writes and reports the storage unhealthy; the operator restarts the process. The failed fsync is never retried, because the kernel may already have dropped the dirty pages. The write-and-sync step runs on a blocking thread and cannot be cancelled halfway.
 
-**Checkpoint.** The catalog stores `flushed_seq` per table (highest WAL seq whose rows are in Parquet files). Segments whose max seq ≤ `flushed_seq` are deleted, and only after the catalog transaction that advanced `flushed_seq` has returned (§2).
+**Checkpoint.** The catalog stores `flushed_seq` per table (highest WAL seq whose rows are in Parquet files). WAL segments are deleted only after the catalog transaction that advanced `flushed_seq` has returned (§2). Segment `k` is deleted when a later segment exists and `first_seq(k + 1) - 1 <= flushed_seq`. The newest segment stays, because the writer may still be appending to it (D120). At low traffic that segment can hold flushed and unflushed records; replay skips the flushed ones. The extra bytes are at most one segment (`wal.segment_bytes`).
 
 **Recovery.** At startup, before ingestion opens, for each table:
 - read segments in order, skip records with seq ≤ `flushed_seq`, and insert the rest into the memtable;
@@ -107,9 +109,11 @@ Per table: `active` (accepting inserts) and at most one `frozen` (being flushed)
    - set `flushed_seq = frozen_max_seq`, compare-and-set (it must be greater than the current value).
 
    The same commit publishes a read state with the new files and without `frozen`.
-6. **Truncate.** Delete the WAL segments whose max seq ≤ `flushed_seq`.
+6. **Truncate.** Delete the WAL segments covered by `flushed_seq`, keeping the newest (§1, D120).
 
 Step 5 makes the switch atomic for readers: a query snapshot sees either (frozen, without the new files) or (the new files, without frozen), never both or neither.
+
+A failure in steps 2–5 keeps `frozen` and retries that same view under new file names. The wait starts at 1 s, doubles, and is capped at 60 s, and it resets after an attempt that writes nothing or commits. A shutdown signal ends the wait that is in progress. The two flush tasks then have 30 s together to finish; a task still running is cancelled, and its rows stay in the WAL for the next open. The staged names of a failed attempt stay for GC (§5). A failure of step 6 does not undo the commit: the sequence is remembered and truncation is retried with the same backoff. The task also wakes on a timer (50 ms when no age deadline is sooner), so age and data recovered at startup flush without another append.
 
 ## 3. Parquet files
 
@@ -221,7 +225,7 @@ If a precondition fails, the transaction rolls back and the job gets a conflict:
 
 **Claims.** Background jobs claim their input files in memory before reading them, so compaction and the deletion rewriter never work on the same file. Claims don't survive a restart and need not: an interrupted job is simply redone.
 
-**Metadata cache:** an LRU cache (default 512 MiB) of decoded Parquet footers, page indexes and bloom filters keyed by file id, plugged into DataFusion through its reader factory. Files are immutable, so entries never go stale. DataFusion 55's built-in file metadata cache is used for whatever it covers; a custom `ParquetFileReaderFactory` adds only what is missing.
+**Metadata cache.** One process-wide DataFusion `RuntimeEnv`, built at open and returned by every `Storage::query`. `query.metadata_cache_bytes` (default 512 MiB; zero disables it) is `CacheManagerConfig`'s file-metadata cache limit. The cache stores decoded Parquet footers. With a cache configured, DataFusion also loads column and offset indexes into that metadata. Bloom-filter bitsets are not part of it: the footer records their offsets, and a pruning read fetches the bitset from the object. Files are immutable, so entries never go stale. There is no custom `ParquetFileReaderFactory`.
 
 ## 5. Compaction
 
@@ -247,11 +251,11 @@ Runs in a background task with bounded parallelism (`compaction.threads`, defaul
 
 ## 6. Query path
 
-For each request, `Storage::query` returns a `ProjectQuery`: the project's `TableProvider`s, all bound to one `ReadState` (catalog, memtable and tombstones, §4), plus a per-query `RuntimeEnv` (memory pool, spill directory) and `target_partitions`. The query layer (05, D91) builds the DataFusion session from it. The providers expose the stored Arrow schemas of 01 (binary IDs, `project_id`). They don't register themselves: the query layer (05) registers the user-facing views over them (hex IDs, hidden `project_id`, `sessions`, default exclusions, D89). Because each provider is constructed for a single project, the user cannot name another project's data. A dropped project (§7) gets empty tables.
+For each request, `Storage::query` returns a `ProjectQuery`: the project's `TableProvider`s, all bound to one `ReadState` (catalog, memtable and tombstones, §4), plus the process `RuntimeEnv` built at open (object store and metadata cache; the memory pool stays the default until M6) and `target_partitions`. The query layer (05, D91) builds the DataFusion session from it. The providers expose the stored Arrow schemas of 01 (binary IDs, `project_id`). They don't register themselves: the query layer (05) registers the user-facing views over them (hex IDs, hidden `project_id`, `sessions`, default exclusions, D89). Because each provider is constructed for a single project, the user cannot name another project's data. A dropped project (§7) gets empty tables.
 
 ### `SpansProvider::scan(projection, filters, limit)`
 
-1. Extract a time range from the filters on `start_time` (`=, <, <=, >, >=, BETWEEN`). Prune partitions by `day`, widened by one day on each side (§ Trace anchor), and files by `min_time`/`max_time`.
+1. Extract a time range from the filters on `start_time` (`=, <, <=, >, >=, BETWEEN`). Prune partitions by `day` and files by `min_time`/`max_time`. Day pruning is exact until the trace anchor exists; it then widens by one day on each side (§ Trace anchor).
 2. Build a `ParquetExec` (DataFusion's Parquet scan) over the remaining files, with filter pushdown on, page-index pruning, bloom-filter pruning (equality on `trace_id`, `session_id`, `user_id`) and the metadata cache.
 3. Build a `MemoryExec` (in-memory scan) over the `active` and `frozen` batches of the same partitions. Same filters, applied in-memory.
 4. Combine both with a `UnionExec`, then wrap in the **tombstone filter** (§7) when there are pending tombstones whose `created_at` is at or after the file's or batch's `min_ingest_time`.
@@ -266,7 +270,7 @@ A plan that unions (a) the partial rows from `traces` files with (b) partials co
 - *Fast path for "latest N traces"* (trace list): scan widening windows back from `b` (15 min, 1 h, 6 h, 24 h, then the whole range) and stop once N merged rows pass the post-merge filters.
 - *Single-trace lookup* (`trace_id = X`), in order of preference:
   1. a time hint (`?around=<ts>`, always present in links generated by the UI, API list responses and SDK helpers) narrows the search to files overlapping ±1 day;
-  2. otherwise, trace-ID bloom filters (kept in the metadata cache) select candidate files across all of the project's partitions — a few microseconds per file;
+  2. otherwise, trace-ID bloom filters select candidate files across all of the project's partitions — a few microseconds per file. The bitsets are not in the metadata cache (§4): a pruning read fetches each one from the object;
   3. post-MVP, if per-project file counts make (2) slow: either a `trace_index` table (trace_id → min/max day), sorted by `trace_id` and maintained at compaction, as LangWatch and Opik do; or one combined bloom-filter file per partition, laid out so a lookup is one ranged read per partition, as OpenObserve does.
 
   Within each candidate file, the `trace_id` sort order means the page index locates the trace's rows directly.
@@ -290,7 +294,7 @@ With an S3 object store, every page read is a ranged GET. A bounded on-disk cach
 - entries of a file are dropped when GC deletes it;
 - flush and compaction also write their fresh outputs into the cache, since recent data is what gets read.
 
-It sits in the same reader factory as the metadata cache. With a local object store it is off.
+There is no custom `ParquetFileReaderFactory`; the metadata cache is DataFusion's built-in one (§4). This read cache is not built yet. With a local object store it stays off.
 
 ## 7. Deletion (GDPR)
 
@@ -369,7 +373,7 @@ Media blobs live under `media/<project_id>/<sha256>` in the object store; their 
 |---|---|
 | Free disk under `storage.min_free_bytes` (default 2 GiB) | ingestion answers 503; compaction keeps running (it reclaims space) within its disk reservation (§5) |
 | WAL write or fsync error | pending and new appends fail with `WalFailed` (503), health reports it, restart required (§1) |
-| Object store errors during flush | retry with backoff, while the memtable keeps the data and backpressure applies past the hard limit |
+| Object store errors during flush | retry after 1 s, doubling up to 60 s (§2), while the memtable keeps the data and backpressure applies past the hard limit |
 | Ambiguous upload (error reported, object may exist) | retried under a new name; the old one is collected from `staged_objects` (§2) |
 | Crash | WAL replay before ingestion opens; staged objects are GC'd |
 | Corrupted Parquet file | it is quarantined (state `quarantined`, excluded from snapshots) and an error is logged; data is lost only for that file |
