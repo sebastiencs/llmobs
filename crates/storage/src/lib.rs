@@ -42,6 +42,7 @@ pub(crate) mod catalog;
 pub mod config;
 pub mod error;
 pub(crate) mod objects;
+pub(crate) mod parquet;
 pub mod query;
 mod query_error;
 mod query_text;

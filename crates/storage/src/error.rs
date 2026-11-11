@@ -361,3 +361,46 @@ impl ObjectError {
         }
     }
 }
+
+/// Encoding a partition as one Parquet file failed.
+///
+/// The message names the table or a static reason. It never includes row content.
+#[derive(Debug, thiserror::Error)]
+pub enum ParquetWriteError {
+    /// The batches cannot be written: empty, the wrong schema, or a bad level.
+    #[error("parquet write: {reason}")]
+    Invalid {
+        /// Static reason. Never a cell value.
+        reason: &'static str,
+    },
+    /// An Arrow kernel failed while sorting or measuring the batches.
+    #[error("parquet write: {source}")]
+    Arrow {
+        /// The Arrow error.
+        #[source]
+        source: ArrowError,
+    },
+    /// The Parquet writer failed.
+    #[error("parquet write: {source}")]
+    Parquet {
+        /// The Parquet error.
+        #[source]
+        source: Box<parquet::errors::ParquetError>,
+    },
+}
+
+impl ParquetWriteError {
+    pub(crate) fn invalid(reason: &'static str) -> Self {
+        Self::Invalid { reason }
+    }
+
+    pub(crate) fn arrow(source: ArrowError) -> Self {
+        Self::Arrow { source }
+    }
+
+    pub(crate) fn parquet(source: parquet::errors::ParquetError) -> Self {
+        Self::Parquet {
+            source: Box::new(source),
+        }
+    }
+}
