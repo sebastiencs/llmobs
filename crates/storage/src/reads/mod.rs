@@ -11,7 +11,10 @@ use arrow::record_batch::RecordBatch;
 
 use crate::views::TimeWindow;
 
-pub use traces::{TraceListRequest, TraceSort, trace_list};
+pub use traces::{
+    MAX_TRACE_SPANS, SPAN_LIST_COLUMNS, SpanListRequest, SpanSort, TraceDetailData,
+    TraceListRequest, TraceSort, span_detail, span_list, trace_detail, trace_list,
+};
 
 /// Sort direction for a list. Nulls are last in both directions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

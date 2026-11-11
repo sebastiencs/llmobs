@@ -12,7 +12,11 @@ mod sql;
 mod views;
 
 pub use query_error::{InvalidQuery, Position, RunError};
-pub use reads::{ListScope, MAX_PAGE, Page, SortOrder, TraceListRequest, TraceSort, trace_list};
+pub use reads::{
+    ListScope, MAX_PAGE, MAX_TRACE_SPANS, Page, SPAN_LIST_COLUMNS, SortOrder, SpanListRequest,
+    SpanSort, TraceDetailData, TraceListRequest, TraceSort, span_detail, span_list, trace_detail,
+    trace_list,
+};
 pub use sql::{EXPORT_MAX_ROWS, ExportFormat, SQL_MAX_ROWS, SqlColumn, SqlJson, SqlRequest};
 pub use views::{
     ColumnInfo, ColumnKind, FunctionInfo, ProjectQuery, QueryContext, SqliteView, TimeWindow,
