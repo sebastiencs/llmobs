@@ -63,7 +63,9 @@ export function ProjectSidebar({ children }: { children: ReactNode }) {
                     <SidebarMenuItem key={item.to}>
                       <SidebarMenuButton
                         asChild
-                        isActive={Boolean(matchRoute({ to: item.to, params: { org, project } }))}
+                        isActive={Boolean(
+                          matchRoute({ to: item.to, params: { org, project }, fuzzy: true }),
+                        )}
                         tooltip={item.label}
                       >
                         <Link to={item.to} params={{ org, project }}>

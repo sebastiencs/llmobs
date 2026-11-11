@@ -17,6 +17,7 @@ export function ListToolbar({
   onRefresh,
   search,
   onSearch,
+  idPrefix = "traces",
   evalOn,
   onEval,
   expOn,
@@ -30,8 +31,9 @@ export function ListToolbar({
   range: RangeState;
   onRange: (state: RangeState) => void;
   onRefresh: () => void;
-  search: string;
-  onSearch: (value: string) => void;
+  search?: string;
+  onSearch?: (value: string) => void;
+  idPrefix?: string;
   evalOn: boolean;
   onEval: (on: boolean) => void;
   expOn: boolean;
@@ -44,6 +46,9 @@ export function ListToolbar({
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    if (!onSearch) {
+      return;
+    }
     function onKeyDown(event: KeyboardEvent) {
       if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) {
         return;
@@ -60,7 +65,7 @@ export function ListToolbar({
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [onSearch]);
 
   return (
     <div className="flex min-h-9 shrink-0 items-center gap-2 overflow-x-auto border-b px-3">
@@ -70,16 +75,16 @@ export function ListToolbar({
         <RefreshCw />
       </Button>
       <div className="min-w-0 flex-1">{filter}</div>
-      <SearchBox inputRef={searchRef} value={search} onValue={onSearch} />
+      {onSearch ? <SearchBox inputRef={searchRef} value={search ?? ""} onValue={onSearch} /> : null}
       <Flag
-        id="traces-eval"
+        id={`${idPrefix}-eval`}
         label="Eval"
         tooltip="Show evaluation traces"
         checked={evalOn}
         onCheckedChange={onEval}
       />
       <Flag
-        id="traces-exp"
+        id={`${idPrefix}-exp`}
         label="Experiments"
         tooltip="Show experiment traces"
         checked={expOn}

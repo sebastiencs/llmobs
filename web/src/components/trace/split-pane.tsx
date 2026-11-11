@@ -3,11 +3,12 @@ import { useGroupRef } from "react-resizable-panels";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { STORAGE_PREFIX } from "@/product";
 
-type SplitName = "traces" | "trace";
+type SplitName = "traces" | "trace" | "session";
 
 const PANES = {
   traces: { start: "traces-list", end: "traces-detail", startSize: 40 },
   trace: { start: "trace-tree", end: "trace-detail", startSize: 55 },
+  session: { start: "session-turns", end: "session-trace", startSize: 55 },
 } as const;
 
 export function SplitPane({

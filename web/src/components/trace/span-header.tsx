@@ -1,7 +1,9 @@
+import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import type { Schema } from "@/api/types";
 import { IdText } from "@/components/id-text";
 import { KindIcon } from "@/components/kind-icon";
+import { useProject } from "@/components/shell/project-context";
 import { StatusDot } from "@/components/status-dot";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -9,6 +11,7 @@ import { formatCost, formatDuration, formatTokens } from "@/lib/format";
 
 export function SpanHeader({ span, detached }: { span: Schema<"SpanDetail">; detached: boolean }) {
   const tokens = tokenSummary(span);
+  const { org, project } = useProject();
   const modelsDiffer =
     span.request_model !== undefined &&
     span.response_model !== undefined &&
@@ -67,7 +70,17 @@ export function SpanHeader({ span, detached }: { span: Schema<"SpanDetail">; det
         {span.service_name ? <Pair label="service">{span.service_name}</Pair> : null}
         {span.environment ? <Pair label="environment">{span.environment}</Pair> : null}
         {span.release ? <Pair label="release">{span.release}</Pair> : null}
-        {span.session_id ? <Pair label="session">{span.session_id}</Pair> : null}
+        {span.session_id ? (
+          <Pair label="session">
+            <Link
+              to="/$org/$project/sessions/$sessionId"
+              params={{ org, project, sessionId: span.session_id }}
+              className="underline-offset-2 hover:underline"
+            >
+              {span.session_id}
+            </Link>
+          </Pair>
+        ) : null}
         {span.user_id ? <Pair label="user">{span.user_id}</Pair> : null}
         {span.truncated.length > 0 ? (
           <Tooltip>

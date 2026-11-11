@@ -73,7 +73,18 @@ export function TraceHeader({
           {trace.cost_total !== undefined ? (
             <span className="num text-foreground">{formatCost(trace.cost_total)}</span>
           ) : null}
-          {trace.session_id ? <span>session {trace.session_id}</span> : null}
+          {trace.session_id ? (
+            <span>
+              session{" "}
+              <Link
+                to="/$org/$project/sessions/$sessionId"
+                params={{ org, project, sessionId: trace.session_id }}
+                className="text-foreground underline-offset-2 hover:underline"
+              >
+                {trace.session_id}
+              </Link>
+            </span>
+          ) : null}
           {trace.user_id ? <span>user {trace.user_id}</span> : null}
           {trace.environment ? <span>{trace.environment}</span> : null}
           {trace.release ? <span>{trace.release}</span> : null}
