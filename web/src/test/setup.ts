@@ -3,8 +3,11 @@ import { cleanup } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll, beforeEach } from "vitest";
 import { server } from "../mocks/node";
 import { savedViewHandlers, seedSavedViews } from "../mocks/saved-views";
+import { installTestEventSource } from "./event-source";
 import { installLayout, restoreLayout } from "./layout";
 import { installMatchMedia, resetMatchMedia } from "./match-media";
+
+installTestEventSource();
 
 beforeAll(() => {
   server.listen({ onUnhandledFrame: "error" });

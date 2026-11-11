@@ -2,10 +2,15 @@ import { setupWorker } from "msw/browser";
 import { STORAGE_PREFIX } from "@/product";
 import { handlers } from "./handlers";
 import { savedViewHandlers, seedSavedViews } from "./saved-views";
+import { fixtureStreamHandlers } from "./sse";
 
 export const MOCK_STORAGE_KEY = `${STORAGE_PREFIX}mock`;
 
-export const worker = setupWorker(...savedViewHandlers(seedSavedViews()), ...handlers);
+export const worker = setupWorker(
+  ...fixtureStreamHandlers(),
+  ...savedViewHandlers(seedSavedViews()),
+  ...handlers,
+);
 
 /** `mock=large` remembers the seeded dataset; `mock=fixtures` clears it. */
 export function readMockMode(): "large" | "fixtures" {
