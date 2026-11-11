@@ -115,6 +115,7 @@ utoipa = { version = "6.0.0", features = ["uuid"] }
 # Same major as axum 0.8's query decoding. Axum is not a dependency yet.
 serde_urlencoded = "0.7.1"
 tempfile = "3.27.0"
+# OTLP property tests in llmobs-otel. MSRV 1.88. Tests enable `std` only.
 proptest = "1.12.0"
 
 [profile.dev]
