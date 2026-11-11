@@ -26,6 +26,7 @@ use arrow::array::{Array, RecordBatch, StringArray};
 use datafusion::datasource::MemTable;
 use llmobs_core::ids::ProjectId;
 
+use crate::catalog::Catalog;
 use crate::config::StorageConfig;
 use crate::config::WalSync;
 use crate::error::{AppendError, MemtableError, OpenError, QueryError, StorageError, WalError};
@@ -37,6 +38,7 @@ use crate::wal::sync_dir;
 use crate::wal::writer::{WalWriterHandle, WriterExit, WriterParams, spawn};
 use crate::wal::{SegmentWriter, replay};
 
+pub(crate) mod catalog;
 pub mod config;
 pub mod error;
 pub mod query;
@@ -140,6 +142,8 @@ impl Storage {
         let published = Arc::new(Published::new(ReadState {
             spans: recovered.spans.memtable.snapshot(),
             scores: recovered.scores.memtable.snapshot(),
+            // M2.6 loads `catalog.db` here. Until then publishes keep this empty catalog.
+            catalog: Arc::new(Catalog::empty()),
         }));
         let spans = spawn_writer(
             Table::Spans,

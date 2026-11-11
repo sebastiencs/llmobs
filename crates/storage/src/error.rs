@@ -192,3 +192,80 @@ impl WalError {
         }
     }
 }
+
+/// Opening or reading `catalog.db` failed.
+///
+/// `what` is a static description. The message never includes a cell value.
+#[derive(Debug, thiserror::Error)]
+pub enum CatalogError {
+    /// The database file could not be opened.
+    #[error("catalog {path}: {source}")]
+    Open {
+        /// `<data_dir>/catalog.db`.
+        path: PathBuf,
+        /// The SQLite error.
+        #[source]
+        source: sqlx::Error,
+    },
+    /// A migration could not be applied.
+    #[error("catalog migration: {source}")]
+    Migrate {
+        /// The migration error.
+        #[source]
+        source: sqlx::migrate::MigrateError,
+    },
+    /// A query failed.
+    #[error("catalog database: {source}")]
+    Db {
+        /// The SQLite error.
+        #[source]
+        source: sqlx::Error,
+    },
+    /// A stored value is not one the catalog can represent.
+    #[error("corrupt catalog: {what}")]
+    Corrupt {
+        /// Static description, for example `unknown table_name`.
+        what: &'static str,
+    },
+}
+
+impl CatalogError {
+    pub(crate) fn db(source: sqlx::Error) -> Self {
+        Self::Db { source }
+    }
+
+    pub(crate) fn corrupt(what: &'static str) -> Self {
+        Self::Corrupt { what }
+    }
+}
+
+/// A catalog commit failed.
+///
+/// A conflict leaves the staged objects in place. After either variant the
+/// in-memory catalog is unchanged.
+#[derive(Debug, thiserror::Error)]
+pub enum CommitError {
+    /// A precondition failed and the transaction rolled back.
+    #[error("catalog conflict: {reason}")]
+    Conflict {
+        /// Static reason. Never a path or a cell value.
+        reason: &'static str,
+    },
+    /// SQLite failed, or an injected `CatalogCommit` fault fired.
+    #[error("catalog database: {source}")]
+    Db {
+        /// The SQLite error, or the injected fault wrapped as I/O.
+        #[source]
+        source: sqlx::Error,
+    },
+}
+
+impl CommitError {
+    pub(crate) fn db(source: sqlx::Error) -> Self {
+        Self::Db { source }
+    }
+
+    pub(crate) fn conflict(reason: &'static str) -> Self {
+        Self::Conflict { reason }
+    }
+}

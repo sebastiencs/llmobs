@@ -22,11 +22,15 @@ pub(crate) enum HookPoint {
     BeforePublish,
     /// After the read state is published, before the group is acknowledged.
     AfterPublish,
+    /// After the catalog writes, before the SQLite commit.
+    ///
+    /// `fail` rolls the transaction back. The in-memory catalog stays as it was.
+    CatalogCommit,
 }
 
 #[cfg(test)]
 impl HookPoint {
-    const COUNT: usize = 5;
+    const COUNT: usize = 6;
 
     const fn index(self) -> usize {
         match self {
@@ -35,6 +39,7 @@ impl HookPoint {
             Self::AfterWalSync => 2,
             Self::BeforePublish => 3,
             Self::AfterPublish => 4,
+            Self::CatalogCommit => 5,
         }
     }
 }
@@ -102,20 +107,8 @@ mod fault {
                     held: Mutex::new(HashSet::new()),
                     cv: Condvar::new(),
                     armed: Mutex::new(HashSet::new()),
-                    waiting_at: [
-                        AtomicUsize::new(0),
-                        AtomicUsize::new(0),
-                        AtomicUsize::new(0),
-                        AtomicUsize::new(0),
-                        AtomicUsize::new(0),
-                    ],
-                    hits: [
-                        AtomicU64::new(0),
-                        AtomicU64::new(0),
-                        AtomicU64::new(0),
-                        AtomicU64::new(0),
-                        AtomicU64::new(0),
-                    ],
+                    waiting_at: [const { AtomicUsize::new(0) }; HookPoint::COUNT],
+                    hits: [const { AtomicU64::new(0) }; HookPoint::COUNT],
                     groups: Mutex::new(Vec::new()),
                 }),
             }

@@ -652,21 +652,28 @@ fn insert_all(
 }
 
 fn publish(table: Table, shared: &WriterShared, published: &Published) {
-    let snapshot = shared
+    // Lock order: this table's memtable, then `Published`.
+    // `Committer::commit` holds the committer mutex across its `publish`
+    // closure, and that closure may take these two. Never take `Published`
+    // first, and never take a memtable lock while waiting for the committer.
+    let memtable = shared
         .memtable
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .snapshot();
+        .unwrap_or_else(PoisonError::into_inner);
+    let snapshot = memtable.snapshot();
     published.replace(|state| match table {
         Table::Spans => ReadState {
             spans: snapshot.clone(),
             scores: Arc::clone(&state.scores),
+            catalog: Arc::clone(&state.catalog),
         },
         Table::Scores => ReadState {
             spans: Arc::clone(&state.spans),
             scores: snapshot.clone(),
+            catalog: Arc::clone(&state.catalog),
         },
     });
+    drop(memtable);
 }
 
 fn fail_group(shared: &WriterShared, prepared: Vec<Prepared>) {

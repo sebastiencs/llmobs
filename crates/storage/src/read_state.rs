@@ -1,8 +1,7 @@
-//! Published memtable snapshots.
+//! Published memtable snapshots and the catalog.
 //!
 //! A query loads one [`ReadState`] and keeps that `Arc` for the whole scan.
-//! The writer replaces the `Arc` after each group. M2 adds the catalog here,
-//! and M5 adds tombstones.
+//! The writer replaces the `Arc` after each group. M5 adds tombstones.
 //!
 //! `load` is what a query calls. Open publishes the first state. Both land
 //! with `Storage`, so this module is only half-used until then.
@@ -10,6 +9,7 @@
 
 use std::sync::{Arc, PoisonError, RwLock};
 
+use crate::catalog::Catalog;
 use crate::memtable::{MemSnapshot, Memtable};
 use crate::wal::Table;
 
@@ -20,6 +20,8 @@ pub(crate) struct ReadState {
     pub spans: Arc<MemSnapshot>,
     /// Scores memtable as of this publish.
     pub scores: Arc<MemSnapshot>,
+    /// Catalog as of this publish. Empty until M2.6 loads `catalog.db` at open.
+    pub catalog: Arc<Catalog>,
 }
 
 impl ReadState {
@@ -28,6 +30,7 @@ impl ReadState {
         Self {
             spans: Memtable::new(Table::Spans).snapshot(),
             scores: Memtable::new(Table::Scores).snapshot(),
+            catalog: Arc::new(Catalog::empty()),
         }
     }
 }
