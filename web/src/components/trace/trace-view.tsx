@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { problemOf } from "@/api/problem";
 import { traceDetailQuery } from "@/api/queries";
+import { useShortcut } from "@/components/command/use-shortcut";
 import { useProject } from "@/components/shell/project-context";
 import { SpanDetail } from "@/components/trace/span-detail";
 import { SplitPane } from "@/components/trace/split-pane";
@@ -36,6 +37,10 @@ export function TraceView({
     if (onModeChange) onModeChange(next);
     else setStoredMode(next);
   }
+
+  useShortcut("toggle-mode", () => {
+    chooseMode(active === "transcript" ? "tree" : "transcript");
+  });
 
   if (trace.isPending) {
     return (

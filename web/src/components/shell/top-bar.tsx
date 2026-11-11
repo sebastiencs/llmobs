@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { CommandPalette } from "@/components/command/palette";
 import { OrgSwitcher } from "@/components/org-switcher";
 import { ProjectSwitcher } from "@/components/shell/project-switcher";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -17,6 +18,7 @@ export function TopBar() {
       </span>
       <ProjectSwitcher />
       <div className="flex-1" />
+      <CommandPalette />
       <ThemeToggle />
       <UserMenu />
     </header>

@@ -4,6 +4,7 @@ import { Waypoints } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { problemOf } from "@/api/problem";
 import type { Schema } from "@/api/types";
+import { useShortcut } from "@/components/command/use-shortcut";
 import { ColumnChooser } from "@/components/data-table/column-chooser";
 import {
   readColumnChoice,
@@ -152,27 +153,16 @@ function TracesPage() {
     };
   }, [traceOpen]);
 
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape" || !search.trace) {
-        return;
-      }
-      const target = event.target;
-      if (
-        target instanceof HTMLElement &&
-        (target.closest("input, textarea") !== null || target.isContentEditable)
-      ) {
-        return;
-      }
-      void navigate({
-        to: "/$org/$project/traces",
-        params: { org, project },
-        search: (prev) => withoutTrace(prev),
-      });
+  useShortcut("dismiss", () => {
+    if (!search.trace) {
+      return;
     }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [navigate, org, project, search.trace]);
+    void navigate({
+      to: "/$org/$project/traces",
+      params: { org, project },
+      search: (prev) => withoutTrace(prev),
+    });
+  });
 
   const problem = list.isError ? problemOf(list.error) : undefined;
   const filterError = problem?.code === "invalid_filter" ? problem : undefined;

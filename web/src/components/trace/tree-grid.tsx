@@ -24,6 +24,7 @@ import { TreeToolbar } from "@/components/trace/tree-toolbar";
 import { Badge } from "@/components/ui/badge";
 import { formatCost, formatDuration, formatTokens } from "@/lib/format";
 import type { TraceMode } from "@/lib/search/traces";
+import { matchesBinding } from "@/lib/shortcuts";
 import {
   type BarGeometry,
   barGeometry,
@@ -237,7 +238,7 @@ export function TreeGrid({
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "0") {
+    if (matchesBinding(event, "fit")) {
       event.preventDefault();
       setView(null);
       return;
@@ -246,10 +247,10 @@ export function TreeGrid({
       return;
     }
     const visiblePos = Math.max(0, rows.indexOf(selectedIndex));
-    if (event.key === "ArrowDown") {
+    if (matchesBinding(event, "row-next")) {
       event.preventDefault();
       selectAt(rows[Math.min(rows.length - 1, visiblePos + 1)] ?? 0);
-    } else if (event.key === "ArrowUp") {
+    } else if (matchesBinding(event, "row-prev")) {
       event.preventDefault();
       selectAt(rows[Math.max(0, visiblePos - 1)] ?? 0);
     } else if (event.key === "ArrowRight") {

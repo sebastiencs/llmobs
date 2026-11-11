@@ -1,9 +1,12 @@
-import { createFileRoute, notFound, Outlet } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { createFileRoute, notFound, Outlet, useRouterState } from "@tanstack/react-router";
+import { useEffect } from "react";
 import { $api } from "@/api/client";
 import { problemOf } from "@/api/problem";
 import { projectRef } from "@/api/project-ref";
-import { projectInit, projectQuery } from "@/api/queries";
-import { ProjectProvider } from "@/components/shell/project-context";
+import { projectInit, projectQuery, traceDetailQuery } from "@/api/queries";
+import { openTraceId, rememberTrace } from "@/components/command/recent-traces";
+import { ProjectProvider, useProject } from "@/components/shell/project-context";
 import { ProjectSidebar } from "@/components/shell/project-sidebar";
 
 export const Route = createFileRoute("/$org/$project")({
@@ -20,6 +23,27 @@ export const Route = createFileRoute("/$org/$project")({
   component: ProjectLayout,
 });
 
+function RememberOpenTrace() {
+  const { org, project } = useProject();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const search = useRouterState({ select: (state) => state.location.search });
+  const id = openTraceId(pathname, search);
+  const detail = useQuery({
+    ...traceDetailQuery(org, project, id ?? "0".repeat(32)),
+    enabled: id !== undefined,
+  });
+
+  useEffect(() => {
+    if (!id) {
+      return;
+    }
+    const name = detail.data?.trace.name;
+    rememberTrace(org, project, { id, name: name && name.length > 0 ? name : id });
+  }, [detail.data, id, org, project]);
+
+  return null;
+}
+
 function ProjectLayout() {
   const { org, project } = Route.useParams();
   const { data } = $api.useSuspenseQuery(
@@ -30,6 +54,7 @@ function ProjectLayout() {
 
   return (
     <ProjectProvider value={{ org, project, ref: projectRef(org, project), data }}>
+      <RememberOpenTrace />
       <ProjectSidebar>
         <Outlet />
       </ProjectSidebar>

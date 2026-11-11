@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
 import { X } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import { type FormEvent, type ReactNode, useState } from "react";
 import type { Problem } from "@/api/problem";
 import { schemaQuery } from "@/api/queries";
 import type { Schema } from "@/api/types";
+import { useShortcut } from "@/components/command/use-shortcut";
 import { FilterEditor } from "@/components/filter-bar/editor";
 import {
   chipFromDraft,
@@ -48,24 +49,13 @@ export function FilterBar({
       ? { from: textMode.from, to: textMode.to }
       : undefined;
 
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== "f" || event.metaKey || event.ctrlKey || event.altKey || showText) {
-        return;
-      }
-      const target = event.target;
-      if (
-        target instanceof HTMLElement &&
-        (target.closest("input, textarea, select") !== null || target.isContentEditable)
-      ) {
-        return;
-      }
-      event.preventDefault();
-      setTextMode({});
+  useShortcut("filter-text", (event) => {
+    if (showText) {
+      return;
     }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [showText]);
+    event.preventDefault();
+    setTextMode({});
+  });
 
   function apply(text: string) {
     setTextMode(null);

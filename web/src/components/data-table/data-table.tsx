@@ -24,6 +24,7 @@ import {
   readColumnSizes,
   writeColumnSizes,
 } from "@/components/data-table/column-size";
+import { matchesBinding } from "@/lib/shortcuts";
 
 const features = tableFeatures({
   columnSizingFeature,
@@ -147,10 +148,10 @@ export function DataTable<Row extends RowData>({
       return;
     }
     const origin = focusedIndex ?? -1;
-    if (event.key === "ArrowDown" || event.key === "j") {
+    if (matchesBinding(event, "row-next")) {
       event.preventDefault();
       moveFocus(origin + 1);
-    } else if (event.key === "ArrowUp" || event.key === "k") {
+    } else if (matchesBinding(event, "row-prev")) {
       event.preventDefault();
       moveFocus(origin - 1);
     } else if (event.key === "Home") {
@@ -159,7 +160,7 @@ export function DataTable<Row extends RowData>({
     } else if (event.key === "End") {
       event.preventDefault();
       moveFocus(rows.length - 1);
-    } else if (event.key === "Enter" && focusedIndex !== null) {
+    } else if (matchesBinding(event, "open") && focusedIndex !== null) {
       event.preventDefault();
       const row = rows[focusedIndex];
       if (row) {

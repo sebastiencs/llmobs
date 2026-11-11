@@ -1,5 +1,6 @@
 import { RefreshCw } from "lucide-react";
 import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
+import { useShortcut } from "@/components/command/use-shortcut";
 import { TimeRangePicker } from "@/components/time-range/time-range-picker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,31 +45,29 @@ export function ListToolbar({
   loaded?: number;
 }) {
   const searchRef = useRef<HTMLInputElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!onSearch) {
-      return;
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) {
-        return;
-      }
-      const target = event.target;
-      if (
-        target instanceof HTMLElement &&
-        (target.closest("input, textarea, select") !== null || target.isContentEditable)
-      ) {
-        return;
-      }
+  useShortcut("focus-search", (event) => {
+    if (onSearch) {
       event.preventDefault();
       searchRef.current?.focus();
+      return;
     }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onSearch]);
+    const filter =
+      barRef.current?.querySelector<HTMLElement>("[aria-label='Edit filter']") ??
+      barRef.current?.querySelector<HTMLElement>(".cm-content");
+    if (!filter) {
+      return;
+    }
+    event.preventDefault();
+    filter.focus();
+  });
 
   return (
-    <div className="flex min-h-9 shrink-0 items-center gap-2 overflow-x-auto border-b px-3">
+    <div
+      ref={barRef}
+      className="flex min-h-9 shrink-0 items-center gap-2 overflow-x-auto border-b px-3"
+    >
       <h1 className="shrink-0 text-sm font-medium">{title}</h1>
       <TimeRangePicker state={range} onChange={onRange} />
       <Button type="button" variant="ghost" size="icon-xs" aria-label="Refresh" onClick={onRefresh}>
