@@ -1,8 +1,8 @@
 //! Precedence tables and the first-usable-value resolver.
 //!
-//! Spec 02 § Mapping tables and rule 2. The tables themselves arrive with the
-//! fields that use them. Resource keys are never consumed: `resource_attributes`
-//! keeps every key except `service.name`.
+//! Spec 02 § Mapping tables and rule 2. Tables live next to the fields that
+//! read them. Resource keys are never consumed: `resource_attributes` keeps
+//! every key except `service.name`.
 #![allow(dead_code)]
 
 use std::collections::HashMap;

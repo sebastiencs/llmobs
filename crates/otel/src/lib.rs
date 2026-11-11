@@ -4,6 +4,7 @@
 //! Decoding and the span skeleton are specified in `docs/spec/02-ingestion.md`.
 
 mod bag;
+mod context;
 mod decode;
 mod detect;
 mod error;

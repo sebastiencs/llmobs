@@ -1,0 +1,8 @@
+{
+  "description": "Every llmobs context key, including experiment linkage stored under the reserved metadata keys.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Context fields",
+    "02 § Normalization rules / 11"
+  ]
+}

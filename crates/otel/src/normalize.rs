@@ -1,7 +1,8 @@
 //! Span skeleton: ids, times, resource, attributes, events, and links.
 //!
-//! Spec 02 rules 1, 2, 13, 15, 17, 18 and 19. Span kind comes from the mapping
-//! table. The other scalar columns stay empty until later field phases.
+//! Spec 02 rules 1, 2, 3, 8, 11, 12, 13, 15, 17, 18 and 19. Model, provider,
+//! operation, request params and context come from the mapping tables. Tokens
+//! and payloads stay empty until later phases.
 
 use std::collections::BTreeMap;
 
@@ -19,6 +20,7 @@ use opentelemetry_proto::tonic::trace::v1::span::Link;
 use serde_json::{Map, Value as Json};
 
 use crate::bag::AttrBag;
+use crate::context::fill;
 use crate::detect::detect;
 use crate::fields::ResourceView;
 use crate::kind::span_kind;
@@ -121,8 +123,7 @@ struct EncodedResource<'a> {
     attributes: BTreeMap<String, String>,
     warnings: Warnings,
     truncated: Vec<String>,
-    /// Resource attributes for the field resolver. Read from N7 on.
-    #[allow(dead_code)]
+    /// Resource attributes for [`crate::context::fill`].
     view: ResourceView<'a>,
 }
 
@@ -209,6 +210,7 @@ fn accept_span(
     let mut bag = AttrBag::new(&span.attributes, &mut warnings);
     let conventions = detect(&bag, &span.events);
     let span_kind = span_kind(&mut bag);
+    let fields = fill(&mut bag, &resource.view, &mut warnings);
     let mut attributes = bag.into_attributes(&mut warnings, &mut truncated);
     let events = encode_events(&span.events, start_time, &mut warnings, &mut truncated);
     let links = encode_links(&span.links, &mut warnings, &mut truncated);
@@ -228,16 +230,16 @@ fn accept_span(
         status,
         status_message,
         service_name: resource.service_name.clone(),
-        session_id: None,
-        user_id: None,
-        environment: None,
-        release: None,
-        tags: Vec::new(),
-        metadata: BTreeMap::new(),
-        provider: None,
-        request_model: None,
-        response_model: None,
-        operation: None,
+        session_id: fields.session_id,
+        user_id: fields.user_id,
+        environment: fields.environment,
+        release: fields.release,
+        tags: fields.tags,
+        metadata: fields.metadata,
+        provider: fields.provider,
+        request_model: fields.request_model,
+        response_model: fields.response_model,
+        operation: fields.operation,
         input_tokens: None,
         output_tokens: None,
         cache_read_tokens: None,
@@ -249,7 +251,7 @@ fn accept_span(
         cost_total: None,
         cost_source: None,
         ttft_ns: None,
-        request_params: None,
+        request_params: fields.request_params,
         input: None,
         input_format: None,
         output: None,
