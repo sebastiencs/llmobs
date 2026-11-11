@@ -1,15 +1,17 @@
 //! Columnar storage for spans and scores: a write-ahead log, an in-memory
-//! memtable, and Parquet files queried through DataFusion.
+//! memtable, Parquet files, and a SQLite catalog, queried through DataFusion.
 //!
 //! See `docs/spec/03-storage.md`. The design and milestones are in
 //! `docs/plans/a1-storage/00-design.md`.
 //!
 //! # What this crate does not do yet
 //!
-//! - there is no `traces` table;
+//! - there is no `traces` table; `Storage::query` returns an empty one;
 //! - compaction does not run, so level-0 files accumulate;
 //! - deletion and retention are absent;
+//! - day pruning is exact; the one-day anchor slack is not built;
 //! - the query runtime uses DataFusion's default memory pool.
+//!   Parquet footers and page indexes use DataFusion's built-in metadata cache.
 
 #![warn(missing_docs)]
 
