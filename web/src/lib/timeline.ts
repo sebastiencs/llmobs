@@ -27,14 +27,37 @@ export function traceWindow(
   return { startNs, endNs };
 }
 
-/** Bar position clamped to the window. A zero-duration span keeps a sliver of width. */
+export type BarGeometry = {
+  leftPct: number;
+  widthPct: number;
+  /** The span starts before the view. */
+  clipStart: boolean;
+  /** The span ends after the view. */
+  clipEnd: boolean;
+};
+
+/**
+ * Bar position inside the view window.
+ * A span that misses the view is hidden. A span that crosses an edge is clipped.
+ * A zero-duration span inside the view keeps a sliver of width.
+ */
 export function barGeometry(
   span: { start_time: string; end_time: string },
-  window: TimeWindow,
-): { leftPct: number; widthPct: number } {
-  const spanNs = window.endNs - window.startNs;
-  const rawLeft = ((instantNs(span.start_time) - window.startNs) / spanNs) * 100;
-  const rawRight = ((instantNs(span.end_time) - window.startNs) / spanNs) * 100;
+  view: TimeWindow,
+): BarGeometry | null {
+  const spanNs = view.endNs - view.startNs;
+  if (!(spanNs > 0)) {
+    return null;
+  }
+  const start = instantNs(span.start_time);
+  const end = instantNs(span.end_time);
+  if (end <= view.startNs || start >= view.endNs) {
+    return null;
+  }
+  const clipStart = start < view.startNs;
+  const clipEnd = end > view.endNs;
+  const rawLeft = ((start - view.startNs) / spanNs) * 100;
+  const rawRight = ((end - view.startNs) / spanNs) * 100;
   let left = clamp(rawLeft, 0, 100);
   let right = clamp(rawRight, 0, 100);
   if (right < left) {
@@ -47,7 +70,78 @@ export function barGeometry(
       left = 100 - MIN_BAR_PCT;
     }
   }
-  return { leftPct: left, widthPct: width };
+  return { leftPct: left, widthPct: width, clipStart, clipEnd };
+}
+
+/** Keep `view` inside the trace window. The narrowest view is one microsecond. */
+export function clampView(trace: TimeWindow, view: TimeWindow): TimeWindow {
+  const span = trace.endNs - trace.startNs;
+  const minWidth = Math.min(span, MIN_WINDOW_NS);
+  let width = view.endNs - view.startNs;
+  if (!(width >= minWidth)) {
+    width = minWidth;
+  }
+  if (width > span) {
+    width = span;
+  }
+  let start = Number.isFinite(view.startNs) ? view.startNs : trace.startNs;
+  if (start < trace.startNs) {
+    start = trace.startNs;
+  }
+  if (start + width > trace.endNs) {
+    start = trace.endNs - width;
+  }
+  return { startNs: start, endNs: start + width };
+}
+
+/**
+ * Zoom about a point. `factor` above 1 narrows the view; below 1 widens it.
+ * `anchorPct` is the pointer's place in the current view, 0–100, and it stays put.
+ */
+export function zoomAt(
+  trace: TimeWindow,
+  view: TimeWindow,
+  anchorPct: number,
+  factor: number,
+): TimeWindow {
+  const current = clampView(trace, view);
+  if (!(factor > 0) || !Number.isFinite(factor)) {
+    return current;
+  }
+  const width = current.endNs - current.startNs;
+  const pct = clamp(anchorPct, 0, 100) / 100;
+  const anchor = current.startNs + pct * width;
+  const nextWidth = width / factor;
+  return clampView(trace, {
+    startNs: anchor - pct * nextWidth,
+    endNs: anchor - pct * nextWidth + nextWidth,
+  });
+}
+
+/** Move the view by a percentage of its width. Positive goes later. */
+export function panBy(trace: TimeWindow, view: TimeWindow, deltaPct: number): TimeWindow {
+  const current = clampView(trace, view);
+  const width = current.endNs - current.startNs;
+  const delta = (deltaPct / 100) * width;
+  return clampView(trace, {
+    startNs: current.startNs + delta,
+    endNs: current.endNs + delta,
+  });
+}
+
+/** The span, plus 5 % of its duration on each side, clamped to the trace. */
+export function zoomToSpan(
+  trace: TimeWindow,
+  span: { start_time: string; end_time: string },
+): TimeWindow {
+  const start = instantNs(span.start_time);
+  let end = instantNs(span.end_time);
+  if (end < start) {
+    end = start;
+  }
+  const width = Math.max(end - start, MIN_WINDOW_NS);
+  const pad = width * 0.05;
+  return clampView(trace, { startNs: start - pad, endNs: start + width + pad });
 }
 
 /**

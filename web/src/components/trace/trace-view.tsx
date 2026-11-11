@@ -61,6 +61,7 @@ export function TraceView({
             name="trace"
             start={
               <TreeGrid
+                key={detail.trace.trace_id}
                 spans={detail.spans}
                 trace={detail.trace}
                 selectedSpanId={selected}

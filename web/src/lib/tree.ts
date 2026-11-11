@@ -42,6 +42,52 @@ export function hasChildren(ends: Int32Array, index: number): boolean {
   return end !== undefined && end > index + 1;
 }
 
+/**
+ * Indices whose span matches `predicate`, plus their ancestors.
+ * Each index is pushed and popped once; an ancestor already kept stops the walk.
+ */
+export function filterRows(
+  spans: readonly { depth: number }[],
+  ends: Int32Array,
+  predicate: (index: number) => boolean,
+): number[] {
+  const keep = new Uint8Array(spans.length);
+  const stack: number[] = [];
+  const limit = Math.min(spans.length, ends.length);
+  for (let index = 0; index < limit; index++) {
+    const span = spans[index];
+    if (!span) {
+      continue;
+    }
+    while (stack.length > 0) {
+      const parent = stack[stack.length - 1];
+      const parentSpan = parent === undefined ? undefined : spans[parent];
+      if (parent === undefined || !parentSpan || parentSpan.depth < span.depth) {
+        break;
+      }
+      stack.pop();
+    }
+    if (predicate(index)) {
+      keep[index] = 1;
+      for (let cursor = stack.length - 1; cursor >= 0; cursor--) {
+        const ancestor = stack[cursor];
+        if (ancestor === undefined || keep[ancestor] === 1) {
+          break;
+        }
+        keep[ancestor] = 1;
+      }
+    }
+    stack.push(index);
+  }
+  const rows: number[] = [];
+  for (let index = 0; index < spans.length; index++) {
+    if (keep[index] === 1) {
+      rows.push(index);
+    }
+  }
+  return rows;
+}
+
 /** Indices to render, skipping descendants of collapsed span ids. */
 export function visibleRows(
   spans: readonly TreeNode[],

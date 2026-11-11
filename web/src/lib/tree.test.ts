@@ -1,5 +1,12 @@
 import { expect, it } from "vitest";
-import { ancestorsOf, defaultCollapsed, hasChildren, subtreeEnds, visibleRows } from "@/lib/tree";
+import {
+  ancestorsOf,
+  defaultCollapsed,
+  filterRows,
+  hasChildren,
+  subtreeEnds,
+  visibleRows,
+} from "@/lib/tree";
 
 // Two roots and a detached root:
 // 0 agent
@@ -40,6 +47,13 @@ it("hides descendants of a collapsed span and keeps the span itself", () => {
   expect(visibleRows(tree, ends, new Set(["b"]))).toEqual([0, 1, 3, 4, 5, 6]);
   expect(visibleRows(tree, ends, new Set(["a"]))).toEqual([0, 4, 5, 6]);
   expect(visibleRows(tree, ends, new Set())).toEqual([0, 1, 2, 3, 4, 5, 6]);
+});
+
+it("keeps matches and their ancestors", () => {
+  const ends = subtreeEnds(tree);
+  expect(filterRows(tree, ends, (index) => index === 2)).toEqual([0, 1, 2]);
+  expect(filterRows(tree, ends, (index) => tree[index]?.span.span_id === "g")).toEqual([6]);
+  expect(filterRows(tree, ends, () => false)).toEqual([]);
 });
 
 it("opens trees of up to 1 000 spans and collapses depth-2 parents after that", () => {
@@ -98,4 +112,26 @@ it("counts ends and visible rows for 10 000 generated spans", () => {
   expect(visible).toEqual(expected);
   expect(visible.length).toBeGreaterThan(0);
   expect(visible.length).toBeLessThan(spans.length);
+});
+
+it("keeps the right rows for 10 000 spans", () => {
+  const spans = Array.from({ length: 10_000 }, (_, index) =>
+    node(index === 0 ? 0 : 1 + (index % 5), `s${index}`),
+  );
+  const ends = subtreeEnds(spans);
+  const predicate = (index: number) => index !== 0 && index % 100 === 0;
+  const rows = filterRows(spans, ends, predicate);
+  const expected = new Set<number>();
+  for (let index = 0; index < spans.length; index++) {
+    if (!predicate(index)) {
+      continue;
+    }
+    expected.add(index);
+    for (const ancestor of ancestorsOf(spans, index)) {
+      expected.add(ancestor);
+    }
+  }
+  expect(rows).toEqual([...expected].sort((left, right) => left - right));
+  expect(rows.length).toBeGreaterThan(0);
+  expect(rows.length).toBeLessThan(spans.length);
 });
