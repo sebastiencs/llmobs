@@ -2,7 +2,7 @@ import { createFileRoute, notFound } from "@tanstack/react-router";
 import { problemOf } from "@/api/problem";
 import { traceDetailQuery } from "@/api/queries";
 import { TraceView } from "@/components/trace/trace-view";
-import { parseTracePageSearch } from "@/lib/search/traces";
+import { parseTracePageSearch, type TraceMode, type TracePageSearch } from "@/lib/search/traces";
 
 export const Route = createFileRoute("/$org/$project/traces/$traceId")({
   validateSearch: (search) => parseTracePageSearch(search),
@@ -32,6 +32,13 @@ function TracePage() {
           traceId={traceId}
           spanId={search.span}
           mode={search.mode}
+          onModeChange={(next) => {
+            void navigate({
+              to: "/$org/$project/traces/$traceId",
+              search: (prev) => withMode(prev, next),
+              replace: true,
+            });
+          }}
           onSelectSpan={(spanId) => {
             void navigate({
               to: "/$org/$project/traces/$traceId",
@@ -43,4 +50,9 @@ function TracePage() {
       </div>
     </div>
   );
+}
+
+function withMode(search: TracePageSearch, mode: TraceMode): TracePageSearch {
+  const { mode: _mode, ...rest } = search;
+  return mode === "tree" ? rest : { ...rest, mode };
 }

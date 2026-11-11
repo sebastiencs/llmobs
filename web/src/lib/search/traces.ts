@@ -71,6 +71,7 @@ export type TracesSearch = {
   cols?: string;
   filter?: string;
   view?: string;
+  mode?: TraceMode;
 };
 
 /** Fixed column ids, plus `score:<name>` for a non-empty name. */
@@ -93,6 +94,7 @@ export function parseTracesSearch(search: Record<string, unknown>): TracesSearch
   const cols = parseCols(search.cols);
   const filter = parseString(search.filter, FILTER_MAX);
   const view = parseViewId(search.view);
+  const mode = parseEnum(search.mode, TRACE_MODES);
   return {
     ...(sort ? { sort } : {}),
     ...(order ? { order } : {}),
@@ -106,6 +108,7 @@ export function parseTracesSearch(search: Record<string, unknown>): TracesSearch
     ...(cols ? { cols } : {}),
     ...(filter ? { filter } : {}),
     ...(view ? { view } : {}),
+    ...(mode ? { mode } : {}),
   };
 }
 

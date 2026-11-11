@@ -53,3 +53,12 @@ it("keeps a span and a mode on the trace page", () => {
   ).toEqual({ span: "b".repeat(16), mode: "transcript" });
   expect(parseTracePageSearch({ span: "B".repeat(16), mode: "chat" })).toEqual({});
 });
+
+it("keeps the trace list mode", () => {
+  expect(parseTracesSearch({ mode: "transcript", trace: "a".repeat(32) })).toEqual({
+    mode: "transcript",
+    trace: "a".repeat(32),
+  });
+  expect(parseTracesSearch({ mode: "tree" })).toEqual({ mode: "tree" });
+  expect(parseTracesSearch({ mode: "chat" })).toEqual({});
+});

@@ -15,7 +15,10 @@ describe("trace page", () => {
     const panel = await screen.findByRole("region", { name: "Span" });
     expect(within(panel).getByRole("tab", { name: "Chat", selected: true })).toBeInTheDocument();
     expect(within(panel).getByText("My order 1234 hasn't arrived.")).toBeInTheDocument();
-    expect(screen.getByRole("row", { selected: true })).toHaveTextContent("chat claude-sonnet-4-5");
+    const transcript = await screen.findByRole("region", { name: "Transcript" });
+    expect(within(transcript).getAllByRole("button", { name: /claude-sonnet-4-5/ })).toHaveLength(
+      2,
+    );
   });
 
   it("shows the not-found page for an unknown trace", async () => {

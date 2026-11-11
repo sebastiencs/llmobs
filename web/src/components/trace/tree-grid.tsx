@@ -23,6 +23,7 @@ import { StatusDot } from "@/components/status-dot";
 import { TreeToolbar } from "@/components/trace/tree-toolbar";
 import { Badge } from "@/components/ui/badge";
 import { formatCost, formatDuration, formatTokens } from "@/lib/format";
+import type { TraceMode } from "@/lib/search/traces";
 import {
   type BarGeometry,
   barGeometry,
@@ -67,11 +68,15 @@ export function TreeGrid({
   trace,
   selectedSpanId,
   onSelectSpan,
+  mode,
+  onMode,
 }: {
   spans: readonly Schema<"TreeSpan">[];
   trace: Schema<"TraceSummary">;
   selectedSpanId?: string;
   onSelectSpan: (spanId: string) => void;
+  mode: TraceMode;
+  onMode: (mode: TraceMode) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -346,6 +351,8 @@ export function TreeGrid({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <TreeToolbar
+        mode={mode}
+        onMode={onMode}
         query={query}
         onQuery={setQuery}
         matchLabel={`${matchPos >= 0 ? matchPos + 1 : 0} / ${matchIndexes.length}`}

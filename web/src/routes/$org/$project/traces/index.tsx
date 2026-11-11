@@ -24,7 +24,7 @@ import { SplitPane } from "@/components/trace/split-pane";
 import { TraceView } from "@/components/trace/trace-view";
 import { orderedTraceColumns, scoreNames, traceColumnSpecs } from "@/components/trace-columns";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { parseTracesSearch, type TracesSearch } from "@/lib/search/traces";
+import { parseTracesSearch, type TraceMode, type TracesSearch } from "@/lib/search/traces";
 import { type RangeState, rangeFromSearch, resolveRange } from "@/lib/time-range";
 
 const TABLE_ID = "traces";
@@ -300,6 +300,15 @@ function TracesPage() {
               <TraceView
                 traceId={search.trace}
                 spanId={search.span}
+                mode={search.mode}
+                onModeChange={(next) => {
+                  void navigate({
+                    to: "/$org/$project/traces",
+                    params: { org, project },
+                    search: (prev) => withMode(prev, next),
+                    replace: true,
+                  });
+                }}
                 onAddFilter={onFilter}
                 onClose={() => {
                   void navigate({
@@ -375,4 +384,9 @@ function withoutSpan(search: TracesSearch): TracesSearch {
 function withoutTrace(search: TracesSearch): TracesSearch {
   const { trace: _trace, span: _span, ...rest } = search;
   return rest;
+}
+
+function withMode(search: TracesSearch, mode: TraceMode): TracesSearch {
+  const { mode: _mode, ...rest } = search;
+  return mode === "tree" ? rest : { ...rest, mode };
 }
