@@ -4,10 +4,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { setTimeZone, useTimeZone } from "@/lib/settings";
 
 export function initials(name: string | null | undefined, email: string): string {
   const trimmed = name?.trim() ?? "";
@@ -22,6 +25,7 @@ export function UserMenu() {
   const { data: me } = $api.useSuspenseQuery("get", "/api/auth/me");
   const name = me.user.name?.trim() ? me.user.name : undefined;
   const letters = initials(me.user.name, me.user.email);
+  const zone = useTimeZone();
 
   return (
     <DropdownMenu>
@@ -45,6 +49,15 @@ export function UserMenu() {
             <Badge variant="secondary">Instance admin</Badge>
           </div>
         ) : null}
+        <DropdownMenuSeparator />
+        <DropdownMenuCheckboxItem
+          checked={zone === "utc"}
+          onCheckedChange={(checked) => {
+            setTimeZone(checked === true ? "utc" : "local");
+          }}
+        >
+          Show times in UTC
+        </DropdownMenuCheckboxItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
