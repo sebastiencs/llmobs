@@ -5,6 +5,7 @@
 
 mod bag;
 mod context;
+mod conventions;
 mod convert;
 mod decode;
 mod detect;

@@ -225,8 +225,9 @@ fn accept_span(
         &mut bag,
         &span.events,
         span_kind,
-        payload::READERS,
-        payload::REGISTRIES,
+        &mut warnings,
+        crate::conventions::READERS,
+        crate::conventions::REGISTRIES,
     );
     let normalize_error = payload::error_attribute(&assembled.io.errors);
     let mut attributes = bag.into_attributes(&mut warnings, &mut truncated);

@@ -1,8 +1,7 @@
 //! Payload values, formats, previews, and the convention driver.
 //!
 //! Spec 02 § Input and output, rules 2, 6, 7, 9 and 10, and § Message conversion.
-//! Convention readers register on [`READERS`] from N13 on. Until then the driver
-//! keeps every payload field empty and drops nothing.
+//! Convention readers live in `conventions` and run in precedence order.
 
 use std::collections::BTreeSet;
 
@@ -42,7 +41,6 @@ pub(crate) struct Io {
 /// Convention readers construct the variants from N13 on. `write` already
 /// matches them.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
 pub(crate) enum Payload {
     Messages(Vec<Message>),
     Json(Json),
@@ -90,22 +88,11 @@ pub(crate) struct ConventionPayload {
 
 /// What a convention reader may look at.
 pub(crate) struct ReadContext<'a, 'b> {
-    /// Readers use the bag from N13 on.
-    #[allow(dead_code)]
     pub bag: &'a mut AttrBag<'b>,
-    /// Readers use events from N13 on.
-    #[allow(dead_code)]
     pub events: &'a [Event],
-    /// Tool payloads depend on kind. Readers use it from N13 on.
-    #[allow(dead_code)]
     pub kind: SpanKind,
+    pub warnings: &'a mut Warnings,
 }
-
-/// Conventions registered so far. N13 appends llmobs and GenAI.
-pub(crate) const READERS: &[ConventionPayload] = &[];
-
-/// Payload keys registered so far. Each convention module adds its own slice.
-pub(crate) const REGISTRIES: &[PayloadKeys] = &[];
 
 const FIELDS: [Field; 4] = [
     Field::Input,
@@ -126,7 +113,6 @@ pub(crate) struct Assembled {
 /// A string is parsed as JSON. When that parse is itself a string whose text
 /// parses as an object or array, that second parse is used. Parsing stops
 /// there. `arrayValue` and `kvlistValue` use rule 1. Anything else is `None`.
-#[allow(dead_code)] // N13 readers call this.
 pub(crate) fn decode_json_text(value: &AnyValue, warnings: &mut Warnings) -> Option<Json> {
     if let Some(text) = as_str(value) {
         return decode_string(text);
@@ -139,7 +125,6 @@ pub(crate) fn decode_json_text(value: &AnyValue, warnings: &mut Warnings) -> Opt
 
 /// Rule 10. An object or array is `json`. Any other string is `text`.
 /// Every remaining AnyValue is `json` of its rule 1 encoding.
-#[allow(dead_code)] // N13 readers call this.
 pub(crate) fn non_message_payload(value: &AnyValue, warnings: &mut Warnings) -> Payload {
     if let Some(parsed) = decode_json_text(value, warnings)
         && (parsed.is_object() || parsed.is_array())
@@ -161,7 +146,6 @@ pub(crate) fn parse_tool_arguments(value: Json) -> Json {
 }
 
 /// Rule 7. Each JSON-string item is parsed. Order is kept.
-#[allow(dead_code)] // N13 readers call this.
 pub(crate) fn tool_definitions(items: Vec<Json>) -> Vec<Json> {
     items.into_iter().map(parse_tool_arguments).collect()
 }
@@ -221,6 +205,7 @@ pub(crate) fn assemble(
     bag: &mut AttrBag<'_>,
     events: &[Event],
     kind: SpanKind,
+    warnings: &mut Warnings,
     readers: &[ConventionPayload],
     registries: &[PayloadKeys],
 ) -> Assembled {
@@ -228,7 +213,12 @@ pub(crate) fn assemble(
     let mut winners = [None; FIELDS.len()];
     let mut dropped = BTreeSet::new();
     for reader in readers {
-        let got = (reader.read)(&mut ReadContext { bag, events, kind });
+        let got = (reader.read)(&mut ReadContext {
+            bag,
+            events,
+            kind,
+            warnings,
+        });
         keep(&mut io.input, &mut winners[0], got.input, reader.convention);
         keep(
             &mut io.output,
@@ -829,7 +819,14 @@ mod tests {
                 keys: LAMINAR_KEYS,
             },
         ];
-        let assembled = assemble(&mut bag, &events, SpanKind::Llm, &readers, &registries);
+        let assembled = assemble(
+            &mut bag,
+            &events,
+            SpanKind::Llm,
+            &mut warnings,
+            &readers,
+            &registries,
+        );
         assert_eq!(assembled.io.input, Some(Payload::Text("ours".to_owned())));
         assert_eq!(
             assembled.io.output,
@@ -928,7 +925,14 @@ mod tests {
                 keys: LAMINAR_KEYS,
             },
         ];
-        let assembled = assemble(&mut bag, &[], SpanKind::Llm, &readers, &registries);
+        let assembled = assemble(
+            &mut bag,
+            &[],
+            SpanKind::Llm,
+            &mut warnings,
+            &readers,
+            &registries,
+        );
         assert_eq!(
             assembled.io.tool_definitions,
             Some(vec![json!({"name": "lookup"})])
@@ -956,11 +960,5 @@ mod tests {
         );
         assert!(dropped.is_empty());
         assert_eq!(bag.state("gen_ai.input.messages"), Some(Use::Unread));
-    }
-
-    #[test]
-    fn no_convention_is_registered_yet() {
-        assert!(super::READERS.is_empty());
-        assert!(super::REGISTRIES.is_empty());
     }
 }

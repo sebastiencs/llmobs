@@ -1,0 +1,111 @@
+{
+  "resourceSpans": [
+    {
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "f80a0000000000000000000000000001",
+              "spanId": "f80a000000000001",
+              "name": "messages",
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "llmobs.input",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"hello\"}]}]"
+                  }
+                },
+                {
+                  "key": "llmobs.input.format",
+                  "value": {
+                    "stringValue": "messages"
+                  }
+                },
+                {
+                  "key": "llmobs.output",
+                  "value": {
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"world\"}]}]"
+                  }
+                },
+                {
+                  "key": "llmobs.output.format",
+                  "value": {
+                    "stringValue": "messages"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "f80a0000000000000000000000000001",
+              "spanId": "f80a000000000002",
+              "name": "json",
+              "startTimeUnixNano": "1767225591000000000",
+              "endTimeUnixNano": "1767225592000000000",
+              "attributes": [
+                {
+                  "key": "llmobs.input",
+                  "value": {
+                    "stringValue": "{\"query\":\"hi\"}"
+                  }
+                },
+                {
+                  "key": "llmobs.input.format",
+                  "value": {
+                    "stringValue": "json"
+                  }
+                },
+                {
+                  "key": "llmobs.output",
+                  "value": {
+                    "stringValue": "[1,2]"
+                  }
+                },
+                {
+                  "key": "llmobs.output.format",
+                  "value": {
+                    "stringValue": "json"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "f80a0000000000000000000000000001",
+              "spanId": "f80a000000000003",
+              "name": "text",
+              "startTimeUnixNano": "1767225592000000000",
+              "endTimeUnixNano": "1767225593000000000",
+              "attributes": [
+                {
+                  "key": "llmobs.input",
+                  "value": {
+                    "stringValue": "plain question"
+                  }
+                },
+                {
+                  "key": "llmobs.input.format",
+                  "value": {
+                    "stringValue": "text"
+                  }
+                },
+                {
+                  "key": "llmobs.output",
+                  "value": {
+                    "stringValue": "plain answer"
+                  }
+                },
+                {
+                  "key": "llmobs.output.format",
+                  "value": {
+                    "stringValue": "text"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "description": "gen_ai.input.messages that is not a message array is kept as raw JSON with a normalize_error code.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Message conversion"
+  ]
+}
