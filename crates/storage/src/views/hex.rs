@@ -3,7 +3,7 @@
 //! Joins between two views on an ID are not rewritten: each side's `encode`
 //! sits in its own projection, so the join compares the hex strings.
 
-use datafusion::arrow::datatypes::DataType;
+use arrow::datatypes::DataType;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{DFSchema, ScalarValue};
 use datafusion::error::DataFusionError;
@@ -175,7 +175,7 @@ mod tests {
     use std::num::NonZeroUsize;
     use std::sync::Arc;
 
-    use datafusion::arrow::array::{Array, AsArray, RecordBatch};
+    use arrow::array::{Array, AsArray, RecordBatch};
     use datafusion::execution::runtime_env::RuntimeEnv;
     use llmobs_core::ids::TraceId;
     use llmobs_core::score::ScoreTarget;

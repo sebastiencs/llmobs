@@ -357,8 +357,8 @@ pub(crate) fn map_plan(
 mod tests {
     use std::collections::BTreeMap;
 
+    use arrow::array::{Array, AsArray, RecordBatch};
     use chrono::{DateTime, SecondsFormat, Utc};
-    use datafusion::arrow::array::{Array, AsArray, RecordBatch};
     use llmobs_core::time_serde::parse_rfc3339;
     use serde_json::{Value, json};
 

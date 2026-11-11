@@ -24,6 +24,7 @@ highlight = "all"
 # crate names, so every arrow sub-crate is listed.
 deny = [
     { crate = "datafusion", deny-multiple-versions = true },
+    { crate = "datafusion-datasource", deny-multiple-versions = true },
     { crate = "arrow", deny-multiple-versions = true },
     { crate = "arrow-arith", deny-multiple-versions = true },
     { crate = "arrow-array", deny-multiple-versions = true },

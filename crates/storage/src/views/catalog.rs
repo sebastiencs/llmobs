@@ -824,7 +824,7 @@ pub fn function_catalog() -> Vec<FunctionInfo> {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::datatypes::DataType;
+    use arrow::datatypes::DataType;
     use serde_json::Value;
 
     use super::*;

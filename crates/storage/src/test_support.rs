@@ -6,12 +6,12 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
-use datafusion::arrow::array::{
+use arrow::array::{
     ArrayRef, BooleanBuilder, FixedSizeBinaryBuilder, Float64Builder, Int32Builder, Int64Builder,
     ListBuilder, MapBuilder, RecordBatch, StringBuilder, TimestampNanosecondBuilder,
 };
-use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
+use arrow::datatypes::{DataType, Field, SchemaRef};
+use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::datasource::memory::MemTable;
 use datafusion::datasource::{TableProvider, TableType};

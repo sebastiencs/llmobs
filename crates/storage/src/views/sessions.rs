@@ -111,9 +111,9 @@ fn epoch() -> Expr {
 mod tests {
     use std::sync::Arc;
 
+    use arrow::array::{Array, AsArray, RecordBatch};
     use arrow::datatypes::{DataType, Field, TimeUnit};
     use chrono::{DateTime, SecondsFormat, Utc};
-    use datafusion::arrow::array::{Array, AsArray, RecordBatch};
     use datafusion::execution::runtime_env::RuntimeEnv;
     use llmobs_core::ids::{SpanId, TraceId};
     use llmobs_core::span::Span;

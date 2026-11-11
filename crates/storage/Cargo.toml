@@ -11,16 +11,24 @@ workspace = true
 
 [dependencies]
 llmobs-core.workspace = true
-arrow = { workspace = true, features = ["json"] }
-bytes = { workspace = true }
-datafusion = { workspace = true }
-futures = { workspace = true }
-hex = { workspace = true }
-parquet = { workspace = true }
-serde_json = { workspace = true }
-thiserror = { workspace = true }
-tokio = { workspace = true }
+arrow = { workspace = true, features = ["ipc_compression", "json"] }
+async-trait.workspace = true
+bytes.workspace = true
+bytesize.workspace = true
+chrono.workspace = true
+crc32c.workspace = true
+datafusion.workspace = true
+datafusion-datasource.workspace = true
+futures.workspace = true
+hex.workspace = true
+humantime-serde.workspace = true
+parquet.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
-async-trait = { workspace = true }
-chrono = { workspace = true }
+proptest.workspace = true
+tempfile.workspace = true

@@ -347,6 +347,8 @@ AGENTS.md requires crash-recovery and concurrency tests for storage. The tools, 
   - every catalog row's object exists;
   - `flushed_seq` never decreases.
 
+  M1 checks the WAL invariants that exist then: every acknowledged batch is present with its row count, every stored batch is complete or absent, no `span_id` appears twice, and sequence numbers increase across runs and never repeat. The catalog, `flushed_seq` and post-compaction checks arrive with M2 and M4.
+
   Runs a fixed number of iterations in `just test` and many more in a manual soak mode.
 - **Pause points.** Test-only hooks (`#[cfg(test)]`, inside the crate) that block a task at a named step (after the WAL write, after the Parquet write, before the commit, after the commit, before WAL deletion). They make race tests deterministic: a query during a flush, a compaction racing a deletion, a retention racing a flush.
 - **Fault-injecting object store.** A wrapper implementing `object_store::ObjectStore` around the real one that fails, delays, or reports failure after the write succeeded (GreptimeDB's ambiguous-upload case). Two real implementations of an external trait, so allowed.
