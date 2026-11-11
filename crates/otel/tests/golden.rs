@@ -9,15 +9,12 @@ mod support;
 use std::fs;
 
 use llmobs_core::media::MediaBlob;
-use llmobs_otel::{IngestContext, IngestLimits, Normalized, decode_json, normalize};
+use llmobs_otel::{IngestContext, IngestLimits, Normalized, PriceTable, decode_json, normalize};
 use serde_json::{Map, Value};
-use support::{Case, ExpectedMedia, canonical_json, load_all_cases, sort_spans};
+use support::{Case, ExpectedMedia, canonical_json, load_all_cases, load_prices, sort_spans};
 
 /// Cases whose expected output needs a later sub-phase.
 const PENDING: &[&str] = &[
-    "edge/media-before-truncation",
-    "edge/media-truncation-rejection",
-    "genai/chat-cache-tokens",
     "openinference/llm-flattened-tool-call",
     "vercel/generate-text",
 ];
@@ -49,7 +46,9 @@ fn run_case(case: &Case, bless: bool) -> Result<(), String> {
     let label = format!("{}/{}", case.group, case.name);
     let bytes = fs::read(case.dir.join("input.json")).map_err(|err| format!("{label}: {err}"))?;
     let request = decode_json(&bytes).map_err(|err| format!("{label}: input.json: {err}"))?;
-    let normalized = normalize(&request, &context_of(case)?);
+    let prices =
+        PriceTable::new(load_prices()).map_err(|err| format!("{label}: prices.json: {err}"))?;
+    let normalized = normalize(&request, &context_of(case)?, &prices);
     let actual = document(&normalized);
     if bless {
         let path = case.dir.join("expected.json");

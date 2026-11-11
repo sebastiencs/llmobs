@@ -1,9 +1,8 @@
 //! Span skeleton: ids, times, resource, attributes, events, and links.
 //!
-//! Spec 02. Model, provider, operation, request params, context, token usage
-//! and time to first token come from the mapping tables. Payload columns are
-//! filled by the convention driver; no convention is registered until N13.
-//! Cost stays empty until N16.
+//! Spec 02. Model, provider, operation, request params, context, token usage,
+//! time to first token, and cost come from the mapping tables. Payload columns
+//! are filled by the convention driver.
 
 use std::collections::BTreeMap;
 
@@ -90,10 +89,13 @@ pub struct Normalized {
     pub rejections: Rejections,
 }
 
-/// Normalize one export request into span skeletons.
-///
-/// `PriceTable` joins this signature in N16. Until then cost is unset.
-pub fn normalize(request: &ExportTraceServiceRequest, ctx: &IngestContext) -> Normalized {
+/// Normalize one export request into spans, media, and rejections.
+pub fn normalize(
+    request: &ExportTraceServiceRequest,
+    ctx: &IngestContext,
+    prices: &crate::cost::PriceTable,
+) -> Normalized {
+    let batch = Batch { ctx, prices };
     let mut spans = Vec::new();
     let mut rejections = Rejections::default();
     let mut media = crate::media::MediaSink::new(&ctx.limits);
@@ -104,7 +106,7 @@ pub fn normalize(request: &ExportTraceServiceRequest, ctx: &IngestContext) -> No
             for span in &scope_spans.spans {
                 if let Some(built) = accept_span(
                     span,
-                    ctx,
+                    &batch,
                     &resource,
                     scope_name.clone(),
                     scope_version.clone(),
@@ -172,9 +174,15 @@ fn non_empty(text: &str) -> Option<String> {
     }
 }
 
+/// The ingest clock and the price table for one request.
+struct Batch<'a> {
+    ctx: &'a IngestContext,
+    prices: &'a crate::cost::PriceTable,
+}
+
 fn accept_span(
     span: &opentelemetry_proto::tonic::trace::v1::Span,
-    ctx: &IngestContext,
+    batch: &Batch<'_>,
     resource: &EncodedResource<'_>,
     scope_name: Option<String>,
     scope_version: Option<String>,
@@ -204,7 +212,7 @@ fn accept_span(
         rejections.record(RejectReason::TimestampOverflow);
         return None;
     };
-    if start_out_of_range(start_time, ctx) {
+    if start_out_of_range(start_time, batch.ctx) {
         rejections.record(RejectReason::StartTimeOutOfRange);
         return None;
     }
@@ -217,7 +225,7 @@ fn accept_span(
     let mut bag = AttrBag::new(&span.attributes, &mut warnings);
     let conventions = detect(&bag, &span.events);
     let span_kind = span_kind(&mut bag);
-    let fields = fill(&mut bag, &resource.view, &mut warnings);
+    let mut fields = fill(&mut bag, &resource.view, &mut warnings);
     let counted = usage(
         &mut bag,
         span_kind,
@@ -225,6 +233,24 @@ fn accept_span(
         &mut warnings,
     );
     let ttft_ns = ttft(&mut bag, start_time, &mut warnings);
+    let priced = crate::cost::apply(
+        &mut bag,
+        &crate::cost::Charge {
+            kind: span_kind,
+            provider: fields.provider.as_deref(),
+            model: fields
+                .response_model
+                .as_deref()
+                .or(fields.request_model.as_deref()),
+            start_time,
+            usage: &counted,
+        },
+        batch.prices,
+        &mut warnings,
+    );
+    if fields.provider.is_none() {
+        fields.provider = priced.provider;
+    }
     let mut assembled = payload::assemble(
         &mut bag,
         &span.events,
@@ -237,7 +263,7 @@ fn accept_span(
     let media_refs = media.media_refs();
     crate::truncate::truncate_payloads(
         &mut assembled.io,
-        ctx.limits.max_attribute_bytes,
+        batch.ctx.limits.max_attribute_bytes,
         &mut truncated,
     );
     let normalize_error = payload::error_attribute(&assembled.io.errors);
@@ -258,7 +284,7 @@ fn accept_span(
     }
 
     let mut built = Span {
-        project_id: ctx.project_id,
+        project_id: batch.ctx.project_id,
         trace_id,
         span_id,
         parent_span_id: parent_id(&span.parent_span_id),
@@ -285,10 +311,10 @@ fn accept_span(
         cache_write_tokens: counted.cache_write_tokens,
         reasoning_tokens: counted.reasoning_tokens,
         total_tokens: counted.total_tokens,
-        cost_input: None,
-        cost_output: None,
-        cost_total: None,
-        cost_source: None,
+        cost_input: priced.input,
+        cost_output: priced.output,
+        cost_total: priced.total,
+        cost_source: priced.source,
         ttft_ns,
         request_params: fields.request_params,
         input: None,
@@ -308,11 +334,11 @@ fn accept_span(
         media_refs,
         truncated,
         conventions,
-        ingest_time: ctx.ingest_time,
+        ingest_time: batch.ctx.ingest_time,
         schema_version: SCHEMA_VERSION,
     };
     payload::write(&mut built, assembled.io);
-    crate::truncate::truncate_columns(&mut built, ctx.limits.max_attribute_bytes);
+    crate::truncate::truncate_columns(&mut built, batch.ctx.limits.max_attribute_bytes);
     Some(built)
 }
 
@@ -460,6 +486,10 @@ mod tests {
         }
     }
 
+    fn no_prices() -> crate::cost::PriceTable {
+        crate::cost::PriceTable::new(Vec::new()).expect("empty price table")
+    }
+
     fn ids() -> (Vec<u8>, Vec<u8>) {
         (vec![0x11; 16], vec![0x22; 8])
     }
@@ -490,7 +520,11 @@ mod tests {
 
     #[test]
     fn an_empty_request_rejects_nothing() {
-        let normalized = normalize(&ExportTraceServiceRequest::default(), &context());
+        let normalized = normalize(
+            &ExportTraceServiceRequest::default(),
+            &context(),
+            &no_prices(),
+        );
         assert!(normalized.spans.is_empty());
         assert!(normalized.media.is_empty());
         assert_eq!(normalized.rejections.total(), 0);
@@ -516,7 +550,7 @@ mod tests {
                 ..ResourceSpans::default()
             }],
         };
-        let normalized = normalize(&with_scope, &context());
+        let normalized = normalize(&with_scope, &context(), &no_prices());
         assert!(normalized.spans.is_empty());
         assert_eq!(normalized.rejections.total(), 0);
     }
@@ -590,7 +624,7 @@ mod tests {
                 ..ResourceSpans::default()
             }],
         };
-        let normalized = normalize(&request, &context());
+        let normalized = normalize(&request, &context(), &no_prices());
         assert_eq!(normalized.spans.len(), 2);
         assert_eq!(
             normalized.spans[0].resource_attributes,
@@ -637,7 +671,7 @@ mod tests {
         let mut span = span_at(1_767_225_590_000_000_000, 1_767_225_591_000_000_000);
         span.trace_id = vec![1, 2, 3];
         span.span_id = vec![0; 8];
-        let normalized = normalize(&request_of(vec![span]), &context());
+        let normalized = normalize(&request_of(vec![span]), &context(), &no_prices());
         assert!(normalized.spans.is_empty());
         assert_eq!(normalized.rejections.total(), 1);
         assert_eq!(normalized.rejections.count(RejectReason::InvalidTraceId), 1);
@@ -657,7 +691,7 @@ mod tests {
             message: String::new(),
             code: 9,
         });
-        let normalized = normalize(&request_of(vec![span]), &context());
+        let normalized = normalize(&request_of(vec![span]), &context(), &no_prices());
         let span = &normalized.spans[0];
         assert_eq!(span.events.len(), 1);
         assert_eq!(span.events[0].time, start as i64);
@@ -687,7 +721,7 @@ mod tests {
             span_id: vec![0x66; 8],
             ..Link::default()
         });
-        let normalized = normalize(&request_of(vec![span]), &context());
+        let normalized = normalize(&request_of(vec![span]), &context(), &no_prices());
         let span = &normalized.spans[0];
         assert_eq!(span.parent_span_id, None);
         assert_eq!(span.links.len(), 1);
@@ -702,7 +736,7 @@ mod tests {
             string_attribute("ai.model.id", "gpt"),
             string_attribute("gen_ai.request.model", "gpt"),
         ];
-        let normalized = normalize(&request_of(vec![span]), &context());
+        let normalized = normalize(&request_of(vec![span]), &context(), &no_prices());
         assert_eq!(
             normalized.spans[0].conventions,
             vec![Convention::Genai, Convention::Vercel]

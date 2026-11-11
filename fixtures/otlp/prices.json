@@ -34,5 +34,50 @@
     "price_cache_write": null,
     "price_reasoning": null,
     "tiers": null
+  },
+  {
+    "model_name": "dated-model",
+    "match_pattern": "dated-model",
+    "provider": "openai",
+    "valid_from": "1970-01-01T00:00:00.000000000Z",
+    "price_input": 1.0,
+    "price_output": 1.0,
+    "price_cache_read": null,
+    "price_cache_write": null,
+    "price_reasoning": null,
+    "tiers": null
+  },
+  {
+    "model_name": "dated-model",
+    "match_pattern": "dated-model",
+    "provider": "openai",
+    "valid_from": "2025-12-31T23:59:51.000000000Z",
+    "price_input": 2.0,
+    "price_output": 2.0,
+    "price_cache_read": null,
+    "price_cache_write": null,
+    "price_reasoning": null,
+    "tiers": null
+  },
+  {
+    "model_name": "long-context",
+    "match_pattern": "long-context",
+    "provider": null,
+    "valid_from": "1970-01-01T00:00:00.000000000Z",
+    "price_input": 1.0,
+    "price_output": 2.0,
+    "price_cache_read": null,
+    "price_cache_write": null,
+    "price_reasoning": null,
+    "tiers": [
+      {
+        "min_input_tokens": 1000,
+        "price_input": 0.5,
+        "price_output": null,
+        "price_cache_read": null,
+        "price_cache_write": null,
+        "price_reasoning": null
+      }
+    ]
   }
 ]

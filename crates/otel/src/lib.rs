@@ -7,6 +7,7 @@ mod bag;
 mod context;
 mod conventions;
 mod convert;
+mod cost;
 mod decode;
 mod detect;
 mod error;
@@ -21,8 +22,9 @@ mod usage;
 mod value;
 mod warn;
 
+pub use cost::{PriceRow, PriceScope, PriceTable, PriceTier};
 pub use decode::{decode_json, decode_protobuf};
-pub use error::{DecodeError, JsonErrorCategory};
+pub use error::{DecodeError, JsonErrorCategory, PriceError};
 pub use normalize::{IngestContext, IngestLimits, Normalized, normalize};
 pub use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 pub use reject::{RejectReason, Rejections};

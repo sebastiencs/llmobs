@@ -1,0 +1,8 @@
+{
+  "description": "A span with no provider takes the provider of the matched price row.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Model, provider, usage",
+    "02 § Cost computation"
+  ]
+}

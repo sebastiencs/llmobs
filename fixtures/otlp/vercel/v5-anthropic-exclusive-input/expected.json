@@ -15,6 +15,7 @@
       "output_tokens": 20,
       "cache_read_tokens": 40,
       "total_tokens": 160,
+      "cost_source": "none",
       "attributes": {
         "ai.model.id": "custom-claude",
         "ai.model.provider": "anthropic",

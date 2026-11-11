@@ -2,8 +2,8 @@
 //!
 //! Spec 02 § Model, provider, usage, § Context fields, and rules 3, 8, 11 and 12.
 //! The precedence tables live here, next to the functions that read them.
-//! `service_name` is filled while the resource is encoded. Provider inference
-//! from the price table waits for N16.
+//! `service_name` is filled while the resource is encoded. A missing provider
+//! is filled from the matched price row.
 
 use std::collections::BTreeMap;
 
@@ -128,7 +128,7 @@ pub(crate) struct ContextFields {
     pub request_model: Option<String>,
     /// Model named on the response.
     pub response_model: Option<String>,
-    /// Provider after rule 12. `None` until price-table inference in N16.
+    /// Provider after rule 12, or the matched price row when the span named none.
     pub provider: Option<String>,
     /// `gen_ai.operation.name`, when it is a non-empty string.
     pub operation: Option<String>,

@@ -65,6 +65,23 @@ impl JsonErrorCategory {
     }
 }
 
+/// A price table cannot be compiled.
+///
+/// The message names the row index or the size limit. It never includes the
+/// pattern: patterns come from users through the server.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum PriceError {
+    /// `match_pattern` at `index` is not a regex.
+    #[error("invalid price pattern at index {index}")]
+    InvalidPattern {
+        /// Position in the row list passed to [`crate::cost::PriceTable::new`].
+        index: usize,
+    },
+    /// The compiled patterns exceed the 16 MiB `RegexSet` limit.
+    #[error("price patterns exceed the compiled size limit")]
+    TooLarge,
+}
+
 impl fmt::Display for JsonErrorCategory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {

@@ -17,6 +17,7 @@
       "cache_write_tokens": 10,
       "reasoning_tokens": 15,
       "total_tokens": 170,
+      "cost_source": "none",
       "attributes": {
         "ai.model.id": "custom-model",
         "ai.model.provider": "openai",

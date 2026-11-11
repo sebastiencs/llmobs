@@ -16,6 +16,7 @@
       "cache_read_tokens": 20,
       "cache_write_tokens": 5,
       "total_tokens": 60,
+      "cost_source": "none",
       "attributes": {
         "gen_ai.operation.name": "chat",
         "gen_ai.request.model": "custom-model",
