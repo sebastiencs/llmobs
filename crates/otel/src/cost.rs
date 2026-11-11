@@ -124,6 +124,18 @@ impl PriceTable {
     }
 }
 
+/// Built-in price rows from the committed LiteLLM snapshot.
+///
+/// Every row has [`PriceScope::Builtin`]. `just prices-update` regenerates the
+/// file. `tests/prices.rs` checks that it parses, so a failure here is a bug
+/// in that snapshot.
+#[allow(clippy::expect_used)]
+pub fn builtin_price_rows() -> Vec<PriceRow> {
+    // The snapshot is ours and `tests/prices.rs` checks it. A parse failure is a bug.
+    serde_json::from_str(include_str!("../prices/builtin.json"))
+        .expect("builtin.json parses; tests/prices.rs checks the snapshot")
+}
+
 /// Cost columns for one span.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct Priced {

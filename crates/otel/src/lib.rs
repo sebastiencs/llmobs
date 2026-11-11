@@ -22,7 +22,7 @@ mod usage;
 mod value;
 mod warn;
 
-pub use cost::{PriceRow, PriceScope, PriceTable, PriceTier};
+pub use cost::{PriceRow, PriceScope, PriceTable, PriceTier, builtin_price_rows};
 pub use decode::{decode_json, decode_protobuf};
 pub use error::{DecodeError, JsonErrorCategory, PriceError};
 pub use normalize::{IngestContext, IngestLimits, Normalized, normalize};

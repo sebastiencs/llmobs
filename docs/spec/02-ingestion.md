@@ -244,7 +244,7 @@ Resolution for span with `model` m, `provider` p, at `start_time` t, in project 
 5. `cost_input = uncached_input·input + cache_read·cache_read_price + cache_write·cache_write_price`; `cost_output = non_reasoning_output·output + reasoning·reasoning_price`; all /1e6. A term whose token count is 0 or absent contributes 0, even if its unit price is null. A term whose token count is greater than 0 and whose unit price is null (after `reasoning` → `output`) makes its part null; nothing else falls back. `cost_total = cost_input + cost_output`, null if either is null. `cost_source` stays `computed` (D82).
 6. No match ⇒ costs null, `cost_source = none` (UI shows "—", never $0).
 
-Built-in prices: a snapshot of LiteLLM's `model_prices_and_context_window.json`, converted to our format and committed as `crates/otel/prices/builtin.json`. The snapshot is converted by `just prices-update` and is never fetched at build time or at runtime (D104). It is refreshed by hand each release, and the diff is reviewed. Costs are computed once at ingest and **not** recomputed when prices change (documented; a recompute job is post-MVP).
+Built-in prices: a snapshot of LiteLLM's `model_prices_and_context_window.json`, converted to our format and committed as `crates/otel/prices/builtin.json`. The snapshot is converted by `just prices-update` and is never fetched at build time or at runtime (D104). It is refreshed by hand each release, and the diff is reviewed. The snapshot's source commit is recorded in the commit message of each refresh. Costs are computed once at ingest and **not** recomputed when prices change (documented; a recompute job is post-MVP).
 
 Embedding spans use the `input` price only: `cost_output` is null and `cost_total = cost_input` (D82).
 
