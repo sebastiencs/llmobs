@@ -98,6 +98,8 @@ crc32c = "0.6.9"
 bytesize = { version = "2.7.0", features = ["serde"] }
 # `[storage]` durations, for example `"120s"` (D90).
 humantime-serde = "1.1.1"
+# Same prost as `opentelemetry-proto` 0.33.1 (`Cargo.lock`). Decode only; no `derive`.
+prost = { version = "0.14.4", default-features = false, features = ["std"] }
 # OTLP messages for fixture validation. Default features stay off: `full` enables the tonic service.
 opentelemetry-proto = { version = "0.33.1", default-features = false, features = [
     "gen-tonic-messages",
