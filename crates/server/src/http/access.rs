@@ -100,6 +100,7 @@ pub(crate) fn routes() -> Vec<RouteDef> {
         },
     ];
     routes.extend(crate::routes::auth::routes());
+    routes.extend(crate::routes::me::routes());
     routes
 }
 

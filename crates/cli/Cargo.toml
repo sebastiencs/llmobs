@@ -11,9 +11,12 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 clap.workspace = true
 llmobs-core.workspace = true
 llmobs-server.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 mimalloc.workspace = true
 tokio.workspace = true
 tracing.workspace = true

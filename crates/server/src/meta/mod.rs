@@ -9,6 +9,8 @@
 pub(crate) mod api_keys;
 pub(crate) mod members;
 pub(crate) mod orgs;
+pub(crate) mod password_resets;
+pub(crate) mod personal_tokens;
 pub(crate) mod projects;
 pub(crate) mod users;
 pub(crate) mod web_sessions;

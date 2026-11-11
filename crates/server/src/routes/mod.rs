@@ -2,3 +2,4 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
 pub(crate) mod auth;
+pub(crate) mod me;

@@ -1,6 +1,6 @@
 //! The OpenAPI document.
 //!
-//! Spec 09. Handlers are not implemented yet; this module is the contract.
+//! Spec 09. `just openapi` writes `crates/server/openapi.json`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,8 +24,8 @@ use utoipa::openapi::{Content, InfoBuilder, OpenApi, OpenApiBuilder, Ref, RefOr,
 use utoipa::{IntoParams, PartialSchema, ToSchema};
 
 use super::account::{
-    AuthConfig, LoginRequest, Me, Project, SetupRequest, SetupResponse, SignupRequest,
-    SignupResponse,
+    AuthConfig, ChangePasswordRequest, LoginRequest, Me, Project, ResetPasswordRequest,
+    SetupRequest, SetupResponse, SignupRequest, SignupResponse, UpdateMeRequest, User,
 };
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
 use super::metrics::{MetricsBucket, MetricsGroupBy, MetricsParams, MetricsResponse};
@@ -83,7 +83,11 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<LoginRequest>();
     set.insert::<SignupRequest>();
     set.insert::<SignupResponse>();
+    set.insert::<ResetPasswordRequest>();
+    set.insert::<UpdateMeRequest>();
+    set.insert::<ChangePasswordRequest>();
     set.insert::<Me>();
+    set.insert::<User>();
     set.insert::<Project>();
     set.insert::<TraceSummary>();
     set.insert::<SpanSummary>();
@@ -170,7 +174,7 @@ pub fn openapi() -> OpenApi {
         .tags(Some([
             tag(
                 "auth",
-                "Login, logout, sign-up, first-run setup, and the current user.",
+                "Login, logout, sign-up, password reset, the current user, and first-run setup.",
             ),
             tag("projects", "Projects the caller can see."),
             tag("traces", "Trace list, detail, and live streams."),
@@ -508,13 +512,60 @@ fn auth_paths(paths: PathsBuilder) -> PathsBuilder {
             &[401, 429],
         ))
         .build();
+    let reset = operation(
+        "post_password_reset",
+        "auth",
+        "Set a password from a reset link",
+    )
+    .securities(Some(Vec::new()))
+    .request_body(Some(json_body("ResetPasswordRequest")))
+    .responses(responses(
+        "204",
+        ResponseBuilder::new()
+            .description("The password is updated and every web session is deleted.")
+            .build(),
+        &[400, 403, 429],
+    ))
+    .build();
+    let session_only = vec![SecurityRequirement::new("session", [] as [&str; 0])];
+    let patch_me = operation("patch_me", "auth", "Change the display name")
+        .securities(Some(session_only.clone()))
+        .request_body(Some(json_body("UpdateMeRequest")))
+        .responses(responses(
+            "200",
+            json_of::<User>("The updated user."),
+            &[400, 401, 403],
+        ))
+        .build();
+    let password = operation("post_me_password", "auth", "Change the password")
+        .securities(Some(session_only))
+        .request_body(Some(json_body("ChangePasswordRequest")))
+        .responses(responses(
+            "204",
+            ResponseBuilder::new()
+                .description(
+                    "The password is updated. Other web sessions and personal access tokens are revoked.",
+                )
+                .build(),
+            &[400, 401, 403, 429],
+        ))
+        .build();
     paths
         .path("/api/auth/config", PathItem::new(HttpMethod::Get, config))
         .path("/api/auth/setup", PathItem::new(HttpMethod::Post, setup))
         .path("/api/auth/login", PathItem::new(HttpMethod::Post, login))
         .path("/api/auth/logout", PathItem::new(HttpMethod::Post, logout))
         .path("/api/auth/signup", PathItem::new(HttpMethod::Post, signup))
+        .path(
+            "/api/auth/password/reset",
+            PathItem::new(HttpMethod::Post, reset),
+        )
         .path("/api/auth/me", PathItem::new(HttpMethod::Get, me))
+        .path("/api/v1/me", PathItem::new(HttpMethod::Patch, patch_me))
+        .path(
+            "/api/v1/me/password",
+            PathItem::new(HttpMethod::Post, password),
+        )
 }
 
 fn project_paths(paths: PathsBuilder) -> PathsBuilder {

@@ -6,6 +6,7 @@
 //! [`api::openapi::openapi`] is the contract written to `crates/server/openapi.json`.
 //! `http` is the axum router. [`serve`] binds it for `llmobs serve`.
 
+pub mod admin;
 pub mod api;
 pub(crate) mod auth;
 pub(crate) mod bootstrap;

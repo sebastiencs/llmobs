@@ -3,6 +3,7 @@
 mod limits;
 pub(crate) mod password;
 pub(crate) mod principal;
+pub(crate) mod reset;
 pub(crate) mod roles;
 pub(crate) mod secret;
 pub(crate) mod session;

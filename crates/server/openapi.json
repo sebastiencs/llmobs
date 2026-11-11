@@ -146,6 +146,61 @@
         }
       }
     },
+    "/api/auth/password/reset": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Set a password from a reset link",
+        "operationId": "post_password_reset",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The password is updated and every web session is deleted."
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
     "/api/auth/setup": {
       "post": {
         "tags": [
@@ -288,6 +343,141 @@
           }
         },
         "security": []
+      }
+    },
+    "/api/v1/me": {
+      "patch": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Change the display name",
+        "operationId": "patch_me",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Change the password",
+        "operationId": "post_me_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The password is updated. Other web sessions and personal access tokens are revoked."
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/v1/orgs/{org}/projects": {
@@ -2742,6 +2932,24 @@
         },
         "additionalProperties": true
       },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/me/password`.",
+        "required": [
+          "new_password"
+        ],
+        "properties": {
+          "current_password": {
+            "type": "string",
+            "description": "The current password. Required when the account has one, and absent when it does not."
+          },
+          "new_password": {
+            "type": "string",
+            "description": "The replacement password."
+          }
+        },
+        "additionalProperties": false
+      },
       "ColumnSchema": {
         "type": "object",
         "description": "One column of a logical view.\n\nSpec 05 § Logical views.",
@@ -3590,6 +3798,25 @@
           }
         },
         "additionalProperties": true
+      },
+      "ResetPasswordRequest": {
+        "type": "object",
+        "description": "`POST /api/auth/password/reset`.",
+        "required": [
+          "token",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The new password."
+          },
+          "token": {
+            "type": "string",
+            "description": "The token from the reset link."
+          }
+        },
+        "additionalProperties": false
       },
       "SavedView": {
         "type": "object",
@@ -5257,6 +5484,17 @@
         },
         "additionalProperties": true
       },
+      "UpdateMeRequest": {
+        "type": "object",
+        "description": "`PATCH /api/v1/me`.\n\nA missing `name` and JSON null both clear the display name.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Display name. Null or omitted clears it. A present value is trimmed to 1–100 characters."
+          }
+        },
+        "additionalProperties": false
+      },
       "UpdateSavedView": {
         "type": "object",
         "description": "Body of `PATCH /api/v1/projects/{project}/saved-views/{id}`.\n\nOmitted fields are left unchanged. Spec 09 § Observability data.",
@@ -5421,7 +5659,7 @@
   "tags": [
     {
       "name": "auth",
-      "description": "Login, logout, sign-up, first-run setup, and the current user."
+      "description": "Login, logout, sign-up, password reset, the current user, and first-run setup."
     },
     {
       "name": "projects",

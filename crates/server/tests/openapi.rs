@@ -16,6 +16,9 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
     ("post", "/api/auth/logout", "post_logout"),
     ("post", "/api/auth/signup", "post_signup"),
     ("get", "/api/auth/me", "get_me"),
+    ("post", "/api/auth/password/reset", "post_password_reset"),
+    ("patch", "/api/v1/me", "patch_me"),
+    ("post", "/api/v1/me/password", "post_me_password"),
     ("get", "/api/v1/orgs/{org}/projects", "list_projects"),
     ("get", "/api/v1/projects/{project}", "get_project"),
     ("get", "/api/v1/projects/{project}/traces", "list_traces"),
@@ -176,9 +179,19 @@ fn document_lint() {
         let operation_security = operation.get("security").and_then(Value::as_array);
         if matches!(
             *id,
-            "get_auth_config" | "post_setup" | "post_login" | "post_logout" | "post_signup"
+            "get_auth_config"
+                | "post_setup"
+                | "post_login"
+                | "post_logout"
+                | "post_signup"
+                | "post_password_reset"
         ) {
             assert_eq!(operation_security.map(Vec::len), Some(0), "{id}");
+        } else if *id == "patch_me" || *id == "post_me_password" {
+            let security = operation_security.unwrap_or_else(|| panic!("{id}"));
+            assert_eq!(security.len(), 1, "{id}");
+            assert!(security[0].get("session").is_some(), "{id}");
+            assert!(security[0].get("bearer").is_none(), "{id}");
         } else {
             assert!(operation_security.is_none(), "{id} overrides security");
         }
@@ -197,6 +210,12 @@ fn document_lint() {
             expected_errors.extend(["400", "403", "409", "429"]);
         } else if *id == "post_login" {
             expected_errors.extend(["401", "403", "429"]);
+        } else if *id == "post_password_reset" {
+            expected_errors.extend(["400", "403", "429"]);
+        } else if *id == "patch_me" {
+            expected_errors.extend(["400", "401", "403"]);
+        } else if *id == "post_me_password" {
+            expected_errors.extend(["400", "401", "403", "429"]);
         } else if *id == "post_logout" {
             // The handler always answers 204. CSRF is the shared origin check.
         } else if *id == "get_media" {

@@ -205,6 +205,38 @@ pub struct SignupResponse {
     pub verification_required: bool,
 }
 
+/// `POST /api/auth/password/reset`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResetPasswordRequest {
+    /// The token from the reset link.
+    pub token: String,
+    /// The new password.
+    pub password: String,
+}
+
+/// `PATCH /api/v1/me`.
+///
+/// A missing `name` and JSON null both clear the display name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateMeRequest {
+    /// Display name. Null or omitted clears it. A present value is trimmed to 1–100 characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// `POST /api/v1/me/password`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChangePasswordRequest {
+    /// The current password. Required when the account has one, and absent when it does not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_password: Option<String>,
+    /// The replacement password.
+    pub new_password: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -8,13 +8,13 @@ use axum::routing::{get, post};
 use uuid::Uuid;
 
 use crate::api::account::{
-    AuthConfig, LoginRequest, Me, OrgMembership, OrgRole, Project, SetupRequest, SetupResponse,
-    SignupPolicy, SignupRequest, SignupResponse, User,
+    AuthConfig, LoginRequest, Me, OrgMembership, OrgRole, Project, ResetPasswordRequest,
+    SetupRequest, SetupResponse, SignupPolicy, SignupRequest, SignupResponse, User,
 };
 use crate::api::common::{FieldError, Problem, ProblemCode};
 use crate::auth::password::check_policy;
 use crate::auth::principal::Principal;
-use crate::auth::secret::constant_time_eq;
+use crate::auth::secret::{constant_time_eq, hash_token, is_opaque_token};
 use crate::auth::session::{clear_cookie, resolve_cookie_header, start_session};
 use crate::bootstrap::{self, BootstrapError};
 use crate::http::AppState;
@@ -22,8 +22,9 @@ use crate::http::access::{Access, RouteDef};
 use crate::http::client_ip::ClientIp;
 use crate::http::error::{self, ApiError};
 use crate::meta::orgs::orgs_of_user;
+use crate::meta::password_resets::{delete_user_resets, use_reset, valid_reset};
 use crate::meta::users::{self, UserRow, normalize_email};
-use crate::meta::web_sessions::delete_session;
+use crate::meta::web_sessions::{delete_session, delete_user_sessions};
 
 /// Auth routes. CSRF still applies to every POST under `/api/auth/` (D141).
 pub(crate) fn routes() -> Vec<RouteDef> {
@@ -62,6 +63,13 @@ pub(crate) fn routes() -> Vec<RouteDef> {
             access: Access::Public,
             documented: true,
             handler: post(signup),
+        },
+        RouteDef {
+            method: axum::http::Method::POST,
+            path: "/api/auth/password/reset",
+            access: Access::Public,
+            documented: true,
+            handler: post(reset_password),
         },
         RouteDef {
             method: axum::http::Method::GET,
@@ -278,6 +286,70 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Res
         .headers_mut()
         .insert(axum::http::header::SET_COOKIE, clear_cookie(&state));
     Ok(response)
+}
+
+async fn reset_password(
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    error::Json(body): error::Json<ResetPasswordRequest>,
+) -> Result<Response, ApiError> {
+    state
+        .limits
+        .ip_forms
+        .check(&ip, state.clock.now_ns())
+        .map_err(|retry| ApiError::RateLimited {
+            retry_after_s: retry.0.as_secs().max(1),
+        })?;
+    if state.config.auth.disable_password {
+        return Err(ApiError::Forbidden {
+            code: ProblemCode::Forbidden,
+        });
+    }
+    if !is_opaque_token(&body.token) {
+        return Err(invalid_link());
+    }
+    let token_hash = hash_token(&body.token);
+    let now = state.clock.now_ns();
+    let Some(user_id) = valid_reset(state.meta.reader(), &token_hash, now).await? else {
+        return Err(invalid_link());
+    };
+    let Some(user) = users::user_by_id(state.meta.reader(), user_id).await? else {
+        return Err(invalid_link());
+    };
+    check_policy(&body.password, &user.email)
+        .map_err(|error| field_error("password", &error.to_string()))?;
+    let password_hash = {
+        let hasher = state.passwords().await?;
+        hasher.hash(&body.password).await.map_err(auth_error)?
+    };
+    let email = user.email.clone();
+    let consumed = state
+        .meta
+        .write(move |conn| {
+            Box::pin(async move {
+                let Some(id) = use_reset(conn, &token_hash, now).await? else {
+                    return Ok(None);
+                };
+                users::set_password_hash(conn, id, Some(&password_hash), now).await?;
+                delete_user_sessions(conn, id, None).await?;
+                delete_user_resets(conn, id).await?;
+                Ok(Some(id))
+            })
+        })
+        .await?;
+    let Some(user_id) = consumed else {
+        return Err(invalid_link());
+    };
+    state.limits.lockout.clear(&email);
+    tracing::info!(target: "audit", %user_id, "password reset");
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+fn invalid_link() -> ApiError {
+    ApiError::BadRequest {
+        detail: Some("invalid or expired link".to_owned()),
+        errors: Vec::new(),
+    }
 }
 
 async fn signup(
@@ -1266,5 +1338,194 @@ mod tests {
             .hash_password_with_salt(password.as_bytes(), &salt)
             .unwrap()
             .to_string()
+    }
+
+    fn sync_clock(app: &TestApp) {
+        let now = crate::clock::Clock::System.now_ns();
+        let crate::clock::Clock::Manual(nanos) = &app.state.clock else {
+            panic!("test clock");
+        };
+        nanos.store(now, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn reset_token(url: &str) -> &str {
+        url.split("token=").nth(1).expect("reset url")
+    }
+
+    #[tokio::test]
+    async fn password_reset_replaces_the_password_and_drops_sessions() {
+        let app = TestApp::new().await;
+        sync_clock(&app);
+        insert_account(&app, "ada@example.com", Some(PASSWORD), true).await;
+        let logged_in = app
+            .request(Method::POST, "/api/auth/login")
+            .json(&login_body("ada@example.com", PASSWORD))
+            .send()
+            .await;
+        assert_eq!(logged_in.status, 200);
+        let cookie = session_cookie(&logged_in);
+        let url = crate::admin::reset_password(&app.state.config, "ada@example.com")
+            .await
+            .unwrap();
+        let token = reset_token(&url).to_owned();
+        let reset = assert_logs_clean(
+            &[&token, PASSWORD, "llmobs-ok2", "ada@example.com"],
+            async {
+                app.request(Method::POST, "/api/auth/password/reset")
+                    .json(&serde_json::json!({ "token": &token, "password": "llmobs-ok2" }))
+                    .send()
+                    .await
+            },
+        )
+        .await;
+        assert_eq!(
+            reset.status,
+            204,
+            "{}",
+            String::from_utf8_lossy(&reset.body)
+        );
+        let me = app
+            .request(Method::GET, "/api/auth/me")
+            .header("cookie", &cookie)
+            .send()
+            .await;
+        assert_eq!(me.status, 401);
+        let old = app
+            .request(Method::POST, "/api/auth/login")
+            .json(&login_body("ada@example.com", PASSWORD))
+            .send()
+            .await;
+        assert_eq!(old.status, 401);
+        let fresh = app
+            .request(Method::POST, "/api/auth/login")
+            .json(&login_body("ada@example.com", "llmobs-ok2"))
+            .send()
+            .await;
+        assert_eq!(fresh.status, 200);
+        let again = app
+            .request(Method::POST, "/api/auth/password/reset")
+            .json(&serde_json::json!({ "token": token, "password": "llmobs-ok2" }))
+            .send()
+            .await;
+        assert_eq!(again.status, 400);
+        assert_eq!(
+            again.problem().detail.as_deref(),
+            Some("invalid or expired link")
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_reset_link_is_rejected_and_a_weak_password_is_not_consumed() {
+        let app = TestApp::new().await;
+        sync_clock(&app);
+        insert_account(&app, "ada@example.com", Some(PASSWORD), true).await;
+        let url = crate::admin::reset_password(&app.state.config, "ada@example.com")
+            .await
+            .unwrap();
+        app.state.clock.advance(Duration::from_secs(3600 + 5));
+        let expired = app
+            .request(Method::POST, "/api/auth/password/reset")
+            .json(&serde_json::json!({
+                "token": reset_token(&url),
+                "password": "llmobs-ok2",
+            }))
+            .send()
+            .await;
+        assert_eq!(expired.status, 400);
+        assert_eq!(
+            expired.problem().detail.as_deref(),
+            Some("invalid or expired link")
+        );
+        let still = app
+            .request(Method::POST, "/api/auth/login")
+            .json(&login_body("ada@example.com", PASSWORD))
+            .send()
+            .await;
+        assert_eq!(still.status, 200);
+
+        let fresh = TestApp::new().await;
+        sync_clock(&fresh);
+        insert_account(&fresh, "ada@example.com", Some(PASSWORD), true).await;
+        let shaped = fresh
+            .request(Method::POST, "/api/auth/password/reset")
+            .json(&serde_json::json!({ "token": "nope", "password": "llmobs-ok2" }))
+            .send()
+            .await;
+        assert_eq!(shaped.status, 400);
+        let url = crate::admin::reset_password(&fresh.state.config, "ada@example.com")
+            .await
+            .unwrap();
+        let token = reset_token(&url);
+        let weak = fresh
+            .request(Method::POST, "/api/auth/password/reset")
+            .json(&serde_json::json!({ "token": token, "password": "nope-nope" }))
+            .send()
+            .await;
+        assert_eq!(weak.status, 400);
+        assert_eq!(weak.problem().errors[0].field, "password");
+        let accepted = fresh
+            .request(Method::POST, "/api/auth/password/reset")
+            .json(&serde_json::json!({ "token": token, "password": "llmobs-ok2" }))
+            .send()
+            .await;
+        assert_eq!(
+            accepted.status,
+            204,
+            "{}",
+            String::from_utf8_lossy(&accepted.body)
+        );
+        let logged_in = fresh
+            .request(Method::POST, "/api/auth/login")
+            .json(&login_body("ada@example.com", "llmobs-ok2"))
+            .send()
+            .await;
+        assert_eq!(logged_in.status, 200);
+    }
+
+    #[tokio::test]
+    async fn reset_unlocks_a_locked_email() {
+        let app = TestApp::new().await;
+        sync_clock(&app);
+        insert_account(&app, "ada@example.com", Some(PASSWORD), true).await;
+        let now = app.state.clock.now_ns();
+        for _ in 0..20 {
+            app.state
+                .limits
+                .lockout
+                .record_failure("ada@example.com", now);
+        }
+        assert!(app.state.limits.lockout.is_locked("ada@example.com", now));
+        let url = crate::admin::reset_password(&app.state.config, "ada@example.com")
+            .await
+            .unwrap();
+        let reset = app
+            .request(Method::POST, "/api/auth/password/reset")
+            .json(&serde_json::json!({
+                "token": reset_token(&url),
+                "password": "llmobs-ok2",
+            }))
+            .send()
+            .await;
+        assert_eq!(reset.status, 204);
+        assert!(!app.state.limits.lockout.is_locked("ada@example.com", now));
+        let logged_in = app
+            .request(Method::POST, "/api/auth/login")
+            .json(&login_body("ada@example.com", "llmobs-ok2"))
+            .send()
+            .await;
+        assert_eq!(logged_in.status, 200);
+    }
+
+    #[tokio::test]
+    async fn reset_is_forbidden_when_password_login_is_disabled() {
+        let app = TestApp::with_config(|config| config.auth.disable_password = true).await;
+        let response = app
+            .request(Method::POST, "/api/auth/password/reset")
+            .json(&serde_json::json!({ "token": "nope", "password": "llmobs-ok2" }))
+            .send()
+            .await;
+        assert_eq!(response.status, 403);
+        assert_eq!(response.problem().code, ProblemCode::Forbidden);
+        assert!(response.problem().detail.is_none());
     }
 }

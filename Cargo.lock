@@ -2695,10 +2695,13 @@ name = "llmobs-cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "llmobs-core",
  "llmobs-server",
  "mimalloc",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
