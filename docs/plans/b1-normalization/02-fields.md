@@ -10,7 +10,7 @@ See [README.md](README.md) for the decisions, the boundaries and the rules that 
 
 ### `fields.rs`
 
-The declarative half of D100.
+The declarative half of D102.
 
 ```rust
 #[derive(Clone, Copy)]
@@ -135,7 +135,7 @@ Unit tests: one per table, plus the alias table.
 - **Vercel v6 `noCacheTokens`.** If `ai.usage.inputTokenDetails.noCacheTokens` is present and there's no inclusive input source, `input = noCacheTokens + cacheRead + cacheWrite`.
 - **`VercelLegacy`.** The span has `ai.*` attributes, has **no** `ai.usage.inputTokenDetails.*`, and its normalized provider is `anthropic`. Then the input count is exclusive, wherever it was read from: `gen_ai.usage.input_tokens` or `ai.usage.inputTokens`/`promptTokens` (N1 token semantics table).
 - **Add-back.** Exclusive input becomes `input + cache_read + cache_write`. Exclusive output becomes `output + reasoning`. Use saturating arithmetic.
-- **Safety net (D108).** After add-back, if `input < cache_read + cache_write`: `input += cache_read + cache_write`, and record `InputExcludesCache`.
+- **Safety net (D110).** After add-back, if `input < cache_read + cache_write`: `input += cache_read + cache_write`, and record `InputExcludesCache`.
 - **Total, rule 4.** A reported total, else `input + output` when both are known, else `None`.
 - **Modality subsets.** Never read them: they stay Unread.
 - **TTFT** (any kind; it's not usage).
@@ -147,7 +147,7 @@ Unit tests: one per table, plus the alias table.
   Each one that wins becomes Consumed.
 - **Embedding spans:** `output_tokens` is read too, if reported. D82 handles their cost in N16.
 
-Fixtures (hand-written, D111):
+Fixtures (hand-written, D113):
 - `genai/cache-write-semconv` (`gen_ai.usage.cache_write.input_tokens` plus `cache_read`);
 - `genai/underscore-cache-keys` (OpenLLMetry-style `gen_ai.usage.cache_read_input_tokens`);
 - `vercel/v6-token-details` (`inputTokenDetails`, `outputTokenDetails`);

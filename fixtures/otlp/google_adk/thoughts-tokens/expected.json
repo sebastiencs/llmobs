@@ -1,0 +1,81 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fe2a0000000000000000000000000001",
+      "span_id": "fe2a000000000001",
+      "name": "call_llm",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "adk-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini",
+      "operation": "call_llm",
+      "input_tokens": 100,
+      "output_tokens": 28,
+      "reasoning_tokens": 8,
+      "total_tokens": 128,
+      "cost_input": 0.0001,
+      "cost_output": 0.000112,
+      "cost_total": 0.000212,
+      "cost_source": "computed",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Hi\"}]}]",
+      "output_format": "messages",
+      "output_preview": "Hi",
+      "attributes": {
+        "gen_ai.operation.name": "call_llm",
+        "gen_ai.request.model": "gpt-4o-mini"
+      },
+      "scope_name": "gcp.vertex.agent",
+      "conventions": [
+        "genai",
+        "google_adk"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fe2a0000000000000000000000000001",
+      "span_id": "fe2a000000000002",
+      "name": "call_llm",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.100000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "adk-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini",
+      "operation": "call_llm",
+      "input_tokens": 10,
+      "output_tokens": 30,
+      "reasoning_tokens": 8,
+      "total_tokens": 40,
+      "cost_input": 0.00001,
+      "cost_output": 0.00012,
+      "cost_total": 0.00013000000000000002,
+      "cost_source": "computed",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Hi\"}]}]",
+      "output_format": "messages",
+      "output_preview": "Hi",
+      "attributes": {
+        "gen_ai.operation.name": "call_llm",
+        "gen_ai.request.model": "gpt-4o-mini",
+        "gen_ai.usage.input_tokens": "10",
+        "gen_ai.usage.output_tokens": "30",
+        "gen_ai.usage.reasoning.output_tokens": "8"
+      },
+      "scope_name": "gcp.vertex.agent",
+      "conventions": [
+        "genai",
+        "google_adk"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

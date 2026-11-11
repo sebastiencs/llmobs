@@ -1,0 +1,40 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "f72a0000000000000000000000000001",
+      "span_id": "f72a000000000001",
+      "name": "v6",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "provider": "openai",
+      "request_model": "custom-model",
+      "input_tokens": 130,
+      "output_tokens": 40,
+      "cache_read_tokens": 20,
+      "cache_write_tokens": 10,
+      "reasoning_tokens": 15,
+      "total_tokens": 170,
+      "cost_source": "none",
+      "attributes": {
+        "ai.model.id": "custom-model",
+        "ai.model.provider": "openai",
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.usage.inputTokenDetails.cacheReadTokens": "20",
+        "ai.usage.inputTokenDetails.cacheWriteTokens": "10",
+        "ai.usage.inputTokenDetails.noCacheTokens": "100",
+        "ai.usage.outputTokenDetails.reasoningTokens": "15",
+        "ai.usage.outputTokens": "40"
+      },
+      "conventions": [
+        "vercel"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

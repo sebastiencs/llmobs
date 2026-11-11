@@ -1,0 +1,11 @@
+{
+  "description": "Gemini usage_metadata adds thoughts to the output, and gen_ai.usage on an ADK span stays inclusive.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Token semantics",
+    "02 § Cost computation",
+    "02 § Normalization rules"
+  ],
+  "notes": "hand-written from google/adk-python src/google/adk/telemetry/tracing.py (tracer gcp.vertex.agent). Re-check against a B2 capture. D113: gen_ai.usage.* on an ADK span is unverified and treated as inclusive, so the second span's output stays 30."
+}

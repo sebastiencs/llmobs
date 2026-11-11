@@ -502,7 +502,7 @@ mod fault_store {
     use std::time::Duration;
 
     use async_trait::async_trait;
-    use futures_util::stream::BoxStream;
+    use futures::stream::BoxStream;
     use object_store::path::Path;
     use object_store::{
         CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,

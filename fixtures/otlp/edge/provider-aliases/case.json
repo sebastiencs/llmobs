@@ -1,0 +1,7 @@
+{
+  "description": "Provider aliases: a Vercel id, a semconv id left intact, xai, and an uppercase name.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Normalization rules / 12"
+  ]
+}

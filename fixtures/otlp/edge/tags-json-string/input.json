@@ -1,0 +1,48 @@
+{
+  "resourceSpans": [
+    {
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "f63a0000000000000000000000000001",
+              "spanId": "f63a000000000001",
+              "name": "json-tags",
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "llmobs.tags",
+                  "value": {
+                    "stringValue": "[\"alpha\",\"beta\",\"alpha\"]"
+                  }
+                },
+                {
+                  "key": "tag.tags",
+                  "value": {
+                    "stringValue": "alpha,beta"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "f63a0000000000000000000000000001",
+              "spanId": "f63a000000000002",
+              "name": "csv-tags",
+              "startTimeUnixNano": "1767225590100000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "tag.tags",
+                  "value": {
+                    "stringValue": "red,blue"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

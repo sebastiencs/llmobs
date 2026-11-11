@@ -1,0 +1,12 @@
+{
+  "description": "A Laminar LLM span converts OpenAI messages, and its tool child stores JSON and text.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Cost computation",
+    "02 § Normalization rules"
+  ],
+  "notes": "hand-written from lmnr 0.8.9 (tracer lmnr.tracer, get_tracer with no version). Re-check against a B2 capture. lmnr.span.path stays in attributes."
+}

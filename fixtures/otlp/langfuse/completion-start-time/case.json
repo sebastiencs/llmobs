@@ -1,0 +1,9 @@
+{
+  "description": "Langfuse completion_start_time is an instant, and time to first token is that instant minus the span start.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Mapping tables / Span kind"
+  ],
+  "notes": "hand-written from langfuse 5.2.0 (tracer langfuse-sdk). Re-check against a B2 capture."
+}

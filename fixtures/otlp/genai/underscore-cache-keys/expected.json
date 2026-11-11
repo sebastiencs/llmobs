@@ -1,0 +1,37 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "f71a0000000000000000000000000001",
+      "span_id": "f71a000000000001",
+      "name": "underscore-cache",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "request_model": "custom-model",
+      "operation": "chat",
+      "input_tokens": 20,
+      "output_tokens": 4,
+      "cache_read_tokens": 8,
+      "cache_write_tokens": 2,
+      "total_tokens": 24,
+      "cost_source": "none",
+      "attributes": {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.request.model": "custom-model",
+        "gen_ai.usage.cache_read_input_tokens": "8",
+        "gen_ai.usage.cache_write_input_tokens": "2",
+        "gen_ai.usage.input_tokens": "20",
+        "gen_ai.usage.output_tokens": "4"
+      },
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

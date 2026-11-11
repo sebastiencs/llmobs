@@ -1,0 +1,7 @@
+{
+  "description": "gen_ai.response.time_to_first_chunk is a duration in seconds and becomes ttft_ns.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Model, provider, usage"
+  ]
+}

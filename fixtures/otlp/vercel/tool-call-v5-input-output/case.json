@@ -1,0 +1,11 @@
+{
+  "description": "v5 tool-call parts use input, tool results use output.value, and a tool span stores args and result.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Input / output",
+    "02 § Normalization rules",
+    "02 § Mapping tables / Span kind",
+    "02 § Cost computation"
+  ],
+  "notes": "hand-written from the ai package telemetry (getTracer(\"ai\")); re-check against a B2 capture"
+}

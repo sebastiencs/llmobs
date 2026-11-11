@@ -15,7 +15,7 @@ use std::time::Duration;
 use arrow::array::{Array, StringArray};
 use bytesize::ByteSize;
 use datafusion::execution::context::{SessionConfig, SessionContext};
-use futures_util::TryStreamExt;
+use futures::TryStreamExt;
 use llmobs_core::batch::spans_to_record_batch;
 use llmobs_core::enums::{SpanKind, SpanStatus};
 use llmobs_core::ids::{ProjectId, SpanId, TraceId};

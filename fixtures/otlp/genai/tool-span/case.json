@@ -1,0 +1,9 @@
+{
+  "description": "A tool span stores call arguments as json and the result as text.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Input and output",
+    "02 § Normalization rules / 6",
+    "02 § Normalization rules / 10"
+  ]
+}

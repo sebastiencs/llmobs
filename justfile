@@ -112,3 +112,14 @@ fixtures-check:
 # Rewrite OTLP fixtures in canonical JSON formatting
 fixtures-fmt:
     LLMOBS_FIXTURES_FMT=1 cargo test -p llmobs-otel --test fixtures -- canonical_formatting
+
+# Rewrite expected.json from the normalizer. Review the diff before committing.
+fixtures-bless:
+    LLMOBS_BLESS=1 cargo test -p llmobs-otel --test golden
+
+# Regenerate the built-in price snapshot from a downloaded LiteLLM JSON (D104).
+# Download model_prices_and_context_window.json from
+# https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+# by hand. This recipe does not fetch it.
+prices-update litellm_json:
+    LLMOBS_LITELLM_JSON={{litellm_json}} cargo test -p llmobs-otel --test prices -- refresh

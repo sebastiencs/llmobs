@@ -1,0 +1,7 @@
+{
+  "description": "The later price row applies only at start times on or after its valid_from.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Cost computation"
+  ]
+}

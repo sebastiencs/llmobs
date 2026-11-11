@@ -1,0 +1,7 @@
+{
+  "description": "A reported cost on a chain span stays in attributes and does not fill cost columns.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Cost computation"
+  ]
+}

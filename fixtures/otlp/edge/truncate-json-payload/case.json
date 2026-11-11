@@ -1,0 +1,10 @@
+{
+  "description": "Cuts a JSON payload as text because the cut bytes are no longer valid JSON.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Truncation"
+  ],
+  "settings": {
+    "max_attribute_bytes": 32
+  }
+}

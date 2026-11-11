@@ -566,8 +566,10 @@ export interface components {
         FunctionSchema: {
             /** @description What the function does. */
             description: string;
-            /** @description Whether the filter DSL allows the function. SQL allows every function. */
+            /** @description Whether the filter DSL allows the function. */
             in_filter: boolean;
+            /** @description Whether the SQL console allows the function. */
+            in_sql: boolean;
             /** @description Function name. */
             name: string;
             /** @description Argument and return types, for example `score(name: string) -> float`. */
@@ -824,7 +826,7 @@ export interface components {
          *     Spec 09 § Conventions. Later endpoints add codes.
          * @enum {string}
          */
-        ProblemCode: "bad_request" | "invalid_filter" | "unauthorized" | "forbidden" | "not_found" | "rate_limited" | "internal";
+        ProblemCode: "bad_request" | "invalid_filter" | "query_failed" | "query_timeout" | "query_too_large" | "busy" | "unauthorized" | "forbidden" | "not_found" | "rate_limited" | "internal";
         /**
          * @description A project the caller can see.
          *

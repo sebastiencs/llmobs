@@ -1,0 +1,36 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "f40a0000000000000000000000000001",
+      "span_id": "f40a000000000001",
+      "name": "earlier-end",
+      "span_kind": "span",
+      "start_time": "2025-12-31T23:59:52.000000000Z",
+      "end_time": "2025-12-31T23:59:52.000000000Z",
+      "status": "unset",
+      "attributes": {
+        "llmobs.normalize_warning": "[\"end_before_start\"]"
+      },
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "f40a0000000000000000000000000001",
+      "span_id": "f40a000000000002",
+      "name": "zero-end",
+      "span_kind": "span",
+      "start_time": "2025-12-31T23:59:54.000000000Z",
+      "end_time": "2025-12-31T23:59:54.000000000Z",
+      "status": "unset",
+      "attributes": {
+        "llmobs.normalize_warning": "[\"end_before_start\"]"
+      },
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

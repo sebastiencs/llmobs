@@ -5,13 +5,17 @@ mod hex;
 mod scores;
 mod session;
 mod sessions;
+
+pub(crate) use sessions::sessions_from_traces;
 mod spans;
 mod traces;
 
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use arrow::datatypes::{DataType, Schema};
+use datafusion::common::{DFSchema, DFSchemaRef};
 use datafusion::datasource::{TableProvider, ViewTable, provider_as_source};
 use datafusion::error::DataFusionError;
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -111,6 +115,24 @@ pub enum ViewName {
     DatasetItems,
 }
 
+/// A server-owned table the SQL console can name (D93).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SqliteView {
+    /// Experiment item rows.
+    ExperimentItems,
+    /// Dataset item rows.
+    DatasetItems,
+}
+
+impl SqliteView {
+    fn view_name(self) -> ViewName {
+        match self {
+            Self::ExperimentItems => ViewName::ExperimentItems,
+            Self::DatasetItems => ViewName::DatasetItems,
+        }
+    }
+}
+
 impl ViewName {
     /// Unqualified table name.
     pub fn as_str(self) -> &'static str {
@@ -128,8 +150,13 @@ impl ViewName {
 /// Sandboxed session with the base views registered.
 pub struct QueryContext {
     /// Later modules plan against this session. Tests read it too.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // filter, SQL and read queries use this from Q7 on
     session: SessionContext,
+    /// Unqualified schema of each registered view, taken from its logical plan.
+    #[allow(dead_code)] // parse_filter reads this
+    schemas: HashMap<ViewName, DFSchemaRef>,
+    /// View names the SQL console may reference. SQLite views join this set.
+    registered: Mutex<HashSet<ViewName>>,
 }
 
 impl std::fmt::Debug for QueryContext {
@@ -152,37 +179,121 @@ impl QueryContext {
     pub fn new(source: ProjectQuery, window: Option<TimeWindow>) -> Result<Self, RunError> {
         let state = session::session_state(source.runtime, source.target_partitions);
         let session = SessionContext::new_with_state(state);
-        register(
-            &session,
+        let mut schemas = HashMap::new();
+        schemas.insert(
             ViewName::Spans,
-            spans::spans_view(source.spans, window)?,
-        )?;
+            register(
+                &session,
+                ViewName::Spans,
+                spans::spans_view(source.spans, window)?,
+            )?,
+        );
         let traces_plan = traces::traces_view(source.traces, window)?;
-        register(
-            &session,
+        schemas.insert(
             ViewName::Sessions,
-            map_plan(sessions::sessions_from_traces(traces_plan.clone()))?,
-        )?;
-        register(&session, ViewName::Traces, traces_plan)?;
-        register(
-            &session,
+            register(
+                &session,
+                ViewName::Sessions,
+                map_plan(sessions_from_traces(traces_plan.clone()))?,
+            )?,
+        );
+        schemas.insert(
+            ViewName::Traces,
+            register(&session, ViewName::Traces, traces_plan)?,
+        );
+        schemas.insert(
             ViewName::Scores,
-            scores::scores_view(source.scores, window)?,
-        )?;
-        Ok(Self { session })
+            register(
+                &session,
+                ViewName::Scores,
+                scores::scores_view(source.scores, window)?,
+            )?,
+        );
+        Ok(Self {
+            session,
+            schemas,
+            registered: Mutex::new(HashSet::from([
+                ViewName::Spans,
+                ViewName::Traces,
+                ViewName::Sessions,
+                ViewName::Scores,
+            ])),
+        })
     }
 
-    #[allow(dead_code)] // filter, SQL and read queries use this from Q6 on
+    /// Register a server-built table under its view name.
+    ///
+    /// # Errors
+    ///
+    /// [`RunError::InvalidRequest`] when `view` is already registered.
+    /// [`RunError::Internal`] when DataFusion rejects the table.
+    pub fn register_sqlite_view(
+        &self,
+        view: SqliteView,
+        table: Arc<dyn TableProvider>,
+    ) -> Result<(), RunError> {
+        let name = view.view_name();
+        let mut registered = self
+            .registered
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !registered.insert(name) {
+            return Err(RunError::InvalidRequest(format!(
+                "{} is already registered",
+                name.as_str()
+            )));
+        }
+        if let Err(error) = self.session.register_table(name.as_str(), table) {
+            registered.remove(&name);
+            return Err(RunError::Internal(error));
+        }
+        Ok(())
+    }
+
+    /// Names a SQL statement may use as tables, before CTE names.
+    pub(crate) fn registered_view_names(&self) -> HashSet<String> {
+        self.registered
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .map(|name| name.as_str().to_owned())
+            .collect()
+    }
+
+    #[allow(dead_code)] // filter, SQL and read queries use this from Q7 on
     pub(crate) fn session(&self) -> &SessionContext {
         &self.session
     }
+
+    /// Schema captured when `view` was registered.
+    ///
+    /// `new` registers spans, traces, sessions and scores. Those are the only
+    /// views the filter compiler asks for.
+    #[allow(dead_code, clippy::expect_used)]
+    pub(crate) fn view_schema(&self, view: ViewName) -> &DFSchemaRef {
+        self.schemas
+            .get(&view)
+            .expect("query views are registered with their schemas")
+    }
 }
 
-fn register(session: &SessionContext, name: ViewName, plan: LogicalPlan) -> Result<(), RunError> {
+fn register(
+    session: &SessionContext,
+    name: ViewName,
+    plan: LogicalPlan,
+) -> Result<DFSchemaRef, RunError> {
+    // The plan qualifies columns with the hidden scan name (`raw_spans`, …).
+    // Filters name the view's columns without that qualifier.
+    let schema = DFSchema::from_unqualified_fields(
+        plan.schema().fields().clone(),
+        plan.schema().metadata().clone(),
+    )
+    .map(Arc::new)
+    .map_err(RunError::Internal)?;
     session
         .register_table(name.as_str(), Arc::new(ViewTable::new(plan, None)))
-        .map(|_| ())
-        .map_err(RunError::Internal)
+        .map_err(RunError::Internal)?;
+    Ok(schema)
 }
 
 /// `CAST(duration_ns AS DOUBLE) / 1e6`.

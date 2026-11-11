@@ -1,0 +1,9 @@
+{
+  "description": "Duplicate span attribute keys keep the last value, and a 33-deep list becomes the depth marker.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Normalization rules / 18",
+    "02 § Normalization rules / 19"
+  ],
+  "notes": "A client-sent llmobs.normalize_warning is replaced by the normalizer's warning array."
+}

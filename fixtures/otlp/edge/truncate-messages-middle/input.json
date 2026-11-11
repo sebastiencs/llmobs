@@ -1,0 +1,33 @@
+{
+  "resourceSpans": [
+    {
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "f8ca0000000000000000000000000001",
+              "spanId": "f8ca000000000001",
+              "name": "chat",
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "llmobs.input",
+                  "value": {
+                    "stringValue": "[{\"role\":\"system\",\"parts\":[{\"type\":\"text\",\"content\":\"rules\"}]},{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"hello\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"one\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"two\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"end\"}]}]"
+                  }
+                },
+                {
+                  "key": "llmobs.input.format",
+                  "value": {
+                    "stringValue": "messages"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

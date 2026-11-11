@@ -1,0 +1,8 @@
+{
+  "description": "OpenLLMetry underscore cache keys fill the cache columns.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Model, provider, usage",
+    "02 § Token semantics"
+  ]
+}

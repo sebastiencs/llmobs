@@ -1,0 +1,99 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "adk-app"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "gcp.vertex.agent"
+          },
+          "spans": [
+            {
+              "traceId": "fe2a0000000000000000000000000001",
+              "spanId": "fe2a000000000001",
+              "name": "call_llm",
+              "kind": 3,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "call_llm"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.llm_response",
+                  "value": {
+                    "stringValue": "{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Hi\"}]},\"usage_metadata\":{\"prompt_token_count\":100,\"candidates_token_count\":20,\"thoughts_token_count\":8}}"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "fe2a0000000000000000000000000001",
+              "spanId": "fe2a000000000002",
+              "name": "call_llm",
+              "kind": 3,
+              "startTimeUnixNano": "1767225590100000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "call_llm"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "10"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "30"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.reasoning.output_tokens",
+                  "value": {
+                    "intValue": "8"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.llm_response",
+                  "value": {
+                    "stringValue": "{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Hi\"}]},\"usage_metadata\":{\"prompt_token_count\":100,\"candidates_token_count\":20,\"thoughts_token_count\":8}}"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

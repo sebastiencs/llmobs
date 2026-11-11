@@ -1,0 +1,10 @@
+{
+  "description": "An Anthropic base64 source that stayed raw JSON has its data replaced by a media reference.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Media extraction"
+  ],
+  "settings": {
+    "media_min_bytes": 32
+  }
+}

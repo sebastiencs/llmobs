@@ -1,0 +1,96 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "openinference-app"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "openinference.instrumentation.llama_index",
+            "version": "4.7.2"
+          },
+          "spans": [
+            {
+              "traceId": "fa1a0000000000000000000000000001",
+              "spanId": "fa1a000000000001",
+              "name": "RetrieverQuery",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "RETRIEVER"
+                  }
+                },
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "Paris weather"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "text/plain"
+                  }
+                },
+                {
+                  "key": "retrieval.documents.0.document.id",
+                  "value": {
+                    "stringValue": "doc-1"
+                  }
+                },
+                {
+                  "key": "retrieval.documents.0.document.content",
+                  "value": {
+                    "stringValue": "Rain"
+                  }
+                },
+                {
+                  "key": "retrieval.documents.0.document.score",
+                  "value": {
+                    "doubleValue": 0.9
+                  }
+                },
+                {
+                  "key": "retrieval.documents.0.document.metadata",
+                  "value": {
+                    "stringValue": "{\"source\":\"wiki\"}"
+                  }
+                },
+                {
+                  "key": "retrieval.documents.1.document.id",
+                  "value": {
+                    "stringValue": "doc-2"
+                  }
+                },
+                {
+                  "key": "retrieval.documents.1.document.content",
+                  "value": {
+                    "stringValue": "Sun"
+                  }
+                },
+                {
+                  "key": "retrieval.documents.1.document.score",
+                  "value": {
+                    "doubleValue": 0.2
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

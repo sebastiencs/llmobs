@@ -1,0 +1,7 @@
+{
+  "description": "A message attribute whose JSON string itself contains JSON is decoded twice and parsed as messages.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Payload encodings"
+  ]
+}

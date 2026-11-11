@@ -1,0 +1,12 @@
+{
+  "description": "OpenLLMetry chat span with flattened prompts, a tool call, content parts, and a price-table cost.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules",
+    "02 § Cost computation"
+  ],
+  "notes": "hand-written from opentelemetry-instrumentation-openai 0.63.0 (tracer opentelemetry.instrumentation.openai.v1, span openai.chat). The published 0.63.0 wheel emits events rather than flattened gen_ai.prompt.N keys; this case uses the legacy flattened shape. Re-check against a B2 capture."
+}

@@ -1,0 +1,7 @@
+{
+  "description": "Vercel v6 inputTokenDetails.noCacheTokens plus the cache details become an inclusive input.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Token semantics"
+  ]
+}

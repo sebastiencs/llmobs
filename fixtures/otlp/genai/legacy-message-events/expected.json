@@ -1,0 +1,27 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "f83a0000000000000000000000000001",
+      "span_id": "f83a000000000001",
+      "name": "chat",
+      "span_kind": "span",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "input": "[{\"role\":\"system\",\"parts\":[{\"type\":\"text\",\"content\":\"be brief\"}]},{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"hi\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"calling\"},{\"type\":\"tool_call\",\"id\":\"call_1\",\"name\":\"lookup\",\"arguments\":{}}]},{\"role\":\"tool\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"call_1\",\"response\":\"found\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"done\"}]}]",
+      "output_format": "messages",
+      "input_preview": "hi",
+      "output_preview": "done",
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

@@ -1,0 +1,85 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fb0a0000000000000000000000000001",
+      "span_id": "fb0a000000000001",
+      "name": "ai.streamText",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "next-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini",
+      "ttft_ns": 12000000,
+      "input": "{\"prompt\":\"Stream hi\"}",
+      "input_format": "json",
+      "output": "Hello",
+      "output_format": "text",
+      "input_preview": "{\"prompt\":\"Stream hi\"}",
+      "output_preview": "Hello",
+      "attributes": {
+        "ai.model.id": "gpt-4o-mini",
+        "ai.model.provider": "openai.chat",
+        "ai.operationId": "ai.streamText",
+        "ai.stream.msToFirstChunk": "12",
+        "ai.usage.inputTokens": "9",
+        "ai.usage.outputTokens": "4"
+      },
+      "scope_name": "ai",
+      "scope_version": "5.0.0",
+      "conventions": [
+        "vercel"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fb0a0000000000000000000000000001",
+      "span_id": "fb0a000000000002",
+      "parent_span_id": "fb0a000000000001",
+      "name": "ai.streamText.doStream",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.100000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "next-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini",
+      "input_tokens": 9,
+      "output_tokens": 4,
+      "total_tokens": 13,
+      "cost_input": 9e-6,
+      "cost_output": 0.000016,
+      "cost_total": 0.000025,
+      "cost_source": "computed",
+      "ttft_ns": 8000000,
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Stream hi\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Hello\"}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "input_preview": "Stream hi",
+      "output_preview": "Hello",
+      "attributes": {
+        "ai.model.id": "gpt-4o-mini",
+        "ai.model.provider": "openai.chat",
+        "ai.operationId": "ai.streamText.doStream",
+        "ai.response.finishReason": "stop",
+        "ai.response.msToFirstChunk": "8",
+        "ai.usage.inputTokens": "9",
+        "ai.usage.outputTokens": "4"
+      },
+      "scope_name": "ai",
+      "scope_version": "5.0.0",
+      "conventions": [
+        "vercel"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

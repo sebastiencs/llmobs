@@ -1,0 +1,11 @@
+{
+  "description": "Cuts the text of one oversized message and keeps the messages format.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Truncation"
+  ],
+  "settings": {
+    "max_attribute_bytes": 1500
+  },
+  "notes": "The leaf stays above 1 KiB, so step 3 does not run and there is no truncate:input error."
+}

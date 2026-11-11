@@ -1,0 +1,8 @@
+{
+  "description": "gen_ai.request parameters of mixed types become one sorted JSON object, and the model key stays out of it.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Normalization rules / 8",
+    "02 § Model, provider, usage"
+  ]
+}

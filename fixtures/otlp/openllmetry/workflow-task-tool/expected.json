@@ -1,0 +1,107 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fc2a0000000000000000000000000001",
+      "span_id": "fc2a000000000001",
+      "name": "answer.workflow",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "workflow-app",
+      "session_id": "sess-1",
+      "metadata": {
+        "customer": "acme",
+        "workflow": "answer"
+      },
+      "input": "{\"args\":[],\"kwargs\":{\"question\":\"capital\"}}",
+      "input_format": "json",
+      "output": "{\"output\":\"Paris\"}",
+      "output_format": "json",
+      "input_preview": "{\"args\":[],\"kwargs\":{\"question\":\"capital\"}}",
+      "output_preview": "{\"output\":\"Paris\"}",
+      "attributes": {
+        "traceloop.association.properties.customer": "acme",
+        "traceloop.association.properties.session_id": "sess-1",
+        "traceloop.entity.name": "answer",
+        "traceloop.span.kind": "workflow",
+        "traceloop.workflow.name": "answer"
+      },
+      "scope_name": "traceloop.tracer",
+      "conventions": [
+        "openllmetry"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fc2a0000000000000000000000000001",
+      "span_id": "fc2a000000000002",
+      "parent_span_id": "fc2a000000000001",
+      "name": "lookup.task",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.100000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "workflow-app",
+      "metadata": {
+        "workflow": "answer"
+      },
+      "input": "{\"args\":[\"Paris\"],\"kwargs\":{}}",
+      "input_format": "json",
+      "output": "{\"output\":{\"temp\":18}}",
+      "output_format": "json",
+      "input_preview": "{\"args\":[\"Paris\"],\"kwargs\":{}}",
+      "output_preview": "{\"output\":{\"temp\":18}}",
+      "attributes": {
+        "traceloop.entity.name": "lookup",
+        "traceloop.span.kind": "task",
+        "traceloop.workflow.name": "answer"
+      },
+      "scope_name": "traceloop.tracer",
+      "conventions": [
+        "openllmetry"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fc2a0000000000000000000000000001",
+      "span_id": "fc2a000000000003",
+      "parent_span_id": "fc2a000000000002",
+      "name": "lookup.tool",
+      "span_kind": "tool",
+      "start_time": "2025-12-31T23:59:50.200000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "workflow-app",
+      "metadata": {
+        "workflow": "answer"
+      },
+      "input": "{\"args\":[],\"kwargs\":{\"city\":\"Paris\"}}",
+      "input_format": "json",
+      "output": "{\"output\":\"sunny\"}",
+      "output_format": "json",
+      "input_preview": "{\"args\":[],\"kwargs\":{\"city\":\"Paris\"}}",
+      "output_preview": "{\"output\":\"sunny\"}",
+      "attributes": {
+        "gen_ai.tool.name": "lookup",
+        "traceloop.entity.name": "lookup",
+        "traceloop.span.kind": "tool",
+        "traceloop.workflow.name": "answer"
+      },
+      "scope_name": "traceloop.tracer",
+      "conventions": [
+        "genai",
+        "openllmetry"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

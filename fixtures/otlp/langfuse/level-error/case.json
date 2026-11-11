@@ -1,0 +1,10 @@
+{
+  "description": "An unset OTLP status becomes error when langfuse.observation.level is ERROR, and trace input is used when the observation key is absent.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Normalization rules"
+  ],
+  "notes": "hand-written from langfuse 5.2.0 (tracer langfuse-sdk). Re-check against a B2 capture. The OTLP status is omitted. status_message is copied from langfuse.observation.status_message."
+}

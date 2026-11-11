@@ -11,12 +11,7 @@ workspace = true
 
 [dependencies]
 llmobs-core.workspace = true
-arrow = { workspace = true, features = ["ipc_compression"] }
-# `fs` is already a default feature of the pin. `aws` is the S3 backend (D119).
-object_store = { workspace = true, features = ["fs", "aws"] }
-parquet.workspace = true
-sqlx.workspace = true
-uuid.workspace = true
+arrow = { workspace = true, features = ["ipc_compression", "json"] }
 async-trait.workspace = true
 bytes.workspace = true
 bytesize.workspace = true
@@ -24,22 +19,20 @@ chrono.workspace = true
 crc32c.workspace = true
 datafusion.workspace = true
 datafusion-datasource.workspace = true
+futures.workspace = true
 hex.workspace = true
 humantime-serde.workspace = true
+# `fs` is already a default feature of the pin. `aws` is the S3 backend (D119).
+object_store = { workspace = true, features = ["fs", "aws"] }
+parquet.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
-futures-util.workspace = true
-object_store = { workspace = true, features = ["aws"] }
 proptest.workspace = true
-sqlx.workspace = true
-serde_json.workspace = true
 tempfile.workspace = true
-arrow.workspace = true
-bytesize.workspace = true
-datafusion.workspace = true
-llmobs-core.workspace = true
-tokio.workspace = true

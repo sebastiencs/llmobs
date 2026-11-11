@@ -1,0 +1,72 @@
+{
+  "resourceSpans": [
+    {
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "f62a0000000000000000000000000001",
+              "spanId": "f62a000000000001",
+              "name": "vercel",
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "ai.model.provider",
+                  "value": {
+                    "stringValue": "openai.chat"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "f62a0000000000000000000000000001",
+              "spanId": "f62a000000000002",
+              "name": "bedrock",
+              "startTimeUnixNano": "1767225590100000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "aws.bedrock"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "f62a0000000000000000000000000001",
+              "spanId": "f62a000000000003",
+              "name": "xai",
+              "startTimeUnixNano": "1767225590200000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "xai"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "f62a0000000000000000000000000001",
+              "spanId": "f62a000000000004",
+              "name": "uppercase",
+              "startTimeUnixNano": "1767225590300000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "OpenAI"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

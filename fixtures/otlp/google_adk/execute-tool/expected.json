@@ -1,0 +1,38 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fe1a0000000000000000000000000001",
+      "span_id": "fe1a000000000001",
+      "name": "execute_tool lookup",
+      "span_kind": "tool",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "adk-app",
+      "operation": "execute_tool",
+      "input": "{\"city\":\"Paris\"}",
+      "input_format": "json",
+      "output": "{\"temperature\":\"18C\"}",
+      "output_format": "json",
+      "input_preview": "{\"city\":\"Paris\"}",
+      "output_preview": "{\"temperature\":\"18C\"}",
+      "attributes": {
+        "gcp.vertex.agent.llm_request": "{}",
+        "gcp.vertex.agent.llm_response": "{}",
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.name": "lookup",
+        "gen_ai.tool.type": "FunctionTool"
+      },
+      "scope_name": "gcp.vertex.agent",
+      "conventions": [
+        "genai",
+        "google_adk"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

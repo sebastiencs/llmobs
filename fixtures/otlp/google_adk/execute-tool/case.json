@@ -1,0 +1,10 @@
+{
+  "description": "A Google ADK execute_tool span stores tool arguments and the tool response as JSON.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Normalization rules"
+  ],
+  "notes": "hand-written from google/adk-python src/google/adk/telemetry/tracing.py (tracer gcp.vertex.agent). Re-check against a B2 capture. The empty llm_request and llm_response placeholders stay in attributes."
+}

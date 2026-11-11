@@ -1,0 +1,137 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "next-app"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "ai",
+            "version": "5.0.0"
+          },
+          "spans": [
+            {
+              "traceId": "fb1a0000000000000000000000000001",
+              "spanId": "fb1a000000000001",
+              "name": "ai.generateText.doGenerate",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "ai.operationId",
+                  "value": {
+                    "stringValue": "ai.generateText.doGenerate"
+                  }
+                },
+                {
+                  "key": "ai.model.id",
+                  "value": {
+                    "stringValue": "gpt-4o-mini"
+                  }
+                },
+                {
+                  "key": "ai.model.provider",
+                  "value": {
+                    "stringValue": "openai.chat"
+                  }
+                },
+                {
+                  "key": "ai.prompt.messages",
+                  "value": {
+                    "stringValue": "[{\"role\": \"user\", \"content\": \"Weather?\"}, {\"role\": \"assistant\", \"content\": [{\"type\": \"tool-call\", \"toolCallId\": \"call_1\", \"toolName\": \"get_weather\", \"input\": {\"city\": \"Paris\"}}]}, {\"role\": \"tool\", \"content\": [{\"type\": \"tool-result\", \"toolCallId\": \"call_1\", \"toolName\": \"get_weather\", \"output\": {\"type\": \"json\", \"value\": {\"temp\": 18}}}]}]"
+                  }
+                },
+                {
+                  "key": "ai.prompt.tools",
+                  "value": {
+                    "stringValue": "[\"{\\\"type\\\":\\\"function\\\",\\\"name\\\":\\\"get_weather\\\",\\\"parameters\\\":{\\\"type\\\":\\\"object\\\"}}\"]"
+                  }
+                },
+                {
+                  "key": "ai.response.text",
+                  "value": {
+                    "stringValue": "18 C"
+                  }
+                },
+                {
+                  "key": "ai.response.toolCalls",
+                  "value": {
+                    "stringValue": "[{\"toolCallId\": \"call_1\", \"toolName\": \"get_weather\", \"input\": {\"city\": \"Paris\"}}]"
+                  }
+                },
+                {
+                  "key": "ai.response.finishReason",
+                  "value": {
+                    "stringValue": "stop"
+                  }
+                },
+                {
+                  "key": "ai.usage.inputTokens",
+                  "value": {
+                    "intValue": "20"
+                  }
+                },
+                {
+                  "key": "ai.usage.outputTokens",
+                  "value": {
+                    "intValue": "6"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "fb1a0000000000000000000000000001",
+              "spanId": "fb1a000000000002",
+              "name": "ai.toolCall",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590200000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "ai.operationId",
+                  "value": {
+                    "stringValue": "ai.toolCall"
+                  }
+                },
+                {
+                  "key": "ai.toolCall.name",
+                  "value": {
+                    "stringValue": "get_weather"
+                  }
+                },
+                {
+                  "key": "ai.toolCall.id",
+                  "value": {
+                    "stringValue": "call_1"
+                  }
+                },
+                {
+                  "key": "ai.toolCall.args",
+                  "value": {
+                    "stringValue": "{\"city\":\"Paris\"}"
+                  }
+                },
+                {
+                  "key": "ai.toolCall.result",
+                  "value": {
+                    "stringValue": "{\"temp\":18}"
+                  }
+                }
+              ],
+              "parentSpanId": "fb1a000000000001"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

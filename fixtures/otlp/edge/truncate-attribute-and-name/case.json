@@ -1,0 +1,10 @@
+{
+  "description": "Cuts the span name, status message, one attribute, one resource attribute, and one event's attributes. A long link attribute and a long event name stay whole.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Truncation"
+  ],
+  "settings": {
+    "max_attribute_bytes": 32
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "description": "Laminar association properties fill session, user, tags, and metadata, and a DEFAULT span is a chain.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Context fields",
+    "02 § Mapping tables / Input / output",
+    "02 § Normalization rules"
+  ],
+  "notes": "hand-written from lmnr 0.8.9 (tracer lmnr.tracer, get_tracer with no version). Re-check against a B2 capture. lmnr.span.path is left in attributes."
+}

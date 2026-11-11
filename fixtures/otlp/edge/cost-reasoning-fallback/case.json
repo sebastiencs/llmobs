@@ -1,0 +1,7 @@
+{
+  "description": "A null reasoning price uses the output price.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Cost computation"
+  ]
+}

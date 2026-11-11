@@ -1,0 +1,7 @@
+{
+  "description": "A span with only gen_ai.tool.name is a tool span. The key stays unread.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Span kind"
+  ]
+}

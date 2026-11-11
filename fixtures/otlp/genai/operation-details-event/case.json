@@ -1,0 +1,7 @@
+{
+  "description": "Messages and system instructions are read from the operation-details event when the span attributes do not have them.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Input and output"
+  ]
+}

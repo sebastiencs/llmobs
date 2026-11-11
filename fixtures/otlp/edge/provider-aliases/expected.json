@@ -1,0 +1,82 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "f62a0000000000000000000000000001",
+      "span_id": "f62a000000000001",
+      "name": "vercel",
+      "span_kind": "span",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "provider": "openai",
+      "attributes": {
+        "ai.model.provider": "openai.chat"
+      },
+      "conventions": [
+        "vercel"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "f62a0000000000000000000000000001",
+      "span_id": "f62a000000000002",
+      "name": "bedrock",
+      "span_kind": "span",
+      "start_time": "2025-12-31T23:59:50.100000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "provider": "aws.bedrock",
+      "attributes": {
+        "gen_ai.provider.name": "aws.bedrock"
+      },
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "f62a0000000000000000000000000001",
+      "span_id": "f62a000000000003",
+      "name": "xai",
+      "span_kind": "span",
+      "start_time": "2025-12-31T23:59:50.200000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "provider": "x_ai",
+      "attributes": {
+        "gen_ai.provider.name": "xai"
+      },
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "f62a0000000000000000000000000001",
+      "span_id": "f62a000000000004",
+      "name": "uppercase",
+      "span_kind": "span",
+      "start_time": "2025-12-31T23:59:50.300000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "provider": "openai",
+      "attributes": {
+        "gen_ai.provider.name": "OpenAI"
+      },
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

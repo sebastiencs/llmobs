@@ -1,0 +1,10 @@
+{
+  "description": "generateObject stores ai.prompt as JSON and ai.response.object as JSON.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Input / output",
+    "02 § Normalization rules",
+    "02 § Mapping tables / Span kind"
+  ],
+  "notes": "hand-written from the ai package telemetry (getTracer(\"ai\")); re-check against a B2 capture"
+}

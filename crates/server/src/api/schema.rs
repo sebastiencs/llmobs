@@ -90,8 +90,10 @@ pub struct FunctionSchema {
     pub signature: String,
     /// What the function does.
     pub description: String,
-    /// Whether the filter DSL allows the function. SQL allows every function.
+    /// Whether the filter DSL allows the function.
     pub in_filter: bool,
+    /// Whether the SQL console allows the function.
+    pub in_sql: bool,
 }
 
 /// Views and functions the filter builder and SQL console show.
@@ -127,6 +129,7 @@ mod tests {
                 signature: "score(name: string) -> float".to_owned(),
                 description: "Latest numeric value of the named score.".to_owned(),
                 in_filter: true,
+                in_sql: false,
             }],
         };
 

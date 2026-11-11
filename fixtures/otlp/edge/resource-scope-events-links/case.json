@@ -1,0 +1,9 @@
+{
+  "description": "Resource attributes, scope name and version, events, one valid link, and an error status survive on the skeleton.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Normalization rules / 1",
+    "02 § Normalization rules / 15"
+  ],
+  "notes": "service.name is removed from resource attributes. The scope attribute is not copied onto the span. The link with a short trace id is dropped."
+}

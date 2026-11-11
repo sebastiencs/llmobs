@@ -1,0 +1,11 @@
+{
+  "description": "Flattened llm.request.functions become tool definitions in index order, with parameters parsed.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Span kind",
+    "02 § Normalization rules",
+    "02 § Cost computation"
+  ],
+  "notes": "hand-written from the legacy OpenLLMetry llm.request.functions.N shape. opentelemetry-instrumentation-openai 0.63.0 writes gen_ai.tool.definitions as one JSON attribute instead. parameters is a JSON string and is parsed. Re-check against a B2 capture."
+}

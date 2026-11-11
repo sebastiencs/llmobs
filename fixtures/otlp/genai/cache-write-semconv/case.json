@@ -1,0 +1,8 @@
+{
+  "description": "GenAI cache_write.input_tokens and cache_read.input_tokens fill the cache columns. The input count already includes them.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Model, provider, usage",
+    "02 § Token semantics"
+  ]
+}

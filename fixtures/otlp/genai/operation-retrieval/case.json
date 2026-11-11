@@ -1,0 +1,7 @@
+{
+  "description": "GenAI operation retrieval becomes a retriever span.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Span kind"
+  ]
+}

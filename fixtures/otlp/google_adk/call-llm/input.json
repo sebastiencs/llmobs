@@ -1,0 +1,106 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "adk-app"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "gcp.vertex.agent"
+          },
+          "spans": [
+            {
+              "traceId": "fe0a0000000000000000000000000001",
+              "spanId": "fe0a000000000001",
+              "name": "invoke_agent planner",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "invoke_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {
+                    "stringValue": "sess-1"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "planner"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "fe0a0000000000000000000000000001",
+              "spanId": "fe0a000000000002",
+              "name": "call_llm",
+              "kind": 3,
+              "startTimeUnixNano": "1767225590100000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "call_llm"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "20"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "10"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.llm_request",
+                  "value": {
+                    "stringValue": "{\"model\":\"gpt-4o-mini\",\"config\":{\"system_instruction\":\"Be brief.\",\"tools\":[{\"function_declarations\":[{\"name\":\"lookup\",\"description\":\"Look up a city.\",\"parameters\":{\"type\":\"OBJECT\",\"properties\":{\"city\":{\"type\":\"STRING\"}}}}]}]},\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"Hello\"}]}]}"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.llm_response",
+                  "value": {
+                    "stringValue": "{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Hi\"}]},\"finish_reason\":\"STOP\",\"usage_metadata\":{\"prompt_token_count\":20,\"candidates_token_count\":10,\"total_token_count\":30}}"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.session_id",
+                  "value": {
+                    "stringValue": "sess-1"
+                  }
+                }
+              ],
+              "parentSpanId": "fe0a000000000001"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

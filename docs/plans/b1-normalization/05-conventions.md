@@ -14,7 +14,7 @@ The tables of spec 02 (as amended by N1) are the source of truth. `docs/research
 - Every attribute the module reads as a payload is listed in its `PAYLOAD_KEYS`.
 - Numbered keys are read with `AttrBag::indexed`, never by prefix (N3).
 - **At least these fixtures:** one `llm` span with messages, tokens and a model from the test price table; one tool span; one non-LLM span; and one per special rule below. Use the scope names and versions the real instrumentation uses (`case.json` `notes`: "hand-written from <source>; re-check against a B2 capture").
-- A behaviour marked **(D111)** below comes from one source only. Its fixture's `notes` must say so.
+- A behaviour marked **(D113)** below comes from one source only. Its fixture's `notes` must say so.
 - **Report:** what you could not verify, and any spec 02 row you found wrong. Fix the spec in the same commit when the fix is certain. Otherwise, report it.
 
 ## N18 — OpenInference
@@ -59,12 +59,12 @@ The rest of the convention:
   - tool spans: `ai.toolCall.result`.
 - **Tool definitions:** `ai.prompt.tools`, an array of JSON strings.
 - **Model and provider:** `ai.model.id`, `ai.model.provider` with the Vercel alias mapping (N7), `ai.response.model`.
-- **Usage:** v4, v5 and v6 keys (N8). Check the `VercelLegacy` semantics against the new fixtures **(D111)**. Anthropic cache write before v6 lives only in `ai.response.providerMetadata` (a JSON string). Read `anthropic.cacheCreationInputTokens` (v5) or `anthropic.usage.cache_creation_input_tokens` from it when no cache-write source exists **(D111)**.
+- **Usage:** v4, v5 and v6 keys (N8). Check the `VercelLegacy` semantics against the new fixtures **(D113)**. Anthropic cache write before v6 lives only in `ai.response.providerMetadata` (a JSON string). Read `anthropic.cacheCreationInputTokens` (v5) or `anthropic.usage.cache_creation_input_tokens` from it when no cache-write source exists **(D113)**.
 - **Settings:** `ai.settings.*` → `request_params` (N7).
 - **Context:** `ai.telemetry.metadata.*` (rule 11). Also `ai.telemetry.functionId` → `metadata["functionId"]`. Add that row to spec 02.
 - **TTFT:** `ai.response.msToFirstChunk`, `ai.stream.msToFirstChunk` (N8).
 - **Double counting:** the outer `ai.generateText` is `chain` (N6), so its `ai.usage.*` stays in `attributes` (rule 3). Remove the existing fixture `vercel/generate-text` from `PENDING`.
-- **Fixtures:** `vercel/stream-text-ttft`, `vercel/tool-call-v5-input-output`, `vercel/v4-args-result`, `vercel/image-part-base64` (with media extraction; lower `media_min_bytes`), `vercel/generate-object`, `vercel/anthropic-provider-metadata-cache-write` **(D111)**.
+- **Fixtures:** `vercel/stream-text-ttft`, `vercel/tool-call-v5-input-output`, `vercel/v4-args-result`, `vercel/image-part-base64` (with media extraction; lower `media_min_bytes`), `vercel/generate-object`, `vercel/anthropic-provider-metadata-cache-write` **(D113)**.
 
 ## N20 — OpenLLMetry (Traceloop)
 
@@ -75,10 +75,10 @@ The rest of the convention:
 - **Output:** `gen_ai.completion.N.{role,content,finish_reason,tool_calls.K.*}`.
 - **Fallbacks:** `traceloop.entity.input` / `traceloop.entity.output`. These are JSON strings, often `{"args": …, "kwargs": …}` / `{"output": …}` wrappers. Store them as `Json` without unwrapping.
 - **Tool definitions:** `llm.request.functions.N.{name,description,parameters}` → `{type: "function", name, description, parameters}` per tool, in index order.
-- **Usage:** `gen_ai.usage.prompt_tokens` / `completion_tokens`, plus the underscore cache keys (N8). Anthropic semantics are unverified **(D111)**: treat input as inclusive and rely on the safety net. Add a fixture where the safety net fires.
+- **Usage:** `gen_ai.usage.prompt_tokens` / `completion_tokens`, plus the underscore cache keys (N8). Anthropic semantics are unverified **(D113)**: treat input as inclusive and rely on the safety net. Add a fixture where the safety net fires.
 - **Context:** `traceloop.association.properties.*` (rule 11), `traceloop.workflow.name` → `metadata["workflow"]`. Add that row to spec 02.
 - **Precedence check:** a span with both `gen_ai.input.messages` (GenAI) and `gen_ai.prompt.0.*` takes GenAI's input. The OpenLLMetry keys are dropped (rule 2).
-- **Fixtures:** `openllmetry/chat-openai`, `openllmetry/chat-anthropic-cache` **(D111)**, `openllmetry/workflow-task-tool`, `openllmetry/functions-tool-definitions`, `openllmetry/genai-and-legacy-prompt`.
+- **Fixtures:** `openllmetry/chat-openai`, `openllmetry/chat-anthropic-cache` **(D113)**, `openllmetry/workflow-task-tool`, `openllmetry/functions-tool-definitions`, `openllmetry/genai-and-legacy-prompt`.
 
 ## N21 — Langfuse and Laminar
 
@@ -95,7 +95,7 @@ Langfuse (`langfuse.*`):
   - `output_reasoning_tokens` / `reasoning_tokens` → reasoning.
 
   `input` excludes cached tokens, per N1's token semantics table. Add the parsed object as a usage source after OpenLLMetry in precedence.
-- **Reported cost:** `langfuse.observation.cost_details` (JSON: `input`, `output`, `total`) → D107.
+- **Reported cost:** `langfuse.observation.cost_details` (JSON: `input`, `output`, `total`) → D109.
 - **TTFT:** `langfuse.observation.completion_start_time` (N8).
 - **Context:** `langfuse.session.id`, `langfuse.user.id`, `langfuse.trace.tags`, `langfuse.trace.metadata.*`, `langfuse.environment`, `langfuse.release` (N7). `langfuse.observation.level` and `.status_message`: `level = ERROR` → `status = error` when the OTLP status is unset. Add that rule to spec 02.
 
@@ -115,6 +115,6 @@ Laminar (`lmnr.*`):
   - `gcp.vertex.agent.llm_request` is a JSON string of a Gemini `GenerateContentRequest`: `contents` go through N12, `config.system_instruction` through `gemini_system_instruction`, and `config.tools` become tool definitions;
   - `gcp.vertex.agent.llm_response` is a JSON string of a `GenerateContentResponse`: `content` (one message) goes through N12, plus `finish_reason`;
   - tool spans: `gcp.vertex.agent.tool_call_args` / `tool_response` → `Json`.
-- **Usage:** ADK also emits `gen_ai.usage.*`, read through GenAI (N8). Gemini-native semantics put thoughts **outside** output (N1 table). Apply the add-back when the usage came from the `llm_response.usage_metadata` (`thoughts_token_count`). For `gen_ai.usage.*` on ADK spans the semantics are unverified **(D111)**: treat them as GenAI-inclusive.
+- **Usage:** ADK also emits `gen_ai.usage.*`, read through GenAI (N8). Gemini-native semantics put thoughts **outside** output (N1 table). Apply the add-back when the usage came from the `llm_response.usage_metadata` (`thoughts_token_count`). For `gen_ai.usage.*` on ADK spans the semantics are unverified **(D113)**: treat them as GenAI-inclusive.
 - **Kind:** ADK sets `gen_ai.operation.name` (`call_llm` → **add** `llm` to the N6 table and spec 02 with a note; `execute_tool` → `tool`; `invoke_agent` → `agent`). Check this against ADK's source if it's available, and write down what you checked.
-- **Fixtures:** `google_adk/call-llm`, `google_adk/execute-tool`, `google_adk/thoughts-tokens` **(D111)**.
+- **Fixtures:** `google_adk/call-llm`, `google_adk/execute-tool`, `google_adk/thoughts-tokens` **(D113)**.
