@@ -1,4 +1,4 @@
-//! MinIO coverage for remote puts (D102).
+//! MinIO coverage for remote puts (D119).
 //!
 //! Skipped unless `LLMOBS_TEST_S3_ENDPOINT` is set. Also set
 //! `LLMOBS_TEST_S3_BUCKET`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.

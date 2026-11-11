@@ -523,7 +523,7 @@ mod fault_store {
     /// [`ObjectStore`] that can fail or delay its next upload.
     ///
     /// This is a second implementation of the external trait so the remote
-    /// `put_durable` path runs in CI without AWS (D102).
+    /// `put_durable` path runs in CI without AWS (D119).
     #[derive(Debug, Clone)]
     pub(crate) struct FaultStore {
         inner: Arc<dyn ObjectStore>,
