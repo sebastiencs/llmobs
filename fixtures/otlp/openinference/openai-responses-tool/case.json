@@ -1,0 +1,23 @@
+{
+  "description": "OpenAI Responses API with one function tool call, then an answer, traced by OpenInference.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "openinference-instrumentation-openai",
+    "instrumentation_version": "0.1.69",
+    "language": "python",
+    "libraries": {
+      "openai": "3.45.0",
+      "openinference-instrumentation-openai": "0.1.69",
+      "opentelemetry-sdk": "1.45.2"
+    },
+    "captured_at": "2026-11-11T11:18:14Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "OpenInference records message content by default, and this scenario sets no content-capture environment variable. The first response calls get_weather. The second sends that call and the tool result, then returns text. Token counts are copied: the second span's prompt is 131 and prompt_details.cache_read is 64, with cache_write and reasoning written as 0. Input messages are indexed from 1. Neither span sets llm.finish_reason. The text answer is under message.contents."
+}

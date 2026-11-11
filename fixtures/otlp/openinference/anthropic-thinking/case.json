@@ -1,0 +1,23 @@
+{
+  "description": "One Anthropic message with a thinking block, then text, traced by OpenInference.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "openinference-instrumentation-anthropic",
+    "instrumentation_version": "3.3.0",
+    "language": "python",
+    "libraries": {
+      "anthropic": "2.4.0",
+      "openinference-instrumentation-anthropic": "3.3.0",
+      "opentelemetry-sdk": "1.45.2"
+    },
+    "captured_at": "2026-11-11T11:18:18Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "OpenInference records message content by default, and this scenario sets no content-capture environment variable. The request enables thinking. The scenario model keeps Anthropic reasoning usage at 0, so the mock omits output_tokens_details. The thinking block is recorded as message_content.type reasoning with a signature, and there is no reasoning token attribute. Completion 16 is output_tokens copied."
+}

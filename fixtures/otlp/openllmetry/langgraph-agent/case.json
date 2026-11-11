@@ -1,0 +1,26 @@
+{
+  "description": "LangChain create_agent with one tool and two model turns, traced by OpenLLMetry.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "opentelemetry-instrumentation-langchain",
+    "instrumentation_version": "0.62.4",
+    "language": "python",
+    "libraries": {
+      "langchain": "1.4.8",
+      "langchain-openai": "1.7.3",
+      "langgraph": "1.2.19",
+      "opentelemetry-instrumentation-langchain": "0.62.4",
+      "opentelemetry-sdk": "1.45.2",
+      "opentelemetry-semantic-conventions-ai": "0.5.1"
+    },
+    "captured_at": "2026-11-11T12:54:53Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "TRACELOOP_TRACE_CONTENT is true, which is also the default, so message content is recorded on spans as gen_ai.input.messages and gen_ai.output.messages. TRACELOOP_METRICS_ENABLED is false. These packages have no TRACELOOP_TELEMETRY switch. Only LangchainInstrumentor is enabled. The agent is langchain.agents.create_agent. ChatOpenAI is pointed at the mock. The capture keeps eight spans: invoke_agent LangGraph, the workflow, a model task, the LLM, a tools task, the tool, then the model task and LLM again. LLM token counts are copied: input 82 then 131, output 17 then 12, cache_read 0 then 64. Finish reasons are tool_call, then stop. langgraph_checkpoint_ns is a hash of the checkpoint id. Run, message, and checkpoint ids are pinned to a counter, and a second capture matches."
+}

@@ -1,0 +1,32 @@
+{
+  "description": "Gemini generateContent with text and an inline PNG, traced by the official OTel Google GenAI instrumentation.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Content is requested on spans: OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental and OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=span_only. GoogleGenAiSdkInstrumentor sets OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT=true while instrumenting generate_content; this span has no events, and the message content is on gen_ai.input.messages and gen_ai.output.messages. The image is a 64x64 PNG generated in the program, stored as a blob part. Usage copies promptTokenCount 90 and cachedContentTokenCount 40 as they are. prices.json has no Gemini model row.",
+  "settings": { "media_min_bytes": 64 },
+  "instrumentation": "opentelemetry-instrumentation-google-genai",
+  "libraries": [
+    "google-genai",
+    "opentelemetry-instrumentation-google-genai",
+    "opentelemetry-sdk",
+    "opentelemetry-util-genai"
+  ],
+  "env": {
+    "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "span_only"
+  },
+  "turns": [
+    {
+      "api": "gemini.generate_content",
+      "model": "gemini-2.5-flash",
+      "message": { "text": "A flat blue square." },
+      "finish": "stop",
+      "usage": { "input": 90, "output": 15, "cache_read": 40 }
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "description": "One streamed Anthropic message with text and a tool call, traced by OpenInference.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "openinference-instrumentation-anthropic",
+    "instrumentation_version": "3.3.0",
+    "language": "python",
+    "libraries": {
+      "anthropic": "2.4.0",
+      "openinference-instrumentation-anthropic": "3.3.0",
+      "opentelemetry-sdk": "1.45.2"
+    },
+    "captured_at": "2026-11-11T11:18:16Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "OpenInference records message content by default, and this scenario sets no content-capture environment variable. The mock waits 120 ms before the first chunk and splits the text and the tool arguments into 4 chunks each. Anthropic streams include usage without a separate request flag. The span has no timing attribute and no first-token event. Prompt 40 and completion 18 are copied. llm.finish_reason is tool_use on the span. The tool call is stored both as a content part and as tool_calls."
+}

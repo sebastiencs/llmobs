@@ -1,0 +1,37 @@
+{
+  "description": "Vercel AI SDK v5 generateText with one tool and two Responses API steps.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Telemetry is enabled on the call. recordInputs and recordOutputs stay at their defaults, which record message content on spans. There is no content-capture environment variable. The model is openai.responses. stopWhen is stepCountIs(2): the first call returns the tool call, the tool runs, and the second call answers. The capture keeps four spans: generateText, doGenerate, toolCall, doGenerate. experimental_telemetry.metadata holds sessionId, userId, and feature. Token counts are copied. The second step's input is 131. These spans do not write cachedInputTokens. providerMetadata.openai.usage only has cacheWriteTokens 0, so the scripted cache_read of 64 does not appear. ai.response.timestamp is the mock created_at, 2026-01-01T00:00:00.000Z.",
+  "instrumentation": "ai",
+  "libraries": ["ai", "@ai-sdk/openai", "@opentelemetry/api", "@opentelemetry/sdk-trace-node"],
+  "turns": [
+    {
+      "api": "openai.responses",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": {
+        "tool_calls": [
+          {
+            "id": "call_weather_1",
+            "name": "get_weather",
+            "arguments": { "city": "Paris" }
+          }
+        ]
+      },
+      "finish": "tool_calls",
+      "usage": { "input": 82, "output": 17 }
+    },
+    {
+      "api": "openai.responses",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": { "text": "It is 18 °C and sunny in Paris." },
+      "finish": "stop",
+      "usage": { "input": 131, "output": 12, "cache_read": 64 }
+    }
+  ]
+}

@@ -1,0 +1,666 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "capture-app"
+            }
+          },
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "nodejs"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "2.12.0"
+            }
+          }
+        ],
+        "droppedAttributesCount": 0,
+        "entityRefs": []
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "ai",
+            "version": "",
+            "attributes": [],
+            "droppedAttributesCount": 0
+          },
+          "spans": [
+            {
+              "traceId": "56680ccba2897e10604d459511b2c6af",
+              "spanId": "aecc1571f19c8e47",
+              "traceState": "",
+              "parentSpanId": "",
+              "flags": 257,
+              "name": "ai.generateText",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225590193000000",
+              "attributes": [
+                {
+                  "key": "operation.name",
+                  "value": {
+                    "stringValue": "ai.generateText v5-generate-text-tool"
+                  }
+                },
+                {
+                  "key": "resource.name",
+                  "value": {
+                    "stringValue": "v5-generate-text-tool"
+                  }
+                },
+                {
+                  "key": "ai.operationId",
+                  "value": {
+                    "stringValue": "ai.generateText"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.functionId",
+                  "value": {
+                    "stringValue": "v5-generate-text-tool"
+                  }
+                },
+                {
+                  "key": "ai.model.provider",
+                  "value": {
+                    "stringValue": "openai.responses"
+                  }
+                },
+                {
+                  "key": "ai.model.id",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "ai.settings.maxRetries",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.metadata.sessionId",
+                  "value": {
+                    "stringValue": "sess-weather"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.metadata.userId",
+                  "value": {
+                    "stringValue": "user-weather"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.metadata.feature",
+                  "value": {
+                    "stringValue": "forecast"
+                  }
+                },
+                {
+                  "key": "ai.request.headers.user-agent",
+                  "value": {
+                    "stringValue": "ai/5.0.285"
+                  }
+                },
+                {
+                  "key": "ai.prompt",
+                  "value": {
+                    "stringValue": "{\"system\":\"You are a weather assistant.\",\"prompt\":\"What's the weather in Paris?\"}"
+                  }
+                },
+                {
+                  "key": "ai.response.finishReason",
+                  "value": {
+                    "stringValue": "stop"
+                  }
+                },
+                {
+                  "key": "ai.response.text",
+                  "value": {
+                    "stringValue": "It is 18 °C and sunny in Paris."
+                  }
+                },
+                {
+                  "key": "ai.response.providerMetadata",
+                  "value": {
+                    "stringValue": "{\"openai\":{\"responseId\":\"resp_capture_2\",\"usage\":{\"cacheWriteTokens\":0}}}"
+                  }
+                },
+                {
+                  "key": "ai.usage.promptTokens",
+                  "value": {
+                    "intValue": "131"
+                  }
+                },
+                {
+                  "key": "ai.usage.completionTokens",
+                  "value": {
+                    "intValue": "12"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "56680ccba2897e10604d459511b2c6af",
+              "spanId": "b7534252be5d02fd",
+              "traceState": "",
+              "parentSpanId": "aecc1571f19c8e47",
+              "flags": 257,
+              "name": "ai.generateText.doGenerate",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590002000000",
+              "endTimeUnixNano": "1767225590102000000",
+              "attributes": [
+                {
+                  "key": "operation.name",
+                  "value": {
+                    "stringValue": "ai.generateText.doGenerate v5-generate-text-tool"
+                  }
+                },
+                {
+                  "key": "resource.name",
+                  "value": {
+                    "stringValue": "v5-generate-text-tool"
+                  }
+                },
+                {
+                  "key": "ai.operationId",
+                  "value": {
+                    "stringValue": "ai.generateText.doGenerate"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.functionId",
+                  "value": {
+                    "stringValue": "v5-generate-text-tool"
+                  }
+                },
+                {
+                  "key": "ai.model.provider",
+                  "value": {
+                    "stringValue": "openai.responses"
+                  }
+                },
+                {
+                  "key": "ai.model.id",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "ai.settings.maxRetries",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.metadata.sessionId",
+                  "value": {
+                    "stringValue": "sess-weather"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.metadata.userId",
+                  "value": {
+                    "stringValue": "user-weather"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.metadata.feature",
+                  "value": {
+                    "stringValue": "forecast"
+                  }
+                },
+                {
+                  "key": "ai.request.headers.user-agent",
+                  "value": {
+                    "stringValue": "ai/5.0.285"
+                  }
+                },
+                {
+                  "key": "ai.prompt.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"system\",\"content\":\"You are a weather assistant.\"},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"What's the weather in Paris?\"}]}]"
+                  }
+                },
+                {
+                  "key": "ai.prompt.tools",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Look up the weather for a city.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"],\"additionalProperties\":false}}"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "ai.prompt.toolChoice",
+                  "value": {
+                    "stringValue": "{\"type\":\"auto\"}"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "openai.responses"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "ai.response.finishReason",
+                  "value": {
+                    "stringValue": "tool-calls"
+                  }
+                },
+                {
+                  "key": "ai.response.toolCalls",
+                  "value": {
+                    "stringValue": "[{\"toolCallId\":\"call_weather_1\",\"toolName\":\"get_weather\",\"input\":\"{\\\"city\\\":\\\"Paris\\\"}\"}]"
+                  }
+                },
+                {
+                  "key": "ai.response.id",
+                  "value": {
+                    "stringValue": "resp_capture_1"
+                  }
+                },
+                {
+                  "key": "ai.response.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "ai.response.timestamp",
+                  "value": {
+                    "stringValue": "2026-01-01T00:00:00.000Z"
+                  }
+                },
+                {
+                  "key": "ai.response.providerMetadata",
+                  "value": {
+                    "stringValue": "{\"openai\":{\"responseId\":\"resp_capture_1\",\"usage\":{\"cacheWriteTokens\":0}}}"
+                  }
+                },
+                {
+                  "key": "ai.usage.promptTokens",
+                  "value": {
+                    "intValue": "82"
+                  }
+                },
+                {
+                  "key": "ai.usage.completionTokens",
+                  "value": {
+                    "intValue": "17"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "tool-calls"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "resp_capture_1"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "82"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "17"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "56680ccba2897e10604d459511b2c6af",
+              "spanId": "d2a1b3e896b3bd52",
+              "traceState": "",
+              "parentSpanId": "aecc1571f19c8e47",
+              "flags": 257,
+              "name": "ai.toolCall",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590118000000",
+              "endTimeUnixNano": "1767225590119000000",
+              "attributes": [
+                {
+                  "key": "operation.name",
+                  "value": {
+                    "stringValue": "ai.toolCall v5-generate-text-tool"
+                  }
+                },
+                {
+                  "key": "resource.name",
+                  "value": {
+                    "stringValue": "v5-generate-text-tool"
+                  }
+                },
+                {
+                  "key": "ai.operationId",
+                  "value": {
+                    "stringValue": "ai.toolCall"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.functionId",
+                  "value": {
+                    "stringValue": "v5-generate-text-tool"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.metadata.sessionId",
+                  "value": {
+                    "stringValue": "sess-weather"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.metadata.userId",
+                  "value": {
+                    "stringValue": "user-weather"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.metadata.feature",
+                  "value": {
+                    "stringValue": "forecast"
+                  }
+                },
+                {
+                  "key": "ai.toolCall.name",
+                  "value": {
+                    "stringValue": "get_weather"
+                  }
+                },
+                {
+                  "key": "ai.toolCall.id",
+                  "value": {
+                    "stringValue": "call_weather_1"
+                  }
+                },
+                {
+                  "key": "ai.toolCall.args",
+                  "value": {
+                    "stringValue": "{\"city\":\"Paris\"}"
+                  }
+                },
+                {
+                  "key": "ai.toolCall.result",
+                  "value": {
+                    "stringValue": "{\"temperature_c\":18,\"conditions\":\"sunny\",\"city\":\"Paris\"}"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "56680ccba2897e10604d459511b2c6af",
+              "spanId": "10632d46aeb27a28",
+              "traceState": "",
+              "parentSpanId": "aecc1571f19c8e47",
+              "flags": 257,
+              "name": "ai.generateText.doGenerate",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590127000000",
+              "endTimeUnixNano": "1767225590189000000",
+              "attributes": [
+                {
+                  "key": "operation.name",
+                  "value": {
+                    "stringValue": "ai.generateText.doGenerate v5-generate-text-tool"
+                  }
+                },
+                {
+                  "key": "resource.name",
+                  "value": {
+                    "stringValue": "v5-generate-text-tool"
+                  }
+                },
+                {
+                  "key": "ai.operationId",
+                  "value": {
+                    "stringValue": "ai.generateText.doGenerate"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.functionId",
+                  "value": {
+                    "stringValue": "v5-generate-text-tool"
+                  }
+                },
+                {
+                  "key": "ai.model.provider",
+                  "value": {
+                    "stringValue": "openai.responses"
+                  }
+                },
+                {
+                  "key": "ai.model.id",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "ai.settings.maxRetries",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.metadata.sessionId",
+                  "value": {
+                    "stringValue": "sess-weather"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.metadata.userId",
+                  "value": {
+                    "stringValue": "user-weather"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.metadata.feature",
+                  "value": {
+                    "stringValue": "forecast"
+                  }
+                },
+                {
+                  "key": "ai.request.headers.user-agent",
+                  "value": {
+                    "stringValue": "ai/5.0.285"
+                  }
+                },
+                {
+                  "key": "ai.prompt.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"system\",\"content\":\"You are a weather assistant.\"},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"What's the weather in Paris?\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"tool-call\",\"toolCallId\":\"call_weather_1\",\"toolName\":\"get_weather\",\"input\":{\"city\":\"Paris\"},\"providerOptions\":{\"openai\":{\"itemId\":\"fc_capture_1_1\"}}}]},{\"role\":\"tool\",\"content\":[{\"type\":\"tool-result\",\"toolCallId\":\"call_weather_1\",\"toolName\":\"get_weather\",\"output\":{\"type\":\"json\",\"value\":{\"temperature_c\":18,\"conditions\":\"sunny\",\"city\":\"Paris\"}}}]}]"
+                  }
+                },
+                {
+                  "key": "ai.prompt.tools",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Look up the weather for a city.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"],\"additionalProperties\":false}}"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "ai.prompt.toolChoice",
+                  "value": {
+                    "stringValue": "{\"type\":\"auto\"}"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "openai.responses"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "ai.response.finishReason",
+                  "value": {
+                    "stringValue": "stop"
+                  }
+                },
+                {
+                  "key": "ai.response.text",
+                  "value": {
+                    "stringValue": "It is 18 °C and sunny in Paris."
+                  }
+                },
+                {
+                  "key": "ai.response.id",
+                  "value": {
+                    "stringValue": "resp_capture_2"
+                  }
+                },
+                {
+                  "key": "ai.response.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "ai.response.timestamp",
+                  "value": {
+                    "stringValue": "2026-01-01T00:00:00.000Z"
+                  }
+                },
+                {
+                  "key": "ai.response.providerMetadata",
+                  "value": {
+                    "stringValue": "{\"openai\":{\"responseId\":\"resp_capture_2\",\"usage\":{\"cacheWriteTokens\":0}}}"
+                  }
+                },
+                {
+                  "key": "ai.usage.promptTokens",
+                  "value": {
+                    "intValue": "131"
+                  }
+                },
+                {
+                  "key": "ai.usage.completionTokens",
+                  "value": {
+                    "intValue": "12"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "resp_capture_2"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "131"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "12"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            }
+          ],
+          "schemaUrl": ""
+        }
+      ],
+      "schemaUrl": ""
+    }
+  ]
+}

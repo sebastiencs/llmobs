@@ -1,0 +1,46 @@
+{
+  "description": "OpenAI chat completion with one tool call, then an answer, traced by OpenLLMetry.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "TRACELOOP_TRACE_CONTENT is true, which is also the default, so message content is recorded on spans as gen_ai.input.messages and gen_ai.output.messages. TRACELOOP_METRICS_ENABLED is false. These provider packages have no TRACELOOP_TELEMETRY switch and no vendor export URL; spans go through the harness tracer provider. gen_ai.prompt.N is not written. Token counts are copied from prompt_tokens and completion_tokens. The first span writes cache_read.input_tokens 0 and reasoning_tokens 0. The second span's input is 131 and cache_read.input_tokens is 64. gen_ai.openai.api_base is the public host https://api.openai.com/v1/.",
+  "instrumentation": "opentelemetry-instrumentation-openai",
+  "libraries": [
+    "openai",
+    "opentelemetry-instrumentation-openai",
+    "opentelemetry-sdk",
+    "opentelemetry-semantic-conventions-ai"
+  ],
+  "env": {
+    "TRACELOOP_TRACE_CONTENT": "true",
+    "TRACELOOP_METRICS_ENABLED": "false"
+  },
+  "turns": [
+    {
+      "api": "openai.chat",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": {
+        "tool_calls": [
+          {
+            "id": "call_weather_1",
+            "name": "get_weather",
+            "arguments": { "city": "Paris" }
+          }
+        ]
+      },
+      "finish": "tool_calls",
+      "usage": { "input": 82, "output": 17 }
+    },
+    {
+      "api": "openai.chat",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": { "text": "It is 18 °C and sunny in Paris." },
+      "finish": "stop",
+      "usage": { "input": 131, "output": 12, "cache_read": 64 }
+    }
+  ]
+}

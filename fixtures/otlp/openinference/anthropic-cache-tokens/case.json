@@ -1,0 +1,23 @@
+{
+  "description": "One Anthropic message whose usage includes cache read and cache write, traced by OpenInference.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "openinference-instrumentation-anthropic",
+    "instrumentation_version": "3.3.0",
+    "language": "python",
+    "libraries": {
+      "anthropic": "2.4.0",
+      "openinference-instrumentation-anthropic": "3.3.0",
+      "opentelemetry-sdk": "1.45.2"
+    },
+    "captured_at": "2026-11-11T11:18:15Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "OpenInference records message content by default, and this scenario sets no content-capture environment variable. The system prompt is marked cache_control ephemeral. Scripted usage is input 2100, output 40, cache_read 1800, cache_write 200, so Anthropic's raw input_tokens is 100. The span's llm.token_count.prompt is 2100, with cache_read 1800 and cache_write 200 copied beside it: the instrumentor added the cache counts back. llm.finish_reason is end_turn on the span, not on the output message. Covers D110 (OpenInference input includes cache)."
+}

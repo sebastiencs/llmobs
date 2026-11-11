@@ -1,0 +1,46 @@
+{
+  "description": "OpenAI chat completion with one tool call, then an answer, traced by the official OTel OpenAI instrumentation.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Content is requested on spans: OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental and OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=span_only. opentelemetry-util-genai 1.1b0 is pinned because 1.2b0 dropped opentelemetry.util.genai.instruments, which this instrumentation imports; is_experimental_mode() in that release always returns true. The second span copies prompt_tokens 131 to gen_ai.usage.input_tokens and does not record cached_tokens 64. Both spans also set openai.response.system_fingerprint.",
+  "instrumentation": "opentelemetry-instrumentation-openai-v2",
+  "libraries": [
+    "openai",
+    "opentelemetry-instrumentation-openai-v2",
+    "opentelemetry-sdk",
+    "opentelemetry-util-genai"
+  ],
+  "env": {
+    "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "span_only"
+  },
+  "turns": [
+    {
+      "api": "openai.chat",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": {
+        "tool_calls": [
+          {
+            "id": "call_weather_1",
+            "name": "get_weather",
+            "arguments": { "city": "Paris" }
+          }
+        ]
+      },
+      "finish": "tool_calls",
+      "usage": { "input": 82, "output": 17 }
+    },
+    {
+      "api": "openai.chat",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": { "text": "It is 18 °C and sunny in Paris." },
+      "finish": "stop",
+      "usage": { "input": 131, "output": 12, "cache_read": 64 }
+    }
+  ]
+}

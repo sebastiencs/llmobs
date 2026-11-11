@@ -1,0 +1,28 @@
+{
+  "description": "One OpenAI chat completion through the Langfuse drop-in, with trace-level session, user, tags, and one metadata key.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Mapping tables / Context fields"
+  ],
+  "notes": "Langfuse 5.1.0 exports to {base_url}/api/public/otel/v1/traces. base_url is the receiver origin. LANGFUSE_PUBLIC_KEY is capture-public-key and LANGFUSE_SECRET_KEY is capture-secret-key. LANGFUSE_MEDIA_UPLOAD_ENABLED is false. LANGFUSE_OTEL_COMPRESSION is none and the client also passes otel_compression none, because the receiver rejects a non-identity content encoding and the SDK default is gzip. There is no separate anonymous-telemetry switch in 5.1.0. The client installs its own tracer provider, so the scenario does not call harness.setup. One span, OpenAI-generation, on scope langfuse-sdk 5.1.0, which also carries public_key. Trace fields are user.id user-1, session.id session-1, langfuse.trace.tags as a string array, and langfuse.trace.metadata.feature as the JSON string \"weather\". A non-streaming drop-in call does not set completion_start_time. usage_details copies the provider usage object: prompt_tokens 24, completion_tokens 12, total_tokens 36, prompt_tokens_details.cached_tokens 8, and completion_tokens_details.reasoning_tokens 3. Those are the provider field names. model.parameters records the SDK defaults, and max_tokens is the string Infinity.",
+  "instrumentation": "langfuse",
+  "libraries": ["langfuse", "openai", "opentelemetry-sdk"],
+  "env": {
+    "LANGFUSE_PUBLIC_KEY": "capture-public-key",
+    "LANGFUSE_SECRET_KEY": "capture-secret-key",
+    "LANGFUSE_MEDIA_UPLOAD_ENABLED": "false",
+    "LANGFUSE_OTEL_COMPRESSION": "none"
+  },
+  "turns": [
+    {
+      "api": "openai.chat",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": { "text": "It is 18 °C and sunny in Paris." },
+      "finish": "stop",
+      "usage": { "input": 24, "output": 12, "cache_read": 8, "reasoning": 3 }
+    }
+  ]
+}

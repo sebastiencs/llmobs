@@ -1,0 +1,536 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.45.2"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "capture-app"
+            }
+          }
+        ],
+        "droppedAttributesCount": 0,
+        "entityRefs": []
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "gcp.vertex.agent",
+            "version": "2.14.0",
+            "attributes": [],
+            "droppedAttributesCount": 0
+          },
+          "spans": [
+            {
+              "traceId": "9b81d4368bef7254c1826ae02743a2ae",
+              "spanId": "66eb565e797ca2f9",
+              "traceState": "",
+              "parentSpanId": "",
+              "flags": 256,
+              "name": "invocation",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225590151000000",
+              "attributes": [],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "9b81d4368bef7254c1826ae02743a2ae",
+              "spanId": "5ab9a20658712793",
+              "traceState": "",
+              "parentSpanId": "66eb565e797ca2f9",
+              "flags": 256,
+              "name": "invoke_agent weather_agent",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590002000000",
+              "endTimeUnixNano": "1767225590150000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "invoke_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.description",
+                  "value": {
+                    "stringValue": ""
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "weather_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {
+                    "stringValue": "session-1"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "9b81d4368bef7254c1826ae02743a2ae",
+              "spanId": "20e47d3d6e909f73",
+              "traceState": "",
+              "parentSpanId": "5ab9a20658712793",
+              "flags": 256,
+              "name": "call_llm",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590034000000",
+              "endTimeUnixNano": "1767225590114000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "gcp.vertex.agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gemini-2.5-flash"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.invocation_id",
+                  "value": {
+                    "stringValue": "invocation-1"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.session_id",
+                  "value": {
+                    "stringValue": "session-1"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.event_id",
+                  "value": {
+                    "stringValue": "capture-2"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.llm_request",
+                  "value": {
+                    "stringValue": "{\"model\": \"gemini-2.5-flash\", \"config\": {\"http_options\": {}, \"system_instruction\": \"Use get_weather for weather questions.\\n\\nYou are an agent. Your internal name is \\\"weather_agent\\\".\", \"tools\": [{\"function_declarations\": [{\"description\": \"Return the weather for a city.\", \"name\": \"get_weather\", \"parameters_json_schema\": {\"properties\": {\"city\": {\"title\": \"City\", \"type\": \"string\"}}, \"required\": [\"city\"], \"title\": \"get_weatherParams\", \"type\": \"object\"}}]}]}, \"contents\": [{\"parts\": [{\"text\": \"What's the weather in Paris?\"}], \"role\": \"user\"}]}"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.llm_response",
+                  "value": {
+                    "stringValue": "{\"model_version\":\"gemini-2.5-flash\",\"content\":{\"parts\":[{\"function_call\":{\"id\":\"call_weather_1\",\"args\":{\"city\":\"Paris\"},\"name\":\"get_weather\"}}],\"role\":\"model\"},\"finish_reason\":\"STOP\",\"usage_metadata\":{\"candidates_token_count\":12,\"prompt_token_count\":40,\"total_token_count\":52}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "40"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "12"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "9b81d4368bef7254c1826ae02743a2ae",
+              "spanId": "05a5f6489ec340e5",
+              "traceState": "",
+              "parentSpanId": "20e47d3d6e909f73",
+              "flags": 256,
+              "name": "generate_content gemini-2.5-flash",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590034000000",
+              "endTimeUnixNano": "1767225590110000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "gemini"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "generate_content"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gemini-2.5-flash"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "weather_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {
+                    "stringValue": "session-1"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.event_id",
+                  "value": {
+                    "stringValue": "capture-2"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.invocation_id",
+                  "value": {
+                    "stringValue": "invocation-1"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "40"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "12"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "9b81d4368bef7254c1826ae02743a2ae",
+              "spanId": "01be24d01e2ffa39",
+              "traceState": "",
+              "parentSpanId": "5ab9a20658712793",
+              "flags": 256,
+              "name": "execute_tool get_weather",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590112000000",
+              "endTimeUnixNano": "1767225590113000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "execute_tool"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.description",
+                  "value": {
+                    "stringValue": "Return the weather for a city."
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "get_weather"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.type",
+                  "value": {
+                    "stringValue": "FunctionTool"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "weather_agent"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.llm_request",
+                  "value": {
+                    "stringValue": "{}"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.llm_response",
+                  "value": {
+                    "stringValue": "{}"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.tool_call_args",
+                  "value": {
+                    "stringValue": "{\"city\": \"Paris\"}"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "call_weather_1"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.event_id",
+                  "value": {
+                    "stringValue": "capture-4"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.tool_response",
+                  "value": {
+                    "stringValue": "{\"city\": \"Paris\", \"report\": \"It is 18 °C and sunny.\"}"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "9b81d4368bef7254c1826ae02743a2ae",
+              "spanId": "94d53a3aad5f17d4",
+              "traceState": "",
+              "parentSpanId": "5ab9a20658712793",
+              "flags": 256,
+              "name": "call_llm",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590115000000",
+              "endTimeUnixNano": "1767225590150000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "gcp.vertex.agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gemini-2.5-flash"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.invocation_id",
+                  "value": {
+                    "stringValue": "invocation-1"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.session_id",
+                  "value": {
+                    "stringValue": "session-1"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.event_id",
+                  "value": {
+                    "stringValue": "capture-6"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.llm_request",
+                  "value": {
+                    "stringValue": "{\"model\": \"gemini-2.5-flash\", \"config\": {\"http_options\": {}, \"system_instruction\": \"Use get_weather for weather questions.\\n\\nYou are an agent. Your internal name is \\\"weather_agent\\\".\", \"tools\": [{\"function_declarations\": [{\"description\": \"Return the weather for a city.\", \"name\": \"get_weather\", \"parameters_json_schema\": {\"properties\": {\"city\": {\"title\": \"City\", \"type\": \"string\"}}, \"required\": [\"city\"], \"title\": \"get_weatherParams\", \"type\": \"object\"}}]}]}, \"contents\": [{\"parts\": [{\"text\": \"What's the weather in Paris?\"}], \"role\": \"user\"}, {\"parts\": [{\"function_call\": {\"id\": \"call_weather_1\", \"args\": {\"city\": \"Paris\"}, \"name\": \"get_weather\"}}], \"role\": \"model\"}, {\"parts\": [{\"function_response\": {\"id\": \"call_weather_1\", \"name\": \"get_weather\", \"response\": {\"city\": \"Paris\", \"report\": \"It is 18 °C and sunny.\"}}}], \"role\": \"user\"}]}"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.llm_response",
+                  "value": {
+                    "stringValue": "{\"model_version\":\"gemini-2.5-flash\",\"content\":{\"parts\":[{\"text\":\"It is 18 °C and sunny in Paris.\"}],\"role\":\"model\"},\"finish_reason\":\"STOP\",\"usage_metadata\":{\"candidates_token_count\":16,\"prompt_token_count\":58,\"total_token_count\":74}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "58"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "16"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "9b81d4368bef7254c1826ae02743a2ae",
+              "spanId": "337b850921267187",
+              "traceState": "",
+              "parentSpanId": "94d53a3aad5f17d4",
+              "flags": 256,
+              "name": "generate_content gemini-2.5-flash",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590115000000",
+              "endTimeUnixNano": "1767225590149000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "gemini"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "generate_content"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gemini-2.5-flash"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "weather_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {
+                    "stringValue": "session-1"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.event_id",
+                  "value": {
+                    "stringValue": "capture-6"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.invocation_id",
+                  "value": {
+                    "stringValue": "invocation-1"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "58"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "16"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            }
+          ],
+          "schemaUrl": "https://opentelemetry.io/schemas/1.36.0"
+        }
+      ],
+      "schemaUrl": ""
+    }
+  ]
+}

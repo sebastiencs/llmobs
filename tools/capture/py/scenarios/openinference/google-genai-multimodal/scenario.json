@@ -1,0 +1,23 @@
+{
+  "description": "Gemini generateContent with text and an inline PNG, traced by OpenInference.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "OpenInference records message content by default, and this scenario sets no content-capture environment variable. The image is a 64x64 PNG generated in the program, stored as a data URL on message_content.image.image.url. Prompt 90 and cache_read 40 are copied; completion 15 is candidatesTokenCount. llm.provider is google and llm.finish_reason is STOP. output.value includes sdk_http_response headers; the mock pins Date so that string stays stable. prices.json has no Gemini model row.",
+  "settings": { "media_min_bytes": 64 },
+  "instrumentation": "openinference-instrumentation-google-genai",
+  "libraries": ["google-genai", "openinference-instrumentation-google-genai", "opentelemetry-sdk"],
+  "turns": [
+    {
+      "api": "gemini.generate_content",
+      "model": "gemini-2.5-flash",
+      "message": { "text": "A flat blue square." },
+      "finish": "stop",
+      "usage": { "input": 90, "output": 15, "cache_read": 40 }
+    }
+  ]
+}

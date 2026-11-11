@@ -1,0 +1,22 @@
+{
+  "description": "An @observe function that makes one OpenAI chat call, with session id, user id, metadata, and tags.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "lmnr",
+    "instrumentation_version": "0.8.8",
+    "language": "python",
+    "libraries": {
+      "lmnr": "0.8.8",
+      "openai": "3.45.0",
+      "opentelemetry-sdk": "1.45.2"
+    },
+    "captured_at": "2026-11-11T14:59:11Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Context fields"
+  ],
+  "notes": "lmnr 0.8.8. LMNR_PROJECT_API_KEY is capture-project-key. LMNR_TRACE_CONTENT is true, which is also the default, so message content and the decorator input and output are recorded on the spans. LMNR_RELEASE is capture, and initialize also passes release capture, so the git commit is not read. The default export is gRPC with gzip. force_http sends OTLP HTTP to the receiver origin on its port, path /v1/traces. The HTTP exporter hardcodes gzip, which the receiver rejects, so the scenario forces identity compression on the HTTP trace and log exporters before initialize. disable_batch is true. instruments is only OpenAI. Session, user, metadata, and tags are arguments of @observe. Two spans: answer-weather, type DEFAULT, and openai.chat, type LLM. The observe span has session_id session-1, user_id user-1, metadata.feature weather, and tags as a string array. The child has session, user, and metadata. lmnr.span.path lists both names, and parent_path is empty. Decorator input is a JSON object and the output is a JSON string. Token counts on the child are copied: input 24, output 12, cache_read 8, reasoning 3. ThreadingInstrumentor is always enabled and emitted no spans. There is no separate anonymous-telemetry switch in 0.8.8."
+}

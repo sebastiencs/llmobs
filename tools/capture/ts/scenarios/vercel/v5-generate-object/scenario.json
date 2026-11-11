@@ -1,0 +1,22 @@
+{
+  "description": "Vercel AI SDK v5 generateObject with a JSON schema, through OpenAI chat.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Telemetry is enabled on the call. recordInputs and recordOutputs stay at their defaults, which record message content on spans. generateObject is still exported by ai 5.0.285. The schema is jsonSchema, without zod. The model is openai.chat, and the SDK makes one call. The scripted text is the JSON object. Token counts are copied: promptTokens 24 and completionTokens 10. ai.response.timestamp is the mock created_at, 2026-01-01T00:00:00.000Z.",
+  "instrumentation": "ai",
+  "libraries": ["ai", "@ai-sdk/openai", "@opentelemetry/api", "@opentelemetry/sdk-trace-node"],
+  "turns": [
+    {
+      "api": "openai.chat",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": { "text": "{\"summary\":\"Clear skies over the harbor.\"}" },
+      "finish": "stop",
+      "usage": { "input": 24, "output": 10 }
+    }
+  ]
+}

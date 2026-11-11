@@ -1,0 +1,30 @@
+{
+  "description": "One OpenAI embeddings call with two inputs, traced by the official OTel OpenAI instrumentation.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Content is requested on spans: OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental and OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=span_only. The call sends two strings and dimensions 8. Embeddings.create is wrapped. The span records gen_ai.embeddings.dimension.count and gen_ai.usage.input_tokens, and does not record the input strings or the vectors.",
+  "instrumentation": "opentelemetry-instrumentation-openai-v2",
+  "libraries": [
+    "openai",
+    "opentelemetry-instrumentation-openai-v2",
+    "opentelemetry-sdk",
+    "opentelemetry-util-genai"
+  ],
+  "env": {
+    "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "span_only"
+  },
+  "turns": [
+    {
+      "api": "openai.embeddings",
+      "model": "text-embedding-3-small",
+      "dims": 8,
+      "usage": { "input": 6 }
+    }
+  ]
+}

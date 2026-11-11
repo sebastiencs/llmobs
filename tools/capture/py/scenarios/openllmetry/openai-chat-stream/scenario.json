@@ -1,0 +1,33 @@
+{
+  "description": "One streamed OpenAI chat answer with usage, traced by OpenLLMetry.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "TRACELOOP_TRACE_CONTENT is true, which is also the default, so message content is recorded on the span as gen_ai.input.messages and gen_ai.output.messages. TRACELOOP_METRICS_ENABLED is false. These provider packages have no TRACELOOP_TELEMETRY switch and no vendor export URL; spans go through the harness tracer provider. gen_ai.prompt.N is not written. The client sets stream_options.include_usage. The mock waits 120 ms before the first chunk and splits the answer into 4 chunks. The span also has seven gen_ai.content.completion.chunk events with no attributes. Prompt 20 and completion 8 are copied, and cache_read.input_tokens is 0. Time to first token is a metric, and metrics are disabled, so the span has no timing attribute.",
+  "instrumentation": "opentelemetry-instrumentation-openai",
+  "libraries": [
+    "openai",
+    "opentelemetry-instrumentation-openai",
+    "opentelemetry-sdk",
+    "opentelemetry-semantic-conventions-ai"
+  ],
+  "env": {
+    "TRACELOOP_TRACE_CONTENT": "true",
+    "TRACELOOP_METRICS_ENABLED": "false"
+  },
+  "turns": [
+    {
+      "api": "openai.chat",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": { "text": "Clear skies over the harbor." },
+      "finish": "stop",
+      "usage": { "input": 20, "output": 8 },
+      "ttft_ms": 120,
+      "chunks": 4
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "description": "LangChain create_agent with one tool and two model turns, traced by OpenInference.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "openinference-instrumentation-langchain",
+    "instrumentation_version": "0.1.81",
+    "language": "python",
+    "libraries": {
+      "langchain": "1.4.8",
+      "langchain-openai": "1.7.3",
+      "langgraph": "1.2.19",
+      "openinference-instrumentation-langchain": "0.1.81",
+      "opentelemetry-sdk": "1.45.2"
+    },
+    "captured_at": "2026-11-11T11:38:35Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Only LangChainInstrumentor is enabled. OpenInference records message content by default, and this scenario sets no content-capture environment variable. The agent is langchain.agents.create_agent, the LangChain 1.x ReAct-style graph. create_react_agent is still in langgraph.prebuilt. ChatOpenAI is pointed at the mock. The capture keeps seven spans: the graph chain, a model chain, the LLM, a tools chain, the tool, then the model chain and LLM again. Token counts are copied. The second LLM span's prompt is 131 and prompt_details.cache_read is 64, and the zero detail counts are written. llm.finish_reason is tool_calls, then stop, on the span only. The tool output is a serialized tool message. Run, message, and checkpoint ids are pinned to a counter so a recapture stays stable."
+}

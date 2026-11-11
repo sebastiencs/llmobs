@@ -1,0 +1,40 @@
+{
+  "description": "Vercel AI SDK v7 streamText of one OpenAI chat answer with usage.",
+  "spec_refs": [
+    "02 \u00a7 Convention detection",
+    "02 \u00a7 Mapping tables / Span kind",
+    "02 \u00a7 Mapping tables / Input / output",
+    "02 \u00a7 Mapping tables / Model, provider, usage",
+    "02 \u00a7 Normalization rules"
+  ],
+  "notes": "ai 7.0.162 does not emit spans. Spans come from @ai-sdk/otel OpenTelemetry, passed on telemetry.integrations. The model is openai.chat. The mock waits 120 ms before the first chunk and splits the answer into 4 chunks. Three spans: invoke_agent, chat, and agent_step. The chat span measures gen_ai.client.operation.duration, time_to_first_chunk, and time_per_output_chunk, in seconds. ai.response.msToFirstChunk and ai.stream.msToFirstChunk are absent. Token counts are copied: input 20, output 8, cache_read 0.",
+  "instrumentation": "ai",
+  "libraries": [
+    "ai",
+    "@ai-sdk/openai",
+    "@ai-sdk/otel",
+    "@opentelemetry/api",
+    "@opentelemetry/sdk-trace-node"
+  ],
+  "timing_attributes": [
+    "gen_ai.client.operation.duration",
+    "gen_ai.client.operation.time_to_first_chunk",
+    "gen_ai.client.operation.time_per_output_chunk"
+  ],
+  "turns": [
+    {
+      "api": "openai.chat",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": {
+        "text": "Clear skies over the harbor."
+      },
+      "finish": "stop",
+      "usage": {
+        "input": 20,
+        "output": 8
+      },
+      "ttft_ms": 120,
+      "chunks": 4
+    }
+  ]
+}

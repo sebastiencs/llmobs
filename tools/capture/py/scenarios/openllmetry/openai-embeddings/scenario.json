@@ -1,0 +1,30 @@
+{
+  "description": "One OpenAI embeddings call with two inputs, traced by OpenLLMetry.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "TRACELOOP_TRACE_CONTENT is true, which is also the default, so the two input strings are recorded on the span as gen_ai.input.messages. TRACELOOP_METRICS_ENABLED is false. These provider packages have no TRACELOOP_TELEMETRY switch and no vendor export URL; spans go through the harness tracer provider. gen_ai.prompt.N is not written. Prompt tokens 6 are copied from prompt_tokens, and cache_read.input_tokens is 0. The vectors are not span attributes.",
+  "instrumentation": "opentelemetry-instrumentation-openai",
+  "libraries": [
+    "openai",
+    "opentelemetry-instrumentation-openai",
+    "opentelemetry-sdk",
+    "opentelemetry-semantic-conventions-ai"
+  ],
+  "env": {
+    "TRACELOOP_TRACE_CONTENT": "true",
+    "TRACELOOP_METRICS_ENABLED": "false"
+  },
+  "turns": [
+    {
+      "api": "openai.embeddings",
+      "model": "text-embedding-3-small",
+      "dims": 8,
+      "usage": { "input": 6 }
+    }
+  ]
+}
