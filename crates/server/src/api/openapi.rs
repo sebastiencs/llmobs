@@ -24,8 +24,9 @@ use utoipa::openapi::{Content, InfoBuilder, OpenApi, OpenApiBuilder, Ref, RefOr,
 use utoipa::{IntoParams, PartialSchema, ToSchema};
 
 use super::account::{
-    AuthConfig, ChangePasswordRequest, LoginRequest, Me, Project, ResetPasswordRequest,
-    SetupRequest, SetupResponse, SignupRequest, SignupResponse, UpdateMeRequest, User,
+    AuthConfig, ChangePasswordRequest, CreateOrgRequest, CreateProjectRequest, LoginRequest, Me,
+    OrgMembership, Project, ResetPasswordRequest, SetupRequest, SetupResponse, SignupRequest,
+    SignupResponse, UpdateMeRequest, UpdateOrgRequest, UpdateProjectRequest, User,
 };
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
 use super::metrics::{MetricsBucket, MetricsGroupBy, MetricsParams, MetricsResponse};
@@ -88,6 +89,11 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<ChangePasswordRequest>();
     set.insert::<Me>();
     set.insert::<User>();
+    set.insert::<OrgMembership>();
+    set.insert::<CreateOrgRequest>();
+    set.insert::<UpdateOrgRequest>();
+    set.insert::<CreateProjectRequest>();
+    set.insert::<UpdateProjectRequest>();
     set.insert::<Project>();
     set.insert::<TraceSummary>();
     set.insert::<SpanSummary>();
@@ -108,6 +114,7 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert_page::<SessionSummary>("SessionPage");
     set.insert_page::<EndUserSummary>("EndUserPage");
     set.insert_page::<Score>("ScorePage");
+    set.insert_page::<OrgMembership>("OrgPage");
     set.insert_page::<Project>("ProjectPage");
     set.insert_page::<SavedView>("SavedViewPage");
     set
@@ -176,6 +183,7 @@ pub fn openapi() -> OpenApi {
                 "auth",
                 "Login, logout, sign-up, password reset, the current user, and first-run setup.",
             ),
+            tag("orgs", "Organizations the caller belongs to."),
             tag("projects", "Projects the caller can see."),
             tag("traces", "Trace list, detail, and live streams."),
             tag("spans", "Span list and detail."),
@@ -569,6 +577,39 @@ fn auth_paths(paths: PathsBuilder) -> PathsBuilder {
 }
 
 fn project_paths(paths: PathsBuilder) -> PathsBuilder {
+    let list_orgs = operation("list_orgs", "orgs", "List organizations")
+        .parameters(Some(with_query::<PageParams>(Vec::new())))
+        .responses(responses(
+            "200",
+            json_named("OrgPage", "One page of organizations."),
+            &[400, 401, 429],
+        ))
+        .build();
+    let post_org = operation("post_org", "orgs", "Create an organization")
+        .request_body(Some(json_body("CreateOrgRequest")))
+        .responses(responses(
+            "201",
+            json_of::<OrgMembership>("The new organization. The caller is its owner."),
+            &[400, 401, 409, 429],
+        ))
+        .build();
+    let get_org = operation("get_org", "orgs", "Get an organization")
+        .parameters(Some(vec![path_string("org", "Org UUID or slug.")]))
+        .responses(responses(
+            "200",
+            json_of::<OrgMembership>("The organization and the caller's role."),
+            AUTH_ERRORS,
+        ))
+        .build();
+    let patch_org = operation("patch_org", "orgs", "Rename an organization")
+        .parameters(Some(vec![path_string("org", "Org UUID or slug.")]))
+        .request_body(Some(json_body("UpdateOrgRequest")))
+        .responses(responses(
+            "200",
+            json_of::<OrgMembership>("The organization. The slug is unchanged."),
+            &[400, 401, 403, 404, 429],
+        ))
+        .build();
     let list = operation("list_projects", "projects", "List projects")
         .parameters(Some(with_query::<PageParams>(vec![path_string(
             "org",
@@ -580,6 +621,15 @@ fn project_paths(paths: PathsBuilder) -> PathsBuilder {
             QUERY_ERRORS,
         ))
         .build();
+    let post_project = operation("post_project", "projects", "Create a project")
+        .parameters(Some(vec![path_string("org", "Org UUID or slug.")]))
+        .request_body(Some(json_body("CreateProjectRequest")))
+        .responses(responses(
+            "201",
+            json_of::<Project>("The new project."),
+            &[400, 401, 403, 404, 409, 429],
+        ))
+        .build();
     let get = operation("get_project", "projects", "Get a project")
         .parameters(Some(vec![project_param()]))
         .responses(responses(
@@ -588,15 +638,28 @@ fn project_paths(paths: PathsBuilder) -> PathsBuilder {
             AUTH_ERRORS,
         ))
         .build();
+    let patch_project = operation("patch_project", "projects", "Update a project")
+        .parameters(Some(vec![project_param()]))
+        .request_body(Some(json_body("UpdateProjectRequest")))
+        .responses(responses(
+            "200",
+            json_of::<Project>("The project."),
+            &[400, 401, 403, 404, 429],
+        ))
+        .build();
+    let mut orgs = PathItem::new(HttpMethod::Get, list_orgs);
+    orgs.post = Some(post_org);
+    let mut org = PathItem::new(HttpMethod::Get, get_org);
+    org.patch = Some(patch_org);
+    let mut projects = PathItem::new(HttpMethod::Get, list);
+    projects.post = Some(post_project);
+    let mut project = PathItem::new(HttpMethod::Get, get);
+    project.patch = Some(patch_project);
     paths
-        .path(
-            "/api/v1/orgs/{org}/projects",
-            PathItem::new(HttpMethod::Get, list),
-        )
-        .path(
-            "/api/v1/projects/{project}",
-            PathItem::new(HttpMethod::Get, get),
-        )
+        .path("/api/v1/orgs", orgs)
+        .path("/api/v1/orgs/{org}", org)
+        .path("/api/v1/orgs/{org}/projects", projects)
+        .path("/api/v1/projects/{project}", project)
 }
 
 fn trace_paths(paths: PathsBuilder) -> PathsBuilder {

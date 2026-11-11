@@ -3,6 +3,7 @@
 //! Spec 08 § Sign-up policy and § Authorization, spec 09 § Endpoints.
 
 use llmobs_core::ids::{OrgId, ProjectId};
+use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -123,7 +124,7 @@ pub struct Project {
     pub slug: String,
     /// Display name.
     pub name: String,
-    /// Retention in days. Omitted when the project uses the default.
+    /// Days to keep data. Omitted when data is kept forever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retention_days: Option<u32>,
     /// The caller's effective role on this project.
@@ -224,6 +225,62 @@ pub struct UpdateMeRequest {
     /// Display name. Null or omitted clears it. A present value is trimmed to 1–100 characters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+}
+
+/// `POST /api/v1/orgs`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateOrgRequest {
+    /// Display name. Trimmed to 1–100 characters.
+    pub name: String,
+    /// URL slug. Absent derives one from the name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+}
+
+/// `PATCH /api/v1/orgs/{org}`. The slug does not change.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateOrgRequest {
+    /// Display name. Trimmed to 1–100 characters.
+    pub name: String,
+}
+
+/// `POST /api/v1/orgs/{org}/projects`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateProjectRequest {
+    /// Display name. Trimmed to 1–100 characters.
+    pub name: String,
+    /// URL slug. Absent derives one from the name. Project slugs are not reserved words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+    /// Days to keep data, from 1 to 36500. Absent keeps data forever.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retention_days: Option<u32>,
+}
+
+/// `PATCH /api/v1/projects/{project}`.
+///
+/// `retention_days: null` keeps data forever. Omitting the field leaves retention unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateProjectRequest {
+    /// Display name. Absent leaves the name unchanged. A present value is trimmed to 1–100 characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Days to keep data, from 1 to 36500. Null keeps data forever. Absent leaves retention unchanged.
+    #[serde(default, deserialize_with = "optional_retention")]
+    #[schema(value_type = Option<u32>)]
+    pub retention_days: Option<Option<u32>>,
+}
+
+/// Present JSON is `Some(value)`, including null. An absent field stays the default `None`.
+fn optional_retention<'de, D>(deserializer: D) -> Result<Option<Option<u32>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Some(Option::<u32>::deserialize(deserializer)?))
 }
 
 /// `POST /api/v1/me/password`.

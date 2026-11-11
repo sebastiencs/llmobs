@@ -19,8 +19,14 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
     ("post", "/api/auth/password/reset", "post_password_reset"),
     ("patch", "/api/v1/me", "patch_me"),
     ("post", "/api/v1/me/password", "post_me_password"),
+    ("get", "/api/v1/orgs", "list_orgs"),
+    ("post", "/api/v1/orgs", "post_org"),
+    ("get", "/api/v1/orgs/{org}", "get_org"),
+    ("patch", "/api/v1/orgs/{org}", "patch_org"),
     ("get", "/api/v1/orgs/{org}/projects", "list_projects"),
+    ("post", "/api/v1/orgs/{org}/projects", "post_project"),
     ("get", "/api/v1/projects/{project}", "get_project"),
+    ("patch", "/api/v1/projects/{project}", "patch_project"),
     ("get", "/api/v1/projects/{project}/traces", "list_traces"),
     (
         "get",
@@ -108,6 +114,7 @@ const QUERY_OR_BODY: &[&str] = &[
 
 const TAGS: &[&str] = &[
     "auth",
+    "orgs",
     "projects",
     "traces",
     "spans",
@@ -216,6 +223,14 @@ fn document_lint() {
             expected_errors.extend(["400", "401", "403"]);
         } else if *id == "post_me_password" {
             expected_errors.extend(["400", "401", "403", "429"]);
+        } else if *id == "list_orgs" {
+            expected_errors.extend(["400", "401", "429"]);
+        } else if *id == "post_org" {
+            expected_errors.extend(["400", "401", "409", "429"]);
+        } else if *id == "patch_org" || *id == "patch_project" {
+            expected_errors.extend(["400", "401", "403", "404", "429"]);
+        } else if *id == "post_project" {
+            expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
         } else if *id == "post_logout" {
             // The handler always answers 204. CSRF is the shared origin check.
         } else if *id == "get_media" {
@@ -290,6 +305,7 @@ fn document_lint() {
         ("SessionPage", "SessionSummary"),
         ("EndUserPage", "EndUserSummary"),
         ("ScorePage", "Score"),
+        ("OrgPage", "OrgMembership"),
         ("ProjectPage", "Project"),
         ("SavedViewPage", "SavedView"),
     ];
@@ -532,6 +548,7 @@ fn assert_nullability(schemas: &serde_json::Map<String, Value>) {
         "SessionPage",
         "EndUserPage",
         "ScorePage",
+        "OrgPage",
         "ProjectPage",
         "SavedViewPage",
     ];

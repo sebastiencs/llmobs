@@ -1,0 +1,11 @@
+{
+  "data": [
+    {
+      "id": "01900000-0000-7000-8000-000000000010",
+      "slug": "acme",
+      "name": "Acme",
+      "role": "owner"
+    }
+  ],
+  "next_cursor": null
+}

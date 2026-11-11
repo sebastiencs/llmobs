@@ -34,6 +34,16 @@
     "file": "static/metrics.json"
   },
   {
+    "operation_id": "get_org",
+    "path_params": {
+      "org": "acme"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/org.json"
+  },
+  {
     "operation_id": "get_project",
     "path_params": {},
     "query": {},
@@ -326,6 +336,14 @@
     "status": 200,
     "content_type": "application/json",
     "file": "responses/users/user-7.json"
+  },
+  {
+    "operation_id": "list_orgs",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/orgs.json"
   },
   {
     "operation_id": "list_projects",
