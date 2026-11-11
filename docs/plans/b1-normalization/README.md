@@ -105,7 +105,7 @@ pub struct IngestContext {
 pub struct IngestLimits { pub max_attribute_bytes: usize, pub media_min_bytes: usize, pub media_max_bytes: usize }
 impl Default for IngestLimits { /* 8 MiB, 4 KiB, 32 MiB (spec 02 § Limits) */ }
 
-pub fn normalize(request: ExportTraceServiceRequest, ctx: &IngestContext, prices: &PriceTable) -> Normalized;
+pub fn normalize(request: &ExportTraceServiceRequest, ctx: &IngestContext, prices: &PriceTable) -> Normalized;
 pub struct Normalized { pub spans: Vec<Span>, pub media: Vec<MediaBlob>, pub rejections: Rejections }
 pub struct Rejections { /* private counts */ }
 impl Rejections { pub fn total(&self) -> u64; pub fn count(&self, reason: RejectReason) -> u64; pub fn message(&self) -> Option<String>; }

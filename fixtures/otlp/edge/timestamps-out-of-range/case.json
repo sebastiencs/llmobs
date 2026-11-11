@@ -1,0 +1,12 @@
+{
+  "description": "Starts before 2000, before the retention cutoff, or more than a day after ingest are rejected.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Normalization rules / 15",
+    "02 § Normalization rules / 17"
+  ],
+  "settings": {
+    "retention_days": 7
+  },
+  "notes": "The three rejected spans are outside the fixture 10-second window. Only the accepted span has to sit in that window. retention_days is 7, so a start eight days before ingest is out of range, and a start 25 hours after ingest is out of range."
+}

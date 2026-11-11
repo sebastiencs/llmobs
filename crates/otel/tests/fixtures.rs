@@ -54,6 +54,7 @@ fn case_json() {
             ));
         }
         check_media_bounds(&case, &mut failures);
+        check_retention(&case, &mut failures);
     }
     finish(&failures);
 }
@@ -820,9 +821,18 @@ fn input_size_failure(case_label: &str, len: u64) -> Option<String> {
 fn check_input_times(case: &Case, failures: &mut Vec<String>) {
     let case_label = label(case);
     let ingest = case.meta.context.ingest_time;
+    // Rejected spans are absent from expected.json. Only accepted spans must
+    // sit in the 10-second window (fixtures README).
+    let accepted = case
+        .expected
+        .spans
+        .iter()
+        .map(|span| (span.trace_id.to_hex(), span.span_id.to_hex()))
+        .collect::<BTreeSet<_>>();
     for resource in &case.input.resource_spans {
         for scope in &resource.scope_spans {
             for span in &scope.spans {
+                let trace_id = hex_encode(&span.trace_id);
                 let span_id = hex_encode(&span.span_id);
                 let (Some(start), Some(end)) = (
                     i64::try_from(span.start_time_unix_nano).ok(),
@@ -833,9 +843,21 @@ fn check_input_times(case: &Case, failures: &mut Vec<String>) {
                     ));
                     continue;
                 };
+                if !accepted.contains(&(trace_id, span_id.clone())) {
+                    continue;
+                }
                 check_span_window(&case_label, &span_id, start, end, ingest, failures);
             }
         }
+    }
+}
+
+fn check_retention(case: &Case, failures: &mut Vec<String>) {
+    if case.meta.settings.retention_days == Some(0) {
+        failures.push(format!(
+            "{}: retention_days must be an integer >= 1",
+            label(case)
+        ));
     }
 }
 
@@ -1128,6 +1150,43 @@ fn duplicate_media_sha256_fails() {
 }
 
 #[test]
+fn retention_days_zero_fails() {
+    let mut case = empty_case();
+    case.meta.settings.retention_days = Some(0);
+    let mut failures = Vec::new();
+    check_retention(&case, &mut failures);
+    assert_eq!(
+        failures,
+        vec!["edge/sample: retention_days must be an integer >= 1".to_owned()]
+    );
+}
+
+#[test]
+fn rejected_spans_skip_the_ingest_window() {
+    use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span};
+    let mut case = empty_case();
+    case.input.resource_spans.push(ResourceSpans {
+        scope_spans: vec![ScopeSpans {
+            spans: vec![Span {
+                trace_id: vec![0x11; 16],
+                span_id: vec![0x22; 8],
+                start_time_unix_nano: 0,
+                end_time_unix_nano: 0,
+                ..Span::default()
+            }],
+            ..ScopeSpans::default()
+        }],
+        ..ResourceSpans::default()
+    });
+    let mut failures = Vec::new();
+    check_input_times(&case, &mut failures);
+    assert!(
+        failures.is_empty(),
+        "a span missing from expected.json is rejected and not window-checked: {failures:?}"
+    );
+}
+
+#[test]
 fn media_min_bytes_above_max_fails() {
     let mut case = empty_case();
     case.meta.settings.media_min_bytes = 32;
@@ -1258,6 +1317,7 @@ fn empty_case() -> Case {
                 max_attribute_bytes: 8,
                 media_min_bytes: 1,
                 media_max_bytes: 10,
+                retention_days: None,
             },
             context: Context {
                 project_id,

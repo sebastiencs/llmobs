@@ -34,7 +34,7 @@ impl Warning {
 }
 
 /// Deduplicated warnings for one span, in [`Warning`] order.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct Warnings(BTreeSet<Warning>);
 
 impl Warnings {

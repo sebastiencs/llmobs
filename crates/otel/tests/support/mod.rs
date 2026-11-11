@@ -111,6 +111,8 @@ pub struct Settings {
     pub media_min_bytes: u64,
     /// `media.max_bytes`.
     pub media_max_bytes: u64,
+    /// Project retention. `None` means the project keeps spans forever.
+    pub retention_days: Option<u32>,
 }
 
 /// Project and clock used while normalizing the case.
@@ -195,6 +197,7 @@ struct SettingsFile {
     max_attribute_bytes: Option<u64>,
     media_min_bytes: Option<u64>,
     media_max_bytes: Option<u64>,
+    retention_days: Option<u32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -343,6 +346,7 @@ fn load_meta(path: &Path) -> Result<CaseMeta, String> {
                 .settings
                 .media_max_bytes
                 .unwrap_or(DEFAULT_MEDIA_MAX_BYTES),
+            retention_days: file.settings.retention_days,
         },
         context: Context {
             project_id: file.context.project_id.unwrap_or(defaults.project_id),

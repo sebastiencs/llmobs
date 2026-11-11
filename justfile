@@ -112,3 +112,7 @@ fixtures-check:
 # Rewrite OTLP fixtures in canonical JSON formatting
 fixtures-fmt:
     LLMOBS_FIXTURES_FMT=1 cargo test -p llmobs-otel --test fixtures -- canonical_formatting
+
+# Rewrite expected.json from the normalizer. Review the diff before committing.
+fixtures-bless:
+    LLMOBS_BLESS=1 cargo test -p llmobs-otel --test golden

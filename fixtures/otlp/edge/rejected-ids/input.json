@@ -1,0 +1,48 @@
+{
+  "resourceSpans": [
+    {
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "010203",
+              "spanId": "f10a000000000002",
+              "name": "short-trace",
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000"
+            },
+            {
+              "traceId": "00000000000000000000000000000000",
+              "spanId": "f10a000000000003",
+              "name": "zero-trace",
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000"
+            },
+            {
+              "traceId": "f10a0000000000000000000000000002",
+              "spanId": "01020304050607",
+              "name": "short-span",
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000"
+            },
+            {
+              "traceId": "f10a0000000000000000000000000003",
+              "spanId": "0000000000000000",
+              "name": "zero-span",
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000"
+            },
+            {
+              "traceId": "f10a0000000000000000000000000001",
+              "spanId": "f10a000000000001",
+              "name": "kept",
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "parentSpanId": "01020304"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
