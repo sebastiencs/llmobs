@@ -1,0 +1,37 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "f73a0000000000000000000000000001",
+      "span_id": "f73a000000000001",
+      "name": "v5-anthropic",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "provider": "anthropic",
+      "request_model": "custom-claude",
+      "input_tokens": 140,
+      "output_tokens": 20,
+      "cache_read_tokens": 40,
+      "total_tokens": 160,
+      "attributes": {
+        "ai.model.id": "custom-claude",
+        "ai.model.provider": "anthropic",
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.usage.cachedInputTokens": "40",
+        "ai.usage.inputTokens": "100",
+        "ai.usage.outputTokens": "20",
+        "gen_ai.usage.input_tokens": "100"
+      },
+      "conventions": [
+        "genai",
+        "vercel"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

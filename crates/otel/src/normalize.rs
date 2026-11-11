@@ -1,8 +1,8 @@
 //! Span skeleton: ids, times, resource, attributes, events, and links.
 //!
-//! Spec 02 rules 1, 2, 3, 8, 11, 12, 13, 15, 17, 18 and 19. Model, provider,
-//! operation, request params and context come from the mapping tables. Tokens
-//! and payloads stay empty until later phases.
+//! Spec 02. Model, provider, operation, request params, context, token usage
+//! and time to first token come from the mapping tables. Payloads and cost
+//! stay empty until later phases.
 
 use std::collections::BTreeMap;
 
@@ -25,6 +25,7 @@ use crate::detect::detect;
 use crate::fields::ResourceView;
 use crate::kind::span_kind;
 use crate::reject::{RejectReason, Rejections};
+use crate::usage::{ttft, usage};
 use crate::value::{as_str, to_json};
 use crate::warn::{Warning, Warnings};
 
@@ -211,6 +212,13 @@ fn accept_span(
     let conventions = detect(&bag, &span.events);
     let span_kind = span_kind(&mut bag);
     let fields = fill(&mut bag, &resource.view, &mut warnings);
+    let counted = usage(
+        &mut bag,
+        span_kind,
+        fields.provider.as_deref(),
+        &mut warnings,
+    );
+    let ttft_ns = ttft(&mut bag, start_time, &mut warnings);
     let mut attributes = bag.into_attributes(&mut warnings, &mut truncated);
     let events = encode_events(&span.events, start_time, &mut warnings, &mut truncated);
     let links = encode_links(&span.links, &mut warnings, &mut truncated);
@@ -240,17 +248,17 @@ fn accept_span(
         request_model: fields.request_model,
         response_model: fields.response_model,
         operation: fields.operation,
-        input_tokens: None,
-        output_tokens: None,
-        cache_read_tokens: None,
-        cache_write_tokens: None,
-        reasoning_tokens: None,
-        total_tokens: None,
+        input_tokens: counted.input_tokens,
+        output_tokens: counted.output_tokens,
+        cache_read_tokens: counted.cache_read_tokens,
+        cache_write_tokens: counted.cache_write_tokens,
+        reasoning_tokens: counted.reasoning_tokens,
+        total_tokens: counted.total_tokens,
         cost_input: None,
         cost_output: None,
         cost_total: None,
         cost_source: None,
-        ttft_ns: None,
+        ttft_ns,
         request_params: fields.request_params,
         input: None,
         input_format: None,

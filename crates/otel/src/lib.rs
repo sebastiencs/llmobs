@@ -12,6 +12,7 @@ mod fields;
 mod kind;
 mod normalize;
 mod reject;
+mod usage;
 mod value;
 mod warn;
 

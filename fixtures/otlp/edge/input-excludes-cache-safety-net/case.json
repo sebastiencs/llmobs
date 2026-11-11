@@ -1,0 +1,7 @@
+{
+  "description": "An input smaller than the cache tokens is treated as exclusive and records input_excludes_cache.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Token semantics"
+  ]
+}

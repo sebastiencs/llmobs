@@ -1,0 +1,7 @@
+{
+  "description": "Per-modality token counts stay in attributes and are not added to the token columns.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Token semantics"
+  ]
+}

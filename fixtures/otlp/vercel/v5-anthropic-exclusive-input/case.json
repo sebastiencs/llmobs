@@ -1,0 +1,8 @@
+{
+  "description": "Vercel v5 with provider anthropic reports an exclusive input, including when that count is mirrored on gen_ai.usage.input_tokens.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Token semantics"
+  ],
+  "notes": "pinned by hand from LangWatch's finding; re-check against a B2 capture"
+}
