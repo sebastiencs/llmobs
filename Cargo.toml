@@ -82,6 +82,7 @@ thiserror = "2.0"
 async-trait = "0.1.92"
 hex = "0.4.3"
 bytes = "1.12"
+futures = "0.3.34"
 strum = { version = "0.28.0", features = ["derive"] }
 insta = { version = "1.49.0", features = ["json"] }
 jsonschema = { version = "0.60.2", default-features = false }
