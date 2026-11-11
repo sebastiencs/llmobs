@@ -90,6 +90,7 @@ sdks/typescript/             TypeScript SDK (pnpm)                              
 fixtures/otlp/               OTLP fixtures shared by Rust golden tests and SDK tests  (spec 02 § Testing)
 fixtures/api/                example API responses (UI mocks), checked against the server types (spec 09)
 tools/                       dev tools (fixture capture, benchmarks); not shipped
+tools/capture/               fixture capture: mock provider, OTLP receiver, scenarios (B2)
 docs/                        decisions, specs, plans, research
 ```
 
@@ -130,6 +131,8 @@ Run everything through `just`:
 | `just web-dev` | web dev server with the API mocked from `fixtures/api` |
 | `just web-dev-server` | web dev server proxied at the real API |
 | `just run <args>` | run the `llmobs` binary |
+| `just capture <group>/<case>` | record an OTLP fixture from a scenario, e.g. `just capture openinference/openai-chat-tool` |
+| `just capture-all` | recapture every scenario |
 
 Required tools:
 - `rustup` (the toolchain is pinned in `rust-toolchain.toml`)

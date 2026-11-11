@@ -20,7 +20,7 @@ See [README.md](README.md). K10 adds the Python scenario project and records the
 
 `tools/capture/py/`:
 
-- **`.python-version`:** the newest CPython 3.13 patch older than 7 days, as an exact version (e.g. `3.13.9`). `process.runtime.version` ends up in fixtures, so it must not depend on the machine (D114).
+- **`.python-version`:** the newest CPython 3.13 patch older than 7 days, as an exact version (e.g. `3.13.9`). `process.runtime.version` ends up in fixtures, so it must not depend on the machine (D116).
 - **`pyproject.toml`:**
   ```toml
   [project]
@@ -42,7 +42,7 @@ See [README.md](README.md). K10 adds the Python scenario project and records the
   build-backend = "uv_build"
 
   [tool.uv]
-  exclude-newer = "7 days"   # D74/D115: no release younger than 7 days
+  exclude-newer = "7 days"   # D74/D117: no release younger than 7 days
 
   [tool.uv.build-backend]
   module-name = "capture_py"
@@ -101,7 +101,7 @@ See [README.md](README.md). K10 adds the Python scenario project and records the
    - the case files.
 
    **Fix failures in the tool or the scenario, never in the files.**
-3. Run the capture a second time: `just check-capture` must pass, which proves determinism (D114).
+3. Run the capture a second time: `just check-capture` must pass, which proves determinism (D116).
 4. Read `input.json` yourself:
    - two LLM spans with the `llm.*` / `openinference.span.kind` attributes;
    - flattened `llm.input_messages.*`;
@@ -123,7 +123,7 @@ check-capture: capture-py-sync
     cargo run -q -p llmobs-capture -- run --all --check
 ```
 
-Make `capture` and `capture-all` depend on `capture-py-sync`. **Don't add `check-capture` to `check`** (D115).
+Make `capture` and `capture-all` depend on `capture-py-sync`. **Don't add `check-capture` to `check`** (D117).
 
 ### `AGENTS.md`
 

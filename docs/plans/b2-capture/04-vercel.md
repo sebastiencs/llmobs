@@ -1,6 +1,6 @@
 # B2 · Vercel AI SDK (K14–K15)
 
-See [README.md](README.md) and the common rules in [03-genai-openinference.md](03-genai-openinference.md#common-rules-for-capture-sub-phases). The Vercel AI SDK emits its own spans (`ai.*`, plus `gen_ai.*` on the provider calls). It's the only TypeScript instrumentation in the matrix (D117), so K14 also creates the TypeScript project.
+See [README.md](README.md) and the common rules in [03-genai-openinference.md](03-genai-openinference.md#common-rules-for-capture-sub-phases). The Vercel AI SDK emits its own spans (`ai.*`, plus `gen_ai.*` on the provider calls). It's the only TypeScript instrumentation in the matrix (D119), so K14 also creates the TypeScript project.
 
 ## K14 — TypeScript project and AI SDK v5
 
@@ -15,7 +15,7 @@ See [README.md](README.md) and the common rules in [03-genai-openinference.md](0
 
 ### The project
 
-`tools/capture/ts/` is a standalone pnpm project, **not** a member of the root workspace (D115).
+`tools/capture/ts/` is a standalone pnpm project, **not** a member of the root workspace (D117).
 
 - **`pnpm-workspace.yaml`:**
   - makes the directory its own workspace root;

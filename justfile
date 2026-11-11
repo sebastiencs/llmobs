@@ -123,3 +123,13 @@ fixtures-bless:
 # by hand. This recipe does not fetch it.
 prices-update litellm_json:
     LLMOBS_LITELLM_JSON={{litellm_json}} cargo test -p llmobs-otel --test prices -- refresh
+
+# Fixture capture
+
+# Capture OTLP fixtures from real instrumentations (tools/capture), e.g. `just capture openinference/openai-chat-tool`
+capture +cases:
+    cargo run -q -p llmobs-capture -- run {{cases}}
+
+# Recapture every scenario
+capture-all:
+    cargo run -q -p llmobs-capture -- run --all

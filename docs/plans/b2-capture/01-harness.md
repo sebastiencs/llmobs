@@ -8,16 +8,16 @@ See [README.md](README.md) for the decisions, the scenario format and the rules.
 
 **Edit only:** `docs/mvp-decisions.md`, `docs/spec/02-ingestion.md`, `tools/README.md`, `docs/spec/README.md` (only if its layout block needs `tools/capture`).
 
-1. **`docs/mvp-decisions.md`:** add rows D112–D118 with the text of this plan's decision table, one short paragraph each, in the style of the existing rows. If the numbers collide with rows already on `main`, renumber this plan's decisions to the next free numbers and update every `D11x` reference under `docs/plans/b2-capture/`.
+1. **`docs/mvp-decisions.md`:** add rows D114–D120 with the text of this plan's decision table, one short paragraph each, in the style of the existing rows. If the numbers collide with rows already on `main`, renumber this plan's decisions to the next free numbers and update every `D11x` reference under `docs/plans/b2-capture/`.
 2. **Spec 02 § Testing:** replace the "Captured cases come from real instrumentations: …" bullet with:
-   - one sentence saying captured cases are recorded by `tools/capture` against a local mock provider (D112, D113);
-   - the capture matrix of D117 as a short table: convention or library on one axis, and the providers or frameworks captured on the other;
-   - one sentence saying captured cases may land before their `expected.json` (D116), with a link to `fixtures/otlp/README.md` § Workflows.
+   - one sentence saying captured cases are recorded by `tools/capture` against a local mock provider (D114, D115);
+   - the capture matrix of D119 as a short table: convention or library on one axis, and the providers or frameworks captured on the other;
+   - one sentence saying captured cases may land before their `expected.json` (D118), with a link to `fixtures/otlp/README.md` § Workflows.
 3. **`tools/README.md`:** a section for `tools/capture/`:
    - what it does (two sentences);
    - where the scenarios live;
    - the three recipes (`just capture <group>/<case>`, `just capture-all`, `just check-capture`), saying that the recipes and the tool arrive in K9–K10 of this plan;
-   - the rule that captured `input.json` files are never edited by hand (D118);
+   - the rule that captured `input.json` files are never edited by hand (D120);
    - a pointer to this plan.
 
 **Checks:** `just check`.
@@ -45,7 +45,7 @@ Later sub-phases add their own variants. Error messages name files, case paths, 
 **`scenario.rs`.** Every struct uses `#[serde(deny_unknown_fields)]`.
 - `pub struct CasePath { pub group: String, pub case: String }`.
   - `FromStr` parses `group/case`.
-  - `group` must be one of `genai`, `openinference`, `openllmetry`, `vercel`, `langfuse`, `laminar`, `google_adk`, `edge`. That's the `fixtures/otlp/README.md` list without `llmobs`, which D117 excludes. Put the list in a `const` with a comment pointing at that README.
+  - `group` must be one of `genai`, `openinference`, `openllmetry`, `vercel`, `langfuse`, `laminar`, `google_adk`, `edge`. That's the `fixtures/otlp/README.md` list without `llmobs`, which D119 excludes. Put the list in a `const` with a comment pointing at that README.
   - `case` must match `^[a-z0-9]+(?:-[a-z0-9]+)*$`.
   - `Display` prints `group/case`.
 - `pub struct Scenario`, holding the fields of README § The scenario format:
