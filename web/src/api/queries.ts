@@ -1,4 +1,5 @@
 import { $api, api } from "./client";
+import { projectRef } from "./project-ref";
 import type { Schema } from "./types";
 
 export const meQuery = $api.queryOptions("get", "/api/auth/me");
@@ -39,4 +40,29 @@ export function projectListOptions(org: string) {
     },
     getNextPageParam: (page: Schema<"ProjectPage">) => page.next_cursor ?? undefined,
   };
+}
+
+export function projectInit(org: string, project: string) {
+  return {
+    params: {
+      path: { project: projectRef(org, project) },
+    },
+  };
+}
+
+export function projectQuery(org: string, project: string) {
+  return $api.queryOptions("get", "/api/v1/projects/{project}", projectInit(org, project));
+}
+
+export function traceListInit(org: string, project: string) {
+  return {
+    params: {
+      path: { project: projectRef(org, project) },
+      query: { limit: 50 },
+    },
+  };
+}
+
+export function traceListQuery(org: string, project: string) {
+  return $api.queryOptions("get", "/api/v1/projects/{project}/traces", traceListInit(org, project));
 }
