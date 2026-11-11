@@ -153,7 +153,6 @@ pub(crate) fn non_message_payload(value: &AnyValue, warnings: &mut Warnings) -> 
 }
 
 /// Rule 6. A string that is valid JSON becomes that value. Anything else is unchanged.
-#[allow(dead_code)] // N10 and N13 call this.
 pub(crate) fn parse_tool_arguments(value: Json) -> Json {
     let Json::String(text) = &value else {
         return value;
