@@ -33,7 +33,9 @@ tracing.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true
+object_store = { workspace = true, features = ["aws"] }
 proptest.workspace = true
+sqlx.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 arrow.workspace = true

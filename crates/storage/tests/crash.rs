@@ -1,9 +1,9 @@
-//! Kill -9 harness for the WAL.
+//! Kill -9 harness for the WAL and flush.
 //!
 //! `crash_recovery` is what `cargo test` runs. It spawns `crash_child`, which
-//! is ignored unless this parent starts it. M1 checks acknowledged batches,
-//! atomic records, unique span ids and increasing sequence numbers. Catalog
-//! and `flushed_seq` checks wait for M2.
+//! is ignored unless this parent starts it. After each kill the parent checks
+//! acknowledged rows, catalog files, and `flushed_seq`. A last open collects
+//! staged objects with a zero age.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use arrow::array::{Array, FixedSizeBinaryArray, StringArray};
 use bytesize::ByteSize;
-use datafusion::execution::context::SessionContext;
+use datafusion::execution::context::{SessionConfig, SessionContext};
 use llmobs_core::batch::spans_to_record_batch;
 use llmobs_core::enums::{SpanKind, SpanStatus};
 use llmobs_core::ids::{ProjectId, SpanId, TraceId};
@@ -27,6 +27,8 @@ use llmobs_storage::config::{
     FlushConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig, WalConfig, WalSync,
 };
 use llmobs_storage::{ProjectQuery, Storage};
+use sqlx::ConnectOptions;
+use sqlx::sqlite::SqliteConnectOptions;
 
 const DEFAULT_ITERATIONS: u32 = 25;
 const DEFAULT_SEED: u64 = 0xA1C5_5EED;
@@ -45,8 +47,9 @@ fn child_config(dir: &Path) -> StorageConfig {
             ..WalConfig::default()
         },
         flush: FlushConfig {
-            max_bytes: ByteSize::mib(128),
-            ..FlushConfig::default()
+            max_bytes: ByteSize::mib(2),
+            max_age: Duration::from_millis(500),
+            upload_concurrency: 2,
         },
         memtable: MemtableConfig {
             hard_limit: ByteSize::mib(256),
@@ -181,6 +184,7 @@ fn crash_recovery() {
         .unwrap_or(DEFAULT_SEED);
     let dir = tempfile::tempdir().unwrap();
     let mut state = seed;
+    let mut flushed = (0_u64, 0_u64);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -214,13 +218,15 @@ fn crash_recovery() {
             status.code().is_none(),
             "crash child exited {status} at iteration {run}, seed {seed}"
         );
-        let check = runtime.block_on(check_dir(dir.path(), &before));
-        assert!(
-            check.is_ok(),
-            "crash harness failed at iteration {run}, seed {seed}: {}",
-            check.unwrap_err()
-        );
+        let check = runtime.block_on(check_dir(dir.path(), &before, flushed));
+        match check {
+            Ok(next) => flushed = next,
+            Err(error) => panic!("crash harness failed at iteration {run}, seed {seed}: {error}"),
+        }
     }
+    runtime
+        .block_on(collect_crash_orphans(dir.path()))
+        .unwrap_or_else(|error| panic!("staged collection after the crash run: {error}"));
 }
 
 fn xorshift(state: &mut u64) -> u64 {
@@ -285,14 +291,36 @@ fn complete_acks(path: &Path) -> Vec<Ack> {
         .collect()
 }
 
-async fn check_dir(dir: &Path, before: &[Ack]) -> Result<(), String> {
+async fn check_dir(dir: &Path, before: &[Ack], previous: (u64, u64)) -> Result<(u64, u64), String> {
     let storage = Storage::open(child_config(dir))
         .await
         .map_err(|error| error.to_string())?;
-    let stored = stored_rows(&storage.query(project()).unwrap()).await;
+    let stored = stored_rows(
+        &storage
+            .query(project())
+            .map_err(|error| error.to_string())?,
+    )
+    .await;
     // Drop leaves the rows in the WAL. Shutdown would flush them, and the next
     // iteration of this directory would not see them in the memtable.
     drop(storage);
+    let catalog = read_catalog(dir).await?;
+    for (path, size) in &catalog.files {
+        let file = dir.join("objects").join(path);
+        let meta = std::fs::metadata(&file).map_err(|error| format!("{path}: {error}"))?;
+        if meta.len() != *size {
+            return Err(format!(
+                "{path} is {} bytes, catalog says {size}",
+                meta.len()
+            ));
+        }
+    }
+    if catalog.spans_seq < previous.0 || catalog.scores_seq < previous.1 {
+        return Err(format!(
+            "flushed_seq went from ({}, {}) to ({}, {})",
+            previous.0, previous.1, catalog.spans_seq, catalog.scores_seq
+        ));
+    }
 
     let mut by_batch: BTreeMap<u64, BTreeSet<u32>> = BTreeMap::new();
     let mut span_ids = HashSet::new();
@@ -347,7 +375,131 @@ async fn check_dir(dir: &Path, before: &[Ack]) -> Result<(), String> {
             ));
         }
     }
+    Ok((catalog.spans_seq, catalog.scores_seq))
+}
+
+struct CatalogView {
+    files: Vec<(String, u64)>,
+    spans_seq: u64,
+    scores_seq: u64,
+    staged_at: Vec<i64>,
+}
+
+async fn read_catalog(dir: &Path) -> Result<CatalogView, String> {
+    let path = dir.join("catalog.db");
+    let mut connection = SqliteConnectOptions::new()
+        .filename(&path)
+        .read_only(true)
+        .busy_timeout(Duration::from_secs(5))
+        .connect()
+        .await
+        .map_err(|error| error.to_string())?;
+    let file_rows = sqlx::query("SELECT path, size_bytes FROM data_files")
+        .fetch_all(&mut connection)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut files = Vec::new();
+    for row in file_rows {
+        let path: String = sqlx::Row::try_get(&row, "path").map_err(|error| error.to_string())?;
+        let size: i64 =
+            sqlx::Row::try_get(&row, "size_bytes").map_err(|error| error.to_string())?;
+        let size = u64::try_from(size).map_err(|_| format!("{path} has a negative size"))?;
+        files.push((path, size));
+    }
+    let seq_rows = sqlx::query("SELECT table_name, flushed_seq FROM table_state")
+        .fetch_all(&mut connection)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut spans_seq = 0_u64;
+    let mut scores_seq = 0_u64;
+    for row in seq_rows {
+        let table: String =
+            sqlx::Row::try_get(&row, "table_name").map_err(|error| error.to_string())?;
+        let seq: i64 =
+            sqlx::Row::try_get(&row, "flushed_seq").map_err(|error| error.to_string())?;
+        let seq = u64::try_from(seq).map_err(|_| format!("{table} flushed_seq is negative"))?;
+        match table.as_str() {
+            "spans" => spans_seq = seq,
+            "scores" => scores_seq = seq,
+            _ => return Err(format!("unknown table_state row {table}")),
+        }
+    }
+    let staged_at = sqlx::query_scalar("SELECT created_at FROM staged_objects")
+        .fetch_all(&mut connection)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(CatalogView {
+        files,
+        spans_seq,
+        scores_seq,
+        staged_at,
+    })
+}
+
+fn now_ns() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
+/// Opens the directory, flushes what the last kill left in the WAL, then
+/// collects every staged row written before this call.
+async fn collect_crash_orphans(dir: &Path) -> Result<(), String> {
+    let started = now_ns();
+    let storage = Storage::open(child_config(dir))
+        .await
+        .map_err(|error| error.to_string())?;
+    storage
+        .shutdown()
+        .await
+        .map_err(|error| error.to_string())?;
+    storage
+        .collect_staged(Duration::ZERO)
+        .await
+        .map_err(|error| error.to_string())?;
+    drop(storage);
+    let catalog = read_catalog(dir).await?;
+    for created_at in catalog.staged_at {
+        if created_at < started {
+            return Err(format!(
+                "staged row from before the final open survived collection ({created_at})"
+            ));
+        }
+    }
+    let temps = temp_files(&dir.join("objects"));
+    if !temps.is_empty() {
+        return Err(format!(
+            "{} temp file(s) remain under objects/",
+            temps.len()
+        ));
+    }
     Ok(())
+}
+
+fn temp_files(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return found,
+        Err(_) => return vec![dir.to_path_buf()],
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(temp_files(&path));
+        } else if is_temp_name(&entry.file_name()) {
+            found.push(path);
+        }
+    }
+    found
+}
+
+fn is_temp_name(name: &std::ffi::OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    name.starts_with('.') && name.contains(".tmp-")
 }
 
 fn parse_batch_name(name: &str) -> Option<(u64, u32)> {
@@ -357,7 +509,7 @@ fn parse_batch_name(name: &str) -> Option<(u64, u32)> {
 }
 
 async fn stored_rows(query: &ProjectQuery) -> Vec<(String, Vec<u8>)> {
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), Arc::clone(&query.runtime));
     ctx.register_table("spans_t", Arc::clone(&query.spans))
         .unwrap();
     let batches = ctx

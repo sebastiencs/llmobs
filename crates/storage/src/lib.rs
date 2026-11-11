@@ -63,6 +63,8 @@ pub(crate) mod read_state;
 pub(crate) mod wal;
 
 #[cfg(test)]
+mod crash_tests;
+#[cfg(test)]
 mod test_support;
 
 /// One acknowledged append.
@@ -356,6 +358,22 @@ impl Storage {
             memtable_bytes: spans.saturating_add(scores),
             memtable_hard_limit: self.hard_limit,
         }
+    }
+
+    /// One staged-object collection, with an explicit age.
+    ///
+    /// The background task uses one hour. Tests pass a shorter age. A zero age
+    /// collects every row whose `created_at` is before this call.
+    #[doc(hidden)]
+    pub async fn collect_staged(&self, max_age: std::time::Duration) -> Result<(), error::GcError> {
+        gc::collect_once(
+            &self.committer,
+            &self.objects,
+            &self.hooks,
+            catalog::now_ns(),
+            max_age,
+        )
+        .await
     }
 
     /// Stops writers, flushes both memtables, and releases the data directory lock.

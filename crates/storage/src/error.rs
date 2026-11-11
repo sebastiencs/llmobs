@@ -243,7 +243,7 @@ pub enum CatalogError {
 /// [`GcError::Object`] names the key. Keys contain project ids, so callers log
 /// this error at debug.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum GcError {
+pub enum GcError {
     /// `catalog.db` rejected the read or the row delete.
     #[error(transparent)]
     Catalog(#[from] CatalogError),

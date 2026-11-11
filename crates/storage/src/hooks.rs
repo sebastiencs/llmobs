@@ -124,6 +124,7 @@ mod fault {
         hits: [AtomicU64; HookPoint::COUNT],
         groups: Mutex<Vec<(usize, u64)>>,
         passed: Mutex<Vec<HookPoint>>,
+        abort_at: Mutex<HashSet<HookPoint>>,
     }
 
     impl std::fmt::Debug for State {
@@ -147,6 +148,7 @@ mod fault {
                     hits: [const { AtomicU64::new(0) }; HookPoint::COUNT],
                     groups: Mutex::new(Vec::new()),
                     passed: Mutex::new(Vec::new()),
+                    abort_at: Mutex::new(HashSet::new()),
                 }),
             }
         }
@@ -161,6 +163,12 @@ mod fault {
             let index = point.index();
             self.inner.hits[index].fetch_add(1, Ordering::SeqCst);
             lock(&self.inner.passed).push(point);
+            let aborting = lock(&self.inner.abort_at).contains(&point);
+            if aborting {
+                // The crash child is a separate process. Aborting it is the point.
+                #[allow(clippy::exit)]
+                std::process::abort();
+            }
             let mut held = lock(&self.inner.held);
             if !held.contains(&point) {
                 return;
@@ -195,6 +203,13 @@ mod fault {
             let mut held = lock(&self.inner.held);
             held.remove(&point);
             self.inner.cv.notify_all();
+        }
+
+        /// The next [`Self::pause`] on `point` aborts the process.
+        ///
+        /// Used by the flush crash child. The parent reopens the directory.
+        pub(crate) fn abort_at(&self, point: HookPoint) {
+            lock(&self.inner.abort_at).insert(point);
         }
 
         /// The next [`Self::fail`] on `point` returns an error, once.
