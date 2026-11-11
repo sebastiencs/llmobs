@@ -27,6 +27,7 @@ axum.workspace = true
 tracing.workspace = true
 serde_path_to_error.workspace = true
 serde_urlencoded.workspace = true
+unicode-normalization.workspace = true
 
 [dev-dependencies]
 bytesize.workspace = true

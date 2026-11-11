@@ -108,6 +108,8 @@ axum = { version = "0.8.9", default-features = false, features = [
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
 # Field path of a JSON or query error, without the rejected value (P4).
 serde_path_to_error = "0.1.20"
+# Email normalization: trim, NFC, lowercase (P6, D136).
+unicode-normalization = "0.1.26"
 # DataFusion 55's `TableProvider` is an `#[async_trait]` trait.
 async-trait = "0.1.92"
 hex = "0.4.3"

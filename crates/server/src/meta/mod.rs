@@ -6,6 +6,11 @@
 //! migration is not this binary's.
 #![cfg_attr(not(test), allow(dead_code))] // `llmobs serve` opens this from P5 on
 
+mod members;
+mod orgs;
+mod projects;
+mod users;
+
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -167,12 +172,10 @@ pub enum MetaError {
     /// A query failed.
     #[error("meta.db: {0}")]
     Db(sqlx::Error),
-    /// A unique constraint failed. Stores map the constraint onto a static reason (P6).
-    #[allow(dead_code)]
+    /// A unique constraint failed. Stores map the constraint onto a static reason.
     #[error("{0}")]
     Conflict(&'static str),
     /// A stored value does not decode. The names are static column identifiers.
-    #[allow(dead_code)]
     #[error("corrupt {table}.{column}")]
     Corrupt {
         /// Table name.
@@ -180,6 +183,18 @@ pub enum MetaError {
         /// Column name.
         column: &'static str,
     },
+}
+
+/// A unique violation becomes `conflict`. Every other database error stays [`MetaError::Db`].
+pub(crate) fn unique_or(error: sqlx::Error, conflict: &'static str) -> MetaError {
+    if error
+        .as_database_error()
+        .is_some_and(|db| db.is_unique_violation())
+    {
+        MetaError::Conflict(conflict)
+    } else {
+        MetaError::from(error)
+    }
 }
 
 impl From<sqlx::Error> for MetaError {
@@ -233,6 +248,13 @@ fn reader_options(path: &Path) -> SqliteConnectOptions {
         .foreign_keys(true)
         .busy_timeout(BUSY_TIMEOUT)
         .disable_statement_logging()
+}
+
+#[cfg(test)]
+pub(crate) async fn test_db() -> (tempfile::TempDir, MetaDb) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = MetaDb::open(dir.path()).await.unwrap();
+    (dir, db)
 }
 
 async fn reader_pool(path: &Path) -> Result<SqlitePool, MetaError> {
