@@ -3,6 +3,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "@fontsource-variable/inter";
+import "@fontsource-variable/jetbrains-mono";
 import { createAppQueryClient } from "@/api/client";
 import {
   applyResolvedTheme,
