@@ -95,7 +95,7 @@ Note: Vercel's outer `ai.generateText` is `chain` (not `llm`) so tokens/cost are
 | Laminar | `lmnr.span.input` | `lmnr.span.output` |
 | Google ADK | `gcp.vertex.agent.llm_request`, `gcp.vertex.agent.tool_call_args` | `gcp.vertex.agent.llm_response`, `gcp.vertex.agent.tool_response` |
 
-Message conversion: each converter (OpenAI chat format, Anthropic content blocks, Gemini `parts`, OpenInference flattened, Vercel `CoreMessage`) maps into the canonical format of 01. If conversion fails, the raw value is stored with `format = json` and a `normalize_error` entry is added to `attributes`.
+Message conversion: each converter (OpenAI chat format, Anthropic content blocks, Gemini `parts`, OpenInference flattened, Vercel `CoreMessage`) maps into the canonical format of 01. If a convention recognizes its source but cannot convert it, the raw value is stored with `format = json` and `attributes` gains `llmobs.normalize_error`. Each failure is a code `messages:<convention>:<field>`, where `<convention>` is the convention's stored name (`llmobs`, `genai`, `openinference`, `vercel`, `openllmetry`, `langfuse`, `laminar`, `google_adk`) and `<field>` is `input`, `output`, `system_instructions` or `tool_definitions`. Several failures are joined with `,` and no spaces, for example `messages:genai:input,messages:genai:output`. The attribute replaces a client-sent value with the same key. The code never contains payload text.
 
 **Tool definitions** are normalized to one element per tool (rule 7), from the first source that yields any:
 

@@ -1,8 +1,9 @@
 //! Span skeleton: ids, times, resource, attributes, events, and links.
 //!
 //! Spec 02. Model, provider, operation, request params, context, token usage
-//! and time to first token come from the mapping tables. Payloads and cost
-//! stay empty until later phases.
+//! and time to first token come from the mapping tables. Payload columns are
+//! filled by the convention driver; no convention is registered until N13.
+//! Cost stays empty until N16.
 
 use std::collections::BTreeMap;
 
@@ -24,6 +25,7 @@ use crate::context::fill;
 use crate::detect::detect;
 use crate::fields::ResourceView;
 use crate::kind::span_kind;
+use crate::payload;
 use crate::reject::{RejectReason, Rejections};
 use crate::usage::{ttft, usage};
 use crate::value::{as_str, to_json};
@@ -219,14 +221,31 @@ fn accept_span(
         &mut warnings,
     );
     let ttft_ns = ttft(&mut bag, start_time, &mut warnings);
+    let assembled = payload::assemble(
+        &mut bag,
+        &span.events,
+        span_kind,
+        payload::READERS,
+        payload::REGISTRIES,
+    );
+    let normalize_error = payload::error_attribute(&assembled.io.errors);
     let mut attributes = bag.into_attributes(&mut warnings, &mut truncated);
-    let events = encode_events(&span.events, start_time, &mut warnings, &mut truncated);
+    let events = encode_events(
+        &span.events,
+        start_time,
+        &mut warnings,
+        &mut truncated,
+        &assembled.dropped_events,
+    );
     let links = encode_links(&span.links, &mut warnings, &mut truncated);
     if let Some(text) = warnings.to_attribute() {
         attributes.insert(metadata_key::NORMALIZE_WARNING.to_owned(), text);
     }
+    if let Some(text) = normalize_error {
+        attributes.insert(metadata_key::NORMALIZE_ERROR.to_owned(), text);
+    }
 
-    Some(Span {
+    let mut built = Span {
         project_id: ctx.project_id,
         trace_id,
         span_id,
@@ -279,7 +298,9 @@ fn accept_span(
         conventions,
         ingest_time: ctx.ingest_time,
         schema_version: SCHEMA_VERSION,
-    })
+    };
+    payload::write(&mut built, assembled.io);
+    Some(built)
 }
 
 fn start_out_of_range(start_time: i64, ctx: &IngestContext) -> bool {
@@ -330,10 +351,13 @@ fn encode_events(
     start_time: i64,
     warnings: &mut Warnings,
     truncated: &mut Vec<String>,
+    dropped: &[usize],
 ) -> Vec<SpanEvent> {
     events
         .iter()
-        .map(|event| {
+        .enumerate()
+        .filter(|(index, _)| !dropped.contains(index))
+        .map(|(_, event)| {
             let time = match i64::try_from(event.time_unix_nano) {
                 Ok(time) => time,
                 Err(_) => {
