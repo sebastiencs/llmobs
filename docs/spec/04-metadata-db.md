@@ -1,6 +1,6 @@
 # 04 — Metadata database (SQLite)
 
-`meta.db`, SQLite ≥ 3.45, `journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON`, `busy_timeout=5000`. Accessed through `sqlx` with one writer connection (serialized writes through a `Mutex`/queue) and a read pool. Migrations are embedded (`sqlx::migrate!`) and run at startup; downgrade is not supported (12 §Upgrades).
+`meta.db`, SQLite ≥ 3.45, `journal_mode=WAL`, `synchronous=FULL`, `foreign_keys=ON`, `busy_timeout=5000`. Writes are rare; every commit is durable before the response (D136). Accessed through `sqlx` with one writer connection (serialized writes through a `Mutex`) and a read pool of 4 read-only connections. Migrations are embedded (`sqlx::migrate!`) and run in `llmobs serve`; downgrade is not supported (12 §Upgrades). `llmobs admin` commands open `meta.db` without running migrations and refuse a database at another migration version (D136).
 
 `meta.db` belongs to `llmobs-server`. The storage engine keeps its own catalog in `catalog.db` (03 §4, D83): data files, WAL checkpoints, media index and its side of deletions. The two databases share no transaction; the only link is the deletion handoff (§ Deletion requests).
 
@@ -13,7 +13,7 @@ Conventions: `id TEXT PRIMARY KEY` (UUIDv7), `created_at`/`updated_at INTEGER` (
 ```sql
 CREATE TABLE users (
   id TEXT PRIMARY KEY,
-  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  email TEXT NOT NULL UNIQUE,         -- normalized: trimmed, NFC, lowercase (D136)
   name TEXT,
   password_hash TEXT,                 -- argon2id PHC string; NULL for SSO-only users
   email_verified_at INTEGER,
@@ -33,7 +33,7 @@ CREATE TABLE identities (            -- linked OAuth/OIDC accounts
 );
 
 CREATE TABLE web_sessions (
-  id TEXT PRIMARY KEY,                -- random 32 bytes, base64url; stored as SHA-256 hash
+  id TEXT PRIMARY KEY,                -- SHA-256 hex of the cookie value (32 random bytes, base64url)
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
   user_agent TEXT, ip TEXT
@@ -75,19 +75,28 @@ CREATE TABLE project_members (        -- optional per-project role override
 CREATE TABLE invites (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
-  email TEXT NOT NULL COLLATE NOCASE,
+  email TEXT NOT NULL,                -- normalized: trimmed, NFC, lowercase (D136)
   role TEXT NOT NULL,
   token_hash TEXT NOT NULL UNIQUE,
   invited_by TEXT REFERENCES users(id),
   created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, accepted_at INTEGER
 );
+CREATE UNIQUE INDEX invites_pending ON invites(org_id, email) WHERE accepted_at IS NULL;
 
 CREATE TABLE password_resets (
   token_hash TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, used_at INTEGER
 );
+
+CREATE TABLE email_verifications (
+  token_hash TEXT PRIMARY KEY,        -- SHA-256 hex of a 32-byte random token
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, used_at INTEGER
+);
 ```
+
+A new invite for the same (org, email) replaces the pending one (D147).
 
 ## Keys & credentials
 
@@ -98,7 +107,7 @@ CREATE TABLE api_keys (
   kind TEXT NOT NULL,                 -- 'public' | 'secret'
   scopes TEXT NOT NULL,               -- JSON array: ['ingest'] | ['ingest','read','write'] | ['feedback']
   name TEXT,
-  prefix TEXT NOT NULL,               -- first 12 chars, shown in UI
+  prefix TEXT NOT NULL,               -- type prefix + first 6 random characters, e.g. `sk-llmobs-a1B2c3` (D140)
   key_hash TEXT NOT NULL UNIQUE,      -- SHA-256 hex
   created_by TEXT REFERENCES users(id),
   created_at INTEGER NOT NULL, expires_at INTEGER, last_used_at INTEGER, revoked_at INTEGER
@@ -107,7 +116,9 @@ CREATE TABLE api_keys (
 CREATE TABLE personal_tokens (        -- for CLI / MCP; act as the user, with the user's roles
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name TEXT, prefix TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+  name TEXT,
+  prefix TEXT NOT NULL,               -- type prefix + first 6 random characters, e.g. `pat-llmobs-a1B2c3` (D140)
+  token_hash TEXT NOT NULL UNIQUE,
   scopes TEXT NOT NULL,               -- ['read'] | ['read','write']
   created_at INTEGER NOT NULL, expires_at INTEGER, last_used_at INTEGER, revoked_at INTEGER
 );
@@ -391,6 +402,8 @@ CREATE TABLE usage_daily (
 CREATE TABLE instance_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 -- e.g. encryption key check value, signup policy, telemetry id
 ```
+
+`instance_settings` is created by track E with its first use (D135).
 
 Usage counters are accumulated in memory and flushed to `usage_daily` every 10 s (upsert-add).
 
