@@ -1,11 +1,11 @@
 //! Span skeleton: ids, times, resource, attributes, events, and links.
 //!
-//! Spec 02 rules 1, 2, 13, 15, 17, 18 and 19. Scalar columns stay empty until
-//! the field phases.
+//! Spec 02 rules 1, 2, 13, 15, 17, 18 and 19. Span kind comes from the mapping
+//! table. The other scalar columns stay empty until later field phases.
 
 use std::collections::BTreeMap;
 
-use llmobs_core::enums::{SpanKind, SpanStatus};
+use llmobs_core::enums::SpanStatus;
 use llmobs_core::ids::{ProjectId, SpanId, TraceId};
 use llmobs_core::media::MediaBlob;
 use llmobs_core::names::metadata_key;
@@ -21,6 +21,7 @@ use serde_json::{Map, Value as Json};
 use crate::bag::AttrBag;
 use crate::detect::detect;
 use crate::fields::ResourceView;
+use crate::kind::span_kind;
 use crate::reject::{RejectReason, Rejections};
 use crate::value::{as_str, to_json};
 use crate::warn::{Warning, Warnings};
@@ -205,8 +206,9 @@ fn accept_span(
     let (status, status_message) = map_status(span.status.as_ref());
 
     let mut truncated = resource.truncated.clone();
-    let bag = AttrBag::new(&span.attributes, &mut warnings);
+    let mut bag = AttrBag::new(&span.attributes, &mut warnings);
     let conventions = detect(&bag, &span.events);
+    let span_kind = span_kind(&mut bag);
     let mut attributes = bag.into_attributes(&mut warnings, &mut truncated);
     let events = encode_events(&span.events, start_time, &mut warnings, &mut truncated);
     let links = encode_links(&span.links, &mut warnings, &mut truncated);
@@ -220,7 +222,7 @@ fn accept_span(
         span_id,
         parent_span_id: parent_id(&span.parent_span_id),
         name: span.name.clone(),
-        span_kind: SpanKind::Span,
+        span_kind,
         start_time,
         end_time,
         status,
@@ -393,7 +395,7 @@ fn encode_attribute_object(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use llmobs_core::enums::Convention;
+    use llmobs_core::enums::{Convention, SpanKind};
     use opentelemetry_proto::tonic::common::v1::AnyValue;
     use opentelemetry_proto::tonic::common::v1::InstrumentationScope;
     use opentelemetry_proto::tonic::trace::v1::ResourceSpans;

@@ -17,7 +17,6 @@ use support::{Case, ExpectedMedia, canonical_json, load_all_cases, sort_spans};
 const PENDING: &[&str] = &[
     "edge/media-before-truncation",
     "edge/media-truncation-rejection",
-    "edge/zero-parent-span-id",
     "genai/chat-cache-tokens",
     "openinference/llm-flattened-tool-call",
     "vercel/generate-text",

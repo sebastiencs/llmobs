@@ -8,6 +8,7 @@ mod decode;
 mod detect;
 mod error;
 mod fields;
+mod kind;
 mod normalize;
 mod reject;
 mod value;

@@ -1,0 +1,7 @@
+{
+  "description": "GenAI operation invoke_workflow becomes a chain span.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Span kind"
+  ]
+}
