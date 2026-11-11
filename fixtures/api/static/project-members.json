@@ -1,0 +1,24 @@
+{
+  "data": [
+    {
+      "user": {
+        "id": "01900000-0000-7000-8000-000000000100",
+        "email": "ada@example.com",
+        "name": "Ada Example"
+      },
+      "org_role": "owner",
+      "effective_role": "admin"
+    },
+    {
+      "user": {
+        "id": "01900000-0000-7000-8000-000000000101",
+        "email": "bob@example.com",
+        "name": "Bob Example"
+      },
+      "org_role": "member",
+      "override": "viewer",
+      "effective_role": "viewer"
+    }
+  ],
+  "next_cursor": null
+}

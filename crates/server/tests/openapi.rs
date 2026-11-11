@@ -23,10 +23,36 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
     ("post", "/api/v1/orgs", "post_org"),
     ("get", "/api/v1/orgs/{org}", "get_org"),
     ("patch", "/api/v1/orgs/{org}", "patch_org"),
+    ("get", "/api/v1/orgs/{org}/members", "list_org_members"),
+    (
+        "patch",
+        "/api/v1/orgs/{org}/members/{user}",
+        "patch_org_member",
+    ),
+    (
+        "delete",
+        "/api/v1/orgs/{org}/members/{user}",
+        "delete_org_member",
+    ),
     ("get", "/api/v1/orgs/{org}/projects", "list_projects"),
     ("post", "/api/v1/orgs/{org}/projects", "post_project"),
     ("get", "/api/v1/projects/{project}", "get_project"),
     ("patch", "/api/v1/projects/{project}", "patch_project"),
+    (
+        "get",
+        "/api/v1/projects/{project}/members",
+        "list_project_members",
+    ),
+    (
+        "put",
+        "/api/v1/projects/{project}/members/{user}",
+        "put_project_member",
+    ),
+    (
+        "delete",
+        "/api/v1/projects/{project}/members/{user}",
+        "delete_project_member",
+    ),
     ("get", "/api/v1/projects/{project}/traces", "list_traces"),
     (
         "get",
@@ -96,6 +122,8 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
 ];
 
 const QUERY_OR_BODY: &[&str] = &[
+    "list_org_members",
+    "list_project_members",
     "list_projects",
     "list_traces",
     "stream_traces",
@@ -194,7 +222,15 @@ fn document_lint() {
                 | "post_password_reset"
         ) {
             assert_eq!(operation_security.map(Vec::len), Some(0), "{id}");
-        } else if *id == "patch_me" || *id == "post_me_password" {
+        } else if matches!(
+            *id,
+            "patch_me"
+                | "post_me_password"
+                | "patch_org_member"
+                | "delete_org_member"
+                | "put_project_member"
+                | "delete_project_member"
+        ) {
             let security = operation_security.unwrap_or_else(|| panic!("{id}"));
             assert_eq!(security.len(), 1, "{id}");
             assert!(security[0].get("session").is_some(), "{id}");
@@ -227,7 +263,13 @@ fn document_lint() {
             expected_errors.extend(["400", "401", "429"]);
         } else if *id == "post_org" {
             expected_errors.extend(["400", "401", "409", "429"]);
-        } else if *id == "patch_org" || *id == "patch_project" {
+        } else if *id == "patch_org_member" || *id == "delete_org_member" {
+            expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
+        } else if *id == "put_project_member"
+            || *id == "delete_project_member"
+            || *id == "patch_org"
+            || *id == "patch_project"
+        {
             expected_errors.extend(["400", "401", "403", "404", "429"]);
         } else if *id == "post_project" {
             expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
@@ -306,6 +348,8 @@ fn document_lint() {
         ("EndUserPage", "EndUserSummary"),
         ("ScorePage", "Score"),
         ("OrgPage", "OrgMembership"),
+        ("OrgMemberPage", "OrgMember"),
+        ("ProjectMemberPage", "ProjectMember"),
         ("ProjectPage", "Project"),
         ("SavedViewPage", "SavedView"),
     ];
@@ -549,6 +593,8 @@ fn assert_nullability(schemas: &serde_json::Map<String, Value>) {
         "EndUserPage",
         "ScorePage",
         "OrgPage",
+        "OrgMemberPage",
+        "ProjectMemberPage",
         "ProjectPage",
         "SavedViewPage",
     ];

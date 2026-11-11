@@ -5,6 +5,7 @@
 
 pub mod account;
 pub mod common;
+pub mod members;
 pub mod metrics;
 pub mod openapi;
 pub mod payload;

@@ -114,6 +114,25 @@ pub(crate) async fn remove_org_member(
     org_id: OrgId,
     user_id: Uuid,
 ) -> Result<(), MetaError> {
+    clear_project_overrides(conn, org_id, user_id).await?;
+    sqlx::query("DELETE FROM org_members WHERE org_id = ? AND user_id = ?")
+        .bind(org_id.to_string())
+        .bind(user_id.to_string())
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
+/// Deletes this user's overrides on the org's projects. The membership stays.
+///
+/// # Errors
+///
+/// Returns [`MetaError::Db`] when the delete fails.
+pub(crate) async fn clear_project_overrides(
+    conn: &mut SqliteConnection,
+    org_id: OrgId,
+    user_id: Uuid,
+) -> Result<(), MetaError> {
     sqlx::query(
         "DELETE FROM project_members WHERE user_id = ? AND project_id IN \
          (SELECT id FROM projects WHERE org_id = ?)",
@@ -122,11 +141,6 @@ pub(crate) async fn remove_org_member(
     .bind(org_id.to_string())
     .execute(&mut *conn)
     .await?;
-    sqlx::query("DELETE FROM org_members WHERE org_id = ? AND user_id = ?")
-        .bind(org_id.to_string())
-        .bind(user_id.to_string())
-        .execute(&mut *conn)
-        .await?;
     Ok(())
 }
 

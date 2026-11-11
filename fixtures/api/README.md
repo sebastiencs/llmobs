@@ -1,6 +1,6 @@
 # API example project
 
-Synthetic data for UI mocks, the OpenAPI examples, and later storage and API tests. Nothing here is a real customer, key, or address. The only email is `ada@example.com`.
+Synthetic data for UI mocks, the OpenAPI examples, and later storage and API tests. Nothing here is a real customer, key, or address. The emails are `ada@example.com` and `bob@example.com`.
 
 ## Layout
 
@@ -24,6 +24,7 @@ Do not edit `responses/` or `manifest.json` by hand. Regenerate them with `just 
 | Project | `01900000-0000-7000-8000-000000000001`, slug `support-bot`, name `Support bot`, retention 30 days |
 | Second project | `01900000-0000-7000-8000-000000000002`, slug `playground`, name `Playground` |
 | User | `01900000-0000-7000-8000-000000000100`, `ada@example.com`, `Ada Example`, instance admin, org owner |
+| Member | `01900000-0000-7000-8000-000000000101`, `bob@example.com`, `Bob Example`, org member. Used by the member examples |
 | Trace ids | `a1000000000000000000000000000001` through `…0006` |
 | Span ids | `b1000000000000` plus the trace digit and the span digit. Trace 1 span 2 is `b100000000000012` |
 | Missing parent of trace 6 | `b1000000000000ff` |

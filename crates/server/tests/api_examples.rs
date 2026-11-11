@@ -15,6 +15,7 @@ use llmobs_server::api::account::{
     AuthConfig, Me, OrgMembership, OrgRole, Project, SetupResponse, SignupResponse,
 };
 use llmobs_server::api::common::Page;
+use llmobs_server::api::members::{OrgMember, ProjectMember};
 use llmobs_server::api::metrics::MetricsResponse;
 use llmobs_server::api::openapi::openapi;
 use llmobs_server::api::payload::Payload;
@@ -363,6 +364,20 @@ fn build() -> Built {
             params(&[("org", "acme")]),
             BTreeMap::new(),
             "static/org.json",
+            "application/json",
+        ),
+        example(
+            "list_org_members",
+            params(&[("org", "acme")]),
+            BTreeMap::new(),
+            "static/org-members.json",
+            "application/json",
+        ),
+        example(
+            "list_project_members",
+            BTreeMap::new(),
+            BTreeMap::new(),
+            "static/project-members.json",
             "application/json",
         ),
         example(
@@ -922,6 +937,8 @@ fn static_files_match_their_types() {
     roundtrip::<Me>("static/me.json");
     roundtrip::<Page<OrgMembership>>("static/orgs.json");
     roundtrip::<OrgMembership>("static/org.json");
+    roundtrip::<Page<OrgMember>>("static/org-members.json");
+    roundtrip::<Page<ProjectMember>>("static/project-members.json");
     roundtrip::<Page<Project>>("static/projects.json");
     roundtrip::<Project>("static/project.json");
     roundtrip::<SchemaResponse>("static/schema.json");
@@ -946,9 +963,20 @@ fn generated_files_roundtrip() {
             "list_users" => roundtrip::<Page<EndUserSummary>>(&example.file),
             "get_user" => roundtrip::<EndUserDetail>(&example.file),
             "list_scores" => roundtrip::<Page<Score>>(&example.file),
-            "get_auth_config" | "get_me" | "list_orgs" | "get_org" | "list_projects"
-            | "get_project" | "get_schema" | "list_saved_views" | "get_metrics" | "post_setup"
-            | "post_login" | "post_signup" => {}
+            "get_auth_config"
+            | "get_me"
+            | "list_orgs"
+            | "get_org"
+            | "list_org_members"
+            | "list_project_members"
+            | "list_projects"
+            | "get_project"
+            | "get_schema"
+            | "list_saved_views"
+            | "get_metrics"
+            | "post_setup"
+            | "post_login"
+            | "post_signup" => {}
             other => panic!("{other} has no round-trip"),
         }
     }

@@ -29,6 +29,7 @@ use super::account::{
     SignupResponse, UpdateMeRequest, UpdateOrgRequest, UpdateProjectRequest, User,
 };
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
+use super::members::{OrgMember, ProjectMember, SetProjectOverrideRequest, UpdateOrgMemberRequest};
 use super::metrics::{MetricsBucket, MetricsGroupBy, MetricsParams, MetricsResponse};
 use super::saved_views::{CreateSavedView, SavedView, SavedViewListParams, UpdateSavedView};
 use super::schema::SchemaResponse;
@@ -94,6 +95,10 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<UpdateOrgRequest>();
     set.insert::<CreateProjectRequest>();
     set.insert::<UpdateProjectRequest>();
+    set.insert::<OrgMember>();
+    set.insert::<UpdateOrgMemberRequest>();
+    set.insert::<ProjectMember>();
+    set.insert::<SetProjectOverrideRequest>();
     set.insert::<Project>();
     set.insert::<TraceSummary>();
     set.insert::<SpanSummary>();
@@ -115,6 +120,8 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert_page::<EndUserSummary>("EndUserPage");
     set.insert_page::<Score>("ScorePage");
     set.insert_page::<OrgMembership>("OrgPage");
+    set.insert_page::<OrgMember>("OrgMemberPage");
+    set.insert_page::<ProjectMember>("ProjectMemberPage");
     set.insert_page::<Project>("ProjectPage");
     set.insert_page::<SavedView>("SavedViewPage");
     set
@@ -460,6 +467,7 @@ fn paths() -> Paths {
     let paths = PathsBuilder::new();
     let paths = auth_paths(paths);
     let paths = project_paths(paths);
+    let paths = member_paths(paths);
     let paths = trace_paths(paths);
     let paths = session_paths(paths);
     let paths = score_paths(paths);
@@ -660,6 +668,104 @@ fn project_paths(paths: PathsBuilder) -> PathsBuilder {
         .path("/api/v1/orgs/{org}", org)
         .path("/api/v1/orgs/{org}/projects", projects)
         .path("/api/v1/projects/{project}", project)
+}
+
+fn member_paths(paths: PathsBuilder) -> PathsBuilder {
+    let session_only = vec![SecurityRequirement::new("session", [] as [&str; 0])];
+    let org_param = path_string("org", "Org UUID or slug.");
+    let user_param = path_uuid("user", "User id.");
+    let list_orgs = operation("list_org_members", "orgs", "List organization members")
+        .parameters(Some(with_query::<PageParams>(vec![org_param.clone()])))
+        .responses(responses(
+            "200",
+            json_named("OrgMemberPage", "One page of members, ordered by email."),
+            QUERY_ERRORS,
+        ))
+        .build();
+    let patch_org = operation("patch_org_member", "orgs", "Change an organization role")
+        .securities(Some(session_only.clone()))
+        .parameters(Some(vec![org_param, user_param.clone()]))
+        .request_body(Some(json_body("UpdateOrgMemberRequest")))
+        .responses(responses(
+            "200",
+            json_of::<OrgMember>("The member."),
+            &[400, 401, 403, 404, 409, 429],
+        ))
+        .build();
+    let delete_org = operation("delete_org_member", "orgs", "Remove an organization member")
+        .securities(Some(session_only.clone()))
+        .parameters(Some(vec![
+            path_string("org", "Org UUID or slug."),
+            user_param.clone(),
+        ]))
+        .responses(responses(
+            "204",
+            ResponseBuilder::new()
+                .description("The member and their project overrides in this org are removed.")
+                .build(),
+            &[400, 401, 403, 404, 409, 429],
+        ))
+        .build();
+    let list_projects = operation("list_project_members", "projects", "List project members")
+        .parameters(Some(with_query::<PageParams>(vec![project_param()])))
+        .responses(responses(
+            "200",
+            json_named(
+                "ProjectMemberPage",
+                "One page of org members and their effective project role, ordered by email.",
+            ),
+            QUERY_ERRORS,
+        ))
+        .build();
+    let put_project = operation(
+        "put_project_member",
+        "projects",
+        "Set a project role override",
+    )
+    .securities(Some(session_only.clone()))
+    .parameters(Some(vec![project_param(), user_param.clone()]))
+    .request_body(Some(json_body("SetProjectOverrideRequest")))
+    .responses(responses(
+        "200",
+        json_of::<ProjectMember>("The member on this project."),
+        &[400, 401, 403, 404, 429],
+    ))
+    .build();
+    let delete_project = operation(
+        "delete_project_member",
+        "projects",
+        "Remove a project role override",
+    )
+    .securities(Some(session_only))
+    .parameters(Some(vec![project_param(), user_param]))
+    .responses(responses(
+        "204",
+        ResponseBuilder::new()
+            .description("The override is removed. Also returned when there was none.")
+            .build(),
+        &[400, 401, 403, 404, 429],
+    ))
+    .build();
+    let mut org_member = PathItem::new(HttpMethod::Patch, patch_org);
+    org_member.delete = Some(delete_org);
+    paths
+        .path(
+            "/api/v1/orgs/{org}/members",
+            PathItem::new(HttpMethod::Get, list_orgs),
+        )
+        .path("/api/v1/orgs/{org}/members/{user}", org_member)
+        .path(
+            "/api/v1/projects/{project}/members",
+            PathItem::new(HttpMethod::Get, list_projects),
+        )
+        .path(
+            "/api/v1/projects/{project}/members/{user}",
+            PathItem::new(HttpMethod::Put, put_project),
+        )
+        .path(
+            "/api/v1/projects/{project}/members/{user}",
+            PathItem::new(HttpMethod::Delete, delete_project),
+        )
 }
 
 fn trace_paths(paths: PathsBuilder) -> PathsBuilder {

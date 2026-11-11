@@ -193,6 +193,41 @@ export interface paths {
         patch: operations["patch_org"];
         trace?: never;
     };
+    "/api/v1/orgs/{org}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List organization members */
+        get: operations["list_org_members"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{org}/members/{user}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove an organization member */
+        delete: operations["delete_org_member"];
+        options?: never;
+        head?: never;
+        /** Change an organization role */
+        patch: operations["patch_org_member"];
+        trace?: never;
+    };
     "/api/v1/orgs/{org}/projects": {
         parameters: {
             query?: never;
@@ -244,6 +279,41 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List project members */
+        get: operations["list_project_members"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project}/members/{user}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set a project role override */
+        put: operations["put_project_member"];
+        post?: never;
+        /** Remove a project role override */
+        delete: operations["delete_project_member"];
         options?: never;
         head?: never;
         patch?: never;
@@ -810,6 +880,18 @@ export interface components {
             /** @description The signed-in user. */
             user: components["schemas"]["User"];
         };
+        /** @description A user as seen by the other members of an org. */
+        MemberUser: {
+            /** @description Email address. */
+            email: string;
+            /**
+             * Format: uuid
+             * @description User id.
+             */
+            id: string;
+            /** @description Display name. Omitted when the user has not set one. */
+            name?: string;
+        };
         /** @description One message in a conversation. Spec 01 § Canonical message format. */
         Message: {
             /** @description Why generation stopped. Omitted when absent. An explicit `null` from the source is kept (D65). */
@@ -939,6 +1021,29 @@ export interface components {
          */
         OrgId: string;
         /**
+         * @description One org membership.
+         *
+         *     `GET /api/v1/orgs/{org}/members`.
+         */
+        OrgMember: {
+            /**
+             * Format: date-time
+             * @description When the user joined the org, nanoseconds since the Unix epoch. JSON is RFC 3339.
+             */
+            joined_at: string;
+            /** @description Org role. */
+            role: components["schemas"]["OrgRole"];
+            /** @description The member. */
+            user: components["schemas"]["MemberUser"];
+        };
+        /** @description One page of results. `next_cursor` is null when there is no next page. */
+        OrgMemberPage: {
+            /** @description Items in this page. */
+            data: components["schemas"]["OrgMember"][];
+            /** @description Opaque cursor for the next page, or null when this is the last page. */
+            next_cursor: string | null;
+        };
+        /**
          * @description One org membership of the signed-in user.
          *
          *     Spec 04 `org_members`.
@@ -1058,6 +1163,28 @@ export interface components {
          *     Spec README § Cross-cutting conventions. Stored as lowercase hyphenated text (spec 01 `project_id`).
          */
         ProjectId: string;
+        /**
+         * @description One org member's place on a project.
+         *
+         *     `effective_role` is omitted when an override of `none` hides the project.
+         */
+        ProjectMember: {
+            /** @description Effective project role. Omitted when the project is hidden from this member. */
+            effective_role?: components["schemas"]["OrgRole"];
+            /** @description Org role, before the override. */
+            org_role: components["schemas"]["OrgRole"];
+            /** @description Stored override. Omitted when the member has none. */
+            override?: components["schemas"]["ProjectRoleOverride"];
+            /** @description The member. */
+            user: components["schemas"]["MemberUser"];
+        };
+        /** @description One page of results. `next_cursor` is null when there is no next page. */
+        ProjectMemberPage: {
+            /** @description Items in this page. */
+            data: components["schemas"]["ProjectMember"][];
+            /** @description Opaque cursor for the next page, or null when this is the last page. */
+            next_cursor: string | null;
+        };
         /** @description One page of results. `next_cursor` is null when there is no next page. */
         ProjectPage: {
             /** @description Items in this page. */
@@ -1065,6 +1192,13 @@ export interface components {
             /** @description Opaque cursor for the next page, or null when this is the last page. */
             next_cursor: string | null;
         };
+        /**
+         * @description A stored project override. `none` hides the project.
+         *
+         *     Spec 04 `project_members.role`.
+         * @enum {string}
+         */
+        ProjectRoleOverride: "admin" | "member" | "viewer" | "none";
         /** @description Model reasoning, separate from the user-visible text. */
         ReasoningPart: {
             /** @description The reasoning text. */
@@ -1409,6 +1543,11 @@ export interface components {
             output?: components["schemas"]["Payload"];
             /** @description Trace row. */
             trace: components["schemas"]["TraceSummary"];
+        };
+        /** @description `PUT /api/v1/projects/{project}/members/{user}`. */
+        SetProjectOverrideRequest: {
+            /** @description The override to store. */
+            role: components["schemas"]["ProjectRoleOverride"];
         };
         /** @description `POST /api/auth/setup`. The token is the one logged at startup (D144). */
         SetupRequest: {
@@ -2020,6 +2159,11 @@ export interface components {
         UpdateMeRequest: {
             /** @description Display name. Null or omitted clears it. A present value is trimmed to 1–100 characters. */
             name?: string;
+        };
+        /** @description `PATCH /api/v1/orgs/{org}/members/{user}`. */
+        UpdateOrgMemberRequest: {
+            /** @description The new org role. */
+            role: components["schemas"]["OrgRole"];
         };
         /** @description `PATCH /api/v1/orgs/{org}`. The slug does not change. */
         UpdateOrgRequest: {
@@ -2773,6 +2917,239 @@ export interface operations {
             };
         };
     };
+    list_org_members: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of items to return (1–1000, default 50). */
+                limit?: components["schemas"]["Limit"];
+                /** @description Opaque cursor from a previous page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Org UUID or slug. */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of members, ordered by email. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgMemberPage"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_org_member: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Org UUID or slug. */
+                org: string;
+                /** @description User id. */
+                user: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The member and their project overrides in this org are removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request conflicts with the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    patch_org_member: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Org UUID or slug. */
+                org: string;
+                /** @description User id. */
+                user: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateOrgMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description The member. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgMember"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request conflicts with the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     list_projects: {
         parameters: {
             query?: {
@@ -3124,6 +3501,221 @@ export interface operations {
             };
             /** @description The Range header does not overlap the blob. */
             416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_project_members: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of items to return (1–1000, default 50). */
+                limit?: components["schemas"]["Limit"];
+                /** @description Opaque cursor from a previous page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of org members and their effective project role, ordered by email. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectMemberPage"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    put_project_member: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+                /** @description User id. */
+                user: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetProjectOverrideRequest"];
+            };
+        };
+        responses: {
+            /** @description The member on this project. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectMember"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_project_member: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+                /** @description User id. */
+                user: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The override is removed. Also returned when there was none. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

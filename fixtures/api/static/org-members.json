@@ -1,0 +1,23 @@
+{
+  "data": [
+    {
+      "user": {
+        "id": "01900000-0000-7000-8000-000000000100",
+        "email": "ada@example.com",
+        "name": "Ada Example"
+      },
+      "role": "owner",
+      "joined_at": "2026-01-01T09:00:00.000000000Z"
+    },
+    {
+      "user": {
+        "id": "01900000-0000-7000-8000-000000000101",
+        "email": "bob@example.com",
+        "name": "Bob Example"
+      },
+      "role": "member",
+      "joined_at": "2026-01-02T09:00:00.000000000Z"
+    }
+  ],
+  "next_cursor": null
+}

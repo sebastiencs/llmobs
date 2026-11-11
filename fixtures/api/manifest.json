@@ -338,12 +338,30 @@
     "file": "responses/users/user-7.json"
   },
   {
+    "operation_id": "list_org_members",
+    "path_params": {
+      "org": "acme"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/org-members.json"
+  },
+  {
     "operation_id": "list_orgs",
     "path_params": {},
     "query": {},
     "status": 200,
     "content_type": "application/json",
     "file": "static/orgs.json"
+  },
+  {
+    "operation_id": "list_project_members",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/project-members.json"
   },
   {
     "operation_id": "list_projects",
