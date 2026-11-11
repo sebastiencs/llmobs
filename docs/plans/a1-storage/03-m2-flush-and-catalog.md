@@ -9,7 +9,7 @@ Implementation plan for milestone M2 of the storage track. One agent does the su
 - `docs/plans/a1-storage/00-design.md`: § Concurrency model, § Durability, § Commit protocol, § Catalog, § Query resources, § Testing.
 - `docs/spec/03-storage.md`: § Layout, §1 (checkpoint, recovery), §2 (memtable, flush), §3 (Parquet files), §4 (catalog, read state, committer, metadata cache), §5 (crash safety, staged objects), §6 (`SpansProvider`, `ScoresProvider`), §10.
 - `docs/spec/12-operations.md` § Configuration, § Process lifecycle.
-- `docs/mvp-decisions.md`: D39, D83, D84, D87, D89, D90, D91, and D102 (added by M2.1, text below).
+- `docs/mvp-decisions.md`: D39, D83, D84, D87, D89, D90, D91, and D119 (added by M2.1, text below).
 - The M1 code: `crates/storage/src/{lib.rs,memtable.rs,read_state.rs,hooks.rs,wal/,query/}` and `tests/crash.rs`.
 
 ## What M2 delivers
@@ -39,7 +39,7 @@ M2 never removes an active file: no file becomes obsolete before M4/M5. So obsol
 | D87 | Files durable before active; staged objects; serialized compare-and-set commits. |
 | D89 / D91 | Providers expose stored schemas; `ProjectQuery` carries the providers, a `RuntimeEnv` and `target_partitions`; A2 builds the session. |
 | D90 | Nested `[storage]` config, human units. |
-| **D102 (new, M2.1)** | **S3 testing.** CI tests the S3 code paths through `object_store`'s `InMemory` store wrapped in a fault-injecting store. A MinIO integration test runs only when `LLMOBS_TEST_S3_ENDPOINT` is set. It is documented in `AGENTS.md` and run locally before merging storage changes that touch object writes. |
+| **D119 (new, M2.1)** | **S3 testing.** CI tests the S3 code paths through `object_store`'s `InMemory` store wrapped in a fault-injecting store. A MinIO integration test runs only when `LLMOBS_TEST_S3_ENDPOINT` is set. It is documented in `AGENTS.md` and run locally before merging storage changes that touch object writes. |
 
 User answers behind this plan: S3 is in M2, tested with MinIO opt-in; M2 is one PR.
 
@@ -98,7 +98,7 @@ crates/storage/
 
 ---
 
-## M2.1 — Dependencies, configuration and D102
+## M2.1 — Dependencies, configuration and D119
 
 **Edit:** root `Cargo.toml`, `Cargo.lock`, `crates/storage/Cargo.toml`, `src/config.rs`, `src/error.rs`, `docs/mvp-decisions.md`, `docs/spec/12-operations.md`, `AGENTS.md`.
 
@@ -123,8 +123,8 @@ crates/storage/
    - `ObjectStoreUrl` is an enum `Local(PathBuf) | S3 { bucket, prefix }`, deserialized from the string.
    - The `file://` default depends on `data_dir`, so it is resolved after deserialization, through a method like `object_store_url()`. Keep the field an `Option` in serde.
 3. Spec 12's configuration table: add `storage.object_store` (it already has a row; update it to the D90 form), `storage.s3.*`, `storage.flush.upload_concurrency` and `storage.query.metadata_cache_bytes`.
-4. Add D102 to `docs/mvp-decisions.md` (text in § Decisions).
-5. `AGENTS.md` § Tests: "`LLMOBS_TEST_S3_ENDPOINT` (with `LLMOBS_TEST_S3_BUCKET` and the `AWS_*` credentials) runs the storage MinIO test (D102)."
+4. Add D119 to `docs/mvp-decisions.md` (text in § Decisions).
+5. `AGENTS.md` § Tests: "`LLMOBS_TEST_S3_ENDPOINT` (with `LLMOBS_TEST_S3_BUCKET` and the `AWS_*` credentials) runs the storage MinIO test (D119)."
 
 ### Tests
 
@@ -287,7 +287,7 @@ Add `ObjectWrite` (before the temp write), `ObjectSync` (before `sync_all`), `Ob
 - write and then **return an error anyway** (the ambiguous case);
 - delay.
 
-It is a second real implementation of an external trait, used to exercise the S3 branch in CI (D102).
+It is a second real implementation of an external trait, used to exercise the S3 branch in CI (D119).
 
 ### Tests
 
@@ -608,7 +608,7 @@ Use the hooks recorder (M2.3) to assert that, for each flushed file, the recorde
 
 and never a deletion before the commit.
 
-### MinIO (`tests/s3.rs`, opt-in, D102)
+### MinIO (`tests/s3.rs`, opt-in, D119)
 
 Runs only when `LLMOBS_TEST_S3_ENDPOINT` is set; otherwise it returns at once and prints that it was skipped.
 - Use `LLMOBS_TEST_S3_BUCKET`, a unique prefix per run, and `AWS_*` credentials.
