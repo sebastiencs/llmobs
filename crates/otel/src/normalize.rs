@@ -51,7 +51,7 @@ pub struct IngestContext {
     pub ingest_time: i64,
     /// How many days of history this project keeps. `None` means no cutoff.
     pub retention_days: Option<u32>,
-    /// Size limits. Media reads them. Truncation reads them from N15 on.
+    /// Size limits. Media extraction and truncation both read them.
     pub limits: IngestLimits,
 }
 
@@ -233,6 +233,13 @@ fn accept_span(
         crate::conventions::READERS,
         crate::conventions::REGISTRIES,
     );
+    crate::media::extract_io(&mut assembled.io, media);
+    let media_refs = media.media_refs();
+    crate::truncate::truncate_payloads(
+        &mut assembled.io,
+        ctx.limits.max_attribute_bytes,
+        &mut truncated,
+    );
     let normalize_error = payload::error_attribute(&assembled.io.errors);
     let mut attributes = bag.into_attributes(&mut warnings, &mut truncated);
     let events = encode_events(
@@ -298,15 +305,14 @@ fn accept_span(
         scope_version,
         events,
         links,
-        media_refs: Vec::new(),
+        media_refs,
         truncated,
         conventions,
         ingest_time: ctx.ingest_time,
         schema_version: SCHEMA_VERSION,
     };
-    crate::media::extract_io(&mut assembled.io, media);
-    built.media_refs = media.media_refs();
     payload::write(&mut built, assembled.io);
+    crate::truncate::truncate_columns(&mut built, ctx.limits.max_attribute_bytes);
     Some(built)
 }
 

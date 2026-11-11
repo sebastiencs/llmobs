@@ -16,6 +16,7 @@ mod media;
 mod normalize;
 mod payload;
 mod reject;
+mod truncate;
 mod usage;
 mod value;
 mod warn;

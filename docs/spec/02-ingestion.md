@@ -221,12 +221,16 @@ Max per blob: `media.max_bytes` (default 32 MiB); larger blobs are dropped and r
 
 ## Truncation
 
-After media extraction, any attribute or payload string longer than `ingest.max_attribute_bytes` (8 MiB) is handled:
+After media extraction, these strings are checked against `ingest.max_attribute_bytes` (8 MiB): `input`, `output`, `system_instructions`, `tool_definitions`, every value in `attributes` and `resource_attributes`, each event's `attributes` JSON, `status_message`, and `name`.
 
-- `messages` payloads: keep system messages, the first user message and the last N messages that fit; insert a placeholder message `{"role":"system","parts":[{"type":"text","content":"[llmobs: K messages truncated]"}]}`.
-- other strings: cut at a UTF-8 boundary and append `…[llmobs: truncated, original N bytes]`.
+- **Messages.** The candidate list is measured by its serialized length.
+  1. Keep every system message, the first user message, and the longest suffix that still fits. Where a contiguous run of messages was removed, insert one placeholder `{"role":"system","parts":[{"type":"text","content":"[llmobs: K messages truncated]"}]}`. `K` is the number removed in that run.
+  2. If the kept list still exceeds the limit, cut the longest string leaf with the string rule: text or reasoning `content`, or tool `arguments` / `response` when that value is a JSON string. Cut it to the length that makes the list fit, or to 1 KiB when a shorter cut would be required. Repeat, longest first, until the list fits or no leaf is longer than 1 KiB.
+  3. If it still does not fit, store the serialized messages cut with the string rule and set the format to `text`. `attributes` gains `llmobs.normalize_error` code `truncate:<field>`, where `<field>` is `input` or `output`.
+- **JSON payloads.** `input` or `output` whose format is `json` is cut as one string. The format becomes `text`, because the cut text is no longer valid JSON.
+- **Other strings.** Cut at the largest UTF-8 character boundary ≤ the limit, then append `…[llmobs: truncated, original N bytes]`. The stored value is slightly longer than the limit. A value whose length equals the limit is kept.
 
-The attribute name is added to `truncated`. Spans are never rejected for size alone (only the request).
+`truncated` lists the column name (`input`, `output`, `system_instructions`, `tool_definitions`, `name`, `status_message`), the attribute key, or `events[<i>].attributes`. The list is sorted and has no duplicates. Spans are never rejected for size alone (only the request).
 
 ## Cost computation
 
