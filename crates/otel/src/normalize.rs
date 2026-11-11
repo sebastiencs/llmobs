@@ -1,6 +1,7 @@
 //! Span skeleton: ids, times, resource, attributes, events, and links.
 //!
-//! Spec 02 rules 1, 2, 15, 17, 18 and 19. Convention fields stay empty until N5.
+//! Spec 02 rules 1, 2, 13, 15, 17, 18 and 19. Scalar columns stay empty until
+//! the field phases.
 
 use std::collections::BTreeMap;
 
@@ -18,6 +19,8 @@ use opentelemetry_proto::tonic::trace::v1::span::Link;
 use serde_json::{Map, Value as Json};
 
 use crate::bag::AttrBag;
+use crate::detect::detect;
+use crate::fields::ResourceView;
 use crate::reject::{RejectReason, Rejections};
 use crate::value::{as_str, to_json};
 use crate::warn::{Warning, Warnings};
@@ -112,18 +115,21 @@ pub fn normalize(request: &ExportTraceServiceRequest, ctx: &IngestContext) -> No
     }
 }
 
-struct EncodedResource {
+struct EncodedResource<'a> {
     service_name: Option<String>,
     attributes: BTreeMap<String, String>,
     warnings: Warnings,
     truncated: Vec<String>,
+    /// Resource attributes for the field resolver. Read from N7 on.
+    #[allow(dead_code)]
+    view: ResourceView<'a>,
 }
 
-fn encode_resource(resource: Option<&Resource>) -> EncodedResource {
-    let empty = Vec::new();
+fn encode_resource(resource: Option<&Resource>) -> EncodedResource<'_> {
     let attrs = resource
         .map(|item| item.attributes.as_slice())
-        .unwrap_or(&empty);
+        .unwrap_or(&[]);
+    let view = ResourceView::new(attrs);
     let mut warnings = Warnings::default();
     let mut bag = AttrBag::new(attrs, &mut warnings);
     let service_name = bag
@@ -138,6 +144,7 @@ fn encode_resource(resource: Option<&Resource>) -> EncodedResource {
         attributes,
         warnings,
         truncated,
+        view,
     }
 }
 
@@ -161,7 +168,7 @@ fn non_empty(text: &str) -> Option<String> {
 fn accept_span(
     span: &opentelemetry_proto::tonic::trace::v1::Span,
     ctx: &IngestContext,
-    resource: &EncodedResource,
+    resource: &EncodedResource<'_>,
     scope_name: Option<String>,
     scope_version: Option<String>,
     rejections: &mut Rejections,
@@ -199,6 +206,7 @@ fn accept_span(
 
     let mut truncated = resource.truncated.clone();
     let bag = AttrBag::new(&span.attributes, &mut warnings);
+    let conventions = detect(&bag, &span.events);
     let mut attributes = bag.into_attributes(&mut warnings, &mut truncated);
     let events = encode_events(&span.events, start_time, &mut warnings, &mut truncated);
     let links = encode_links(&span.links, &mut warnings, &mut truncated);
@@ -256,7 +264,7 @@ fn accept_span(
         links,
         media_refs: Vec::new(),
         truncated,
-        conventions: Vec::new(),
+        conventions,
         ingest_time: ctx.ingest_time,
         schema_version: SCHEMA_VERSION,
     })
@@ -385,6 +393,7 @@ fn encode_attribute_object(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use llmobs_core::enums::Convention;
     use opentelemetry_proto::tonic::common::v1::AnyValue;
     use opentelemetry_proto::tonic::common::v1::InstrumentationScope;
     use opentelemetry_proto::tonic::trace::v1::ResourceSpans;
@@ -635,5 +644,33 @@ mod tests {
         assert_eq!(span.links.len(), 1);
         assert_eq!(span.links[0].trace_id.as_bytes(), &[0x55; 16]);
         assert!(normalized.rejections.message().is_none());
+    }
+
+    #[test]
+    fn conventions_follow_detection_order() {
+        let mut span = span_at(1_767_225_590_000_000_000, 1_767_225_591_000_000_000);
+        span.attributes = vec![
+            string_attribute("ai.model.id", "gpt"),
+            string_attribute("gen_ai.request.model", "gpt"),
+        ];
+        let normalized = normalize(&request_of(vec![span]), &context());
+        assert_eq!(
+            normalized.spans[0].conventions,
+            vec![Convention::Genai, Convention::Vercel]
+        );
+    }
+
+    fn string_attribute(key: &str, text: &str) -> KeyValue {
+        KeyValue {
+            key: key.to_owned(),
+            value: Some(AnyValue {
+                value: Some(
+                    opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
+                        text.to_owned(),
+                    ),
+                ),
+            }),
+            ..KeyValue::default()
+        }
     }
 }

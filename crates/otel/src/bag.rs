@@ -61,6 +61,12 @@ impl<'a> AttrBag<'a> {
         Self { entries, index }
     }
 
+    /// How `key` has been used, if the bag has it.
+    pub(crate) fn state(&self, key: &str) -> Option<Use> {
+        let &slot = self.index.get(key)?;
+        self.entries.get(slot).map(|entry| entry.state)
+    }
+
     /// Peek. Does not change [`Use`].
     pub(crate) fn get(&self, key: &str) -> Option<&'a AnyValue> {
         let &slot = self.index.get(key)?;
@@ -85,6 +91,11 @@ impl<'a> AttrBag<'a> {
     /// Mark `Payload` without reading. Missing keys are ignored.
     pub(crate) fn drop_payload(&mut self, key: &str) {
         self.mark_payload(key);
+    }
+
+    /// Every key, in first-seen order.
+    pub(crate) fn keys(&self) -> impl Iterator<Item = &'a str> + '_ {
+        self.entries.iter().map(|entry| entry.key)
     }
 
     /// Keys that start with `prefix`, in first-seen order.
@@ -167,7 +178,7 @@ impl<'a> AttrBag<'a> {
 }
 
 /// `0`, or a decimal that does not start with `0`.
-fn is_decimal_index(text: &str) -> bool {
+pub(crate) fn is_decimal_index(text: &str) -> bool {
     let mut bytes = text.bytes();
     match bytes.next() {
         Some(b'0') => bytes.next().is_none(),

@@ -5,7 +5,9 @@
 
 mod bag;
 mod decode;
+mod detect;
 mod error;
+mod fields;
 mod normalize;
 mod reject;
 mod value;
