@@ -1,10 +1,11 @@
 //! Payload readers in convention precedence order.
 //!
-//! Spec 02 § Input and output. llmobs and GenAI are N13. Later conventions
-//! append one reader and one [`PayloadKeys`] entry.
+//! Spec 02 § Input and output. llmobs and GenAI are N13. OpenInference is N18.
+//! Later conventions append one reader and one [`PayloadKeys`] entry.
 
 mod genai;
 mod llmobs;
+mod openinference;
 
 use llmobs_core::enums::Convention;
 use opentelemetry_proto::tonic::common::v1::AnyValue;
@@ -14,7 +15,7 @@ use crate::payload::{ConventionPayload, Payload, PayloadKeys, decode_json_text};
 use crate::value::{as_str, to_json};
 use crate::warn::Warnings;
 
-/// llmobs, then GenAI. Later conventions append in spec 02 precedence order.
+/// llmobs, then GenAI, then OpenInference. Later conventions append in spec 02 order.
 pub(crate) const READERS: &[ConventionPayload] = &[
     ConventionPayload {
         convention: Convention::Llmobs,
@@ -23,6 +24,10 @@ pub(crate) const READERS: &[ConventionPayload] = &[
     ConventionPayload {
         convention: Convention::Genai,
         read: genai::read,
+    },
+    ConventionPayload {
+        convention: Convention::Openinference,
+        read: openinference::read,
     },
 ];
 
@@ -35,6 +40,10 @@ pub(crate) const REGISTRIES: &[PayloadKeys] = &[
     PayloadKeys {
         convention: Convention::Genai,
         keys: genai::PAYLOAD_KEYS,
+    },
+    PayloadKeys {
+        convention: Convention::Openinference,
+        keys: openinference::PAYLOAD_KEYS,
     },
 ];
 

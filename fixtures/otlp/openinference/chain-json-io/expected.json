@@ -1,0 +1,35 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fa4a0000000000000000000000000001",
+      "span_id": "fa4a000000000001",
+      "name": "RunnableSequence",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "openinference-app",
+      "input": "{\"prompt\":\"hi\"}",
+      "input_format": "json",
+      "output": "hello",
+      "output_format": "text",
+      "input_preview": "{\"prompt\":\"hi\"}",
+      "output_preview": "hello",
+      "attributes": {
+        "input.mime_type": "application/json",
+        "openinference.span.kind": "CHAIN",
+        "output.mime_type": "text/plain"
+      },
+      "scope_name": "openinference.instrumentation.langchain",
+      "scope_version": "0.1.82",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

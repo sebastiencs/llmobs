@@ -1,0 +1,38 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fa2a0000000000000000000000000001",
+      "span_id": "fa2a000000000001",
+      "name": "Embeddings",
+      "span_kind": "embedding",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "openinference-app",
+      "provider": "openai",
+      "request_model": "text-embedding-3-small",
+      "input_tokens": 1000,
+      "cost_input": 0.00002,
+      "cost_total": 0.00002,
+      "cost_source": "computed",
+      "input": "[\"hello\",\"world\"]",
+      "input_format": "json",
+      "input_preview": "[\"hello\",\"world\"]",
+      "attributes": {
+        "embedding.model_name": "text-embedding-3-small",
+        "llm.token_count.prompt": "1000",
+        "openinference.span.kind": "EMBEDDING"
+      },
+      "scope_name": "openinference.instrumentation.openai",
+      "scope_version": "0.1.69",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

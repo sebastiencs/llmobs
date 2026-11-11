@@ -32,7 +32,6 @@ pub(crate) enum ConvertError {
 ///
 /// [`ConvertError::NotAnArray`] when the value is neither an array nor an
 /// object. [`ConvertError::NotAMessage`] when an element has no string `role`.
-#[allow(dead_code)] // N13 and N18 call this.
 pub(crate) fn openai_messages(value: &Json) -> Result<Vec<Message>, ConvertError> {
     match value {
         Json::Array(items) => items

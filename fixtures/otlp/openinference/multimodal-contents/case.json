@@ -1,0 +1,11 @@
+{
+  "description": "OpenInference flattened contents become text and image parts, and finish_reason stays on the assistant message.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Input / output",
+    "02 § Normalization rules",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Cost computation"
+  ],
+  "notes": "hand-written from openinference-instrumentation-openai; re-check against a B2 capture"
+}

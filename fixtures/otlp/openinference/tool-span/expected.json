@@ -1,0 +1,37 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fa3a0000000000000000000000000001",
+      "span_id": "fa3a000000000001",
+      "name": "get_weather",
+      "span_kind": "tool",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "openinference-app",
+      "input": "{\"city\":\"Paris\"}",
+      "input_format": "json",
+      "output": "18 C",
+      "output_format": "text",
+      "input_preview": "{\"city\":\"Paris\"}",
+      "output_preview": "18 C",
+      "attributes": {
+        "input.mime_type": "application/json",
+        "openinference.span.kind": "TOOL",
+        "output.mime_type": "text/plain",
+        "tool.name": "get_weather",
+        "tool.parameters": "{\"city\":\"Paris\"}"
+      },
+      "scope_name": "openinference.instrumentation.llama_index",
+      "scope_version": "4.7.2",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}
