@@ -1,13 +1,14 @@
 //! Filter DSL: text in, a checked boolean [`Expr`] over one view out.
 //!
-//! Score functions, list queries and the SQL console are the callers. Until
-//! they land, only the tests in this module reference these items.
+//! Score functions, list queries and the SQL console are the callers.
 
 #![allow(dead_code)]
 
 mod scope;
 mod scores;
 mod validate;
+
+pub(crate) use scope::{exclusions, search, time_window};
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::error::DataFusionError;

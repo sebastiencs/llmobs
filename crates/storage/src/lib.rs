@@ -7,10 +7,12 @@
 mod filter;
 mod query_error;
 mod query_text;
+mod reads;
 mod sql;
 mod views;
 
 pub use query_error::{InvalidQuery, Position, RunError};
+pub use reads::{ListScope, MAX_PAGE, Page, SortOrder, TraceListRequest, TraceSort, trace_list};
 pub use sql::{EXPORT_MAX_ROWS, ExportFormat, SQL_MAX_ROWS, SqlColumn, SqlJson, SqlRequest};
 pub use views::{
     ColumnInfo, ColumnKind, FunctionInfo, ProjectQuery, QueryContext, SqliteView, TimeWindow,
