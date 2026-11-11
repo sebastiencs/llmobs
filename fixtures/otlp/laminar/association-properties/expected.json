@@ -1,0 +1,43 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fd5a0000000000000000000000000001",
+      "span_id": "fd5a000000000001",
+      "name": "answer",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "laminar-app",
+      "session_id": "sess-1",
+      "user_id": "user-9",
+      "tags": [
+        "red",
+        "blue"
+      ],
+      "metadata": {
+        "customer": "acme"
+      },
+      "input": "hello",
+      "input_format": "text",
+      "input_preview": "hello",
+      "attributes": {
+        "lmnr.association.properties.metadata.customer": "acme",
+        "lmnr.association.properties.session_id": "sess-1",
+        "lmnr.association.properties.tags": "[\"red\",\"blue\"]",
+        "lmnr.association.properties.user_id": "user-9",
+        "lmnr.span.path": "[\"answer\"]",
+        "lmnr.span.type": "DEFAULT"
+      },
+      "scope_name": "lmnr.tracer",
+      "conventions": [
+        "laminar"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

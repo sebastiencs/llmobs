@@ -1,0 +1,47 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fd1a0000000000000000000000000001",
+      "span_id": "fd1a000000000001",
+      "name": "chat",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "langfuse-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini",
+      "input_tokens": 20,
+      "output_tokens": 10,
+      "total_tokens": 30,
+      "cost_input": 0.001,
+      "cost_output": 0.002,
+      "cost_total": 0.003,
+      "cost_source": "reported",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Hello\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Hi\"}]}]",
+      "output_format": "messages",
+      "input_preview": "Hello",
+      "output_preview": "Hi",
+      "attributes": {
+        "gen_ai.system": "openai",
+        "langfuse.observation.cost_details": "{\"input\":0.001,\"output\":0.002}",
+        "langfuse.observation.model.name": "gpt-4o-mini",
+        "langfuse.observation.type": "generation",
+        "langfuse.observation.usage_details": "{\"input\":20,\"output\":10,\"total\":30}"
+      },
+      "scope_name": "langfuse-sdk",
+      "scope_version": "5.2.0",
+      "conventions": [
+        "genai",
+        "langfuse"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

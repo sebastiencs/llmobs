@@ -1,9 +1,9 @@
 //! Token columns and time to first token.
 //!
 //! Spec 02 § Model, provider, usage, § Token semantics, and rules 3 and 4.
-//! Gemini `usage_metadata`, Langfuse `usage_details` and ADK-specific keys are
-//! not in these tables; later convention phases read them. Anthropic cache
-//! write before Vercel v6 is read from `ai.response.providerMetadata`.
+//! Gemini `usage_metadata` and ADK-specific keys are not in these tables.
+//! Langfuse `usage_details` is read after the attribute sources. Anthropic
+//! cache write before Vercel v6 is read from `ai.response.providerMetadata`.
 //! `gen_ai.usage.*` stays inclusive and relies on the safety net.
 
 use llmobs_core::enums::{Convention, SpanKind};
@@ -18,6 +18,7 @@ use crate::fields::{ResourceView, Source, first_i64, span};
 use crate::value::{InvalidNumber, as_f64, as_i64, as_str};
 use crate::warn::{Warning, Warnings};
 
+const USAGE_DETAILS: &str = "langfuse.observation.usage_details";
 const NO_CACHE_TOKENS: &str = "ai.usage.inputTokenDetails.noCacheTokens";
 const INPUT_TOKEN_DETAILS: &str = "ai.usage.inputTokenDetails.";
 
@@ -26,9 +27,7 @@ const INPUT_TOKEN_DETAILS: &str = "ai.usage.inputTokenDetails.";
 pub(crate) enum Inclusive {
     /// The count already includes the related tokens.
     Yes,
-    /// Add the related tokens back. Gemini output counts use this; no current
-    /// table row does, and the add-back still handles it.
-    #[allow(dead_code)]
+    /// Add the related tokens back. Langfuse `usage_details.input` uses this.
     No,
     /// Exclusive only for a Vercel span with no `inputTokenDetails` and provider `anthropic`.
     VercelLegacy,
@@ -317,13 +316,60 @@ pub(crate) fn usage(
     let legacy = vercel_legacy(bag, provider);
     let input = first_count(bag, &resource, INPUT, warnings);
     let output = first_count(bag, &resource, OUTPUT, warnings);
-    let cache_read = first_count(bag, &resource, CACHE_READ, warnings).map(|(value, _, _)| value);
-    let cache_write = match first_count(bag, &resource, CACHE_WRITE, warnings) {
+    let mut cache_read =
+        first_count(bag, &resource, CACHE_READ, warnings).map(|(value, _, _)| value);
+    let mut cache_write = match first_count(bag, &resource, CACHE_WRITE, warnings) {
         Some((value, _, _)) => Some(value),
         None => provider_cache_write(bag, warnings),
     };
-    let reasoning = first_count(bag, &resource, REASONING, warnings).map(|(value, _, _)| value);
-    let reported_total = first_count(bag, &resource, TOTAL, warnings).map(|(value, _, _)| value);
+    let mut reasoning = first_count(bag, &resource, REASONING, warnings).map(|(value, _, _)| value);
+    let mut reported_total =
+        first_count(bag, &resource, TOTAL, warnings).map(|(value, _, _)| value);
+    let details = langfuse_usage(bag, warnings);
+    let mut from_details = false;
+    let input = match input {
+        Some(found) => Some(found),
+        None => details
+            .as_ref()
+            .and_then(|details| details.input)
+            .map(|value| {
+                from_details = true;
+                (value, Inclusive::No, Inclusive::Yes)
+            }),
+    };
+    let output = match output {
+        Some(found) => Some(found),
+        None => details
+            .as_ref()
+            .and_then(|details| details.output)
+            .map(|value| {
+                from_details = true;
+                (value, Inclusive::Yes, Inclusive::Yes)
+            }),
+    };
+    fill_detail(
+        &mut cache_read,
+        details.as_ref().and_then(|details| details.cache_read),
+        &mut from_details,
+    );
+    fill_detail(
+        &mut cache_write,
+        details.as_ref().and_then(|details| details.cache_write),
+        &mut from_details,
+    );
+    fill_detail(
+        &mut reasoning,
+        details.as_ref().and_then(|details| details.reasoning),
+        &mut from_details,
+    );
+    fill_detail(
+        &mut reported_total,
+        details.as_ref().and_then(|details| details.total),
+        &mut from_details,
+    );
+    if from_details {
+        bag.take(USAGE_DETAILS);
+    }
 
     let mut input_tokens = input.map(|(value, _, _)| value);
     let mut input_inclusive = input
@@ -401,6 +447,71 @@ pub(crate) fn ttft(bag: &mut AttrBag<'_>, start_time: i64, warnings: &mut Warnin
         start_time,
         warnings,
     )
+}
+
+struct LangfuseUsage {
+    input: Option<i64>,
+    output: Option<i64>,
+    total: Option<i64>,
+    cache_read: Option<i64>,
+    cache_write: Option<i64>,
+    reasoning: Option<i64>,
+}
+
+fn fill_detail(slot: &mut Option<i64>, value: Option<i64>, used: &mut bool) {
+    if slot.is_none()
+        && let Some(value) = value
+    {
+        *slot = Some(value);
+        *used = true;
+    }
+}
+
+/// Langfuse `usage_details`, after the attribute sources.
+///
+/// `input` excludes cache. The attribute is consumed only when a column is
+/// filled from it.
+fn langfuse_usage(bag: &AttrBag<'_>, warnings: &mut Warnings) -> Option<LangfuseUsage> {
+    let value = bag.get(USAGE_DETAILS)?;
+    let json = crate::payload::decode_json_text(value, warnings)?;
+    let object = json.as_object()?;
+    Some(LangfuseUsage {
+        input: detail_count(object, &["input"], warnings),
+        output: detail_count(object, &["output"], warnings),
+        total: detail_count(object, &["total"], warnings),
+        cache_read: detail_count(
+            object,
+            &["input_cached_tokens", "cache_read_input_tokens"],
+            warnings,
+        ),
+        cache_write: detail_count(object, &["cache_creation_input_tokens"], warnings),
+        reasoning: detail_count(
+            object,
+            &["output_reasoning_tokens", "reasoning_tokens"],
+            warnings,
+        ),
+    })
+}
+
+fn detail_count(
+    object: &serde_json::Map<String, Json>,
+    keys: &[&str],
+    warnings: &mut Warnings,
+) -> Option<i64> {
+    for key in keys {
+        let Some(value) = object.get(*key) else {
+            continue;
+        };
+        return match json_count(Some(value)) {
+            Ok(Some(count)) if count >= 0 => Some(count),
+            Ok(Some(_)) | Err(InvalidNumber) => {
+                warnings.add(Warning::InvalidNumber);
+                None
+            }
+            Ok(None) => None,
+        };
+    }
+    None
 }
 
 fn first_count(
@@ -703,6 +814,67 @@ mod tests {
         assert_eq!(bag.state("llm.token_count.prompt"), Some(Use::Unread));
         assert_eq!(
             bag.state("gen_ai.usage.audio.input_tokens"),
+            Some(Use::Unread)
+        );
+    }
+
+    #[test]
+    fn langfuse_usage_details_excludes_cache_and_loses_to_an_attribute() {
+        let attrs = [string_attr(
+            "langfuse.observation.usage_details",
+            r#"{"input":100,"output":20,"input_cached_tokens":40,"cache_creation_input_tokens":10,"output_reasoning_tokens":5,"total":160}"#,
+        )];
+        let (usage, warnings, bag) = counted(&attrs, SpanKind::Llm, None);
+        assert_eq!(usage.input_tokens, Some(150));
+        assert_eq!(usage.cache_read_tokens, Some(40));
+        assert_eq!(usage.cache_write_tokens, Some(10));
+        assert_eq!(usage.output_tokens, Some(20));
+        assert_eq!(usage.reasoning_tokens, Some(5));
+        assert_eq!(usage.total_tokens, Some(160));
+        assert_eq!(warnings.to_attribute(), None);
+        assert_eq!(
+            bag.state("langfuse.observation.usage_details"),
+            Some(Use::Consumed)
+        );
+
+        let attrs = [string_attr(
+            "langfuse.observation.usage_details",
+            r#"{"cache_read_input_tokens":7,"reasoning_tokens":3,"output":4}"#,
+        )];
+        let (usage, _, _) = counted(&attrs, SpanKind::Llm, None);
+        assert_eq!(usage.cache_read_tokens, Some(7));
+        assert_eq!(usage.reasoning_tokens, Some(3));
+        assert_eq!(usage.output_tokens, Some(4));
+        assert_eq!(usage.input_tokens, None);
+
+        let attrs = [
+            int_attr("gen_ai.usage.input_tokens", 12),
+            string_attr(
+                "langfuse.observation.usage_details",
+                r#"{"input":100,"output":20}"#,
+            ),
+        ];
+        let (usage, _, bag) = counted(&attrs, SpanKind::Llm, None);
+        assert_eq!(usage.input_tokens, Some(12));
+        assert_eq!(usage.output_tokens, Some(20));
+        assert_eq!(
+            bag.state("langfuse.observation.usage_details"),
+            Some(Use::Consumed)
+        );
+
+        let attrs = [string_attr(
+            "langfuse.observation.usage_details",
+            r#"{"input":-3,"input_cached_tokens":null,"cache_read_input_tokens":9}"#,
+        )];
+        let (usage, warnings, bag) = counted(&attrs, SpanKind::Llm, None);
+        assert_eq!(usage.input_tokens, None);
+        assert_eq!(usage.cache_read_tokens, None);
+        assert_eq!(
+            warnings.to_attribute().as_deref(),
+            Some("[\"invalid_number\"]")
+        );
+        assert_eq!(
+            bag.state("langfuse.observation.usage_details"),
             Some(Use::Unread)
         );
     }

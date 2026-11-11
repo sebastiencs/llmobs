@@ -25,6 +25,7 @@ const TOTAL_KEYS: &[&str] = &[
 ];
 const INPUT_KEYS: &[&str] = &["llm.cost.prompt", "gen_ai.usage.input_cost"];
 const OUTPUT_KEYS: &[&str] = &["llm.cost.completion", "gen_ai.usage.output_cost"];
+const COST_DETAILS: &str = "langfuse.observation.cost_details";
 
 /// Who owns a price row. Project beats org, which beats built-in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
@@ -225,17 +226,71 @@ fn reported_cost(bag: &mut AttrBag<'_>, warnings: &mut Warnings) -> Option<Repor
     let (input_present, input) = first_number(bag, INPUT_KEYS, warnings);
     let (output_present, output) = first_number(bag, OUTPUT_KEYS, warnings);
     if !total_present && !input_present && !output_present {
-        return None;
+        return langfuse_cost(bag, warnings);
     }
-    let total = total.or_else(|| match (input, output) {
-        (Some(input), Some(output)) => (input + output).is_finite().then_some(input + output),
-        _ => None,
-    });
     Some(Reported {
         input,
         output,
-        total,
+        total: reported_total(input, output, total),
     })
+}
+
+/// `cost_details` when no attribute cost key is present.
+///
+/// A value that is not a JSON object still sets the source and stays unread.
+fn langfuse_cost(bag: &mut AttrBag<'_>, warnings: &mut Warnings) -> Option<Reported> {
+    let value = bag.get(COST_DETAILS)?;
+    let Some(json) = crate::payload::decode_json_text(value, warnings) else {
+        return Some(Reported {
+            input: None,
+            output: None,
+            total: None,
+        });
+    };
+    let Some(object) = json.as_object() else {
+        return Some(Reported {
+            input: None,
+            output: None,
+            total: None,
+        });
+    };
+    let input = cost_number(object.get("input"), warnings);
+    let output = cost_number(object.get("output"), warnings);
+    let total = cost_number(object.get("total"), warnings);
+    bag.take(COST_DETAILS);
+    Some(Reported {
+        input,
+        output,
+        total: reported_total(input, output, total),
+    })
+}
+
+fn reported_total(input: Option<f64>, output: Option<f64>, total: Option<f64>) -> Option<f64> {
+    total.or_else(|| match (input, output) {
+        (Some(input), Some(output)) => (input + output).is_finite().then_some(input + output),
+        _ => None,
+    })
+}
+
+fn cost_number(value: Option<&serde_json::Value>, warnings: &mut Warnings) -> Option<f64> {
+    let value = value?;
+    let number = match value {
+        serde_json::Value::Number(number) => number.as_f64(),
+        serde_json::Value::String(text) => text.parse::<f64>().ok(),
+        _ => None,
+    };
+    match number {
+        Some(number) if number.is_finite() => Some(number),
+        Some(_) => {
+            warnings.add(Warning::InvalidNumber);
+            None
+        }
+        None if value.is_null() => None,
+        None => {
+            warnings.add(Warning::InvalidNumber);
+            None
+        }
+    }
 }
 
 /// The first finite number, and whether any key in `keys` exists.
@@ -542,5 +597,77 @@ mod tests {
         ]);
         let matched = lookup(&prices, "same", None, 0).expect("row");
         assert_eq!(matched.price_input, Some(1.0));
+    }
+
+    #[test]
+    fn langfuse_cost_details_is_reported_and_loses_to_an_attribute() {
+        use crate::bag::Use;
+        use opentelemetry_proto::tonic::common::v1::any_value::Value;
+        use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue};
+
+        fn string_attr(key: &str, text: &str) -> KeyValue {
+            KeyValue {
+                key: key.to_owned(),
+                value: Some(AnyValue {
+                    value: Some(Value::StringValue(text.to_owned())),
+                }),
+                key_strindex: 0,
+            }
+        }
+
+        let prices = table(vec![row("gpt-4o-mini", PriceScope::Builtin, None, 0, 9.0)]);
+        let usage = Usage::default();
+        let charge = Charge {
+            kind: SpanKind::Llm,
+            provider: None,
+            model: Some("gpt-4o-mini"),
+            start_time: 0,
+            usage: &usage,
+        };
+
+        let attrs = [string_attr(
+            "langfuse.observation.cost_details",
+            r#"{"input":0.25,"output":0.5}"#,
+        )];
+        let mut warnings = Warnings::default();
+        let mut bag = AttrBag::new(&attrs, &mut warnings);
+        let priced = apply(&mut bag, &charge, &prices, &mut warnings);
+        assert_eq!(priced.source, Some(CostSource::Reported));
+        assert_eq!(priced.input, Some(0.25));
+        assert_eq!(priced.output, Some(0.5));
+        assert_eq!(priced.total, Some(0.75));
+        assert_eq!(
+            bag.state("langfuse.observation.cost_details"),
+            Some(Use::Consumed)
+        );
+
+        let attrs = [string_attr("langfuse.observation.cost_details", "not-json")];
+        let mut warnings = Warnings::default();
+        let mut bag = AttrBag::new(&attrs, &mut warnings);
+        let priced = apply(&mut bag, &charge, &prices, &mut warnings);
+        assert_eq!(priced.source, Some(CostSource::Reported));
+        assert_eq!(priced.input, None);
+        assert_eq!(priced.total, None);
+        assert_eq!(
+            bag.state("langfuse.observation.cost_details"),
+            Some(Use::Unread)
+        );
+
+        let attrs = [
+            string_attr("llm.cost.total", "1.5"),
+            string_attr(
+                "langfuse.observation.cost_details",
+                r#"{"input":0.25,"output":0.5}"#,
+            ),
+        ];
+        let mut warnings = Warnings::default();
+        let mut bag = AttrBag::new(&attrs, &mut warnings);
+        let priced = apply(&mut bag, &charge, &prices, &mut warnings);
+        assert_eq!(priced.total, Some(1.5));
+        assert_eq!(priced.source, Some(CostSource::Reported));
+        assert_eq!(
+            bag.state("langfuse.observation.cost_details"),
+            Some(Use::Unread)
+        );
     }
 }

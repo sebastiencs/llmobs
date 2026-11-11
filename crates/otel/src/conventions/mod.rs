@@ -1,10 +1,12 @@
 //! Payload readers in convention precedence order.
 //!
 //! Spec 02 § Input and output. llmobs and GenAI are N13. OpenInference is N18.
-//! Vercel is N19. OpenLLMetry is N20. Later conventions append one reader and
-//! one [`PayloadKeys`] entry.
+//! Vercel is N19. OpenLLMetry is N20. Langfuse and Laminar are N21.
+//! Later conventions append one reader and one [`PayloadKeys`] entry.
 
 mod genai;
+mod laminar;
+mod langfuse;
 mod llmobs;
 mod openinference;
 mod openllmetry;
@@ -14,11 +16,14 @@ use llmobs_core::enums::Convention;
 use opentelemetry_proto::tonic::common::v1::AnyValue;
 use serde_json::Value as Json;
 
+pub(crate) use langfuse::apply_status;
+
 use crate::payload::{ConventionPayload, Payload, PayloadKeys, decode_json_text};
 use crate::value::{as_str, to_json};
 use crate::warn::Warnings;
 
-/// llmobs, then GenAI, then OpenInference, then Vercel, then OpenLLMetry.
+/// llmobs, then GenAI, then OpenInference, then Vercel, then OpenLLMetry,
+/// then Langfuse, then Laminar.
 pub(crate) const READERS: &[ConventionPayload] = &[
     ConventionPayload {
         convention: Convention::Llmobs,
@@ -39,6 +44,14 @@ pub(crate) const READERS: &[ConventionPayload] = &[
     ConventionPayload {
         convention: Convention::Openllmetry,
         read: openllmetry::read,
+    },
+    ConventionPayload {
+        convention: Convention::Langfuse,
+        read: langfuse::read,
+    },
+    ConventionPayload {
+        convention: Convention::Laminar,
+        read: laminar::read,
     },
 ];
 
@@ -63,6 +76,14 @@ pub(crate) const REGISTRIES: &[PayloadKeys] = &[
     PayloadKeys {
         convention: Convention::Openllmetry,
         keys: openllmetry::PAYLOAD_KEYS,
+    },
+    PayloadKeys {
+        convention: Convention::Langfuse,
+        keys: langfuse::PAYLOAD_KEYS,
+    },
+    PayloadKeys {
+        convention: Convention::Laminar,
+        keys: laminar::PAYLOAD_KEYS,
     },
 ];
 

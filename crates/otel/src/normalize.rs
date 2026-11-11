@@ -219,10 +219,11 @@ fn accept_span(
 
     let mut warnings = resource.warnings.clone();
     let end_time = clamp_end(start_time, end_time, span.end_time_unix_nano, &mut warnings);
-    let (status, status_message) = map_status(span.status.as_ref());
+    let (mut status, mut status_message) = map_status(span.status.as_ref());
 
     let mut truncated = resource.truncated.clone();
     let mut bag = AttrBag::new(&span.attributes, &mut warnings);
+    crate::conventions::apply_status(&mut bag, &mut status, &mut status_message);
     let conventions = detect(&bag, &span.events);
     let span_kind = span_kind(&mut bag);
     let mut fields = fill(&mut bag, &resource.view, &mut warnings);
