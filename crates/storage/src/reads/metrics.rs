@@ -1,10 +1,13 @@
-//! Dashboard metrics computed on `traces`.
+//! Dashboard metrics.
 //!
-//! Trace series share one aggregate, grouped by `date_bin` and, when asked,
-//! the group key. `EvalCost` is a second aggregate: the eval environment only,
-//! never grouped. Empty buckets stay `None`.
+//! Trace series share one aggregate. Span tokens, TTFT, LLM latency, and cost
+//! by model are further aggregates, as are score averages, the two KPI ranges,
+//! and top models. Span and score rows are limited to traces that pass the
+//! request, through a semi-join, except when the filter is absent and both
+//! include flags are on. Empty buckets stay `None`.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use arrow::array::{Array, AsArray};
@@ -13,12 +16,13 @@ use arrow::record_batch::RecordBatch;
 use datafusion::common::{NullHandling, ScalarValue, UnnestOptions};
 use datafusion::error::DataFusionError;
 use datafusion::functions::datetime::expr_fn::date_bin;
-use datafusion::functions_aggregate::expr_fn::{approx_percentile_cont, count, sum};
+use datafusion::functions_aggregate::expr_fn::{approx_percentile_cont, avg, count, sum};
 use datafusion::logical_expr::expr_fn::when;
-use datafusion::logical_expr::{Expr, SortExpr, col, lit};
+use datafusion::logical_expr::{Expr, LogicalPlan, SortExpr, col, in_subquery, lit};
 use datafusion::prelude::DataFrame;
+use llmobs_core::enums::{ScoreTargetKind, SpanKind};
 use llmobs_core::names::environment;
-use llmobs_core::schema::traces;
+use llmobs_core::schema::{scores, spans, traces};
 
 use super::{ListScope, present, scoped_traces};
 use crate::filter::{Filter, FilterView};
@@ -51,6 +55,9 @@ const P50: &str = "p50";
 const P95: &str = "p95";
 const P99: &str = "p99";
 const COST: &str = "cost";
+const VALUE: &str = "value";
+const LLM_COUNT: &str = "llm_count";
+const TOP_MODELS: usize = 10;
 
 /// Width of one dashboard bucket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,7 +128,8 @@ pub struct MetricsRequest<'a> {
     pub bucket: Bucket,
     /// Filter text over `traces`. Empty means no filter.
     pub filter: Option<&'a str>,
-    /// Split the trace series. `EvalCost` stays ungrouped.
+    /// Split the series that follow it. Eval cost, LLM latency, cost by model,
+    /// and score averages keep their own keys.
     pub group_by: Option<MetricsGroupBy>,
     /// Keep rows whose environment is the eval environment.
     pub include_eval: bool,
@@ -133,8 +141,7 @@ pub struct MetricsRequest<'a> {
 
 /// One dashboard series.
 ///
-/// The variants computed here are the trace series. Later phases add the rest
-/// of the server's `MetricName`, in this same order, before [`SeriesName::EvalCost`].
+/// Variant order matches the server's `MetricName`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SeriesName {
     /// `count(*)` on `traces`.
@@ -151,8 +158,67 @@ pub enum SeriesName {
     LatencyP99,
     /// `sum(cost_total)` on `traces`, USD.
     Cost,
+    /// Sum of `input_tokens` on `llm` and `embedding` spans.
+    InputTokens,
+    /// Sum of `output_tokens` on `llm` and `embedding` spans.
+    OutputTokens,
+    /// Sum of `cache_read_tokens` on `llm` and `embedding` spans.
+    CacheReadTokens,
+    /// Sum of `cache_write_tokens` on `llm` and `embedding` spans.
+    CacheWriteTokens,
+    /// `ttft_ns` p50 on `llm` spans.
+    TtftP50,
+    /// `ttft_ns` p95 on `llm` spans.
+    TtftP95,
+    /// `duration_ns` p50 on `llm` spans. `group` is the model.
+    LlmLatencyP50,
+    /// `duration_ns` p95 on `llm` spans. `group` is the model.
+    LlmLatencyP95,
+    /// `sum(cost_total)` on `llm` spans, USD. `group` is the model.
+    CostByModel,
+    /// `avg(value_num)` per score name. `group` is the score name.
+    ScoreAvg,
     /// `sum(cost_total)` on evaluation traces, USD. Never grouped.
     EvalCost,
+}
+
+/// One KPI over the request window and the previous window of the same length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum KpiName {
+    /// Trace count.
+    Traces,
+    /// Errors divided by traces.
+    ErrorRate,
+    /// Trace `duration_ns` p95.
+    LatencyP95,
+    /// `sum(cost_total)` on traces, USD.
+    CostTotal,
+    /// `sum(total_tokens)` on traces.
+    TotalTokens,
+}
+
+/// A KPI value. Absent when that range has no traces.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Kpi {
+    /// Which measure.
+    pub name: KpiName,
+    /// Value over `[from, to)`.
+    pub value: Option<f64>,
+    /// Value over the previous range of the same length.
+    pub previous: Option<f64>,
+}
+
+/// One model in the cost ranking. At most 10.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelUsageRow {
+    /// Model name.
+    pub model: String,
+    /// Number of `llm` spans.
+    pub llm_count: i64,
+    /// Sum of `total_tokens`. Absent when every span omitted it.
+    pub total_tokens: Option<i64>,
+    /// Sum of `cost_total`, USD. Absent when every span omitted it.
+    pub cost_total: Option<f64>,
 }
 
 /// One bucket of a series.
@@ -175,13 +241,17 @@ pub struct Series {
     pub points: Vec<Point>,
 }
 
-/// Dashboard series for one request.
+/// Dashboard metrics for one request.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MetricsData {
     /// Width of every bucket, nanoseconds.
     pub bucket_ns: i64,
+    /// The five KPIs, in [`KpiName`] order.
+    pub kpis: Vec<Kpi>,
     /// Sorted by [`SeriesName`], then by group (`None` first).
     pub series: Vec<Series>,
+    /// At most 10 models, `cost_total` descending, nulls last, then model ascending.
+    pub top_models: Vec<ModelUsageRow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -199,7 +269,54 @@ struct TraceRow {
     cost: Option<f64>,
 }
 
-/// Time series for the trace dashboard.
+struct TokenSums {
+    input: Option<f64>,
+    output: Option<f64>,
+    cache_read: Option<f64>,
+    cache_write: Option<f64>,
+}
+
+struct Percentiles {
+    p50: Option<f64>,
+    p95: Option<f64>,
+}
+
+struct LlmRow {
+    p50: Option<f64>,
+    p95: Option<f64>,
+    cost: Option<f64>,
+}
+
+struct SeriesRows {
+    traces: BTreeMap<RowKey, TraceRow>,
+    eval_cost: BTreeMap<i64, Option<f64>>,
+    tokens: BTreeMap<RowKey, TokenSums>,
+    ttft: BTreeMap<RowKey, Percentiles>,
+    llm: BTreeMap<RowKey, LlmRow>,
+    scores: BTreeMap<RowKey, Option<f64>>,
+}
+
+struct KpiValues {
+    traces: Option<f64>,
+    error_rate: Option<f64>,
+    latency_p95: Option<f64>,
+    cost: Option<f64>,
+    tokens: Option<f64>,
+}
+
+impl KpiValues {
+    fn empty() -> Self {
+        Self {
+            traces: None,
+            error_rate: None,
+            latency_p95: None,
+            cost: None,
+            tokens: None,
+        }
+    }
+}
+
+/// Dashboard series, KPIs, and the top models.
 ///
 /// # Errors
 ///
@@ -217,12 +334,32 @@ pub async fn metrics(
     }
 }
 
+/// Nine collects: trace series, eval cost, token sums, TTFT percentiles, LLM
+/// latency with cost by model, score averages, the current KPI range, the
+/// previous KPI range, and top models. The trace-id set is one plan, inlined
+/// into the span, score, and top-model queries, not a tenth collect.
 async fn compute(ctx: &QueryContext, request: MetricsRequest<'_>) -> Result<MetricsData, RunError> {
     let width = resolve(request.window, request.bucket)?;
     let grid = bucket_grid(request.window, width)?;
-    let rows = trace_rows(ctx, &request, width, &grid).await?;
-    let eval_cost = eval_cost(ctx, &request, width, &grid).await?;
-    Ok(assemble(width, &grid, request.group_by, &rows, &eval_cost))
+    let ids = trace_ids(ctx, &request).await?;
+    let rows = SeriesRows {
+        traces: trace_rows(ctx, &request, width, &grid).await?,
+        eval_cost: eval_cost(ctx, &request, width, &grid).await?,
+        tokens: token_rows(ctx, &request, width, &grid, ids.as_ref()).await?,
+        ttft: ttft_rows(ctx, &request, width, &grid, ids.as_ref()).await?,
+        llm: llm_rows(ctx, &request, width, &grid, ids.as_ref()).await?,
+        scores: score_rows(ctx, &request, width, &grid, ids.as_ref()).await?,
+    };
+    let kpis = kpi_pair(ctx, &request).await?;
+    let top_models = top_model_rows(ctx, &request, ids.as_ref()).await?;
+    Ok(assemble(
+        width,
+        &grid,
+        request.group_by,
+        &rows,
+        kpis,
+        top_models,
+    ))
 }
 
 fn resolve(window: TimeWindow, bucket: Bucket) -> Result<i64, RunError> {
@@ -345,7 +482,10 @@ async fn eval_cost(
         frame = filter.apply(frame, ctx).await.map_err(classify)?;
     }
     let batches = frame
-        .select(vec![bucket_expr(width), col(traces::COST_TOTAL)])
+        .select(vec![
+            bucket_expr(width, traces::START_TIME),
+            col(traces::COST_TOTAL),
+        ])
         .map_err(classify)?
         .aggregate(
             vec![col(BUCKET)],
@@ -363,6 +503,485 @@ fn parsed(ctx: &QueryContext, text: Option<&str>) -> Result<Option<Filter>, RunE
         Some(text) => Ok(Some(ctx.parse_filter(FilterView::Traces, text)?)),
         None => Ok(None),
     }
+}
+
+/// Scoped trace ids over the lookback day. `None` skips the semi-join: the
+/// filter is absent and both include flags are on.
+async fn trace_ids(
+    ctx: &QueryContext,
+    request: &MetricsRequest<'_>,
+) -> Result<Option<LogicalPlan>, RunError> {
+    if present(request.filter).is_none() && request.include_eval && request.include_experiments {
+        return Ok(None);
+    }
+    let start = request
+        .window
+        .from()
+        .checked_sub(BucketWidth::D1.ns())
+        .ok_or_else(out_of_range)?;
+    let window = TimeWindow::new(start, request.window.to())?;
+    let filter = parsed(ctx, request.filter)?;
+    let references_environment = filter
+        .as_ref()
+        .is_some_and(|filter| filter.references_environment);
+    let mut frame = scoped_traces(
+        ctx,
+        ListScope {
+            window: Some(window),
+            include_eval: request.include_eval,
+            include_experiments: request.include_experiments,
+        },
+        references_environment,
+    )
+    .await?;
+    frame = frame
+        .filter(at_least(traces::END_TIME, request.window.from()))
+        .map_err(classify)?;
+    if let Some(filter) = filter {
+        frame = filter.apply(frame, ctx).await.map_err(classify)?;
+    }
+    let frame = frame
+        .select(vec![col(traces::TRACE_ID)])
+        .map_err(classify)?;
+    Ok(Some(frame.logical_plan().clone()))
+}
+
+fn out_of_range() -> RunError {
+    RunError::InvalidRequest("from is out of range".to_owned())
+}
+
+fn at_least(column: &str, ns: i64) -> Expr {
+    col(column).gt_eq(Expr::Literal(
+        ScalarValue::TimestampNanosecond(Some(ns), Some("UTC".into())),
+        None,
+    ))
+}
+
+async fn span_frame(
+    ctx: &QueryContext,
+    request: &MetricsRequest<'_>,
+    ids: Option<&LogicalPlan>,
+) -> Result<DataFrame, RunError> {
+    let mut predicate = request.window.predicate(spans::START_TIME);
+    if let Some(plan) = ids {
+        predicate = predicate.and(in_subquery(col(spans::TRACE_ID), Arc::new(plan.clone())));
+    }
+    ctx.session()
+        .table("spans")
+        .await
+        .map_err(classify)?
+        .filter(predicate)
+        .map_err(classify)
+}
+
+fn kind_is(kinds: &[SpanKind]) -> Expr {
+    col(spans::SPAN_KIND).in_list(kinds.iter().map(|kind| lit(kind.as_str())).collect(), false)
+}
+
+fn span_group(group_by: Option<MetricsGroupBy>) -> Option<&'static str> {
+    match group_by {
+        Some(MetricsGroupBy::Model) => Some(spans::MODEL),
+        Some(MetricsGroupBy::Environment) => Some(spans::ENVIRONMENT),
+        Some(MetricsGroupBy::Release) => Some(spans::RELEASE),
+        None => None,
+    }
+}
+
+fn with_bucket(
+    frame: DataFrame,
+    width: i64,
+    time: &str,
+    group: Option<&str>,
+    values: &[&str],
+) -> Result<DataFrame, RunError> {
+    let mut columns = vec![bucket_expr(width, time)];
+    columns.extend(values.iter().map(|name| col(*name)));
+    if let Some(name) = group {
+        columns.push(col(name).alias(GROUP));
+    }
+    frame.select(columns).map_err(classify)
+}
+
+fn bucket_keys(grouped: bool) -> Vec<Expr> {
+    let mut keys = vec![col(BUCKET)];
+    if grouped {
+        keys.push(col(GROUP));
+    }
+    keys
+}
+
+async fn token_rows(
+    ctx: &QueryContext,
+    request: &MetricsRequest<'_>,
+    width: i64,
+    grid: &[i64],
+    ids: Option<&LogicalPlan>,
+) -> Result<BTreeMap<RowKey, TokenSums>, RunError> {
+    let group = span_group(request.group_by);
+    let mut predicate = kind_is(&[SpanKind::Llm, SpanKind::Embedding]);
+    if let Some(name) = group {
+        predicate = predicate.and(col(name).is_not_null());
+    }
+    let columns = [
+        spans::INPUT_TOKENS,
+        spans::OUTPUT_TOKENS,
+        spans::CACHE_READ_TOKENS,
+        spans::CACHE_WRITE_TOKENS,
+    ];
+    let frame = with_bucket(
+        span_frame(ctx, request, ids)
+            .await?
+            .filter(predicate)
+            .map_err(classify)?,
+        width,
+        spans::START_TIME,
+        group,
+        &columns,
+    )?;
+    let batches = frame
+        .aggregate(
+            bucket_keys(group.is_some()),
+            columns
+                .iter()
+                .map(|name| sum(col(*name)).alias(*name))
+                .collect::<Vec<_>>(),
+        )
+        .map_err(classify)?
+        .collect()
+        .await
+        .map_err(classify)?;
+    map_rows(
+        value_rows(&batches, group.is_some(), grid, &columns)?,
+        |values| {
+            let [input, output, cache_read, cache_write] = values
+                .try_into()
+                .map_err(|_| internal("token aggregate width".to_owned()))?;
+            Ok(TokenSums {
+                input,
+                output,
+                cache_read,
+                cache_write,
+            })
+        },
+    )
+}
+
+async fn ttft_rows(
+    ctx: &QueryContext,
+    request: &MetricsRequest<'_>,
+    width: i64,
+    grid: &[i64],
+    ids: Option<&LogicalPlan>,
+) -> Result<BTreeMap<RowKey, Percentiles>, RunError> {
+    let group = span_group(request.group_by);
+    let mut predicate = kind_is(&[SpanKind::Llm]).and(col(spans::TTFT_NS).is_not_null());
+    if let Some(name) = group {
+        predicate = predicate.and(col(name).is_not_null());
+    }
+    let columns = [spans::TTFT_NS];
+    let frame = with_bucket(
+        span_frame(ctx, request, ids)
+            .await?
+            .filter(predicate)
+            .map_err(classify)?,
+        width,
+        spans::START_TIME,
+        group,
+        &columns,
+    )?;
+    let batches = frame
+        .aggregate(
+            bucket_keys(group.is_some()),
+            vec![
+                percentile(spans::TTFT_NS, 0.5).alias(P50),
+                percentile(spans::TTFT_NS, 0.95).alias(P95),
+            ],
+        )
+        .map_err(classify)?
+        .collect()
+        .await
+        .map_err(classify)?;
+    map_rows(
+        value_rows(&batches, group.is_some(), grid, &[P50, P95])?,
+        |values| {
+            let [p50, p95] = values
+                .try_into()
+                .map_err(|_| internal("percentile aggregate width".to_owned()))?;
+            Ok(Percentiles { p50, p95 })
+        },
+    )
+}
+
+async fn llm_rows(
+    ctx: &QueryContext,
+    request: &MetricsRequest<'_>,
+    width: i64,
+    grid: &[i64],
+    ids: Option<&LogicalPlan>,
+) -> Result<BTreeMap<RowKey, LlmRow>, RunError> {
+    let columns = [DURATION_NS, spans::COST_TOTAL];
+    let frame = with_bucket(
+        span_frame(ctx, request, ids)
+            .await?
+            .filter(kind_is(&[SpanKind::Llm]).and(col(spans::MODEL).is_not_null()))
+            .map_err(classify)?,
+        width,
+        spans::START_TIME,
+        Some(spans::MODEL),
+        &columns,
+    )?;
+    let batches = frame
+        .aggregate(
+            bucket_keys(true),
+            vec![
+                percentile(DURATION_NS, 0.5).alias(P50),
+                percentile(DURATION_NS, 0.95).alias(P95),
+                sum(col(spans::COST_TOTAL)).alias(COST),
+            ],
+        )
+        .map_err(classify)?
+        .collect()
+        .await
+        .map_err(classify)?;
+    map_rows(
+        value_rows(&batches, true, grid, &[P50, P95, COST])?,
+        |values| {
+            let [p50, p95, cost] = values
+                .try_into()
+                .map_err(|_| internal("llm aggregate width".to_owned()))?;
+            Ok(LlmRow { p50, p95, cost })
+        },
+    )
+}
+
+async fn score_rows(
+    ctx: &QueryContext,
+    request: &MetricsRequest<'_>,
+    width: i64,
+    grid: &[i64],
+    ids: Option<&LogicalPlan>,
+) -> Result<BTreeMap<RowKey, Option<f64>>, RunError> {
+    let mut predicate = request
+        .window
+        .predicate(scores::CREATED_AT)
+        .and(col(scores::TARGET).in_list(
+            vec![
+                lit(ScoreTargetKind::Trace.as_str()),
+                lit(ScoreTargetKind::Span.as_str()),
+            ],
+            false,
+        ))
+        .and(col(scores::VALUE_NUM).is_not_null());
+    if let Some(plan) = ids {
+        predicate = predicate.and(in_subquery(col(scores::TRACE_ID), Arc::new(plan.clone())));
+    }
+    let frame = with_bucket(
+        ctx.session()
+            .table("scores")
+            .await
+            .map_err(classify)?
+            .filter(predicate)
+            .map_err(classify)?,
+        width,
+        scores::CREATED_AT,
+        Some(scores::NAME),
+        &[scores::VALUE_NUM],
+    )?;
+    let batches = frame
+        .aggregate(
+            bucket_keys(true),
+            vec![avg(col(scores::VALUE_NUM)).alias(VALUE)],
+        )
+        .map_err(classify)?
+        .collect()
+        .await
+        .map_err(classify)?;
+    map_rows(value_rows(&batches, true, grid, &[VALUE])?, |values| {
+        let [value] = values
+            .try_into()
+            .map_err(|_| internal("score aggregate width".to_owned()))?;
+        Ok(value)
+    })
+}
+
+async fn kpi_pair(ctx: &QueryContext, request: &MetricsRequest<'_>) -> Result<Vec<Kpi>, RunError> {
+    let current = kpi_range(ctx, request, request.window).await?;
+    let previous = kpi_range(ctx, request, previous_window(request.window)?).await?;
+    Ok(vec![
+        Kpi {
+            name: KpiName::Traces,
+            value: current.traces,
+            previous: previous.traces,
+        },
+        Kpi {
+            name: KpiName::ErrorRate,
+            value: current.error_rate,
+            previous: previous.error_rate,
+        },
+        Kpi {
+            name: KpiName::LatencyP95,
+            value: current.latency_p95,
+            previous: previous.latency_p95,
+        },
+        Kpi {
+            name: KpiName::CostTotal,
+            value: current.cost,
+            previous: previous.cost,
+        },
+        Kpi {
+            name: KpiName::TotalTokens,
+            value: current.tokens,
+            previous: previous.tokens,
+        },
+    ])
+}
+
+fn previous_window(window: TimeWindow) -> Result<TimeWindow, RunError> {
+    let length = window
+        .to()
+        .checked_sub(window.from())
+        .ok_or_else(out_of_range)?;
+    let start = window.from().checked_sub(length).ok_or_else(out_of_range)?;
+    TimeWindow::new(start, window.from())
+}
+
+async fn kpi_range(
+    ctx: &QueryContext,
+    request: &MetricsRequest<'_>,
+    window: TimeWindow,
+) -> Result<KpiValues, RunError> {
+    let filter = parsed(ctx, request.filter)?;
+    let references_environment = filter
+        .as_ref()
+        .is_some_and(|filter| filter.references_environment);
+    let mut frame = scoped_traces(
+        ctx,
+        ListScope {
+            window: Some(window),
+            include_eval: request.include_eval,
+            include_experiments: request.include_experiments,
+        },
+        references_environment,
+    )
+    .await?;
+    if let Some(filter) = filter {
+        frame = filter.apply(frame, ctx).await.map_err(classify)?;
+    }
+    let errors = when(col(traces::ERROR_COUNT).gt(lit(0_i64)), lit(1_i64))
+        .otherwise(lit(0_i64))
+        .map_err(classify)?;
+    let batches = frame
+        .aggregate(
+            vec![],
+            vec![
+                count(lit(1_i64)).alias(TRACES),
+                sum(errors).alias(ERRORS),
+                percentile(DURATION_NS, 0.95).alias(P95),
+                sum(col(traces::COST_TOTAL)).alias(COST),
+                sum(col(traces::TOTAL_TOKENS)).alias(traces::TOTAL_TOKENS),
+            ],
+        )
+        .map_err(classify)?
+        .collect()
+        .await
+        .map_err(classify)?;
+    kpi_values(&batches)
+}
+
+fn kpi_values(batches: &[RecordBatch]) -> Result<KpiValues, RunError> {
+    let mut found = None;
+    for batch in batches {
+        if batch.num_rows() == 0 {
+            continue;
+        }
+        let traces = require(batch, TRACES)?;
+        let errors = require(batch, ERRORS)?;
+        let latency = require(batch, P95)?;
+        let cost = require(batch, COST)?;
+        let tokens = require(batch, traces::TOTAL_TOKENS)?;
+        for index in 0..batch.num_rows() {
+            if found.is_some() {
+                return Err(internal("duplicate kpi row".to_owned()));
+            }
+            let count = i64_at(traces, index)?;
+            found = Some(if count == 0 {
+                KpiValues::empty()
+            } else {
+                KpiValues {
+                    traces: Some(count as f64),
+                    error_rate: Some(i64_at(errors, index)? as f64 / count as f64),
+                    latency_p95: f64_at(latency, index)?,
+                    cost: f64_at(cost, index)?,
+                    tokens: f64_at(tokens, index)?,
+                }
+            });
+        }
+    }
+    Ok(found.unwrap_or_else(KpiValues::empty))
+}
+
+async fn top_model_rows(
+    ctx: &QueryContext,
+    request: &MetricsRequest<'_>,
+    ids: Option<&LogicalPlan>,
+) -> Result<Vec<ModelUsageRow>, RunError> {
+    let batches = span_frame(ctx, request, ids)
+        .await?
+        .filter(kind_is(&[SpanKind::Llm]).and(col(spans::MODEL).is_not_null()))
+        .map_err(classify)?
+        .aggregate(
+            vec![col(spans::MODEL)],
+            vec![
+                count(lit(1_i64)).alias(LLM_COUNT),
+                sum(col(spans::TOTAL_TOKENS)).alias(spans::TOTAL_TOKENS),
+                sum(col(spans::COST_TOTAL)).alias(COST),
+            ],
+        )
+        .map_err(classify)?
+        .sort(vec![
+            col(COST).sort(false, false),
+            col(spans::MODEL).sort(true, false),
+        ])
+        .map_err(classify)?
+        .limit(0, Some(TOP_MODELS))
+        .map_err(classify)?
+        .collect()
+        .await
+        .map_err(classify)?;
+    model_rows(&batches)
+}
+
+fn model_rows(batches: &[RecordBatch]) -> Result<Vec<ModelUsageRow>, RunError> {
+    let mut rows = Vec::new();
+    for batch in batches {
+        if batch.num_rows() == 0 {
+            continue;
+        }
+        let models = require(batch, spans::MODEL)?;
+        let counts = require(batch, LLM_COUNT)?;
+        let tokens = require(batch, spans::TOTAL_TOKENS)?;
+        let cost = require(batch, COST)?;
+        for index in 0..batch.num_rows() {
+            let model =
+                string_at(models, index)?.ok_or_else(|| internal("model is null".to_owned()))?;
+            rows.push(ModelUsageRow {
+                model,
+                llm_count: i64_at(counts, index)?,
+                total_tokens: i64_opt(tokens, index)?,
+                cost_total: f64_at(cost, index)?,
+            });
+        }
+    }
+    Ok(rows)
+}
+
+fn map_rows<T>(
+    raw: BTreeMap<RowKey, Vec<Option<f64>>>,
+    convert: impl Fn(Vec<Option<f64>>) -> Result<T, RunError>,
+) -> Result<BTreeMap<RowKey, T>, RunError> {
+    raw.into_iter()
+        .map(|(key, values)| Ok((key, convert(values)?)))
+        .collect()
 }
 
 fn grouped(frame: DataFrame, group_by: Option<MetricsGroupBy>) -> Result<DataFrame, RunError> {
@@ -391,7 +1010,7 @@ fn project(
     group_by: Option<MetricsGroupBy>,
 ) -> Result<DataFrame, RunError> {
     let mut columns = vec![
-        bucket_expr(width),
+        bucket_expr(width, traces::START_TIME),
         col(traces::ERROR_COUNT),
         col(DURATION_NS),
         col(traces::COST_TOTAL),
@@ -428,27 +1047,23 @@ fn aggregate(frame: DataFrame, grouped: bool) -> Result<DataFrame, RunError> {
             vec![
                 count(lit(1_i64)).alias(TRACES),
                 sum(errors).alias(ERRORS),
-                percentile(0.5).alias(P50),
-                percentile(0.95).alias(P95),
-                percentile(0.99).alias(P99),
+                percentile(DURATION_NS, 0.5).alias(P50),
+                percentile(DURATION_NS, 0.95).alias(P95),
+                percentile(DURATION_NS, 0.99).alias(P99),
                 sum(col(traces::COST_TOTAL)).alias(COST),
             ],
         )
         .map_err(classify)
 }
 
-fn percentile(quantile: f64) -> Expr {
-    approx_percentile_cont(
-        SortExpr::new(col(DURATION_NS), true, true),
-        lit(quantile),
-        None,
-    )
+fn percentile(column: &str, quantile: f64) -> Expr {
+    approx_percentile_cont(SortExpr::new(col(column), true, true), lit(quantile), None)
 }
 
-fn bucket_expr(width: i64) -> Expr {
+fn bucket_expr(width: i64, time: &str) -> Expr {
     date_bin(
         Expr::Literal(ScalarValue::new_interval_mdn(0, 0, width), None),
-        col(traces::START_TIME),
+        col(time),
         Expr::Literal(
             ScalarValue::TimestampNanosecond(Some(0), Some("UTC".into())),
             None,
@@ -535,64 +1150,199 @@ fn on_grid(grid: &[i64], time: i64) -> Result<(), RunError> {
     }
 }
 
+fn value_rows(
+    batches: &[RecordBatch],
+    grouped: bool,
+    grid: &[i64],
+    columns: &[&str],
+) -> Result<BTreeMap<RowKey, Vec<Option<f64>>>, RunError> {
+    let mut rows = BTreeMap::new();
+    for batch in batches {
+        if batch.num_rows() == 0 {
+            continue;
+        }
+        let times = require(batch, BUCKET)?;
+        let groups = if grouped {
+            Some(require(batch, GROUP)?)
+        } else {
+            None
+        };
+        let values = columns
+            .iter()
+            .map(|name| require(batch, name))
+            .collect::<Result<Vec<_>, _>>()?;
+        for index in 0..batch.num_rows() {
+            let time = time_at(times, index)?;
+            on_grid(grid, time)?;
+            let group = match groups {
+                Some(column) => Some(
+                    string_at(column, index)?
+                        .ok_or_else(|| internal("group key is null".to_owned()))?,
+                ),
+                None => None,
+            };
+            let picked = values
+                .iter()
+                .map(|column| f64_at(*column, index))
+                .collect::<Result<Vec<_>, _>>()?;
+            if rows.insert(RowKey { time, group }, picked).is_some() {
+                return Err(internal("duplicate aggregate row".to_owned()));
+            }
+        }
+    }
+    Ok(rows)
+}
+
 fn assemble(
     width: i64,
     grid: &[i64],
     group_by: Option<MetricsGroupBy>,
-    rows: &BTreeMap<RowKey, TraceRow>,
-    eval_cost: &BTreeMap<i64, Option<f64>>,
+    rows: &SeriesRows,
+    kpis: Vec<Kpi>,
+    top_models: Vec<ModelUsageRow>,
 ) -> MetricsData {
-    let groups = group_keys(group_by, rows);
+    let groups = group_keys(group_by, &rows.traces);
     let mut series = Vec::new();
-    push(
+    fill(
         &mut series,
         SeriesName::Traces,
         &groups,
         grid,
-        rows,
+        &rows.traces,
         traces_of,
     );
-    push(
+    fill(
         &mut series,
         SeriesName::Errors,
         &groups,
         grid,
-        rows,
+        &rows.traces,
         errors_of,
     );
-    push(
+    fill(
         &mut series,
         SeriesName::ErrorRate,
         &groups,
         grid,
-        rows,
+        &rows.traces,
         rate_of,
     );
-    push(
+    fill(
         &mut series,
         SeriesName::LatencyP50,
         &groups,
         grid,
-        rows,
+        &rows.traces,
         p50_of,
     );
-    push(
+    fill(
         &mut series,
         SeriesName::LatencyP95,
         &groups,
         grid,
-        rows,
+        &rows.traces,
         p95_of,
     );
-    push(
+    fill(
         &mut series,
         SeriesName::LatencyP99,
         &groups,
         grid,
-        rows,
+        &rows.traces,
         p99_of,
     );
-    push(&mut series, SeriesName::Cost, &groups, grid, rows, cost_of);
+    fill(
+        &mut series,
+        SeriesName::Cost,
+        &groups,
+        grid,
+        &rows.traces,
+        cost_of,
+    );
+    let token_groups = group_keys(group_by, &rows.tokens);
+    fill(
+        &mut series,
+        SeriesName::InputTokens,
+        &token_groups,
+        grid,
+        &rows.tokens,
+        input_of,
+    );
+    fill(
+        &mut series,
+        SeriesName::OutputTokens,
+        &token_groups,
+        grid,
+        &rows.tokens,
+        output_of,
+    );
+    fill(
+        &mut series,
+        SeriesName::CacheReadTokens,
+        &token_groups,
+        grid,
+        &rows.tokens,
+        cache_read_of,
+    );
+    fill(
+        &mut series,
+        SeriesName::CacheWriteTokens,
+        &token_groups,
+        grid,
+        &rows.tokens,
+        cache_write_of,
+    );
+    let ttft_groups = group_keys(group_by, &rows.ttft);
+    fill(
+        &mut series,
+        SeriesName::TtftP50,
+        &ttft_groups,
+        grid,
+        &rows.ttft,
+        pair_p50,
+    );
+    fill(
+        &mut series,
+        SeriesName::TtftP95,
+        &ttft_groups,
+        grid,
+        &rows.ttft,
+        pair_p95,
+    );
+    let models = present_groups(&rows.llm);
+    fill(
+        &mut series,
+        SeriesName::LlmLatencyP50,
+        &models,
+        grid,
+        &rows.llm,
+        llm_p50,
+    );
+    fill(
+        &mut series,
+        SeriesName::LlmLatencyP95,
+        &models,
+        grid,
+        &rows.llm,
+        llm_p95,
+    );
+    fill(
+        &mut series,
+        SeriesName::CostByModel,
+        &models,
+        grid,
+        &rows.llm,
+        llm_cost,
+    );
+    let names = present_groups(&rows.scores);
+    fill(
+        &mut series,
+        SeriesName::ScoreAvg,
+        &names,
+        grid,
+        &rows.scores,
+        score_of,
+    );
     series.push(Series {
         name: SeriesName::EvalCost,
         group: None,
@@ -600,7 +1350,7 @@ fn assemble(
             .iter()
             .map(|time| Point {
                 time: *time,
-                value: eval_cost.get(time).copied().flatten(),
+                value: rows.eval_cost.get(time).copied().flatten(),
             })
             .collect(),
     });
@@ -611,30 +1361,37 @@ fn assemble(
     });
     MetricsData {
         bucket_ns: width,
+        kpis,
         series,
+        top_models,
     }
 }
 
-fn group_keys(
+fn group_keys<T>(
     group_by: Option<MetricsGroupBy>,
-    rows: &BTreeMap<RowKey, TraceRow>,
+    rows: &BTreeMap<RowKey, T>,
 ) -> Vec<Option<String>> {
     if group_by.is_none() {
-        return vec![None];
+        vec![None]
+    } else {
+        present_groups(rows)
     }
+}
+
+fn present_groups<T>(rows: &BTreeMap<RowKey, T>) -> Vec<Option<String>> {
     let mut groups: Vec<String> = rows.keys().filter_map(|key| key.group.clone()).collect();
     groups.sort();
     groups.dedup();
     groups.into_iter().map(Some).collect()
 }
 
-fn push(
+fn fill<T>(
     series: &mut Vec<Series>,
     name: SeriesName,
     groups: &[Option<String>],
     grid: &[i64],
-    rows: &BTreeMap<RowKey, TraceRow>,
-    pick: fn(Option<&TraceRow>) -> Option<f64>,
+    rows: &BTreeMap<RowKey, T>,
+    pick: fn(Option<&T>) -> Option<f64>,
 ) {
     for group in groups {
         let points = grid
@@ -690,6 +1447,46 @@ fn cost_of(row: Option<&TraceRow>) -> Option<f64> {
     row.and_then(|row| row.cost)
 }
 
+fn input_of(row: Option<&TokenSums>) -> Option<f64> {
+    row.and_then(|row| row.input)
+}
+
+fn output_of(row: Option<&TokenSums>) -> Option<f64> {
+    row.and_then(|row| row.output)
+}
+
+fn cache_read_of(row: Option<&TokenSums>) -> Option<f64> {
+    row.and_then(|row| row.cache_read)
+}
+
+fn cache_write_of(row: Option<&TokenSums>) -> Option<f64> {
+    row.and_then(|row| row.cache_write)
+}
+
+fn pair_p50(row: Option<&Percentiles>) -> Option<f64> {
+    row.and_then(|row| row.p50)
+}
+
+fn pair_p95(row: Option<&Percentiles>) -> Option<f64> {
+    row.and_then(|row| row.p95)
+}
+
+fn llm_p50(row: Option<&LlmRow>) -> Option<f64> {
+    row.and_then(|row| row.p50)
+}
+
+fn llm_p95(row: Option<&LlmRow>) -> Option<f64> {
+    row.and_then(|row| row.p95)
+}
+
+fn llm_cost(row: Option<&LlmRow>) -> Option<f64> {
+    row.and_then(|row| row.cost)
+}
+
+fn score_of(row: Option<&Option<f64>>) -> Option<f64> {
+    row.copied().flatten()
+}
+
 fn require<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a dyn Array, RunError> {
     match batch.column_by_name(name) {
         Some(column) => Ok(column.as_ref()),
@@ -737,6 +1534,21 @@ fn i64_at(column: &dyn Array, index: usize) -> Result<i64, RunError> {
     )))
 }
 
+fn i64_opt(column: &dyn Array, index: usize) -> Result<Option<i64>, RunError> {
+    let is_int = column.as_primitive_opt::<Int64Type>().is_some()
+        || column.as_primitive_opt::<UInt64Type>().is_some();
+    if !is_int {
+        return Err(internal(format!(
+            "aggregate count has type {}",
+            column.data_type()
+        )));
+    }
+    if column.is_null(index) {
+        return Ok(None);
+    }
+    Ok(Some(i64_at(column, index)?))
+}
+
 fn f64_at(column: &dyn Array, index: usize) -> Result<Option<f64>, RunError> {
     if let Some(values) = column.as_primitive_opt::<Float64Type>() {
         return Ok((!values.is_null(index)).then(|| values.value(index)));
@@ -775,20 +1587,31 @@ fn internal(message: String) -> RunError {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::cmp::Ordering;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::num::NonZeroUsize;
+    use std::sync::Arc;
     use std::time::Duration;
 
+    use datafusion::execution::runtime_env::RuntimeEnv;
+    use llmobs_core::enums::SpanKind;
+    use llmobs_core::ids::{SpanId, TraceId};
     use llmobs_core::names::environment;
+    use llmobs_core::score::ScoreTarget;
+    use llmobs_core::span::Span;
     use llmobs_core::time_serde::parse_rfc3339;
     use serde_json::Value;
 
     use super::{
-        Bucket, BucketWidth, MetricsData, MetricsGroupBy, MetricsRequest, Series, SeriesName,
-        metrics,
+        Bucket, BucketWidth, Kpi, KpiName, MetricsData, MetricsGroupBy, MetricsRequest,
+        ModelUsageRow, Series, SeriesName, metrics,
     };
     use crate::query_error::RunError;
-    use crate::test_support::example_query;
-    use crate::views::{QueryContext, TimeWindow};
+    use crate::test_support::{
+        dataset_scores, dataset_spans, example_query, live_scores, live_scores_table, spans_table,
+        traces_table,
+    };
+    use crate::views::{ProjectQuery, QueryContext, TimeWindow};
 
     const TIMEOUT: Duration = Duration::from_secs(30);
     const M10: i64 = 600_000_000_000;
@@ -800,6 +1623,7 @@ mod tests {
         duration: i64,
         error_count: i64,
         cost: Option<f64>,
+        total_tokens: Option<i64>,
         models: Vec<String>,
         environment: Option<String>,
         status: String,
@@ -850,6 +1674,7 @@ mod tests {
                 duration: row["duration_ns"].as_i64().expect("duration"),
                 error_count: row["error_count"].as_i64().expect("errors"),
                 cost: row.get("cost_total").and_then(Value::as_f64),
+                total_tokens: row.get("total_tokens").and_then(Value::as_i64),
                 models: row["models"]
                     .as_array()
                     .expect("models")
@@ -894,25 +1719,31 @@ mod tests {
 
     fn assert_times(data: &MetricsData, bucket_ns: i64, times: &[i64]) {
         assert_eq!(data.bucket_ns, bucket_ns);
-        let names: Vec<_> = data.series.iter().map(|series| series.name).collect();
-        assert_eq!(
-            names,
-            vec![
-                SeriesName::Traces,
-                SeriesName::Errors,
-                SeriesName::ErrorRate,
-                SeriesName::LatencyP50,
-                SeriesName::LatencyP95,
-                SeriesName::LatencyP99,
-                SeriesName::Cost,
-                SeriesName::EvalCost,
-            ]
-        );
+        assert_eq!(data.kpis.len(), 5);
+        let mut ordered = data.series.clone();
+        ordered.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then_with(|| left.group.cmp(&right.group))
+        });
+        assert_eq!(data.series, ordered);
         for series in &data.series {
-            assert!(series.group.is_none());
+            if !split_by_itself(series.name) {
+                assert!(series.group.is_none(), "{:?} is grouped", series.name);
+            }
             let actual: Vec<i64> = series.points.iter().map(|point| point.time).collect();
-            assert_eq!(actual, times);
+            assert_eq!(actual, times, "{:?}", series.name);
         }
+    }
+
+    fn split_by_itself(name: SeriesName) -> bool {
+        matches!(
+            name,
+            SeriesName::LlmLatencyP50
+                | SeriesName::LlmLatencyP95
+                | SeriesName::CostByModel
+                | SeriesName::ScoreAvg
+        )
     }
 
     fn assert_close(actual: Option<f64>, expected: Option<f64>) {
@@ -1015,9 +1846,6 @@ mod tests {
         .await;
         let loaded = samples("traces.json");
         for series in &data.series {
-            if series.name == SeriesName::EvalCost {
-                continue;
-            }
             for point in &series.points {
                 let rows = in_bucket(&loaded, from, to, point.time, M10);
                 match series.name {
@@ -1047,10 +1875,7 @@ mod tests {
                         assert_close(point.value, expected);
                     }
                     SeriesName::Cost => assert_close(point.value, cost_sum(&rows)),
-                    SeriesName::LatencyP50
-                    | SeriesName::LatencyP95
-                    | SeriesName::LatencyP99
-                    | SeriesName::EvalCost => {}
+                    _ => {}
                 }
             }
         }
@@ -1305,5 +2130,635 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[derive(Clone)]
+    struct SpanSample {
+        trace_id: String,
+        start: i64,
+        duration: i64,
+        kind: String,
+        model: Option<String>,
+        input_tokens: Option<i64>,
+        output_tokens: Option<i64>,
+        cache_read_tokens: Option<i64>,
+        cache_write_tokens: Option<i64>,
+        total_tokens: Option<i64>,
+        ttft_ns: Option<i64>,
+        cost_total: Option<f64>,
+    }
+
+    fn span_samples() -> Vec<SpanSample> {
+        dataset_spans()
+            .into_iter()
+            .map(|span| SpanSample {
+                trace_id: span.trace_id.to_string(),
+                start: span.start_time,
+                duration: span.end_time.saturating_sub(span.start_time),
+                kind: span.span_kind.as_str().to_owned(),
+                model: span.response_model.or(span.request_model),
+                input_tokens: span.input_tokens,
+                output_tokens: span.output_tokens,
+                cache_read_tokens: span.cache_read_tokens,
+                cache_write_tokens: span.cache_write_tokens,
+                total_tokens: span.total_tokens,
+                ttft_ns: span.ttft_ns,
+                cost_total: span.cost_total,
+            })
+            .collect()
+    }
+
+    fn fixture_text(name: &str) -> &'static str {
+        match name {
+            "traces.json" => include_str!("../../../../fixtures/api/responses/traces.json"),
+            "traces-include-eval.json" => {
+                include_str!("../../../../fixtures/api/responses/traces-include-eval.json")
+            }
+            other => panic!("unknown fixture {other}"),
+        }
+    }
+
+    /// Trace ids whose `start_time` is in `[from - 1 day, to)` and `end_time >= from`.
+    fn scoped_ids(name: &str, from: i64, to: i64) -> BTreeSet<String> {
+        let value: Value = serde_json::from_str(fixture_text(name)).expect(name);
+        let lookback = from - DAY;
+        value["data"]
+            .as_array()
+            .expect("data")
+            .iter()
+            .filter_map(|row| {
+                let start = at(row["start_time"].as_str().expect("start"));
+                let end = at(row["end_time"].as_str().expect("end"));
+                (start >= lookback && start < to && end >= from)
+                    .then(|| row["trace_id"].as_str().expect("trace").to_owned())
+            })
+            .collect()
+    }
+
+    fn kept_spans(ids: &BTreeSet<String>, from: i64, to: i64, kinds: &[&str]) -> Vec<SpanSample> {
+        span_samples()
+            .into_iter()
+            .filter(|span| {
+                ids.contains(&span.trace_id)
+                    && span.start >= from
+                    && span.start < to
+                    && kinds.contains(&span.kind.as_str())
+            })
+            .collect()
+    }
+
+    fn bucket_spans(spans: &[SpanSample], bucket: i64, width: i64) -> Vec<&SpanSample> {
+        spans
+            .iter()
+            .filter(|span| span.start - span.start.rem_euclid(width) == bucket)
+            .collect()
+    }
+
+    fn sum_i64(values: impl Iterator<Item = Option<i64>>) -> Option<f64> {
+        let mut total = None;
+        for value in values.flatten() {
+            total = Some(total.unwrap_or(0) + value);
+        }
+        total.map(|value| value as f64)
+    }
+
+    fn sum_f64(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
+        let mut total = None;
+        for value in values.flatten() {
+            total = Some(total.unwrap_or(0.0) + value);
+        }
+        total
+    }
+
+    fn assert_column(
+        data: &MetricsData,
+        name: SeriesName,
+        group: Option<&str>,
+        spans: &[SpanSample],
+        width: i64,
+        pick: fn(&SpanSample) -> Option<i64>,
+    ) {
+        for point in &named(data, name, group).points {
+            let rows = bucket_spans(spans, point.time, width);
+            assert_close(point.value, sum_i64(rows.into_iter().map(pick)));
+        }
+    }
+
+    fn assert_tokens(data: &MetricsData, ids: &BTreeSet<String>, from: i64, to: i64) {
+        let spans = kept_spans(
+            ids,
+            from,
+            to,
+            &[SpanKind::Llm.as_str(), SpanKind::Embedding.as_str()],
+        );
+        assert_column(data, SeriesName::InputTokens, None, &spans, M10, |span| {
+            span.input_tokens
+        });
+        assert_column(data, SeriesName::OutputTokens, None, &spans, M10, |span| {
+            span.output_tokens
+        });
+        assert_column(
+            data,
+            SeriesName::CacheReadTokens,
+            None,
+            &spans,
+            M10,
+            |span| span.cache_read_tokens,
+        );
+        assert_column(
+            data,
+            SeriesName::CacheWriteTokens,
+            None,
+            &spans,
+            M10,
+            |span| span.cache_write_tokens,
+        );
+    }
+
+    fn usage_rows(spans: &[SpanSample]) -> Vec<ModelUsageRow> {
+        let mut rows: BTreeMap<String, ModelUsageRow> = BTreeMap::new();
+        for span in spans.iter().filter(|span| span.model.is_some()) {
+            let model = span.model.clone().expect("model");
+            let row = rows.entry(model.clone()).or_insert(ModelUsageRow {
+                model,
+                llm_count: 0,
+                total_tokens: None,
+                cost_total: None,
+            });
+            row.llm_count += 1;
+            if let Some(tokens) = span.total_tokens {
+                row.total_tokens = Some(row.total_tokens.unwrap_or(0) + tokens);
+            }
+            if let Some(cost) = span.cost_total {
+                row.cost_total = Some(row.cost_total.unwrap_or(0.0) + cost);
+            }
+        }
+        let mut rows: Vec<_> = rows.into_values().collect();
+        rows.sort_by(by_cost);
+        rows.truncate(10);
+        rows
+    }
+
+    fn by_cost(left: &ModelUsageRow, right: &ModelUsageRow) -> Ordering {
+        match (left.cost_total, right.cost_total) {
+            (Some(left_cost), Some(right_cost)) => right_cost
+                .total_cmp(&left_cost)
+                .then_with(|| left.model.cmp(&right.model)),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => left.model.cmp(&right.model),
+        }
+    }
+
+    fn hour() -> (i64, i64, MetricsRequest<'static>) {
+        (
+            at("2026-01-01T10:00:00Z"),
+            at("2026-01-01T11:00:00Z"),
+            request(
+                "2026-01-01T10:00:00Z",
+                "2026-01-01T11:00:00Z",
+                Bucket::Fixed(BucketWidth::M10),
+            ),
+        )
+    }
+
+    #[tokio::test]
+    async fn token_sums_match_llm_and_embedding_spans() {
+        let (from, to, request) = hour();
+        let data = run(request).await;
+        let ids = scoped_ids("traces.json", from, to);
+        assert_tokens(&data, &ids, from, to);
+        let spans = kept_spans(&ids, from, to, &[SpanKind::Llm.as_str()]);
+        let with_ttft: Vec<_> = spans
+            .iter()
+            .filter(|span| span.ttft_ns.is_some())
+            .cloned()
+            .collect();
+        for point in &named(&data, SeriesName::TtftP50, None).points {
+            let rows = bucket_spans(&with_ttft, point.time, M10);
+            if rows.len() == 1 {
+                assert_eq!(point.value, Some(rows[0].ttft_ns.expect("ttft") as f64));
+                assert_eq!(
+                    value_at(named(&data, SeriesName::TtftP95, None), point.time),
+                    point.value
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn llm_latency_p50_matches_one_span_buckets() {
+        let (from, to, request) = hour();
+        let data = run(request).await;
+        let spans = kept_spans(
+            &scoped_ids("traces.json", from, to),
+            from,
+            to,
+            &[SpanKind::Llm.as_str()],
+        );
+        let spans: Vec<_> = spans
+            .into_iter()
+            .filter(|span| span.model.is_some())
+            .collect();
+        let models: BTreeSet<_> = spans.iter().filter_map(|span| span.model.clone()).collect();
+        let actual: BTreeSet<_> = data
+            .series
+            .iter()
+            .filter(|series| series.name == SeriesName::LlmLatencyP50)
+            .map(|series| series.group.clone().expect("model"))
+            .collect();
+        assert_eq!(actual, models);
+        for model in &models {
+            let series = named(&data, SeriesName::LlmLatencyP50, Some(model));
+            for point in &series.points {
+                let rows: Vec<_> = bucket_spans(&spans, point.time, M10)
+                    .into_iter()
+                    .filter(|span| span.model.as_deref() == Some(model))
+                    .collect();
+                if rows.len() == 1 {
+                    let exact = Some(rows[0].duration as f64);
+                    assert_eq!(point.value, exact);
+                    assert_eq!(
+                        value_at(
+                            named(&data, SeriesName::LlmLatencyP95, Some(model)),
+                            point.time
+                        ),
+                        exact
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cost_by_model_and_top_models_match_the_dataset() {
+        let (from, to, request) = hour();
+        let data = run(request).await;
+        let spans = kept_spans(
+            &scoped_ids("traces.json", from, to),
+            from,
+            to,
+            &[SpanKind::Llm.as_str()],
+        );
+        let spans: Vec<_> = spans
+            .into_iter()
+            .filter(|span| span.model.is_some())
+            .collect();
+        let models: BTreeSet<_> = spans.iter().filter_map(|span| span.model.clone()).collect();
+        for model in &models {
+            for point in &named(&data, SeriesName::CostByModel, Some(model)).points {
+                let rows: Vec<_> = bucket_spans(&spans, point.time, M10)
+                    .into_iter()
+                    .filter(|span| span.model.as_deref() == Some(model))
+                    .collect();
+                assert_close(
+                    point.value,
+                    sum_f64(rows.into_iter().map(|span| span.cost_total)),
+                );
+            }
+        }
+        assert_eq!(data.top_models, usage_rows(&spans));
+    }
+
+    #[tokio::test]
+    async fn top_models_keeps_ten_by_cost_then_name() {
+        let template = dataset_spans().into_iter().next().expect("span");
+        let start = at("2026-01-01T10:05:00Z");
+        let mut built = Vec::new();
+        for n in 0..12u8 {
+            let mut span = template.clone();
+            span.trace_id = numbered_trace(n + 1);
+            span.span_id = numbered_span(n + 1);
+            span.parent_span_id = None;
+            span.span_kind = SpanKind::Llm;
+            span.start_time = start;
+            span.end_time = start + 1_000_000;
+            span.environment = Some("production".to_owned());
+            span.metadata.clear();
+            span.response_model = Some(format!("m{n:02}"));
+            span.request_model = None;
+            span.cost_total = (n > 0).then_some(f64::from(n));
+            span.total_tokens = Some(i64::from(n) * 10);
+            span.ttft_ns = None;
+            built.push(span);
+        }
+        let data = metrics(
+            &context_of(&built),
+            request(
+                "2026-01-01T10:00:00Z",
+                "2026-01-01T11:00:00Z",
+                Bucket::Fixed(BucketWidth::M10),
+            ),
+        )
+        .await
+        .expect("metrics");
+        let expected = usage_rows(
+            &built
+                .iter()
+                .map(|span| SpanSample {
+                    trace_id: span.trace_id.to_string(),
+                    start: span.start_time,
+                    duration: span.end_time - span.start_time,
+                    kind: span.span_kind.as_str().to_owned(),
+                    model: span.response_model.clone(),
+                    input_tokens: span.input_tokens,
+                    output_tokens: span.output_tokens,
+                    cache_read_tokens: span.cache_read_tokens,
+                    cache_write_tokens: span.cache_write_tokens,
+                    total_tokens: span.total_tokens,
+                    ttft_ns: span.ttft_ns,
+                    cost_total: span.cost_total,
+                })
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(data.top_models.len(), 10);
+        assert_eq!(data.top_models, expected);
+        assert!(
+            data.top_models
+                .iter()
+                .all(|row| row.model != "m00" && row.model != "m01")
+        );
+        assert_eq!(data.top_models[0].model, "m11");
+        assert_eq!(data.top_models[0].cost_total, Some(11.0));
+        assert_eq!(data.top_models[9].model, "m02");
+    }
+
+    fn numbered_trace(n: u8) -> TraceId {
+        let mut bytes = [0; 16];
+        bytes[15] = n;
+        TraceId::from_bytes(bytes).expect("trace id")
+    }
+
+    fn numbered_span(n: u8) -> SpanId {
+        let mut bytes = [0; 8];
+        bytes[7] = n;
+        SpanId::from_bytes(bytes).expect("span id")
+    }
+
+    fn context_of(spans: &[Span]) -> QueryContext {
+        QueryContext::new(
+            ProjectQuery {
+                spans: spans_table(spans),
+                traces: traces_table(spans),
+                scores: live_scores_table(&dataset_scores()),
+                runtime: Arc::new(RuntimeEnv::default()),
+                target_partitions: NonZeroUsize::new(2).expect("two partitions"),
+            },
+            None,
+        )
+        .expect("context")
+    }
+
+    #[tokio::test]
+    async fn score_average_uses_live_trace_and_span_scores() {
+        let (from, to, request) = hour();
+        let data = run(request).await;
+        let ids = scoped_ids("traces.json", from, to);
+        let mut sums: BTreeMap<(i64, String), (f64, i64)> = BTreeMap::new();
+        let mut session_names = BTreeSet::new();
+        for score in live_scores(&dataset_scores()) {
+            let trace_id = match &score.target {
+                ScoreTarget::Trace { trace_id } | ScoreTarget::Span { trace_id, .. } => {
+                    trace_id.to_string()
+                }
+                ScoreTarget::Session { .. } => {
+                    session_names.insert(score.name);
+                    continue;
+                }
+            };
+            if !ids.contains(&trace_id) || score.created_at < from || score.created_at >= to {
+                continue;
+            }
+            let Some(value) = score.value.value_num() else {
+                continue;
+            };
+            let bucket = score.created_at - score.created_at.rem_euclid(M10);
+            let entry = sums.entry((bucket, score.name)).or_insert((0.0, 0));
+            entry.0 += value;
+            entry.1 += 1;
+        }
+        assert!(!session_names.is_empty());
+        let actual: BTreeSet<_> = data
+            .series
+            .iter()
+            .filter(|series| series.name == SeriesName::ScoreAvg)
+            .map(|series| series.group.clone().expect("score name"))
+            .collect();
+        let names: BTreeSet<_> = sums.keys().map(|(_, name)| name.clone()).collect();
+        assert_eq!(actual, names);
+        assert!(actual.is_disjoint(&session_names));
+        for series in data
+            .series
+            .iter()
+            .filter(|series| series.name == SeriesName::ScoreAvg)
+        {
+            let name = series.group.clone().expect("score name");
+            for point in &series.points {
+                let expected = sums
+                    .get(&(point.time, name.clone()))
+                    .map(|(sum, count)| sum / *count as f64);
+                assert_close(point.value, expected);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn kpis_cover_the_window_and_the_previous_window() {
+        let (from, to, asked) = hour();
+        let data = run(asked).await;
+        assert_eq!(
+            data.kpis.iter().map(|kpi| kpi.name).collect::<Vec<_>>(),
+            vec![
+                KpiName::Traces,
+                KpiName::ErrorRate,
+                KpiName::LatencyP95,
+                KpiName::CostTotal,
+                KpiName::TotalTokens,
+            ]
+        );
+        let loaded = samples("traces.json");
+        assert_kpis(&data, &loaded, from, to);
+        assert!(data.kpis.iter().all(|kpi| kpi.previous.is_none()));
+
+        let previous_from = at("2026-01-01T10:15:00Z");
+        let previous_to = at("2026-01-01T10:30:00Z");
+        let later = run(request(
+            "2026-01-01T10:15:00Z",
+            "2026-01-01T10:30:00Z",
+            Bucket::Fixed(BucketWidth::M10),
+        ))
+        .await;
+        let traces = kpi(&later, KpiName::Traces);
+        let current = loaded
+            .iter()
+            .filter(|sample| sample.start >= previous_from && sample.start < previous_to)
+            .count();
+        let previous = loaded
+            .iter()
+            .filter(|sample| {
+                sample.start >= at("2026-01-01T10:00:00Z") && sample.start < previous_from
+            })
+            .count();
+        assert_eq!(traces.value, Some(current as f64));
+        assert_eq!(traces.previous, Some(previous as f64));
+        assert!(traces.previous.is_some_and(|value| value > 0.0));
+        assert_kpis(&later, &loaded, previous_from, previous_to);
+    }
+
+    fn kpi(data: &MetricsData, name: KpiName) -> &Kpi {
+        data.kpis
+            .iter()
+            .find(|kpi| kpi.name == name)
+            .unwrap_or_else(|| panic!("missing {name:?}"))
+    }
+
+    fn assert_kpis(data: &MetricsData, loaded: &[Sample], from: i64, to: i64) {
+        let rows: Vec<_> = loaded
+            .iter()
+            .filter(|sample| sample.start >= from && sample.start < to)
+            .collect();
+        assert_eq!(kpi(data, KpiName::Traces).value, Some(rows.len() as f64));
+        let errors = rows.iter().filter(|row| row.error_count > 0).count();
+        assert_close(
+            kpi(data, KpiName::ErrorRate).value,
+            Some(errors as f64 / rows.len() as f64),
+        );
+        let durations: Vec<f64> = rows.iter().map(|row| row.duration as f64).collect();
+        let latency = kpi(data, KpiName::LatencyP95).value.expect("p95");
+        let min = durations.iter().copied().fold(f64::INFINITY, f64::min);
+        let max = durations.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            latency >= min && latency <= max,
+            "{latency} not in {min}..={max}"
+        );
+        if durations.len() == 1 {
+            assert_eq!(kpi(data, KpiName::LatencyP95).value, Some(durations[0]));
+        }
+        assert_close(kpi(data, KpiName::CostTotal).value, cost_sum(&rows));
+        assert_close(
+            kpi(data, KpiName::TotalTokens).value,
+            sum_i64(rows.iter().map(|row| row.total_tokens)),
+        );
+    }
+
+    #[tokio::test]
+    async fn filter_keeps_token_series_on_one_trace() {
+        let from = at("2026-01-01T10:00:00Z");
+        let to = at("2026-01-01T11:00:00Z");
+        let trace = "a1000000000000000000000000000001";
+        let text = format!("trace_id = '{trace}'");
+        let filtered = MetricsRequest {
+            window: TimeWindow::new(from, to).expect("window"),
+            bucket: Bucket::Fixed(BucketWidth::M10),
+            filter: Some(&text),
+            group_by: None,
+            include_eval: false,
+            include_experiments: false,
+            timeout: TIMEOUT,
+        };
+        let data = run(filtered).await;
+        let mut ids = BTreeSet::new();
+        ids.insert(trace.to_owned());
+        assert_tokens(&data, &ids, from, to);
+        let all = kept_spans(
+            &scoped_ids("traces.json", from, to),
+            from,
+            to,
+            &[SpanKind::Llm.as_str(), SpanKind::Embedding.as_str()],
+        );
+        let only = kept_spans(
+            &ids,
+            from,
+            to,
+            &[SpanKind::Llm.as_str(), SpanKind::Embedding.as_str()],
+        );
+        let all_input = sum_i64(all.iter().map(|span| span.input_tokens));
+        let one_input = sum_i64(only.iter().map(|span| span.input_tokens));
+        assert!(all_input.is_some_and(|value| Some(value) != one_input));
+    }
+
+    #[tokio::test]
+    async fn include_eval_adds_trace_five_spans_and_hides_them_by_default() {
+        let (from, to, hidden_request) = hour();
+        let hidden = run(hidden_request).await;
+        let mut included_request = request(
+            "2026-01-01T10:00:00Z",
+            "2026-01-01T11:00:00Z",
+            Bucket::Fixed(BucketWidth::M10),
+        );
+        included_request.include_eval = true;
+        let included = run(included_request).await;
+        let hidden_ids = scoped_ids("traces.json", from, to);
+        let included_ids = scoped_ids("traces-include-eval.json", from, to);
+        assert_tokens(&hidden, &hidden_ids, from, to);
+        assert_tokens(&included, &included_ids, from, to);
+        assert_span_models(&hidden, &hidden_ids, from, to);
+        assert_span_models(&included, &included_ids, from, to);
+        let extra: BTreeSet<_> = included_ids.difference(&hidden_ids).cloned().collect();
+        let added = kept_spans(
+            &extra,
+            from,
+            to,
+            &[SpanKind::Llm.as_str(), SpanKind::Embedding.as_str()],
+        );
+        assert_eq!(
+            sum_i64(added.iter().map(|span| span.input_tokens)),
+            Some(600.0)
+        );
+        let hidden_input = series_sum(&hidden, SeriesName::InputTokens, None);
+        let included_input = series_sum(&included, SeriesName::InputTokens, None);
+        assert_close(
+            included_input,
+            hidden_input.map(|value| value + 600.0).or(Some(600.0)),
+        );
+    }
+
+    fn assert_span_models(data: &MetricsData, ids: &BTreeSet<String>, from: i64, to: i64) {
+        let spans = kept_spans(ids, from, to, &[SpanKind::Llm.as_str()]);
+        let spans: Vec<_> = spans
+            .into_iter()
+            .filter(|span| span.model.is_some())
+            .collect();
+        let with_ttft: Vec<_> = spans
+            .iter()
+            .filter(|span| span.ttft_ns.is_some())
+            .cloned()
+            .collect();
+        for point in &named(data, SeriesName::TtftP50, None).points {
+            let rows = bucket_spans(&with_ttft, point.time, M10);
+            if rows.len() == 1 {
+                assert_eq!(point.value, Some(rows[0].ttft_ns.expect("ttft") as f64));
+            }
+        }
+        for model in spans.iter().filter_map(|span| span.model.clone()) {
+            for point in &named(data, SeriesName::CostByModel, Some(&model)).points {
+                let rows: Vec<_> = bucket_spans(&spans, point.time, M10)
+                    .into_iter()
+                    .filter(|span| span.model.as_deref() == Some(model.as_str()))
+                    .collect();
+                assert_close(
+                    point.value,
+                    sum_f64(rows.into_iter().map(|span| span.cost_total)),
+                );
+            }
+            for point in &named(data, SeriesName::LlmLatencyP50, Some(&model)).points {
+                let rows: Vec<_> = bucket_spans(&spans, point.time, M10)
+                    .into_iter()
+                    .filter(|span| span.model.as_deref() == Some(model.as_str()))
+                    .collect();
+                if rows.len() == 1 {
+                    assert_eq!(point.value, Some(rows[0].duration as f64));
+                }
+            }
+        }
+    }
+
+    fn series_sum(data: &MetricsData, name: SeriesName, group: Option<&str>) -> Option<f64> {
+        sum_f64(
+            named(data, name, group)
+                .points
+                .iter()
+                .map(|point| point.value),
+        )
     }
 }

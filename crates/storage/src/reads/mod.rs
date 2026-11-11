@@ -20,7 +20,8 @@ use crate::query_error::{RunError, classify};
 use crate::views::{QueryContext, TimeWindow};
 
 pub use metrics::{
-    Bucket, BucketWidth, MetricsData, MetricsGroupBy, MetricsRequest, Point, Series, SeriesName,
+    Bucket, BucketWidth, Kpi, KpiName, MetricsData, MetricsGroupBy, MetricsRequest, ModelUsageRow,
+    Point, Series, SeriesName,
 };
 pub use scores::{LATEST_SCORE_COLUMNS, ScoreListRequest, ScoreTargets, latest_scores, score_list};
 pub use sessions::{
