@@ -239,6 +239,92 @@ it("virtualizes a 10 000 span trace and reveals children when a node expands", a
   });
 });
 
+it("chooses a preset and refreshes against a new anchor", async () => {
+  const urls: URL[] = [];
+  const onStart = ({ request }: { request: Request }) => {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/traces")) {
+      urls.push(url);
+    }
+  };
+  server.events.on("request:start", onStart);
+  try {
+    const { router } = await renderApp("/acme/support-bot/traces");
+    await screen.findByRole("grid", { name: "Traces" });
+    fireEvent.click(screen.getByRole("button", { name: "Last 24 hours" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Last 1 hour" }));
+    await waitFor(() => {
+      expect(urls.some((url) => near(url, 3_600_000))).toBe(true);
+    });
+    expect(router.state.location.search).toMatchObject({ range: "1h" });
+    const before = urls
+      .filter((url) => near(url, 3_600_000))
+      .at(-1)
+      ?.searchParams.get("from");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      const after = urls
+        .filter((url) => near(url, 3_600_000))
+        .at(-1)
+        ?.searchParams.get("from");
+      expect(after).toBeTruthy();
+      expect(after).not.toBe(before);
+    });
+  } finally {
+    server.events.removeListener("request:start", onStart);
+  }
+});
+
+it("sends a search after the debounce", async () => {
+  const urls: URL[] = [];
+  const onStart = ({ request }: { request: Request }) => {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/traces")) {
+      urls.push(url);
+    }
+  };
+  server.events.on("request:start", onStart);
+  try {
+    const { router } = await renderApp("/acme/support-bot/traces");
+    const input = await screen.findByRole("searchbox", { name: "Search" });
+    fireEvent.change(input, { target: { value: "refund" } });
+    await waitFor(() => {
+      expect(urls.some((url) => url.searchParams.get("search") === "refund")).toBe(true);
+    });
+    expect(router.state.location.search).toMatchObject({ search: "refund" });
+  } finally {
+    server.events.removeListener("request:start", onStart);
+  }
+});
+
+it("includes evaluation traces when eval is on", async () => {
+  const urls: URL[] = [];
+  const onStart = ({ request }: { request: Request }) => {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/traces")) {
+      urls.push(url);
+    }
+  };
+  server.events.on("request:start", onStart);
+  try {
+    const { router } = await renderApp("/acme/support-bot/traces");
+    await screen.findByRole("grid", { name: "Traces" });
+    expect(screen.queryByText("judge helpfulness")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch", { name: "Eval" }));
+    expect(await screen.findByText("judge helpfulness")).toBeInTheDocument();
+    expect(urls.some((url) => url.searchParams.get("include_eval") === "true")).toBe(true);
+    expect(router.state.location.search).toMatchObject({ eval: 1 });
+  } finally {
+    server.events.removeListener("request:start", onStart);
+  }
+});
+
+function near(url: URL, windowMs: number): boolean {
+  const from = Date.parse(url.searchParams.get("from") ?? "");
+  return Math.abs(from - (Date.now() - windowMs)) < 15_000;
+}
+
 it("shows the empty state when the first page is empty", async () => {
   server.use(
     http.get("/api/v1/projects/:project/traces", () =>

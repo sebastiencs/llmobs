@@ -6,6 +6,7 @@ import type { Schema } from "@/api/types";
 import { DataTable, type DataTableColumn } from "@/components/data-table/data-table";
 import { traceListOptions } from "@/components/data-table/use-infinite-list";
 import { EmptyState } from "@/components/empty-state";
+import { ListToolbar } from "@/components/list-toolbar";
 import { useProject } from "@/components/shell/project-context";
 import { StatusDot } from "@/components/status-dot";
 import { TimeText } from "@/components/time-text";
@@ -15,8 +16,8 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatCost, formatDuration, formatTokens } from "@/lib/format";
 import { parseTracesSearch, type TracesSearch } from "@/lib/search/traces";
+import { type RangeState, rangeFromSearch, resolveRange } from "@/lib/time-range";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 const TAGS_SHOWN = 2;
 
 const columns: DataTableColumn<Schema<"TraceSummary">>[] = [
@@ -122,9 +123,28 @@ function TracesPage() {
   const { org, project } = useProject();
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
-  const [from] = useState(() => new Date(Date.now() - DAY_MS).toISOString());
+  const range = rangeFromSearch(search);
+  const rangeKey = range.kind === "preset" ? range.preset : `${range.from}\n${range.to}`;
+  const [anchor, setAnchor] = useState(() => Date.now());
+  const seenRange = useRef(rangeKey);
+  useEffect(() => {
+    if (seenRange.current === rangeKey) {
+      return;
+    }
+    seenRange.current = rangeKey;
+    setAnchor(Date.now());
+  }, [rangeKey]);
+  const resolved = resolveRange(range, anchor);
   const list = useInfiniteQuery(
-    traceListOptions(org, project, { from, sort: search.sort, order: search.order }),
+    traceListOptions(org, project, {
+      from: resolved.from,
+      to: resolved.to,
+      sort: search.sort,
+      order: search.order,
+      search: search.search,
+      includeEval: search.eval === 1,
+      includeExperiments: search.exp === 1,
+    }),
   );
   const fetchNextPage = useCallback(() => {
     void list.fetchNextPage();
@@ -184,14 +204,48 @@ function TracesPage() {
           open={traceOpen}
           start={
             <div className="flex h-full min-h-0 flex-col">
-              <div className="flex h-[36px] shrink-0 items-center justify-between border-b px-3">
-                <h1 className="text-sm font-medium">Traces</h1>
+              <TooltipProvider>
+                <ListToolbar
+                  title="Traces"
+                  range={range}
+                  onRange={(next) => {
+                    seenRange.current =
+                      next.kind === "preset" ? next.preset : `${next.from}\n${next.to}`;
+                    setAnchor(Date.now());
+                    void navigate({
+                      to: "/$org/$project/traces",
+                      params: { org, project },
+                      search: (prev) => withRange(prev, next),
+                    });
+                  }}
+                  onRefresh={() => setAnchor(Date.now())}
+                  search={search.search ?? ""}
+                  onSearch={(value) => {
+                    void navigate({
+                      to: "/$org/$project/traces",
+                      params: { org, project },
+                      search: (prev) => withSearch(prev, value),
+                    });
+                  }}
+                  evalOn={search.eval === 1}
+                  onEval={(on) => {
+                    void navigate({
+                      to: "/$org/$project/traces",
+                      params: { org, project },
+                      search: (prev) => withFlag(prev, "eval", on),
+                    });
+                  }}
+                  expOn={search.exp === 1}
+                  onExp={(on) => {
+                    void navigate({
+                      to: "/$org/$project/traces",
+                      params: { org, project },
+                      search: (prev) => withFlag(prev, "exp", on),
+                    });
+                  }}
+                  loaded={list.data ? rows.length : undefined}
+                />
                 {list.data ? (
-                  <span className="text-xs text-muted-foreground">{rows.length} loaded</span>
-                ) : null}
-              </div>
-              {list.data ? (
-                <TooltipProvider>
                   <DataTable
                     tableId="traces"
                     ariaLabel="Traces"
@@ -223,8 +277,8 @@ function TracesPage() {
                     }}
                     emptyState={<EmptyState icon={Waypoints} title="No traces" />}
                   />
-                </TooltipProvider>
-              ) : null}
+                ) : null}
+              </TooltipProvider>
             </div>
           }
           end={
@@ -247,6 +301,25 @@ function TracesPage() {
       </div>
     </div>
   );
+}
+
+function withRange(search: TracesSearch, state: RangeState): TracesSearch {
+  const { range: _range, from: _from, to: _to, ...rest } = search;
+  if (state.kind === "preset") {
+    return { ...rest, range: state.preset };
+  }
+  return { ...rest, from: state.from, to: state.to };
+}
+
+function withSearch(search: TracesSearch, value: string): TracesSearch {
+  const { search: _search, ...rest } = search;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? { ...rest, search: trimmed } : rest;
+}
+
+function withFlag(search: TracesSearch, key: "eval" | "exp", on: boolean): TracesSearch {
+  const { [key]: _flag, ...rest } = search;
+  return on ? { ...rest, [key]: 1 } : rest;
 }
 
 function withoutSpan(search: TracesSearch): TracesSearch {

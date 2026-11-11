@@ -21,9 +21,9 @@ export function parseHex(value: unknown, length: number): string | undefined {
   return /^[0-9a-f]+$/.test(value) ? value : undefined;
 }
 
-/** `"1"` is on. Every other value is dropped. */
+/** `1` is on, whether the router parsed it as a number or left it as a string. */
 export function parseFlag(value: unknown): true | undefined {
-  return value === "1" ? true : undefined;
+  return value === 1 || value === "1" ? true : undefined;
 }
 
 /** Trimmed text. Empty or longer than `max` is dropped. */

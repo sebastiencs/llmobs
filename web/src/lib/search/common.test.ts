@@ -27,10 +27,12 @@ describe("parseHex", () => {
 });
 
 describe("parseFlag", () => {
-  it("accepts only the string 1", () => {
+  it("accepts 1 and drops every other value", () => {
+    expect(parseFlag(1)).toBe(true);
     expect(parseFlag("1")).toBe(true);
     expect(parseFlag("true")).toBeUndefined();
     expect(parseFlag("0")).toBeUndefined();
+    expect(parseFlag(true)).toBeUndefined();
   });
 });
 
