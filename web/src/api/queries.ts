@@ -53,16 +53,3 @@ export function projectInit(org: string, project: string) {
 export function projectQuery(org: string, project: string) {
   return $api.queryOptions("get", "/api/v1/projects/{project}", projectInit(org, project));
 }
-
-export function traceListInit(org: string, project: string) {
-  return {
-    params: {
-      path: { project: projectRef(org, project) },
-      query: { limit: 50 },
-    },
-  };
-}
-
-export function traceListQuery(org: string, project: string) {
-  return $api.queryOptions("get", "/api/v1/projects/{project}/traces", traceListInit(org, project));
-}

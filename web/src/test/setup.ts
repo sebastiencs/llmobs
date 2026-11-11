@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll } from "vitest";
 import { server } from "../mocks/node";
+import { installLayout, restoreLayout } from "./layout";
 import { installMatchMedia, resetMatchMedia } from "./match-media";
 
 beforeAll(() => {
@@ -9,6 +10,7 @@ beforeAll(() => {
 });
 
 installMatchMedia();
+installLayout();
 
 window.scrollTo = () => {};
 
@@ -39,5 +41,6 @@ afterEach(() => {
 });
 
 afterAll(() => {
+  restoreLayout();
   server.close();
 });
