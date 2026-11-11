@@ -1,10 +1,11 @@
 //! Queries behind the read endpoints (D92).
 //!
-//! Each function takes a [`QueryContext`] and a request, runs under the
-//! request's timeout, and returns Arrow batches in view-column order. The
-//! server maps those batches to API types.
+//! Each function takes a [`QueryContext`] and a request and runs under the
+//! request's timeout. Lists return Arrow batches in view-column order.
+//! Dashboard metrics return plain structs. The server maps either to API types.
 
 mod cursor;
+pub(crate) mod metrics;
 mod scores;
 mod sessions;
 mod traces;
@@ -18,6 +19,9 @@ use crate::filter::{FilterView, exclusions, time_window};
 use crate::query_error::{RunError, classify};
 use crate::views::{QueryContext, TimeWindow};
 
+pub use metrics::{
+    Bucket, BucketWidth, MetricsData, MetricsGroupBy, MetricsRequest, Point, Series, SeriesName,
+};
 pub use scores::{LATEST_SCORE_COLUMNS, ScoreListRequest, ScoreTargets, latest_scores, score_list};
 pub use sessions::{
     MAX_SESSION_TURNS, SessionDetailData, SessionListRequest, SessionSort, session_detail,
