@@ -46,6 +46,16 @@ import {
 } from "@/lib/tree";
 
 const ROW_HEIGHT = 28;
+const LIVE_ROW_CSS = `
+@keyframes live-row {
+  from { box-shadow: inset 0 0 0 999px color-mix(in oklch, var(--primary) 28%, transparent); }
+  to { box-shadow: inset 0 0 0 999px transparent; }
+}
+.live-row { animation: live-row 1.5s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .live-row { animation: none; }
+}
+`;
 const OVERSCAN = 12;
 const TEMPLATE = "minmax(0, 1.4fr) 72px 64px 72px minmax(0, 1fr)";
 const ZOOM_WHEEL = 1.2;
@@ -71,6 +81,7 @@ export function TreeGrid({
   onSelectSpan,
   mode,
   onMode,
+  highlightedSpanIds,
 }: {
   spans: readonly Schema<"TreeSpan">[];
   trace: Schema<"TraceSummary">;
@@ -78,6 +89,7 @@ export function TreeGrid({
   onSelectSpan: (spanId: string) => void;
   mode: TraceMode;
   onMode: (mode: TraceMode) => void;
+  highlightedSpanIds?: ReadonlySet<string>;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -378,6 +390,7 @@ export function TreeGrid({
         onPointerMove={onPointerMove}
         onPointerLeave={() => setNeedle(null)}
       >
+        <style>{LIVE_ROW_CSS}</style>
         {needle ? (
           <div
             className="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-foreground/70"
@@ -473,6 +486,7 @@ export function TreeGrid({
                       : "hover:bg-muted",
                     dim && "opacity-40",
                     isMatch && !selected && "bg-primary/10",
+                    highlightedSpanIds?.has(span.span_id) && "live-row",
                   )}
                   style={{
                     height: ROW_HEIGHT,

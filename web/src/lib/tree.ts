@@ -127,6 +127,79 @@ export function defaultCollapsed(spans: readonly TreeNode[]): Set<string> {
   return collapsed;
 }
 
+type LiveSpan = {
+  span_id: string;
+  parent_span_id?: string;
+  start_time: string;
+};
+
+type LiveRow<Span extends LiveSpan> = {
+  depth: number;
+  detached: boolean;
+  span: Span;
+};
+
+/**
+ * Inserts one live span into a pre-order tree.
+ * A known id is replaced in place. A known parent gets the span among its
+ * children, ordered by start time then span id, after that child's descendants.
+ * An unknown parent is appended as a detached root and is not moved later.
+ */
+export function insertSpan<Span extends LiveSpan>(
+  spans: readonly LiveRow<Span>[],
+  summary: Span,
+): LiveRow<Span>[] {
+  const existing = spans.findIndex((row) => row.span.span_id === summary.span_id);
+  if (existing >= 0) {
+    const current = spans[existing];
+    if (!current) {
+      return spans.slice();
+    }
+    const next = spans.slice();
+    next[existing] = { ...current, span: summary };
+    return next;
+  }
+  const parentIndex = summary.parent_span_id
+    ? spans.findIndex((row) => row.span.span_id === summary.parent_span_id)
+    : -1;
+  const parent = parentIndex >= 0 ? spans[parentIndex] : undefined;
+  if (!parent) {
+    return [...spans, { depth: 0, detached: true, span: summary }];
+  }
+  const depth = parent.depth + 1;
+  const ends = subtreeEnds(spans);
+  const subtreeEnd = ends[parentIndex] ?? spans.length;
+  let insertAt = subtreeEnd;
+  let index = parentIndex + 1;
+  while (index < subtreeEnd) {
+    const row = spans[index];
+    if (!row || row.depth !== depth) {
+      index += 1;
+      continue;
+    }
+    if (startsAfter(row.span, summary)) {
+      insertAt = index;
+      break;
+    }
+    const childEnd = ends[index] ?? index + 1;
+    insertAt = childEnd;
+    index = childEnd;
+  }
+  return [
+    ...spans.slice(0, insertAt),
+    { depth, detached: false, span: summary },
+    ...spans.slice(insertAt),
+  ];
+}
+
+/** Existing sorts after the incoming span: later start, or the same start and a greater id. */
+function startsAfter(existing: LiveSpan, incoming: LiveSpan): boolean {
+  if (existing.start_time !== incoming.start_time) {
+    return existing.start_time > incoming.start_time;
+  }
+  return existing.span_id > incoming.span_id;
+}
+
 /** Ancestor indices from the root down to the parent, so a selection can expand its path. */
 export function ancestorsOf(spans: readonly { depth: number }[], index: number): number[] {
   if (index < 0 || index >= spans.length) {

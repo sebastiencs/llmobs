@@ -12,17 +12,27 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatCost, formatDuration, formatTokens } from "@/lib/format";
 import type { TraceMode } from "@/lib/search/traces";
+import type { StreamStatus } from "@/lib/sse";
+
+const LIVE_DOT: Record<StreamStatus, string> = {
+  connecting: "bg-muted-foreground",
+  open: "bg-status-ok",
+  retrying: "bg-status-error",
+  closed: "bg-muted-foreground",
+};
 
 export function TraceHeader({
   trace,
   spanId,
   mode,
   onClose,
+  live,
 }: {
   trace: Schema<"TraceSummary">;
   spanId?: string;
   mode?: TraceMode;
   onClose?: () => void;
+  live?: { status: StreamStatus; onStop: () => void };
 }) {
   const { org, project } = useProject();
   const search = pageSearch(spanId, mode);
@@ -40,6 +50,21 @@ export function TraceHeader({
           <IdText value={trace.trace_id} kind="trace" />
           <TimeText value={trace.start_time} style="datetime" />
           <div className="ml-auto flex shrink-0 items-center gap-1">
+            {live ? (
+              <span className="inline-flex items-center gap-1">
+                <span
+                  role="status"
+                  aria-label={live.status}
+                  className={cn("size-2 shrink-0 rounded-full", LIVE_DOT[live.status])}
+                />
+                <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
+                  Live
+                </Badge>
+                <Button type="button" variant="ghost" size="xs" onClick={live.onStop}>
+                  Stop
+                </Button>
+              </span>
+            ) : null}
             <CopyButton value={href} label="link" />
             {onClose ? (
               <Link

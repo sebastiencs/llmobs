@@ -4,6 +4,7 @@ import {
   defaultCollapsed,
   filterRows,
   hasChildren,
+  insertSpan,
   subtreeEnds,
   visibleRows,
 } from "@/lib/tree";
@@ -135,3 +136,83 @@ it("keeps the right rows for 10 000 spans", () => {
   expect(rows.length).toBeGreaterThan(0);
   expect(rows.length).toBeLessThan(spans.length);
 });
+
+function live(id: string, start: string, parent?: string, name?: string) {
+  return {
+    span_id: id,
+    start_time: start,
+    ...(parent ? { parent_span_id: parent } : {}),
+    ...(name ? { name } : {}),
+  };
+}
+
+function placed(id: string, start: string, depth: number, parent?: string, detached = false) {
+  return { depth, detached, span: live(id, start, parent) };
+}
+
+it("inserts a child after earlier siblings and their descendants", () => {
+  const spans = [
+    placed("p", "t0", 0),
+    placed("a", "t1", 1, "p"),
+    placed("g", "t2", 2, "a"),
+    placed("c", "t3", 1, "p"),
+  ];
+  const next = insertSpan(spans, live("b", "t2", "p"));
+  expect(next.map((row) => row.span.span_id)).toEqual(["p", "a", "g", "b", "c"]);
+  expect(next[3]).toEqual({ depth: 1, detached: false, span: live("b", "t2", "p") });
+});
+
+it("orders siblings with the same start by span id", () => {
+  const spans = [placed("p", "t0", 0), placed("b", "t1", 1, "p"), placed("d", "t1", 1, "p")];
+  const next = insertSpan(spans, live("c", "t1", "p"));
+  expect(next.map((row) => row.span.span_id)).toEqual(["p", "b", "c", "d"]);
+});
+
+it("appends an unknown parent as a detached root and leaves it there", () => {
+  const spans = [placed("p", "t0", 0)];
+  const detached = insertSpan(spans, live("orphan", "t1", "missing"));
+  expect(detached).toEqual([
+    ...spans,
+    { depth: 0, detached: true, span: live("orphan", "t1", "missing") },
+  ]);
+  const parent = insertSpan(detached, live("missing", "t0"));
+  expect(parent.map((row) => row.span.span_id)).toEqual(["p", "orphan", "missing"]);
+  expect(parent[1]?.detached).toBe(true);
+});
+
+it("replaces a duplicate span in place", () => {
+  const spans = [placed("p", "t0", 0), placed("a", "t1", 1, "p")];
+  const next = insertSpan(spans, live("a", "t9", "p", "updated"));
+  expect(next.map((row) => row.span.span_id)).toEqual(["p", "a"]);
+  expect(next[1]?.depth).toBe(1);
+  expect(next[1]?.span).toMatchObject({ start_time: "t9", name: "updated" });
+});
+
+it("places one span in a 10 000-span tree", () => {
+  const spans = [placed("p", stamp(0), 0)];
+  for (let index = 0; index < 10_000; index++) {
+    spans.push(placed(idOf(index), stamp(index * 2 + 2), 1, "p"));
+  }
+  const incoming = live(idOf(10_000), stamp(5000 * 2 + 1), "p");
+  const next = insertSpan(spans, incoming);
+  expect(next).toHaveLength(10_002);
+  const at = next.findIndex((row) => row.span.span_id === incoming.span_id);
+  expect(at).toBe(5001);
+  expect(next[at]).toEqual({ depth: 1, detached: false, span: incoming });
+  const before = next[at - 1]?.span.start_time;
+  const after = next[at + 1]?.span.start_time;
+  if (before === undefined || after === undefined) {
+    throw new Error("missing neighbours");
+  }
+  expect(before < incoming.start_time).toBe(true);
+  expect(after > incoming.start_time).toBe(true);
+  expect(next.filter((row) => row.depth === 0).map((row) => row.span.span_id)).toEqual(["p"]);
+});
+
+function stamp(index: number): string {
+  return `t${String(index).padStart(5, "0")}`;
+}
+
+function idOf(index: number): string {
+  return `s${String(index).padStart(5, "0")}`;
+}
