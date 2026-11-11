@@ -1,11 +1,13 @@
 //! Payload readers in convention precedence order.
 //!
 //! Spec 02 § Input and output. llmobs and GenAI are N13. OpenInference is N18.
-//! Vercel is N19. Later conventions append one reader and one [`PayloadKeys`] entry.
+//! Vercel is N19. OpenLLMetry is N20. Later conventions append one reader and
+//! one [`PayloadKeys`] entry.
 
 mod genai;
 mod llmobs;
 mod openinference;
+mod openllmetry;
 mod vercel;
 
 use llmobs_core::enums::Convention;
@@ -16,7 +18,7 @@ use crate::payload::{ConventionPayload, Payload, PayloadKeys, decode_json_text};
 use crate::value::{as_str, to_json};
 use crate::warn::Warnings;
 
-/// llmobs, then GenAI, then OpenInference, then Vercel.
+/// llmobs, then GenAI, then OpenInference, then Vercel, then OpenLLMetry.
 pub(crate) const READERS: &[ConventionPayload] = &[
     ConventionPayload {
         convention: Convention::Llmobs,
@@ -33,6 +35,10 @@ pub(crate) const READERS: &[ConventionPayload] = &[
     ConventionPayload {
         convention: Convention::Vercel,
         read: vercel::read,
+    },
+    ConventionPayload {
+        convention: Convention::Openllmetry,
+        read: openllmetry::read,
     },
 ];
 
@@ -53,6 +59,10 @@ pub(crate) const REGISTRIES: &[PayloadKeys] = &[
     PayloadKeys {
         convention: Convention::Vercel,
         keys: vercel::PAYLOAD_KEYS,
+    },
+    PayloadKeys {
+        convention: Convention::Openllmetry,
+        keys: openllmetry::PAYLOAD_KEYS,
     },
 ];
 

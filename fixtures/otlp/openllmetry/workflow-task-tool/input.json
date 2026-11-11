@@ -1,0 +1,165 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "workflow-app"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "traceloop.tracer"
+          },
+          "spans": [
+            {
+              "traceId": "fc2a0000000000000000000000000001",
+              "spanId": "fc2a000000000001",
+              "name": "answer.workflow",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "traceloop.span.kind",
+                  "value": {
+                    "stringValue": "workflow"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.name",
+                  "value": {
+                    "stringValue": "answer"
+                  }
+                },
+                {
+                  "key": "traceloop.workflow.name",
+                  "value": {
+                    "stringValue": "answer"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.input",
+                  "value": {
+                    "stringValue": "{\"args\":[],\"kwargs\":{\"question\":\"capital\"}}"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.output",
+                  "value": {
+                    "stringValue": "{\"output\":\"Paris\"}"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.session_id",
+                  "value": {
+                    "stringValue": "sess-1"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.customer",
+                  "value": {
+                    "stringValue": "acme"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "fc2a0000000000000000000000000001",
+              "spanId": "fc2a000000000002",
+              "name": "lookup.task",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590100000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "traceloop.span.kind",
+                  "value": {
+                    "stringValue": "task"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.name",
+                  "value": {
+                    "stringValue": "lookup"
+                  }
+                },
+                {
+                  "key": "traceloop.workflow.name",
+                  "value": {
+                    "stringValue": "answer"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.input",
+                  "value": {
+                    "stringValue": "{\"args\":[\"Paris\"],\"kwargs\":{}}"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.output",
+                  "value": {
+                    "stringValue": "{\"output\":{\"temp\":18}}"
+                  }
+                }
+              ],
+              "parentSpanId": "fc2a000000000001"
+            },
+            {
+              "traceId": "fc2a0000000000000000000000000001",
+              "spanId": "fc2a000000000003",
+              "name": "lookup.tool",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590200000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "traceloop.span.kind",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.name",
+                  "value": {
+                    "stringValue": "lookup"
+                  }
+                },
+                {
+                  "key": "traceloop.workflow.name",
+                  "value": {
+                    "stringValue": "answer"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "lookup"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.input",
+                  "value": {
+                    "stringValue": "{\"args\":[],\"kwargs\":{\"city\":\"Paris\"}}"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.output",
+                  "value": {
+                    "stringValue": "{\"output\":\"sunny\"}"
+                  }
+                }
+              ],
+              "parentSpanId": "fc2a000000000002"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

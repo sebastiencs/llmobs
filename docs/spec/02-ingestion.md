@@ -152,7 +152,7 @@ Per-modality counts (`gen_ai.usage.{audio,image,text}.*`, `llm.token_count.*_det
 | `session_id` | `llmobs.session.id`, `session.id`, `gen_ai.conversation.id`, `traceloop.association.properties.session_id`, `ai.telemetry.metadata.sessionId`, `langfuse.session.id`, `lmnr.association.properties.session_id` |
 | `user_id` | `llmobs.user.id`, `user.id`, `enduser.id`, `traceloop.association.properties.user_id`, `ai.telemetry.metadata.userId`, `langfuse.user.id`, `lmnr.association.properties.user_id` |
 | `tags` | `llmobs.tags`, `tag.tags`, `ai.telemetry.metadata.tags`, `langfuse.trace.tags`, `lmnr.association.properties.tags`. Each source is a string array or a string containing a JSON array of strings. Any other form, such as a comma-separated list, is not a tag source: it is consumed and stays in `attributes` (rule 2) |
-| `metadata` | `llmobs.metadata.*` (one attribute per key), `metadata` (OI, JSON object string), `ai.telemetry.metadata.*`, `ai.telemetry.functionId` (stored as `functionId`), `traceloop.association.properties.*`, `langfuse.trace.metadata.*`, `lmnr.association.properties.metadata.*` |
+| `metadata` | `llmobs.metadata.*` (one attribute per key), `metadata` (OI, JSON object string), `ai.telemetry.metadata.*`, `ai.telemetry.functionId` (stored as `functionId`), `traceloop.association.properties.*`, `traceloop.workflow.name` (stored as `workflow`), `langfuse.trace.metadata.*`, `lmnr.association.properties.metadata.*` |
 | `environment` | `llmobs.environment`, resource `deployment.environment.name`, `deployment.environment`, `langfuse.environment` |
 | `release` | `llmobs.release`, resource `service.version`, `langfuse.release`, `lmnr.span.release` (span) |
 | `service_name` | resource `service.name` |

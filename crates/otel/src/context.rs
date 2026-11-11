@@ -340,6 +340,7 @@ fn metadata(bag: &mut AttrBag<'_>, warnings: &mut Warnings) -> BTreeMap<String, 
         &mut metadata,
         warnings,
     );
+    workflow_name(bag, &mut metadata, warnings);
     sweep_prefix(bag, "langfuse.trace.metadata.", &mut metadata, warnings);
     sweep_prefix(
         bag,
@@ -390,6 +391,23 @@ fn sweep_prefix(
         bag.take(&key);
         metadata.insert(name.to_owned(), text);
     }
+}
+
+fn workflow_name(
+    bag: &mut AttrBag<'_>,
+    metadata: &mut BTreeMap<String, String>,
+    warnings: &mut Warnings,
+) {
+    if metadata.contains_key("workflow") || bag.get("traceloop.workflow.name").is_none() {
+        return;
+    }
+    link(
+        bag,
+        "traceloop.workflow.name",
+        "workflow",
+        metadata,
+        warnings,
+    );
 }
 
 fn function_id(
@@ -721,6 +739,31 @@ mod tests {
             Some("from-metadata")
         );
         assert_eq!(bag.state("ai.telemetry.functionId"), Some(Use::Unread));
+    }
+
+    #[test]
+    fn workflow_name_fills_metadata_unless_that_key_is_already_set() {
+        let attrs = [string_attr("traceloop.workflow.name", "answer")];
+        let (fields, bag) = filled(&attrs, &[]);
+        assert_eq!(
+            fields.metadata.get("workflow").map(String::as_str),
+            Some("answer")
+        );
+        assert_eq!(bag.state("traceloop.workflow.name"), Some(Use::Consumed));
+
+        let attrs = [
+            string_attr(
+                "traceloop.association.properties.workflow",
+                "from-association",
+            ),
+            string_attr("traceloop.workflow.name", "answer"),
+        ];
+        let (fields, bag) = filled(&attrs, &[]);
+        assert_eq!(
+            fields.metadata.get("workflow").map(String::as_str),
+            Some("from-association")
+        );
+        assert_eq!(bag.state("traceloop.workflow.name"), Some(Use::Unread));
     }
 
     #[test]
