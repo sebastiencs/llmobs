@@ -1,29 +1,42 @@
-//! Read path over one project's memtable.
+//! Read path over one project's files and memtable.
 //!
-//! [`crate::ProjectQuery`] carries the raw providers, a per-query runtime and
+//! [`crate::ProjectQuery`] carries the raw providers, the shared runtime and
 //! `target_partitions`. It does not build a DataFusion session: the query
 //! layer does that and registers the user-facing views (spec 03 §6, D89, D91).
 //!
-//! M1 scans the memtable only. Days are exact. M3 widens span days by one
-//! (spec 03 § Trace anchor) and adds the `traces` provider; until then
-//! `Storage::query` hands out an empty one.
+//! A scan reads the files and the memtable of one read snapshot. Days
+//! are exact. M3 widens span days by one (spec 03 § Trace anchor) and adds the
+//! `traces` provider; until then `Storage::query` hands out an empty one.
 
 mod scores;
 mod spans;
 
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use chrono::{Datelike, NaiveDate};
-use datafusion::common::ScalarValue;
+use datafusion::catalog::Session;
+use datafusion::common::{DFSchema, ScalarValue};
+use datafusion::datasource::physical_plan::ParquetSource;
+use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{Between, BinaryExpr, Expr, Operator};
+use datafusion::physical_expr::utils::conjunction;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::limit::GlobalLimitExec;
+use datafusion::physical_plan::union::UnionExec;
+use datafusion_datasource::PartitionedFile;
+use datafusion_datasource::file_groups::FileGroup;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_datasource::source::DataSourceExec;
 use llmobs_core::ids::ProjectId;
 
+use crate::catalog::{Catalog, FileMeta};
 use crate::memtable::{MemBatch, MemSnapshot};
+use crate::objects::OBJECT_STORE_URL;
+use crate::wal::Table;
 
 pub(crate) use scores::ScoresProvider;
 pub(crate) use spans::SpansProvider;
@@ -265,6 +278,203 @@ pub(crate) fn memory_plan(
         source = source.with_limit(limit);
     }
     Ok(DataSourceExec::from_data_source(source))
+}
+
+/// One file-and-memtable scan. The providers fill this in.
+pub(crate) struct ScanUnion<'a> {
+    /// Project the files and batches belong to.
+    pub project: ProjectId,
+    /// Memtable half of the snapshot.
+    pub snapshot: &'a MemSnapshot,
+    /// File half of the same snapshot.
+    pub catalog: &'a Catalog,
+    /// `spans` or `scores`.
+    pub table: Table,
+    /// Event-time column used for day and file pruning.
+    pub time_column: &'static str,
+    /// Stored schema, before projection.
+    pub schema: SchemaRef,
+    /// Column indices the caller asked for.
+    pub projection: Option<&'a Vec<usize>>,
+    /// Filters. All of them are inexact; the file predicate still sees them.
+    pub filters: &'a [Expr],
+    /// Applied only when `filters` is empty, on the combined plan.
+    pub limit: Option<usize>,
+    /// Upper bound on file groups and memtable partitions.
+    pub target_partitions: usize,
+    /// Session that owns the registered object store and plans expressions.
+    pub session: &'a dyn Session,
+}
+
+/// Files whose day and `[min_time, max_time]` overlap the time filters.
+pub(crate) fn overlapping_files(
+    catalog: &Catalog,
+    table: Table,
+    project: ProjectId,
+    time_column: &str,
+    filters: &[Expr],
+) -> Vec<Arc<FileMeta>> {
+    let bounds = time_bounds(filters, time_column);
+    if bounds.contradicts() {
+        return Vec::new();
+    }
+    catalog
+        .files(table, project, day_range(&bounds))
+        .filter(|file| file_overlaps(file, &bounds))
+        .cloned()
+        .collect()
+}
+
+/// Union of the Parquet files and the memtable. An empty side is left out.
+pub(crate) fn scan_union(
+    scan: &ScanUnion<'_>,
+) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+    let batches = rows_for(scan.project, scan.snapshot, scan.time_column, scan.filters);
+    let files = overlapping_files(
+        scan.catalog,
+        scan.table,
+        scan.project,
+        scan.time_column,
+        scan.filters,
+    );
+    let both = !batches.is_empty() && !files.is_empty();
+    // A limit on each side would drop rows the other side still has.
+    let side_limit = if both { None } else { scan.limit };
+    let mut plans = Vec::new();
+    if !files.is_empty() {
+        plans.push(file_plan(scan, &files, side_limit)?);
+    }
+    if !batches.is_empty() {
+        plans.push(memory_plan(
+            batches,
+            Arc::clone(&scan.schema),
+            scan.projection,
+            scan.filters,
+            side_limit,
+            scan.target_partitions,
+        )?);
+    }
+    let plan = if plans.is_empty() {
+        memory_plan(
+            Vec::new(),
+            Arc::clone(&scan.schema),
+            scan.projection,
+            scan.filters,
+            side_limit,
+            scan.target_partitions,
+        )?
+    } else {
+        UnionExec::try_new(plans)?
+    };
+    if both
+        && scan.filters.is_empty()
+        && let Some(fetch) = scan.limit
+    {
+        return Ok(Arc::new(GlobalLimitExec::new(plan, 0, Some(fetch))));
+    }
+    Ok(plan)
+}
+
+fn file_plan(
+    scan: &ScanUnion<'_>,
+    files: &[Arc<FileMeta>],
+    limit: Option<usize>,
+) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+    let df_schema = DFSchema::try_from(Arc::clone(&scan.schema))?;
+    let mut physical = Vec::with_capacity(scan.filters.len());
+    for filter in scan.filters {
+        physical.push(
+            scan.session
+                .create_physical_expr(filter.clone(), &df_schema)?,
+        );
+    }
+    let mut source = ParquetSource::new(Arc::clone(&scan.schema))
+        .with_pushdown_filters(true)
+        .with_enable_page_index(true);
+    if !physical.is_empty() {
+        source = source.with_predicate(conjunction(physical));
+    }
+    let url = ObjectStoreUrl::parse(OBJECT_STORE_URL)
+        .map_err(|error| datafusion::error::DataFusionError::Internal(error.to_string()))?;
+    let mut builder = FileScanConfigBuilder::new(url, Arc::new(source))
+        .with_file_groups(file_groups(files, scan.target_partitions));
+    if scan.filters.is_empty() {
+        builder = builder.with_limit(limit);
+    }
+    let builder = builder.with_projection_indices(scan.projection.cloned())?;
+    Ok(DataSourceExec::from_data_source(builder.build()))
+}
+
+/// Whole files, packed into at most `target` groups by object size.
+fn file_groups(files: &[Arc<FileMeta>], target: usize) -> Vec<FileGroup> {
+    let mut partitioned: Vec<PartitionedFile> = files
+        .iter()
+        .map(|meta| {
+            let mut file = PartitionedFile::new(meta.path.clone(), meta.size);
+            if let Ok(hint) = usize::try_from(meta.footer_size) {
+                file = file.with_metadata_size_hint(hint);
+            }
+            file
+        })
+        .collect();
+    let slots = target.max(1).min(partitioned.len().max(1));
+    partitioned.sort_by(|left, right| {
+        right
+            .object_meta
+            .size
+            .cmp(&left.object_meta.size)
+            .then_with(|| left.object_meta.location.cmp(&right.object_meta.location))
+    });
+    let mut groups: Vec<(u64, Vec<PartitionedFile>)> = Vec::with_capacity(slots);
+    for _ in 0..slots {
+        groups.push((0, Vec::new()));
+    }
+    for file in partitioned {
+        let mut chosen = 0;
+        for (index, (size, _)) in groups.iter().enumerate().skip(1) {
+            if *size < groups[chosen].0 {
+                chosen = index;
+            }
+        }
+        groups[chosen].0 = groups[chosen].0.saturating_add(file.object_meta.size);
+        groups[chosen].1.push(file);
+    }
+    groups
+        .into_iter()
+        .filter(|(_, files)| !files.is_empty())
+        .map(|(_, files)| FileGroup::new(files))
+        .collect()
+}
+
+/// Days that can hold a timestamp inside `bounds`. A bound that does not
+/// convert stays open, so a day that does not fit in `i64` nanoseconds is kept.
+fn day_range(bounds: &TimeBounds) -> RangeInclusive<NaiveDate> {
+    let start = bounds.min.and_then(day_of_ns).unwrap_or(NaiveDate::MIN);
+    let end = bounds.max.and_then(day_of_ns).unwrap_or(NaiveDate::MAX);
+    if start > end {
+        return NaiveDate::MIN..=NaiveDate::MAX;
+    }
+    start..=end
+}
+
+fn day_of_ns(ns: i64) -> Option<NaiveDate> {
+    let days = ns.div_euclid(DAY_NS);
+    let ce = days.checked_add(UNIX_EPOCH_DAYS_FROM_CE)?;
+    NaiveDate::from_num_days_from_ce_opt(i32::try_from(ce).ok()?)
+}
+
+fn file_overlaps(file: &FileMeta, bounds: &TimeBounds) -> bool {
+    if let Some(min) = bounds.min
+        && file.max_time < min
+    {
+        return false;
+    }
+    if let Some(max) = bounds.max
+        && file.min_time > max
+    {
+        return false;
+    }
+    true
 }
 
 /// At most `target` partitions, filled so row counts stay close.

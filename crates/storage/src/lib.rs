@@ -304,11 +304,13 @@ impl Storage {
         let spans = Arc::new(query::SpansProvider::new(
             project,
             Arc::clone(&state.spans),
+            Arc::clone(&state.catalog),
             partitions,
         ));
         let scores = Arc::new(query::ScoresProvider::new(
             project,
             Arc::clone(&state.scores),
+            Arc::clone(&state.catalog),
             partitions,
         ));
         // There is no `traces` provider yet. Until then the view is empty.
