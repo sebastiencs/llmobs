@@ -7,6 +7,9 @@ import {
   parseRfc3339,
   parseString,
   SEARCH_MAX,
+  sameViewState,
+  searchFromViewState,
+  viewStateOf,
 } from "./common";
 
 describe("parseEnum", () => {
@@ -50,5 +53,50 @@ describe("parseRfc3339", () => {
     expect(parseRfc3339("2026-01-01T10:30:00.000000000Z")).toBe("2026-01-01T10:30:00.000000000Z");
     expect(parseRfc3339("2026-01-01")).toBeUndefined();
     expect(parseRfc3339("yesterday")).toBeUndefined();
+  });
+});
+
+describe("view state", () => {
+  it("stores list search as strings and drops selection", () => {
+    const search = {
+      range: "24h",
+      filter: "status = 'error'",
+      eval: 1,
+      trace: "a".repeat(32),
+      span: "b".repeat(16),
+      view: "01900000-0000-7000-8000-000000000210",
+      live: "1",
+      extra: "nope",
+    };
+    expect(viewStateOf(search)).toEqual({
+      range: "24h",
+      filter: "status = 'error'",
+      eval: "1",
+    });
+    expect(viewStateOf(searchFromViewState(viewStateOf(search)))).toEqual(viewStateOf(search));
+    expect(sameViewState(viewStateOf(search), viewStateOf({ ...search, eval: "1" }))).toBe(true);
+  });
+
+  it("drops an invalid range and a half-open absolute window", () => {
+    expect(searchFromViewState({ range: "last_24h", from: "2026-01-01T00:00:00Z" })).toEqual({});
+    expect(
+      searchFromViewState({
+        from: "2026-01-02T00:00:00Z",
+        to: "2026-01-01T00:00:00Z",
+      }),
+    ).toEqual({});
+    expect(
+      searchFromViewState({
+        from: "2026-01-01T00:00:00Z",
+        to: "2026-01-02T00:00:00Z",
+        sort: "trace_count",
+        order: "asc",
+      }),
+    ).toEqual({
+      from: "2026-01-01T00:00:00Z",
+      to: "2026-01-02T00:00:00Z",
+      sort: "trace_count",
+      order: "asc",
+    });
   });
 });

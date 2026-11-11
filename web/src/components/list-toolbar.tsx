@@ -23,6 +23,7 @@ export function ListToolbar({
   onExp,
   filter,
   columns,
+  views,
   loaded,
 }: {
   title: string;
@@ -37,6 +38,7 @@ export function ListToolbar({
   onExp: (on: boolean) => void;
   filter?: ReactNode;
   columns?: ReactNode;
+  views?: ReactNode;
   loaded?: number;
 }) {
   const searchRef = useRef<HTMLInputElement>(null);
@@ -84,6 +86,7 @@ export function ListToolbar({
         onCheckedChange={onExp}
       />
       {columns}
+      {views}
       {loaded !== undefined ? (
         <span className="shrink-0 text-xs text-muted-foreground">{loaded} loaded</span>
       ) : null}

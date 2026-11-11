@@ -35,3 +35,9 @@ it("keeps a filter and drops an empty or oversized one", () => {
   expect(parseSpansSearch({ filter: "   " })).toEqual({});
   expect(parseSpansSearch({ filter: "x".repeat(4097) })).toEqual({});
 });
+
+it("keeps a saved-view id", () => {
+  const id = "01900000-0000-7000-8000-000000000210";
+  expect(parseSpansSearch({ view: id })).toEqual({ view: id });
+  expect(parseSpansSearch({ view: "not-a-uuid" })).toEqual({});
+});

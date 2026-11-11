@@ -17,6 +17,8 @@ import { EmptyState } from "@/components/empty-state";
 import { FilterBar } from "@/components/filter-bar/filter-bar";
 import { filterMessage } from "@/components/filter-bar/logic";
 import { ListToolbar } from "@/components/list-toolbar";
+import { useDefaultSavedView } from "@/components/saved-views/default-view";
+import { SavedViewsMenu } from "@/components/saved-views/saved-views-menu";
 import { useProject } from "@/components/shell/project-context";
 import { orderedSpanColumns, spanColumnSpecs } from "@/components/span-columns";
 import { SplitPane } from "@/components/trace/split-pane";
@@ -50,6 +52,28 @@ function SpansPage() {
   const { org, project } = useProject();
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
+  const applyView = useCallback(
+    (next: Record<string, unknown>) => {
+      void navigate({
+        to: "/$org/$project/spans",
+        params: { org, project },
+        search: () => parseSpansSearch(next),
+      });
+    },
+    [navigate, org, project],
+  );
+  const applyDefault = useCallback(
+    (next: Record<string, unknown>) => {
+      void navigate({
+        to: "/$org/$project/spans",
+        params: { org, project },
+        search: () => parseSpansSearch(next),
+        replace: true,
+      });
+    },
+    [navigate, org, project],
+  );
+  const { hold } = useDefaultSavedView("spans", search, applyDefault);
   const range = rangeFromSearch(search);
   const rangeKey = range.kind === "preset" ? range.preset : `${range.from}\n${range.to}`;
   const [anchor, setAnchor] = useState(() => Date.now());
@@ -62,8 +86,8 @@ function SpansPage() {
     setAnchor(Date.now());
   }, [rangeKey]);
   const resolved = resolveRange(range, anchor);
-  const list = useInfiniteQuery(
-    spanListOptions(org, project, {
+  const list = useInfiniteQuery({
+    ...spanListOptions(org, project, {
       from: resolved.from,
       to: resolved.to,
       sort: search.sort,
@@ -73,7 +97,8 @@ function SpansPage() {
       includeEval: search.eval === 1,
       includeExperiments: search.exp === 1,
     }),
-  );
+    enabled: !hold,
+  });
   const fetchNextPage = useCallback(() => {
     void list.fetchNextPage();
   }, [list.fetchNextPage]);
@@ -208,6 +233,7 @@ function SpansPage() {
                   columns={
                     <ColumnChooser columns={specs} visible={visible} onVisible={onColumns} />
                   }
+                  views={<SavedViewsMenu kind="spans" search={search} onApply={applyView} />}
                   loaded={list.data ? rows.length : undefined}
                 />
                 {filterError ? (
@@ -215,7 +241,7 @@ function SpansPage() {
                     <h2 className="text-sm font-medium">{filterError.title}</h2>
                     <p className="text-sm text-destructive">{filterMessage(filterError)}</p>
                   </div>
-                ) : list.data ? (
+                ) : !hold && list.data ? (
                   <DataTable
                     tableId="spans"
                     ariaLabel="Spans"

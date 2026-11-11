@@ -98,3 +98,9 @@ it("shows Spans after Traces in the nav", async () => {
     Node.DOCUMENT_POSITION_FOLLOWING,
   );
 });
+
+it("has no default view to apply", async () => {
+  const { router } = await renderApp("/acme/support-bot/spans");
+  expect(await screen.findByRole("button", { name: "Default view" })).toBeInTheDocument();
+  expect(router.state.location.search).toEqual({});
+});

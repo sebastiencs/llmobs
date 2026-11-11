@@ -52,7 +52,7 @@ it("edits a compare chip from the popover", async () => {
 });
 
 it("applies the text editor with Enter", async () => {
-  const { router, user } = await renderApp("/acme/support-bot/traces");
+  const { router, user } = await renderApp("/acme/support-bot/traces?range=15m");
   await user.click(await screen.findByRole("button", { name: "Edit as text" }));
   const content = document.querySelector(".cm-content");
   if (!(content instanceof HTMLElement)) {
@@ -95,7 +95,7 @@ it("shows an invalid filter on the bar and no rows", async () => {
 });
 
 it("appends a status comparison from the row", async () => {
-  const { router, user } = await renderApp("/acme/support-bot/traces");
+  const { router, user } = await renderApp("/acme/support-bot/traces?range=15m");
   await screen.findByRole("grid", { name: "Traces" });
   await user.click(screen.getByRole("button", { name: "Filter by status error" }));
   await waitFor(() => {

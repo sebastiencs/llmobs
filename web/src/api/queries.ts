@@ -134,3 +134,12 @@ export function spanListOptions(
     getNextPageParam: (page: Schema<"SpanPage">) => page.next_cursor ?? undefined,
   };
 }
+
+export function savedViewsQuery(org: string, project: string, kind: Schema<"SavedViewKind">) {
+  return $api.queryOptions("get", "/api/v1/projects/{project}/saved-views", {
+    params: {
+      path: { project: projectRef(org, project) },
+      query: { kind },
+    },
+  });
+}

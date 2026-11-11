@@ -6,6 +6,7 @@ import {
   parseHex,
   parseRfc3339,
   parseString,
+  parseViewId,
   SEARCH_MAX,
 } from "@/lib/search/common";
 import { PRESETS, type Preset } from "@/lib/time-range";
@@ -54,6 +55,7 @@ export type SpansSearch = {
   exp?: 1;
   cols?: string;
   filter?: string;
+  view?: string;
 };
 
 export function isSpanColumnId(id: string): id is SpanColumnId {
@@ -74,6 +76,7 @@ export function parseSpansSearch(search: Record<string, unknown>): SpansSearch {
   const expOn = parseFlag(search.exp);
   const cols = parseCols(search.cols);
   const filter = parseString(search.filter, FILTER_MAX);
+  const view = parseViewId(search.view);
   return {
     ...(sort ? { sort } : {}),
     ...(order ? { order } : {}),
@@ -86,6 +89,7 @@ export function parseSpansSearch(search: Record<string, unknown>): SpansSearch {
     ...(expOn ? { exp: 1 } : {}),
     ...(cols ? { cols } : {}),
     ...(filter ? { filter } : {}),
+    ...(view ? { view } : {}),
   };
 }
 

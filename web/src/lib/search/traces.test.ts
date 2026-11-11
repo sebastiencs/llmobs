@@ -35,3 +35,10 @@ it("keeps a filter and drops an empty or oversized one", () => {
   expect(parseTracesSearch({ filter: "   " })).toEqual({});
   expect(parseTracesSearch({ filter: "x".repeat(4097) })).toEqual({});
 });
+
+it("keeps a saved-view id", () => {
+  const id = "01900000-0000-7000-8000-00000000021a";
+  expect(parseTracesSearch({ view: id })).toEqual({ view: id });
+  expect(parseTracesSearch({ view: id.toUpperCase() })).toEqual({});
+  expect(parseTracesSearch({ view: "errors" })).toEqual({});
+});
