@@ -53,3 +53,23 @@ export function projectInit(org: string, project: string) {
 export function projectQuery(org: string, project: string) {
   return $api.queryOptions("get", "/api/v1/projects/{project}", projectInit(org, project));
 }
+
+export function traceDetailQuery(org: string, project: string, traceId: string) {
+  return $api.queryOptions("get", "/api/v1/projects/{project}/traces/{trace_id}", {
+    params: {
+      path: { project: projectRef(org, project), trace_id: traceId },
+    },
+  });
+}
+
+export function spanDetailQuery(org: string, project: string, traceId: string, spanId: string) {
+  return $api.queryOptions("get", "/api/v1/projects/{project}/traces/{trace_id}/spans/{span_id}", {
+    params: {
+      path: {
+        project: projectRef(org, project),
+        trace_id: traceId,
+        span_id: spanId,
+      },
+    },
+  });
+}

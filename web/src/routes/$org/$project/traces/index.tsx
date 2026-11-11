@@ -1,7 +1,7 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Waypoints } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Schema } from "@/api/types";
 import { DataTable, type DataTableColumn } from "@/components/data-table/data-table";
 import { traceListOptions } from "@/components/data-table/use-infinite-list";
@@ -9,10 +9,12 @@ import { EmptyState } from "@/components/empty-state";
 import { useProject } from "@/components/shell/project-context";
 import { StatusDot } from "@/components/status-dot";
 import { TimeText } from "@/components/time-text";
+import { SplitPane } from "@/components/trace/split-pane";
+import { TraceView } from "@/components/trace/trace-view";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatCost, formatDuration, formatTokens } from "@/lib/format";
-import { parseTracesSearch } from "@/lib/search/traces";
+import { parseTracesSearch, type TracesSearch } from "@/lib/search/traces";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TAGS_SHOWN = 2;
@@ -128,48 +130,133 @@ function TracesPage() {
     void list.fetchNextPage();
   }, [list.fetchNextPage]);
   const rows = useMemo(() => list.data?.pages.flatMap((page) => page.data) ?? [], [list.data]);
+  const traceOpen = search.trace !== undefined;
+  const listScroll = useRef(0);
+  const wasOpen = useRef(traceOpen);
+
+  useLayoutEffect(() => {
+    const node = document.querySelector<HTMLElement>(
+      '[aria-label="Traces"] [data-scroll-container]',
+    );
+    if (node && wasOpen.current !== traceOpen) {
+      node.scrollTop = listScroll.current;
+      node.dispatchEvent(new Event("scroll"));
+      wasOpen.current = traceOpen;
+    }
+    return () => {
+      if (node) {
+        listScroll.current = node.scrollTop;
+      }
+    };
+  }, [traceOpen]);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape" || !search.trace) {
+        return;
+      }
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.closest("input, textarea") !== null || target.isContentEditable)
+      ) {
+        return;
+      }
+      void navigate({
+        to: "/$org/$project/traces",
+        params: { org, project },
+        search: (prev) => withoutTrace(prev),
+      });
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [navigate, org, project, search.trace]);
 
   if (list.isError) {
     throw list.error;
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col">
-      <div className="flex h-[36px] shrink-0 items-center justify-between border-b px-3">
-        <h1 className="text-sm font-medium">Traces</h1>
-        {list.data ? (
-          <span className="text-xs text-muted-foreground">{rows.length} loaded</span>
-        ) : null}
+    <div className="relative h-full min-h-0 flex-1">
+      <div className="absolute inset-0">
+        <SplitPane
+          name="traces"
+          open={traceOpen}
+          start={
+            <div className="flex h-full min-h-0 flex-col">
+              <div className="flex h-[36px] shrink-0 items-center justify-between border-b px-3">
+                <h1 className="text-sm font-medium">Traces</h1>
+                {list.data ? (
+                  <span className="text-xs text-muted-foreground">{rows.length} loaded</span>
+                ) : null}
+              </div>
+              {list.data ? (
+                <TooltipProvider>
+                  <DataTable
+                    tableId="traces"
+                    ariaLabel="Traces"
+                    columns={columns}
+                    rows={rows}
+                    getRowId={(row) => row.trace_id}
+                    selectedRowId={search.trace}
+                    onActivate={(row) => {
+                      void navigate({
+                        to: "/$org/$project/traces",
+                        params: { org, project },
+                        search: (prev) => ({ ...withoutSpan(prev), trace: row.trace_id }),
+                      });
+                    }}
+                    onSelectionMove={(row) => {
+                      void navigate({
+                        to: "/$org/$project/traces",
+                        params: { org, project },
+                        search: (prev) => ({ ...withoutSpan(prev), trace: row.trace_id }),
+                        replace: true,
+                      });
+                    }}
+                    hasNextPage={list.hasNextPage}
+                    isFetchingNextPage={list.isFetchingNextPage}
+                    fetchNextPage={fetchNextPage}
+                    sorting={{
+                      id: search.sort ?? "start_time",
+                      desc: (search.order ?? "desc") === "desc",
+                    }}
+                    emptyState={<EmptyState icon={Waypoints} title="No traces" />}
+                  />
+                </TooltipProvider>
+              ) : null}
+            </div>
+          }
+          end={
+            search.trace ? (
+              <TraceView
+                traceId={search.trace}
+                spanId={search.span}
+                onSelectSpan={(spanId) => {
+                  void navigate({
+                    to: "/$org/$project/traces",
+                    params: { org, project },
+                    search: (prev) => ({ ...prev, span: spanId }),
+                    replace: true,
+                  });
+                }}
+              />
+            ) : null
+          }
+        />
       </div>
-      {list.data ? (
-        <TooltipProvider>
-          <DataTable
-            tableId="traces"
-            ariaLabel="Traces"
-            columns={columns}
-            rows={rows}
-            getRowId={(row) => row.trace_id}
-            selectedRowId={search.trace}
-            onActivate={(row) => {
-              void navigate({
-                to: "/$org/$project/traces",
-                params: { org, project },
-                search: (prev) => ({ ...prev, trace: row.trace_id }),
-              });
-            }}
-            hasNextPage={list.hasNextPage}
-            isFetchingNextPage={list.isFetchingNextPage}
-            fetchNextPage={fetchNextPage}
-            sorting={{
-              id: search.sort ?? "start_time",
-              desc: (search.order ?? "desc") === "desc",
-            }}
-            emptyState={<EmptyState icon={Waypoints} title="No traces" />}
-          />
-        </TooltipProvider>
-      ) : null}
     </div>
   );
+}
+
+function withoutSpan(search: TracesSearch): TracesSearch {
+  const { span: _span, ...rest } = search;
+  return rest;
+}
+
+function withoutTrace(search: TracesSearch): TracesSearch {
+  const { trace: _trace, span: _span, ...rest } = search;
+  return rest;
 }
 
 function Preview({ text }: { text?: string }) {

@@ -1,6 +1,7 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
+import { defaultCollapsed } from "@/lib/tree";
 import { createDataset } from "@/mocks/generated/dataset";
 import { largeHandlers } from "@/mocks/generated/handlers";
 import { server } from "@/mocks/node";
@@ -130,7 +131,7 @@ it("moves with j and k and activates the focused row", async () => {
   fireEvent.keyDown(grid, { key: "k" });
   fireEvent.keyDown(grid, { key: "Enter" });
   expect(router.state.location.search).toMatchObject({ trace: FIRST });
-  expect(await screen.findByRole("row", { selected: true })).toHaveTextContent(
+  expect(await within(grid).findByRole("row", { selected: true })).toHaveTextContent(
     "chat claude-sonnet-4-5",
   );
 });
@@ -147,6 +148,95 @@ it("persists a column width and restores the default on double-click", async () 
   fireEvent.doubleClick(handle);
   expect(localStorage.getItem("llmobs.table.traces")).toBeNull();
   expect(header?.style.gridTemplateColumns.startsWith("28px 132px 200px")).toBe(true);
+});
+
+const TRACE_1 = "a1000000000000000000000000000001";
+const TOOL_SPAN = "b100000000000013";
+const NEXT = "a1000000000000000000000000000004";
+const LARGE = "a0000000000000000000000000000000";
+
+it("opens a trace beside the list and follows span, escape, and j", async () => {
+  const { router } = await renderApp("/acme/support-bot/traces");
+  const list = await screen.findByRole("grid", { name: "Traces" });
+  const scroller = list.querySelector("[data-scroll-container]");
+  if (!(scroller instanceof HTMLElement)) {
+    throw new Error("missing scroll container");
+  }
+  scroller.scrollTop = 240;
+  fireEvent.scroll(scroller);
+
+  fireEvent.click(within(list).getByRole("row", { name: /4\.20s/ }));
+  const tree = await screen.findByRole("grid", { name: "Trace" });
+  expect(router.state.location.search).toMatchObject({ trace: TRACE_1 });
+  const dataRows = within(tree)
+    .getAllByRole("row")
+    .filter((row) => row.getAttribute("aria-rowindex") !== "1");
+  expect(dataRows).toHaveLength(4);
+  expect(within(tree).getByRole("row", { selected: true })).toHaveTextContent("support-agent");
+  expect(await screen.findByRole("tabpanel")).toHaveTextContent("My order 1234 hasn't arrived.");
+  const listAfter = screen.getByRole("grid", { name: "Traces" });
+  const scrollerAfter = listAfter.querySelector("[data-scroll-container]");
+  if (!(scrollerAfter instanceof HTMLElement)) {
+    throw new Error("missing scroll container");
+  }
+  expect(scrollerAfter.scrollTop).toBe(240);
+
+  fireEvent.click(within(tree).getByRole("row", { name: /get_order_status/ }));
+  await waitFor(() => {
+    expect(router.state.location.search).toMatchObject({ trace: TRACE_1, span: TOOL_SPAN });
+  });
+  expect(await screen.findByRole("tabpanel")).toHaveTextContent(/"order_id": "1234"/);
+
+  fireEvent.keyDown(window, { key: "Escape" });
+  await waitFor(() => {
+    expect(router.state.location.search.trace).toBeUndefined();
+  });
+  expect(router.state.location.search.span).toBeUndefined();
+  expect(screen.queryByRole("grid", { name: "Trace" })).not.toBeInTheDocument();
+  expect(screen.getByRole("grid", { name: "Traces" })).toBeInTheDocument();
+
+  const firstRow = within(list).getAllByRole("row")[1];
+  if (!firstRow) {
+    throw new Error("missing trace row");
+  }
+  fireEvent.click(firstRow);
+  await screen.findByRole("grid", { name: "Trace" });
+  list.focus();
+  fireEvent.keyDown(list, { key: "j" });
+  await waitFor(() => {
+    expect(router.state.location.search).toMatchObject({ trace: NEXT });
+  });
+  expect(router.state.location.search.span).toBeUndefined();
+});
+
+it("virtualizes a 10 000 span trace and reveals children when a node expands", async () => {
+  const dataset = createDataset({ seed: 1, now: Date.now(), traces: 1 });
+  server.use(...largeHandlers(dataset));
+  await renderApp(`/acme/support-bot/traces?trace=${LARGE}`);
+  const tree = await screen.findByRole("grid", { name: "Trace" });
+  await waitFor(() => {
+    const count = within(tree).getAllByRole("row").length;
+    expect(count).toBeGreaterThan(1);
+    expect(count).toBeLessThan(80);
+  });
+  const detail = dataset.traceDetail(LARGE);
+  expect(detail).toBeDefined();
+  expect(defaultCollapsed(detail?.spans ?? []).size).toBeGreaterThan(0);
+
+  const before = within(tree)
+    .getAllByRole("row")
+    .map((row) => row.textContent);
+  const expand = within(tree).getAllByRole("button", { name: "Expand" })[0];
+  if (!expand) {
+    throw new Error("missing collapsed span");
+  }
+  fireEvent.click(expand);
+  await waitFor(() => {
+    const after = within(tree)
+      .getAllByRole("row")
+      .map((row) => row.textContent);
+    expect(after.some((text) => !before.includes(text))).toBe(true);
+  });
 });
 
 it("shows the empty state when the first page is empty", async () => {
