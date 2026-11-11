@@ -1,20 +1,26 @@
 //! The caller of one request (D140).
 //!
-//! P16 adds API keys and P17 adds personal access tokens. Until then an
-//! `Authorization` header is refused and the session cookie is ignored
-//! whenever that header is present.
+//! A bearer token wins over a cookie. When both are present the cookie is
+//! ignored and the session is not refreshed. Personal access tokens are P17.
 #![cfg_attr(not(test), allow(dead_code))]
 
 use std::fmt;
 
 use axum::extract::{Request, State};
+use axum::http::HeaderMap;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use llmobs_core::ids::ProjectId;
 use uuid::Uuid;
 
+use crate::api::common::ProblemCode;
+use crate::auth::cache::KeyCache;
+use crate::auth::roles::KeyScopes;
+use crate::auth::secret::{self, KeyKind};
 use crate::auth::session::resolve_cookie_header;
 use crate::http::AppState;
 use crate::http::error::ApiError;
+use crate::meta::api_keys::{self, LoadedApiKey};
 
 /// A signed-in user. `Debug` omits the email.
 #[derive(Clone)]
@@ -47,6 +53,32 @@ pub(crate) enum Principal {
         /// SHA-256 hex of the cookie. Not the cookie value.
         session_hash: String,
     },
+    /// A project API key. `Debug` omits the hash.
+    ApiKey {
+        /// `api_keys.id`.
+        key_id: Uuid,
+        /// The key's project.
+        project_id: ProjectId,
+        /// `secret` or `public`.
+        kind: KeyKind,
+        /// Scopes stored on the key.
+        scopes: KeyScopes,
+    },
+}
+
+/// A cached successful key lookup. `expires_at` is checked on every use.
+#[derive(Clone, Copy)]
+pub(crate) struct CachedKey {
+    /// `api_keys.id`.
+    pub(crate) id: Uuid,
+    /// The key's project.
+    pub(crate) project_id: ProjectId,
+    /// `secret` or `public`.
+    pub(crate) kind: KeyKind,
+    /// Scopes stored on the key.
+    pub(crate) scopes: KeyScopes,
+    /// When the key stops working. Absent means it does not expire.
+    pub(crate) expires_at: Option<i64>,
 }
 
 impl fmt::Debug for Principal {
@@ -56,13 +88,40 @@ impl fmt::Debug for Principal {
                 .debug_struct("Session")
                 .field("user", user)
                 .finish_non_exhaustive(),
+            Self::ApiKey {
+                key_id,
+                project_id,
+                kind,
+                scopes,
+            } => formatter
+                .debug_struct("ApiKey")
+                .field("key_id", key_id)
+                .field("project_id", project_id)
+                .field("kind", kind)
+                .field("scopes", scopes)
+                .finish(),
         }
+    }
+}
+
+/// The session user. A key is refused.
+///
+/// # Errors
+///
+/// Returns [`ApiError::Forbidden`] when `principal` is an API key.
+pub(crate) fn session_user(principal: &Principal) -> Result<&AuthUser, ApiError> {
+    match principal {
+        Principal::Session { user, .. } => Ok(user),
+        Principal::ApiKey { .. } => Err(ApiError::Forbidden {
+            code: ProblemCode::Forbidden,
+        }),
     }
 }
 
 /// Reads credentials and stores `Option<Principal>` on the request.
 ///
-/// A resolved session may add a sliding `Set-Cookie` on the way back.
+/// A resolved session may add a sliding `Set-Cookie` on the way back. A bearer
+/// does not.
 pub(crate) async fn authenticate(
     State(state): State<AppState>,
     mut request: Request,
@@ -72,7 +131,12 @@ pub(crate) async fn authenticate(
         .headers()
         .contains_key(axum::http::header::AUTHORIZATION)
     {
-        return ApiError::Unauthorized.into_response();
+        let principal = match bearer_principal(&state, request.headers()).await {
+            Ok(principal) => principal,
+            Err(error) => return error.into_response(),
+        };
+        request.extensions_mut().insert(Some(principal));
+        return next.run(request).await;
     }
     let resolved =
         match resolve_cookie_header(&state, request.headers(), state.clock.now_ns()).await {
@@ -103,11 +167,90 @@ pub(crate) async fn authenticate(
     response
 }
 
+async fn bearer_principal(state: &AppState, headers: &HeaderMap) -> Result<Principal, ApiError> {
+    let token = bearer_token(headers)?;
+    let Some(kind) = secret::parse_key(token) else {
+        return Err(ApiError::Unauthorized);
+    };
+    if kind == KeyKind::Personal {
+        return Err(ApiError::Unauthorized);
+    }
+    let now = state.clock.now_ns();
+    let hash = secret::hash_token(token);
+    if let Some(cached) = state.key_cache.get(&hash, now) {
+        if expired(cached.expires_at, now) {
+            state.key_cache.evict(&hash);
+            return Err(ApiError::Unauthorized);
+        }
+        state.last_used.record(cached.id, now);
+        return Ok(principal_from_cached(cached));
+    }
+    let loaded = api_keys::api_key_by_hash(state.meta.reader(), &hash).await?;
+    let Some(loaded) = loaded else {
+        return Err(ApiError::Unauthorized);
+    };
+    if loaded.key.revoked_at.is_some() || !loaded.active || expired(loaded.key.expires_at, now) {
+        return Err(ApiError::Unauthorized);
+    }
+    let cached = cached_from(&loaded)?;
+    state.key_cache.put(hash, cached, now);
+    state.last_used.record(cached.id, now);
+    Ok(principal_from_cached(cached))
+}
+
+fn principal_from_cached(cached: CachedKey) -> Principal {
+    Principal::ApiKey {
+        key_id: cached.id,
+        project_id: cached.project_id,
+        kind: cached.kind,
+        scopes: cached.scopes,
+    }
+}
+
+fn cached_from(loaded: &LoadedApiKey) -> Result<CachedKey, ApiError> {
+    Ok(CachedKey {
+        id: loaded.key.id,
+        project_id: loaded.key.project_id,
+        kind: api_keys::stored_kind(&loaded.key.kind)?,
+        scopes: KeyScopes::from_scopes(&loaded.key.scopes),
+        expires_at: loaded.key.expires_at,
+    })
+}
+
+fn expired(expires_at: Option<i64>, now: i64) -> bool {
+    matches!(expires_at, Some(at) if at <= now)
+}
+
+fn bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
+    let Some(value) = headers.get(axum::http::header::AUTHORIZATION) else {
+        return Err(ApiError::Unauthorized);
+    };
+    let Ok(text) = value.to_str() else {
+        return Err(ApiError::Unauthorized);
+    };
+    let mut parts = text.splitn(2, char::is_whitespace);
+    let scheme = parts.next().unwrap_or("");
+    let token = parts.next().unwrap_or("").trim();
+    if !scheme.eq_ignore_ascii_case("bearer")
+        || token.is_empty()
+        || token.contains(char::is_whitespace)
+    {
+        return Err(ApiError::Unauthorized);
+    }
+    Ok(token)
+}
+
+/// The cache used by [`authenticate`]. Declared here so `AppState` can name it.
+pub(crate) type ApiKeyCache = KeyCache<CachedKey>;
+
 #[cfg(test)]
 mod tests {
     use uuid::Uuid;
 
     use super::{AuthUser, Principal};
+    use crate::auth::roles::{KeyScope, KeyScopes};
+    use crate::auth::secret::KeyKind;
+    use llmobs_core::ids::ProjectId;
 
     #[test]
     fn debug_omits_the_email_and_the_session_hash() {
@@ -120,10 +263,24 @@ mod tests {
             session_hash: "not-a-cookie".to_owned(),
         };
         let text = format!("{principal:?}");
-        let Principal::Session { user, session_hash } = &principal;
+        let Principal::Session { user, session_hash } = &principal else {
+            panic!("expected a session");
+        };
         assert_eq!(user.email, "ada@example.com");
         assert_eq!(session_hash, "not-a-cookie");
         assert!(!text.contains(&user.email), "{text}");
         assert!(!text.contains(session_hash), "{text}");
+    }
+
+    #[test]
+    fn debug_of_a_key_omits_the_secret() {
+        let principal = Principal::ApiKey {
+            key_id: Uuid::nil(),
+            project_id: ProjectId::from_uuid(Uuid::nil()),
+            kind: KeyKind::Secret,
+            scopes: KeyScopes::from_scopes(&[KeyScope::Read]),
+        };
+        let text = format!("{principal:?}");
+        assert!(!text.contains("sk-llmobs-"), "{text}");
     }
 }

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::account::{CreateOrgRequest, OrgMembership, OrgRole, UpdateOrgRequest};
 use crate::api::common::{FieldError, Page, PageParams};
-use crate::auth::principal::Principal;
+use crate::auth::principal::{self, Principal};
 use crate::http::AppState;
 use crate::http::access::{Access, OrgAccess, RouteDef};
 use crate::http::error::{self, ApiError};
@@ -67,7 +67,7 @@ async fn list_orgs(
     Extension(principal): Extension<Principal>,
     error::Query(params): error::Query<PageParams>,
 ) -> Result<error::Json<Page<OrgMembership>>, ApiError> {
-    let Principal::Session { user, .. } = &principal;
+    let user = principal::session_user(&principal)?;
     let rows = orgs::orgs_of_user(state.meta.reader(), user.id).await?;
     let items = rows
         .into_iter()
@@ -86,7 +86,7 @@ async fn create_org(
     Extension(principal): Extension<Principal>,
     error::Json(body): error::Json<CreateOrgRequest>,
 ) -> Result<Response, ApiError> {
-    let Principal::Session { user, .. } = &principal;
+    let user = principal::session_user(&principal)?;
     let name = trimmed_name(&body.name)?;
     if let Some(slug) = &body.slug {
         orgs::validate_slug(slug).map_err(slug_error)?;

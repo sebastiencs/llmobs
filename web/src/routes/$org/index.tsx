@@ -116,7 +116,10 @@ function ProjectsPending() {
   );
 }
 
-function roleLabel(role: Schema<"OrgRole">): string {
+function roleLabel(role: Schema<"OrgRole"> | undefined): string {
+  if (role == null) {
+    return "";
+  }
   return role.charAt(0).toUpperCase() + role.slice(1);
 }
 

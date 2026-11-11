@@ -91,6 +91,8 @@ impl TestApp {
             storage: Arc::new(storage),
             clock: Clock::Manual(Arc::new(AtomicI64::new(MANUAL_NOW_NS))),
             limits: Limits::new(),
+            key_cache: crate::auth::principal::ApiKeyCache::new(),
+            last_used: crate::auth::last_used::LastUsed::new(),
             setup: crate::bootstrap::SetupState::new(),
             password_hasher: tokio::sync::OnceCell::new(),
         });

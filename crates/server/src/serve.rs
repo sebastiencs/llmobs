@@ -36,6 +36,9 @@ const STORAGE_SHUTDOWN: Duration = Duration::from_secs(30);
 /// How often idle rate-limit keys are dropped (D143).
 const PRUNE_EVERY: Duration = Duration::from_secs(60);
 
+/// How often coalesced `last_used_at` values are written (D140).
+const LAST_USED_EVERY: Duration = Duration::from_secs(60);
+
 /// How often expired web sessions are deleted.
 const PURGE_EVERY: Duration = Duration::from_secs(60 * 60);
 
@@ -177,6 +180,8 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         storage,
         clock: Clock::System,
         limits: Limits::new(),
+        key_cache: crate::auth::principal::ApiKeyCache::new(),
+        last_used: crate::auth::last_used::LastUsed::new(),
         setup: crate::bootstrap::SetupState::new(),
         password_hasher: tokio::sync::OnceCell::new(),
     });
@@ -219,7 +224,11 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         serve: Some(serve),
         shutdown_tx: Some(shutdown_tx),
         state: Some(state.clone()),
-        tasks: vec![spawn_prune(state.clone()), spawn_purge(state)],
+        tasks: vec![
+            spawn_prune(state.clone()),
+            spawn_purge(state.clone()),
+            spawn_last_used(state),
+        ],
     })
 }
 
@@ -247,6 +256,20 @@ fn spawn_purge(state: AppState) -> JoinHandle<()> {
                 Err(error) => {
                     tracing::error!(error = %error, "session purge failed");
                 }
+            }
+        }
+    })
+}
+
+fn spawn_last_used(state: AppState) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(LAST_USED_EVERY);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            if let Err(error) = state.last_used.flush(&state.meta).await {
+                tracing::error!(error = %error, "last_used flush failed");
             }
         }
     })
@@ -287,6 +310,9 @@ impl Running {
             let _ = task.await;
         }
         if let Some(state) = self.state.take() {
+            if let Err(error) = state.last_used.flush(&state.meta).await {
+                tracing::error!(error = %error, "last_used flush failed");
+            }
             match tokio::time::timeout(STORAGE_SHUTDOWN, state.storage.shutdown()).await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
@@ -484,6 +510,73 @@ mod tests {
             Some(length) => body.len() >= length,
             None => !body.is_empty(),
         }
+    }
+
+    #[tokio::test]
+    async fn shutdown_flushes_last_used() {
+        use crate::auth::roles::{KeyScope, OrgRole};
+        use crate::meta::MetaDb;
+        use crate::meta::api_keys::{NewApiKey, insert_api_key};
+        use crate::meta::members::add_org_member;
+        use crate::meta::orgs::insert_org;
+        use crate::meta::projects::insert_project;
+        use crate::meta::users::{NewUser, insert_user};
+
+        let dir = tempfile::tempdir().unwrap();
+        let running = bind(config(dir.path())).await.unwrap();
+        let state = running.state.as_ref().unwrap().clone();
+        let now = state.clock.now_ns();
+        let key_id = state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    let user = insert_user(
+                        conn,
+                        NewUser {
+                            email: "ada@example.com".to_owned(),
+                            name: None,
+                            password_hash: None,
+                            email_verified_at: None,
+                            is_instance_admin: true,
+                        },
+                        now,
+                    )
+                    .await?;
+                    let org = insert_org(conn, "Acme", "acme", now).await?;
+                    add_org_member(conn, org.id, user.id, OrgRole::Owner, now).await?;
+                    let project =
+                        insert_project(conn, org.id, "Support", "support-bot", None, now).await?;
+                    let key = insert_api_key(
+                        conn,
+                        NewApiKey {
+                            project_id: project.id,
+                            kind: "secret",
+                            scopes: vec![KeyScope::Read],
+                            name: None,
+                            prefix: "sk-llmobs-abcdef".to_owned(),
+                            hash: "ab".repeat(32),
+                            created_by: user.id,
+                            expires_at: None,
+                        },
+                        now,
+                    )
+                    .await?;
+                    Ok(key.id)
+                })
+            })
+            .await
+            .unwrap();
+        state.last_used.record(key_id, now);
+        running.shutdown().await.unwrap();
+        let meta = MetaDb::open(dir.path()).await.unwrap();
+        let stored: Option<i64> =
+            sqlx::query_scalar("SELECT last_used_at FROM api_keys WHERE id = ?")
+                .bind(key_id.to_string())
+                .fetch_one(meta.reader())
+                .await
+                .unwrap();
+        assert_eq!(stored, Some(now));
+        meta.close().await;
     }
 
     fn config(data_dir: &Path) -> ServerConfig {

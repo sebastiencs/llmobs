@@ -8,7 +8,7 @@ use axum::routing::{get, patch, post};
 
 use crate::api::account::{CreateProjectRequest, OrgRole, Project, UpdateProjectRequest};
 use crate::api::common::{FieldError, Page, PageParams};
-use crate::auth::principal::Principal;
+use crate::auth::principal::{self, Principal};
 use crate::auth::roles::{self, OrgPerm, ProjectPerm, Role};
 use crate::http::AppState;
 use crate::http::access::{Access, OrgAccess, ProjectAccess, RouteDef};
@@ -71,7 +71,7 @@ async fn list_projects(
     Extension(access): Extension<OrgAccess>,
     error::Query(params): error::Query<PageParams>,
 ) -> Result<error::Json<Page<Project>>, ApiError> {
-    let Principal::Session { user, .. } = &principal;
+    let user = principal::session_user(&principal)?;
     let projects = projects::projects_of_org(state.meta.reader(), access.org.id).await?;
     let mut visible = Vec::new();
     for project in projects {
@@ -85,7 +85,7 @@ async fn list_projects(
         visible.push((
             project.name.clone(),
             project.id.to_string(),
-            project_json(&project, role),
+            project_json(&project, Some(role)),
         ));
     }
     Ok(error::Json(page_named(
@@ -129,7 +129,7 @@ async fn create_project(
     // CreateProject requires an org admin, whose effective project role is admin.
     Ok((
         StatusCode::CREATED,
-        error::Json(project_json(&project, Role::Admin)),
+        error::Json(project_json(&project, Some(Role::Admin))),
     )
         .into_response())
 }
@@ -178,14 +178,14 @@ async fn update_project(
     Ok(error::Json(project_json(&project, role)))
 }
 
-fn project_json(project: &ProjectRow, role: Role) -> Project {
+fn project_json(project: &ProjectRow, role: Option<Role>) -> Project {
     Project {
         id: project.id,
         org_id: project.org_id,
         slug: project.slug.clone(),
         name: project.name.clone(),
         retention_days: project.retention_days,
-        role: api_role(role),
+        role: role.map(api_role),
         created_at: project.created_at,
     }
 }
@@ -336,7 +336,7 @@ mod tests {
         assert_eq!(created.status, 201);
         let created: Project = created.json();
         assert_eq!(created.slug, "support-bot");
-        assert_eq!(created.role, OrgRole::Admin);
+        assert_eq!(created.role, Some(OrgRole::Admin));
         assert!(created.retention_days.is_none());
 
         let hidden = app
@@ -367,7 +367,7 @@ mod tests {
         let members: Page<Project> = members.json();
         assert_eq!(members.data.len(), 1);
         assert_eq!(members.data[0].slug, "support-bot");
-        assert_eq!(members.data[0].role, OrgRole::Member);
+        assert_eq!(members.data[0].role, Some(OrgRole::Member));
 
         let viewers = app
             .request(Method::GET, "/api/v1/orgs/acme/projects")
@@ -380,7 +380,7 @@ mod tests {
             viewers
                 .data
                 .iter()
-                .all(|project| project.role == OrgRole::Viewer)
+                .all(|project| project.role == Some(OrgRole::Viewer))
         );
 
         let owners = app
@@ -394,7 +394,7 @@ mod tests {
             owners
                 .data
                 .iter()
-                .all(|project| project.role == OrgRole::Admin)
+                .all(|project| project.role == Some(OrgRole::Admin))
         );
 
         let by_id = app

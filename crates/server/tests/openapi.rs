@@ -40,6 +40,21 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
     ("patch", "/api/v1/projects/{project}", "patch_project"),
     (
         "get",
+        "/api/v1/projects/{project}/api-keys",
+        "list_api_keys",
+    ),
+    (
+        "post",
+        "/api/v1/projects/{project}/api-keys",
+        "post_api_key",
+    ),
+    (
+        "delete",
+        "/api/v1/projects/{project}/api-keys/{id}",
+        "delete_api_key",
+    ),
+    (
+        "get",
         "/api/v1/projects/{project}/members",
         "list_project_members",
     ),
@@ -125,6 +140,7 @@ const QUERY_OR_BODY: &[&str] = &[
     "list_org_members",
     "list_project_members",
     "list_projects",
+    "list_api_keys",
     "list_traces",
     "stream_traces",
     "get_trace",
@@ -230,6 +246,9 @@ fn document_lint() {
                 | "delete_org_member"
                 | "put_project_member"
                 | "delete_project_member"
+                | "list_api_keys"
+                | "post_api_key"
+                | "delete_api_key"
         ) {
             let security = operation_security.unwrap_or_else(|| panic!("{id}"));
             assert_eq!(security.len(), 1, "{id}");
@@ -269,6 +288,8 @@ fn document_lint() {
             || *id == "delete_project_member"
             || *id == "patch_org"
             || *id == "patch_project"
+            || *id == "post_api_key"
+            || *id == "delete_api_key"
         {
             expected_errors.extend(["400", "401", "403", "404", "429"]);
         } else if *id == "post_project" {
@@ -351,6 +372,7 @@ fn document_lint() {
         ("OrgMemberPage", "OrgMember"),
         ("ProjectMemberPage", "ProjectMember"),
         ("ProjectPage", "Project"),
+        ("ApiKeyPage", "ApiKey"),
         ("SavedViewPage", "SavedView"),
     ];
     for (page, item) in pages {
@@ -596,6 +618,7 @@ fn assert_nullability(schemas: &serde_json::Map<String, Value>) {
         "OrgMemberPage",
         "ProjectMemberPage",
         "ProjectPage",
+        "ApiKeyPage",
         "SavedViewPage",
     ];
     let expected: BTreeSet<String> = pages

@@ -1,7 +1,7 @@
 //! Origin check for cookie-authenticated writes (D141).
 //!
-//! Bearer requests skip the check. They have no `Authorization` header in P10,
-//! because that header is refused before this layer runs.
+//! Bearer requests skip the check. Authentication runs first, and only a
+//! session principal triggers the origin check.
 
 use axum::extract::{Request, State};
 use axum::http::Method;

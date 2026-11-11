@@ -127,8 +127,9 @@ pub struct Project {
     /// Days to keep data. Omitted when data is kept forever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retention_days: Option<u32>,
-    /// The caller's effective role on this project.
-    pub role: OrgRole,
+    /// The caller's effective role. Omitted when the caller is an API key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<OrgRole>,
     /// Creation time, nanoseconds since the Unix epoch. JSON is RFC 3339.
     #[serde(with = "llmobs_core::time_serde")]
     #[schema(value_type = String, format = DateTime)]
@@ -379,7 +380,7 @@ mod tests {
             slug: "support-bot".to_owned(),
             name: "Support bot".to_owned(),
             retention_days: Some(30),
-            role: OrgRole::Owner,
+            role: Some(OrgRole::Owner),
             created_at: CREATED_AT,
         };
         let unnamed = User {

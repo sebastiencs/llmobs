@@ -29,6 +29,7 @@ use super::account::{
     SignupResponse, UpdateMeRequest, UpdateOrgRequest, UpdateProjectRequest, User,
 };
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
+use super::keys::{ApiKey as ProjectApiKey, CreateApiKeyRequest, CreatedApiKey};
 use super::members::{OrgMember, ProjectMember, SetProjectOverrideRequest, UpdateOrgMemberRequest};
 use super::metrics::{MetricsBucket, MetricsGroupBy, MetricsParams, MetricsResponse};
 use super::saved_views::{CreateSavedView, SavedView, SavedViewListParams, UpdateSavedView};
@@ -100,6 +101,9 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<ProjectMember>();
     set.insert::<SetProjectOverrideRequest>();
     set.insert::<Project>();
+    set.insert::<ProjectApiKey>();
+    set.insert::<CreatedApiKey>();
+    set.insert::<CreateApiKeyRequest>();
     set.insert::<TraceSummary>();
     set.insert::<SpanSummary>();
     set.insert::<TraceDetail>();
@@ -123,6 +127,7 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert_page::<OrgMember>("OrgMemberPage");
     set.insert_page::<ProjectMember>("ProjectMemberPage");
     set.insert_page::<Project>("ProjectPage");
+    set.insert_page::<ProjectApiKey>("ApiKeyPage");
     set.insert_page::<SavedView>("SavedViewPage");
     set
 }
@@ -468,6 +473,7 @@ fn paths() -> Paths {
     let paths = auth_paths(paths);
     let paths = project_paths(paths);
     let paths = member_paths(paths);
+    let paths = api_key_paths(paths);
     let paths = trace_paths(paths);
     let paths = session_paths(paths);
     let paths = score_paths(paths);
@@ -765,6 +771,51 @@ fn member_paths(paths: PathsBuilder) -> PathsBuilder {
         .path(
             "/api/v1/projects/{project}/members/{user}",
             PathItem::new(HttpMethod::Delete, delete_project),
+        )
+}
+
+fn api_key_paths(paths: PathsBuilder) -> PathsBuilder {
+    let session_only = vec![SecurityRequirement::new("session", [] as [&str; 0])];
+    let list = operation("list_api_keys", "projects", "List API keys")
+        .securities(Some(session_only.clone()))
+        .parameters(Some(with_query::<PageParams>(vec![project_param()])))
+        .responses(responses(
+            "200",
+            json_named(
+                "ApiKeyPage",
+                "One page of API keys, newest first. The secret is not included.",
+            ),
+            QUERY_ERRORS,
+        ))
+        .build();
+    let create = operation("post_api_key", "projects", "Create an API key")
+        .securities(Some(session_only.clone()))
+        .parameters(Some(vec![project_param()]))
+        .request_body(Some(json_body("CreateApiKeyRequest")))
+        .responses(responses(
+            "201",
+            json_of::<CreatedApiKey>("The key and its secret. The secret is shown only here."),
+            &[400, 401, 403, 404, 429],
+        ))
+        .build();
+    let delete = operation("delete_api_key", "projects", "Revoke an API key")
+        .securities(Some(session_only))
+        .parameters(Some(vec![project_param(), path_uuid("id", "API key id.")]))
+        .responses(responses(
+            "204",
+            ResponseBuilder::new()
+                .description("The key is revoked.")
+                .build(),
+            &[400, 401, 403, 404, 429],
+        ))
+        .build();
+    let mut keys = PathItem::new(HttpMethod::Get, list);
+    keys.post = Some(create);
+    paths
+        .path("/api/v1/projects/{project}/api-keys", keys)
+        .path(
+            "/api/v1/projects/{project}/api-keys/{id}",
+            PathItem::new(HttpMethod::Delete, delete),
         )
 }
 

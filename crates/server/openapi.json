@@ -1462,6 +1462,297 @@
         }
       }
     },
+    "/api/v1/projects/{project}/api-keys": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "List API keys",
+        "operationId": "list_api_keys",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return (1–1000, default 50).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Limit",
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of API keys, newest first. The secret is not included.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Create an API key",
+        "operationId": "post_api_key",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApiKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The key and its secret. The secret is shown only here.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedApiKey"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/projects/{project}/api-keys/{id}": {
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Revoke an API key",
+        "operationId": "delete_api_key",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "API key id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The key is revoked."
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/api/v1/projects/{project}/media/{sha256}": {
       "get": {
         "tags": [
@@ -3938,6 +4229,105 @@
   },
   "components": {
     "schemas": {
+      "ApiKey": {
+        "type": "object",
+        "description": "A project API key. The secret is not a field.",
+        "required": [
+          "id",
+          "kind",
+          "prefix",
+          "scopes",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Creation time. JSON is RFC 3339."
+          },
+          "created_by": {
+            "type": "string",
+            "format": "uuid",
+            "description": "User who created the key. Omitted when that user is unknown."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the key stops working. Omitted when the key does not expire."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Key id."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ApiKeyKind",
+            "description": "`secret` or `public`."
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last successful authentication. Omitted until a flush has written it."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name. Omitted when the key was created without one."
+          },
+          "prefix": {
+            "type": "string",
+            "description": "Type prefix plus the first 6 random characters."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiKeyScope"
+            },
+            "description": "Scopes, in a stable order."
+          }
+        }
+      },
+      "ApiKeyKind": {
+        "type": "string",
+        "description": "`secret` or `public`.",
+        "enum": [
+          "secret",
+          "public"
+        ]
+      },
+      "ApiKeyPage": {
+        "type": "object",
+        "description": "One page of results. `next_cursor` is null when there is no next page.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiKey"
+            },
+            "description": "Items in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
+      },
+      "ApiKeyScope": {
+        "type": "string",
+        "description": "One scope name.",
+        "enum": [
+          "ingest",
+          "read",
+          "write",
+          "feedback"
+        ]
+      },
       "AuthConfig": {
         "type": "object",
         "description": "Login methods the UI should offer.\n\n`GET /api/auth/config`. Spec 08 § Sign-up policy and spec 09 § Auth.",
@@ -4120,6 +4510,35 @@
           "none"
         ]
       },
+      "CreateApiKeyRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/projects/{project}/api-keys` body.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "expires_at": {
+            "$ref": "#/components/schemas/TimeParam",
+            "description": "When the key stops working. Absent when the key does not expire."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ApiKeyKind",
+            "description": "`secret` or `public`."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name, at most 100 characters. Absent when the key has none."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiKeyScope"
+            },
+            "description": "Secret keys default to ingest, read, and write. Public keys default to feedback."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateOrgRequest": {
         "type": "object",
         "description": "`POST /api/v1/orgs`.",
@@ -4193,6 +4612,24 @@
           }
         },
         "additionalProperties": false
+      },
+      "CreatedApiKey": {
+        "type": "object",
+        "description": "`POST /api/v1/projects/{project}/api-keys`. The response is the only place the secret appears.",
+        "required": [
+          "key",
+          "secret"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/ApiKey",
+            "description": "The stored key, without the secret."
+          },
+          "secret": {
+            "type": "string",
+            "description": "The bearer value. Shown only in this response."
+          }
+        }
       },
       "EndUserDetail": {
         "type": "object",
@@ -4953,7 +5390,6 @@
           "org_id",
           "slug",
           "name",
-          "role",
           "created_at"
         ],
         "properties": {
@@ -4982,7 +5418,7 @@
           },
           "role": {
             "$ref": "#/components/schemas/OrgRole",
-            "description": "The caller's effective role on this project."
+            "description": "The caller's effective role. Omitted when the caller is an API key."
           },
           "slug": {
             "type": "string",

@@ -16,7 +16,9 @@ use super::error::ApiError;
 use super::health;
 use crate::api::common::ProblemCode;
 use crate::auth::principal::Principal;
-use crate::auth::roles::{self, OrgPerm, OrgRole, ProjectPerm, Role, org_rank};
+use crate::auth::roles::{
+    self, KeyScope, KeyScopes, OrgPerm, OrgRole, ProjectPerm, Role, org_rank,
+};
 use crate::meta::members::{org_role, project_override};
 use crate::meta::orgs::{OrgRow, org_by_id, org_by_slug};
 use crate::meta::projects::{ProjectRow, project_by_id, project_by_slugs};
@@ -77,8 +79,8 @@ pub(crate) struct OrgAccess {
 pub(crate) struct ProjectAccess {
     /// The project. `state` is `active`, and so is its org.
     pub(crate) project: ProjectRow,
-    /// Effective project role.
-    pub(crate) role: Role,
+    /// Effective project role. Absent when the caller is an API key.
+    pub(crate) role: Option<Role>,
 }
 
 /// Health probes. Later sub-phases append their handlers here.
@@ -104,6 +106,7 @@ pub(crate) fn routes() -> Vec<RouteDef> {
     routes.extend(crate::routes::orgs::routes());
     routes.extend(crate::routes::projects::routes());
     routes.extend(crate::routes::members::routes());
+    routes.extend(crate::routes::api_keys::routes());
     routes
 }
 
@@ -152,12 +155,19 @@ async fn prepare(state: AppState, access: Access, request: Request) -> Result<Re
     }
     match access {
         Access::Public => {}
-        Access::User { .. } => {}
+        Access::User { .. } => {
+            if matches!(principal, Principal::ApiKey { .. }) {
+                return Err(forbidden());
+            }
+        }
         Access::InstanceAdmin => match &principal {
             Principal::Session { user, .. } if user.is_instance_admin => {}
-            Principal::Session { .. } => return Err(forbidden()),
+            _ => return Err(forbidden()),
         },
         Access::Org { perm, .. } => {
+            if matches!(principal, Principal::ApiKey { .. }) {
+                return Err(forbidden());
+            }
             let key = path_value(&mut parts, &state, "org").await?;
             grant_org(&state, &mut parts, &principal, &key, perm).await?;
         }
@@ -207,7 +217,9 @@ async fn grant_org(
     key: &str,
     perm: OrgPerm,
 ) -> Result<(), ApiError> {
-    let Principal::Session { user, .. } = principal;
+    let Principal::Session { user, .. } = principal else {
+        return Err(forbidden());
+    };
     let org = load_org(state, key).await?;
     let Some(org) = org else {
         return Err(ApiError::NotFound);
@@ -240,7 +252,23 @@ async fn grant_project(
     key: &str,
     perm: ProjectPerm,
 ) -> Result<(), ApiError> {
-    let Principal::Session { user, .. } = principal;
+    match principal {
+        Principal::Session { user, .. } => {
+            grant_session_project(state, parts, user, key, perm).await
+        }
+        Principal::ApiKey {
+            project_id, scopes, ..
+        } => grant_key_project(state, parts, *project_id, *scopes, key, perm).await,
+    }
+}
+
+async fn grant_session_project(
+    state: &AppState,
+    parts: &mut Parts,
+    user: &crate::auth::principal::AuthUser,
+    key: &str,
+    perm: ProjectPerm,
+) -> Result<(), ApiError> {
     if key == "current" {
         return Err(ApiError::NotFound);
     }
@@ -264,7 +292,56 @@ async fn grant_project(
     if role < perm.min_role() {
         return Err(forbidden());
     }
-    parts.extensions.insert(ProjectAccess { project, role });
+    parts.extensions.insert(ProjectAccess {
+        project,
+        role: Some(role),
+    });
+    Ok(())
+}
+
+async fn grant_key_project(
+    state: &AppState,
+    parts: &mut Parts,
+    project_id: ProjectId,
+    scopes: KeyScopes,
+    key: &str,
+    perm: ProjectPerm,
+) -> Result<(), ApiError> {
+    let Some(scope) = perm.key_scope() else {
+        return Err(forbidden());
+    };
+    if !scopes.contains(scope) {
+        return Err(forbidden());
+    }
+    if scope == KeyScope::Read
+        && !matches!(
+            parts.method,
+            axum::http::Method::GET | axum::http::Method::HEAD
+        )
+    {
+        return Err(forbidden());
+    }
+    let project = if key == "current" {
+        project_by_id(state.meta.reader(), project_id).await?
+    } else {
+        load_project(state, key).await?
+    };
+    let Some(project) = project else {
+        return Err(ApiError::NotFound);
+    };
+    if project.id != project_id || project.state != "active" {
+        return Err(ApiError::NotFound);
+    }
+    let Some(org) = org_by_id(state.meta.reader(), project.org_id).await? else {
+        return Err(ApiError::NotFound);
+    };
+    if org.state != "active" {
+        return Err(ApiError::NotFound);
+    }
+    parts.extensions.insert(ProjectAccess {
+        project,
+        role: None,
+    });
     Ok(())
 }
 
@@ -419,7 +496,14 @@ mod tests {
     }
 
     async fn echo_user(Extension(principal): Extension<Principal>) -> Json<Value> {
-        let Principal::Session { user, .. } = principal;
+        let Principal::Session { user, .. } = principal else {
+            return Json(json!({
+                "org": null,
+                "project": null,
+                "role": null,
+                "admin": false,
+            }));
+        };
         Json(json!({
             "org": null,
             "project": null,
@@ -440,7 +524,7 @@ mod tests {
         Json(json!({
             "org": null,
             "project": access.project.slug,
-            "role": role_name(access.role),
+            "role": access.role.map(role_name),
         }))
     }
 

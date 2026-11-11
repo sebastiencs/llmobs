@@ -264,6 +264,41 @@ export interface paths {
         patch: operations["patch_project"];
         trace?: never;
     };
+    "/api/v1/projects/{project}/api-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List API keys */
+        get: operations["list_api_keys"];
+        put?: never;
+        /** Create an API key */
+        post: operations["post_api_key"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project}/api-keys/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke an API key */
+        delete: operations["delete_api_key"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project}/media/{sha256}": {
         parameters: {
             query?: never;
@@ -610,6 +645,59 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description A project API key. The secret is not a field. */
+        ApiKey: {
+            /**
+             * Format: date-time
+             * @description Creation time. JSON is RFC 3339.
+             */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description User who created the key. Omitted when that user is unknown.
+             */
+            created_by?: string;
+            /**
+             * Format: date-time
+             * @description When the key stops working. Omitted when the key does not expire.
+             */
+            expires_at?: string;
+            /**
+             * Format: uuid
+             * @description Key id.
+             */
+            id: string;
+            /** @description `secret` or `public`. */
+            kind: components["schemas"]["ApiKeyKind"];
+            /**
+             * Format: date-time
+             * @description Last successful authentication. Omitted until a flush has written it.
+             */
+            last_used_at?: string;
+            /** @description Display name. Omitted when the key was created without one. */
+            name?: string;
+            /** @description Type prefix plus the first 6 random characters. */
+            prefix: string;
+            /** @description Scopes, in a stable order. */
+            scopes: components["schemas"]["ApiKeyScope"][];
+        };
+        /**
+         * @description `secret` or `public`.
+         * @enum {string}
+         */
+        ApiKeyKind: "secret" | "public";
+        /** @description One page of results. `next_cursor` is null when there is no next page. */
+        ApiKeyPage: {
+            /** @description Items in this page. */
+            data: components["schemas"]["ApiKey"][];
+            /** @description Opaque cursor for the next page, or null when this is the last page. */
+            next_cursor: string | null;
+        };
+        /**
+         * @description One scope name.
+         * @enum {string}
+         */
+        ApiKeyScope: "ingest" | "read" | "write" | "feedback";
         /**
          * @description Login methods the UI should offer.
          *
@@ -699,6 +787,17 @@ export interface components {
          * @enum {string}
          */
         CostSource: "computed" | "reported" | "none";
+        /** @description `POST /api/v1/projects/{project}/api-keys` body. */
+        CreateApiKeyRequest: {
+            /** @description When the key stops working. Absent when the key does not expire. */
+            expires_at?: components["schemas"]["TimeParam"];
+            /** @description `secret` or `public`. */
+            kind: components["schemas"]["ApiKeyKind"];
+            /** @description Display name, at most 100 characters. Absent when the key has none. */
+            name?: string;
+            /** @description Secret keys default to ingest, read, and write. Public keys default to feedback. */
+            scopes?: components["schemas"]["ApiKeyScope"][];
+        };
         /** @description `POST /api/v1/orgs`. */
         CreateOrgRequest: {
             /** @description Display name. Trimmed to 1–100 characters. */
@@ -734,6 +833,13 @@ export interface components {
             shared?: boolean;
             /** @description Opaque UI state: list-page URL params, or `{query, params}` for SQL. */
             state: Record<string, never>;
+        };
+        /** @description `POST /api/v1/projects/{project}/api-keys`. The response is the only place the secret appears. */
+        CreatedApiKey: {
+            /** @description The stored key, without the secret. */
+            key: components["schemas"]["ApiKey"];
+            /** @description The bearer value. Shown only in this response. */
+            secret: string;
         };
         /**
          * @description User summary plus the most recent sessions.
@@ -1151,8 +1257,8 @@ export interface components {
              * @description Days to keep data. Omitted when data is kept forever.
              */
             retention_days?: number;
-            /** @description The caller's effective role on this project. */
-            role: components["schemas"]["OrgRole"];
+            /** @description The caller's effective role. Omitted when the caller is an API key. */
+            role?: components["schemas"]["OrgRole"];
             /** @description URL slug, unique within the org. */
             slug: string;
         };
@@ -3387,6 +3493,219 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Project"];
                 };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_api_keys: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of items to return (1–1000, default 50). */
+                limit?: components["schemas"]["Limit"];
+                /** @description Opaque cursor from a previous page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of API keys, newest first. The secret is not included. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiKeyPage"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    post_api_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateApiKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description The key and its secret. The secret is shown only here. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedApiKey"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_api_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+                /** @description API key id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The key is revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description The request is malformed or a filter is invalid. */
             400: {

@@ -15,7 +15,7 @@ use crate::api::members::{
     MemberUser, OrgMember, ProjectMember, ProjectRoleOverride, SetProjectOverrideRequest,
     UpdateOrgMemberRequest,
 };
-use crate::auth::principal::Principal;
+use crate::auth::principal::{self, Principal};
 use crate::auth::roles::{self, OrgPerm, ProjectOverride, ProjectPerm, Role};
 use crate::http::AppState;
 use crate::http::access::{Access, OrgAccess, ProjectAccess, RouteDef};
@@ -132,7 +132,7 @@ async fn update_org_member(
     error::Path(UserPath { user: target }): error::Path<UserPath>,
     error::Json(body): error::Json<UpdateOrgMemberRequest>,
 ) -> Result<error::Json<OrgMember>, ApiError> {
-    let Principal::Session { user, .. } = &principal;
+    let user = principal::session_user(&principal)?;
     let actor = user.id;
     let org_id = access.org.id;
     let role = body.role;
@@ -185,7 +185,7 @@ async fn remove_org_member(
     Extension(access): Extension<OrgAccess>,
     error::Path(UserPath { user: target }): error::Path<UserPath>,
 ) -> Result<StatusCode, ApiError> {
-    let Principal::Session { user, .. } = &principal;
+    let user = principal::session_user(&principal)?;
     let actor = user.id;
     let org_id = access.org.id;
     let outcome = state

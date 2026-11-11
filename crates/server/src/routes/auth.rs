@@ -13,7 +13,7 @@ use crate::api::account::{
 };
 use crate::api::common::{FieldError, Problem, ProblemCode};
 use crate::auth::password::check_policy;
-use crate::auth::principal::Principal;
+use crate::auth::principal::{self, Principal};
 use crate::auth::secret::{constant_time_eq, hash_token, is_opaque_token};
 use crate::auth::session::{clear_cookie, resolve_cookie_header, start_session};
 use crate::bootstrap::{self, BootstrapError};
@@ -169,7 +169,7 @@ async fn setup(
             slug: created.created.project.slug,
             name: created.created.project.name,
             retention_days: created.created.project.retention_days,
-            role: OrgRole::Owner,
+            role: Some(OrgRole::Owner),
             created_at: created.created.project.created_at,
         },
         secret_key: created.secret_key,
@@ -441,7 +441,7 @@ async fn me(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
 ) -> Result<error::Json<Me>, ApiError> {
-    let Principal::Session { user, .. } = &principal;
+    let user = principal::session_user(&principal)?;
     let Some(row) = users::user_by_id(state.meta.reader(), user.id).await? else {
         return Err(ApiError::Unauthorized);
     };
@@ -642,7 +642,7 @@ mod tests {
         assert_eq!(response.org.role, OrgRole::Owner);
         assert_eq!(response.org.slug, "acme");
         assert_eq!(response.project.slug, "support-bot");
-        assert_eq!(response.project.role, OrgRole::Owner);
+        assert_eq!(response.project.role, Some(OrgRole::Owner));
         assert!(response.secret_key_prefix.len() < response.secret_key.len());
         assert!(response.secret_key.starts_with(&response.secret_key_prefix));
 

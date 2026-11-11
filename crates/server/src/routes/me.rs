@@ -11,7 +11,7 @@ use axum::routing::{patch, post};
 use crate::api::account::{ChangePasswordRequest, UpdateMeRequest, User};
 use crate::api::common::{FieldError, ProblemCode};
 use crate::auth::password::check_policy;
-use crate::auth::principal::Principal;
+use crate::auth::principal::{self, Principal};
 use crate::http::AppState;
 use crate::http::access::{Access, RouteDef};
 use crate::http::client_ip::ClientIp;
@@ -45,7 +45,7 @@ async fn update_me(
     Extension(principal): Extension<Principal>,
     error::Json(body): error::Json<UpdateMeRequest>,
 ) -> Result<error::Json<User>, ApiError> {
-    let Principal::Session { user, .. } = &principal;
+    let user = principal::session_user(&principal)?;
     let name = match body.name {
         None => None,
         Some(name) => Some(trimmed_name(&name)?),
@@ -70,7 +70,14 @@ async fn change_password(
     Extension(principal): Extension<Principal>,
     error::Json(body): error::Json<ChangePasswordRequest>,
 ) -> Result<Response, ApiError> {
-    let Principal::Session { user, session_hash } = &principal;
+    let (user, session_hash) = match &principal {
+        Principal::Session { user, session_hash } => (user, session_hash),
+        Principal::ApiKey { .. } => {
+            return Err(ApiError::Forbidden {
+                code: ProblemCode::Forbidden,
+            });
+        }
+    };
     let Some(row) = users::user_by_id(state.meta.reader(), user.id).await? else {
         return Err(ApiError::Unauthorized);
     };

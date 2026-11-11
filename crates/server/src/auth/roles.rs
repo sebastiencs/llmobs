@@ -107,6 +107,49 @@ pub(crate) enum KeyScope {
     Feedback,
 }
 
+impl KeyScope {
+    fn bit(self) -> u8 {
+        match self {
+            Self::Ingest => 1,
+            Self::Read => 2,
+            Self::Write => 4,
+            Self::Feedback => 8,
+        }
+    }
+}
+
+/// Scopes stored on one key. The order of [`Self::iter`] is stable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct KeyScopes(u8);
+
+impl KeyScopes {
+    /// The scopes in `scopes`. Duplicates collapse.
+    pub(crate) fn from_scopes(scopes: &[KeyScope]) -> Self {
+        let mut bits = 0;
+        for scope in scopes {
+            bits |= scope.bit();
+        }
+        Self(bits)
+    }
+
+    /// Whether `scope` is set.
+    pub(crate) fn contains(self, scope: KeyScope) -> bool {
+        self.0 & scope.bit() != 0
+    }
+
+    /// `ingest`, `read`, `write`, `feedback`, skipping the ones that are unset.
+    pub(crate) fn iter(self) -> impl Iterator<Item = KeyScope> {
+        [
+            KeyScope::Ingest,
+            KeyScope::Read,
+            KeyScope::Write,
+            KeyScope::Feedback,
+        ]
+        .into_iter()
+        .filter(move |scope| self.contains(*scope))
+    }
+}
+
 /// Owner and admin are always project admins. An override applies to members and viewers.
 /// `ProjectOverride::None` hides the project. No stored override keeps the org role.
 pub(crate) fn effective_project_role(org: OrgRole, ov: Option<ProjectOverride>) -> Option<Role> {

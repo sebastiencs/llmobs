@@ -253,7 +253,7 @@ async fn insert_first(
                     project_id: project.id,
                     kind: "secret",
                     scopes: FULL_SCOPES.to_vec(),
-                    name: key.name.clone(),
+                    name: Some(key.name.clone()),
                     prefix: key.prefix.clone(),
                     hash: key.hash.clone(),
                     created_by: user.id,

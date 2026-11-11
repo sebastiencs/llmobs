@@ -23,6 +23,8 @@ use axum::response::Response;
 use llmobs_storage::Storage;
 
 use crate::auth::Limits;
+use crate::auth::last_used::LastUsed;
+use crate::auth::principal::ApiKeyCache;
 use crate::auth::principal::authenticate;
 use crate::clock::Clock;
 use crate::config::ServerConfig;
@@ -42,6 +44,10 @@ pub(crate) struct AppInner {
     pub(crate) storage: Arc<Storage>,
     pub(crate) clock: Clock,
     pub(crate) limits: Limits,
+    /// Successful API-key lookups, cached 60 s by hash.
+    pub(crate) key_cache: ApiKeyCache,
+    /// Coalesced `last_used_at` updates.
+    pub(crate) last_used: LastUsed,
     pub(crate) setup: crate::bootstrap::SetupState,
     /// Built on the first password check, so tests that never log in skip argon2.
     pub(crate) password_hasher: OnceCell<crate::auth::password::Hasher>,

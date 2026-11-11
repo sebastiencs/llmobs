@@ -338,6 +338,14 @@
     "file": "responses/users/user-7.json"
   },
   {
+    "operation_id": "list_api_keys",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/api-keys.json"
+  },
+  {
     "operation_id": "list_org_members",
     "path_params": {
       "org": "acme"
@@ -450,6 +458,14 @@
     "status": 200,
     "content_type": "application/json",
     "file": "responses/users.json"
+  },
+  {
+    "operation_id": "post_api_key",
+    "path_params": {},
+    "query": {},
+    "status": 201,
+    "content_type": "application/json",
+    "file": "static/api-key-created.json"
   },
   {
     "operation_id": "post_login",
