@@ -90,7 +90,9 @@ mod tests {
 
     use super::super::DAY_NS;
     use super::*;
-    use crate::config::{MemtableConfig, QueryConfig, StorageConfig, WalConfig};
+    use crate::config::{
+        FlushConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig, WalConfig,
+    };
     use crate::wal::spans_at;
 
     fn project() -> ProjectId {
@@ -104,10 +106,14 @@ mod tests {
     fn config_in(dir: &Path) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            object_store: None,
+            s3: S3Config::default(),
             wal: WalConfig::default(),
+            flush: FlushConfig::default(),
             memtable: MemtableConfig::default(),
             query: QueryConfig {
                 target_partitions: 2,
+                ..QueryConfig::default()
             },
         }
     }

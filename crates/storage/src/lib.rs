@@ -577,7 +577,7 @@ mod tests {
     use llmobs_core::score::{Score, ScoreTarget, ScoreValue};
 
     use super::*;
-    use crate::config::{MemtableConfig, QueryConfig, WalConfig};
+    use crate::config::{FlushConfig, MemtableConfig, QueryConfig, S3Config, WalConfig};
     use crate::error::StorageError;
     use crate::hooks::HookPoint;
     use crate::wal::{parse_segment_name, spans_at, spans_named};
@@ -593,7 +593,10 @@ mod tests {
     fn config_in(dir: &Path) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            object_store: None,
+            s3: S3Config::default(),
             wal: WalConfig::default(),
+            flush: FlushConfig::default(),
             memtable: MemtableConfig::default(),
             query: QueryConfig::default(),
         }
@@ -726,6 +729,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut config = config_in(dir.path());
         config.memtable.hard_limit = ByteSize::mib(16);
+        config.flush.max_bytes = ByteSize::mib(1);
         let storage = Storage::open(config.clone()).await.unwrap();
         let huge = spans_named(&[1], &"m".repeat(17 * 1024 * 1024));
         let error = storage.append_spans(project(), huge).await.unwrap_err();

@@ -12,6 +12,11 @@ workspace = true
 [dependencies]
 llmobs-core.workspace = true
 arrow = { workspace = true, features = ["ipc_compression"] }
+# `fs` is already a default feature of the pin. `aws` is the S3 backend (D102).
+object_store = { workspace = true, features = ["fs", "aws"] }
+parquet.workspace = true
+sqlx.workspace = true
+uuid.workspace = true
 async-trait.workspace = true
 bytesize.workspace = true
 chrono.workspace = true

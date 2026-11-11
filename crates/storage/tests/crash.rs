@@ -23,7 +23,9 @@ use llmobs_core::batch::spans_to_record_batch;
 use llmobs_core::enums::{SpanKind, SpanStatus};
 use llmobs_core::ids::{ProjectId, SpanId, TraceId};
 use llmobs_core::span::Span;
-use llmobs_storage::config::{MemtableConfig, QueryConfig, StorageConfig, WalConfig, WalSync};
+use llmobs_storage::config::{
+    FlushConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig, WalConfig, WalSync,
+};
 use llmobs_storage::{ProjectQuery, Storage};
 
 const DEFAULT_ITERATIONS: u32 = 25;
@@ -36,9 +38,15 @@ fn project() -> ProjectId {
 fn child_config(dir: &Path) -> StorageConfig {
     StorageConfig {
         data_dir: dir.to_path_buf(),
+        object_store: None,
+        s3: S3Config::default(),
         wal: WalConfig {
             segment_bytes: ByteSize::mib(1),
             ..WalConfig::default()
+        },
+        flush: FlushConfig {
+            max_bytes: ByteSize::mib(128),
+            ..FlushConfig::default()
         },
         memtable: MemtableConfig {
             hard_limit: ByteSize::mib(256),

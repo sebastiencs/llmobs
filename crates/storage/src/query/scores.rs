@@ -201,7 +201,9 @@ mod tests {
     use llmobs_core::schema::scores;
     use llmobs_core::score::{Score, ScoreTarget, ScoreValue};
 
-    use crate::config::{MemtableConfig, QueryConfig, StorageConfig, WalConfig};
+    use crate::config::{
+        FlushConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig, WalConfig,
+    };
 
     fn project() -> ProjectId {
         "018f6b4e-7c1a-7c1a-8c1a-000000000001".parse().unwrap()
@@ -210,7 +212,10 @@ mod tests {
     fn config_in(dir: &Path) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            object_store: None,
+            s3: S3Config::default(),
             wal: WalConfig::default(),
+            flush: FlushConfig::default(),
             memtable: MemtableConfig::default(),
             query: QueryConfig::default(),
         }

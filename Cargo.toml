@@ -72,6 +72,15 @@ parquet = { version = "59.2", default-features = false, features = [
     "flate2-zlib-rs",
 ] }
 object_store = "0.13"
+# catalog.db (D39). `macros` exists for `sqlx::migrate!` only. Queries use the
+# runtime API, not `query!`, so no `DATABASE_URL` is required. `sqlite` bundles
+# SQLite so the binary does not need a system library.
+sqlx = { version = "0.9.0", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+    "migrate",
+    "macros",
+] }
 
 # --- runtime basics ---
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "fs", "io-util"] }
