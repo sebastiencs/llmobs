@@ -2,6 +2,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Waypoints } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { problemOf } from "@/api/problem";
 import type { Schema } from "@/api/types";
 import { ColumnChooser } from "@/components/data-table/column-chooser";
 import {
@@ -13,6 +14,8 @@ import {
 import { DataTable } from "@/components/data-table/data-table";
 import { traceListOptions } from "@/components/data-table/use-infinite-list";
 import { EmptyState } from "@/components/empty-state";
+import { FilterBar } from "@/components/filter-bar/filter-bar";
+import { appendFilter, filterMessage } from "@/components/filter-bar/logic";
 import { ListToolbar } from "@/components/list-toolbar";
 import { useProject } from "@/components/shell/project-context";
 import { SplitPane } from "@/components/trace/split-pane";
@@ -66,6 +69,7 @@ function TracesPage() {
       sort: search.sort,
       order: search.order,
       search: search.search,
+      filter: search.filter,
       includeEval: search.eval === 1,
       includeExperiments: search.exp === 1,
     }),
@@ -80,7 +84,20 @@ function TracesPage() {
     const fromUrl = search.cols?.split(",");
     return visibleColumnIds(specs, fromUrl ?? readColumnChoice(TABLE_ID));
   }, [search.cols, specs]);
-  const tableColumns = useMemo(() => orderedTraceColumns(rows, visible), [rows, visible]);
+  const onFilter = useCallback(
+    (conjunct: string) => {
+      void navigate({
+        to: "/$org/$project/traces",
+        params: { org, project },
+        search: (prev) => withFilter(prev, appendFilter(prev.filter ?? "", conjunct)),
+      });
+    },
+    [navigate, org, project],
+  );
+  const tableColumns = useMemo(
+    () => orderedTraceColumns(rows, visible, onFilter),
+    [rows, visible, onFilter],
+  );
   function onColumns(ids: string[]) {
     const choice = sameColumnIds(ids, defaults) ? undefined : ids;
     writeColumnChoice(TABLE_ID, choice);
@@ -132,7 +149,9 @@ function TracesPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [navigate, org, project, search.trace]);
 
-  if (list.isError) {
+  const problem = list.isError ? problemOf(list.error) : undefined;
+  const filterError = problem?.code === "invalid_filter" ? problem : undefined;
+  if (problem && !filterError) {
     throw list.error;
   }
 
@@ -183,12 +202,31 @@ function TracesPage() {
                       search: (prev) => withFlag(prev, "exp", on),
                     });
                   }}
+                  filter={
+                    <FilterBar
+                      view="traces"
+                      value={search.filter ?? ""}
+                      error={filterError}
+                      onApply={(text) => {
+                        void navigate({
+                          to: "/$org/$project/traces",
+                          params: { org, project },
+                          search: (prev) => withFilter(prev, text),
+                        });
+                      }}
+                    />
+                  }
                   columns={
                     <ColumnChooser columns={specs} visible={visible} onVisible={onColumns} />
                   }
                   loaded={list.data ? rows.length : undefined}
                 />
-                {list.data ? (
+                {filterError ? (
+                  <div className="mx-auto flex max-w-md flex-col gap-2 px-4 py-16">
+                    <h2 className="text-sm font-medium">{filterError.title}</h2>
+                    <p className="text-sm text-destructive">{filterMessage(filterError)}</p>
+                  </div>
+                ) : list.data ? (
                   <DataTable
                     tableId="traces"
                     ariaLabel="Traces"
@@ -265,6 +303,12 @@ function withSearch(search: TracesSearch, value: string): TracesSearch {
   const { search: _search, ...rest } = search;
   const trimmed = value.trim();
   return trimmed.length > 0 ? { ...rest, search: trimmed } : rest;
+}
+
+function withFilter(search: TracesSearch, value: string): TracesSearch {
+  const { filter: _filter, ...rest } = search;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? { ...rest, filter: trimmed } : rest;
 }
 
 function withFlag(search: TracesSearch, key: "eval" | "exp", on: boolean): TracesSearch {

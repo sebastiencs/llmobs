@@ -1,5 +1,6 @@
 import type { Schema } from "@/api/types";
 import {
+  FILTER_MAX,
   parseEnum,
   parseFlag,
   parseHex,
@@ -49,6 +50,7 @@ export type TracesSearch = {
   eval?: 1;
   exp?: 1;
   cols?: string;
+  filter?: string;
 };
 
 /** Fixed column ids, plus `score:<name>` for a non-empty name. */
@@ -69,6 +71,7 @@ export function parseTracesSearch(search: Record<string, unknown>): TracesSearch
   const evalOn = parseFlag(search.eval);
   const expOn = parseFlag(search.exp);
   const cols = parseCols(search.cols);
+  const filter = parseString(search.filter, FILTER_MAX);
   return {
     ...(sort ? { sort } : {}),
     ...(order ? { order } : {}),
@@ -80,6 +83,7 @@ export function parseTracesSearch(search: Record<string, unknown>): TracesSearch
     ...(evalOn ? { eval: 1 } : {}),
     ...(expOn ? { exp: 1 } : {}),
     ...(cols ? { cols } : {}),
+    ...(filter ? { filter } : {}),
   };
 }
 

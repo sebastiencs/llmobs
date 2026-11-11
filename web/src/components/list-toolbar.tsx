@@ -61,7 +61,7 @@ export function ListToolbar({
   }, []);
 
   return (
-    <div className="flex h-9 shrink-0 items-center gap-2 overflow-x-auto border-b px-3">
+    <div className="flex min-h-9 shrink-0 items-center gap-2 overflow-x-auto border-b px-3">
       <h1 className="shrink-0 text-sm font-medium">{title}</h1>
       <TimeRangePicker state={range} onChange={onRange} />
       <Button type="button" variant="ghost" size="icon-xs" aria-label="Refresh" onClick={onRefresh}>

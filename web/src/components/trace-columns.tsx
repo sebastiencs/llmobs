@@ -1,6 +1,9 @@
+import { Plus } from "lucide-react";
+import type { ReactNode } from "react";
 import type { Schema } from "@/api/types";
 import type { ColumnSpec } from "@/components/data-table/column-layout";
 import type { DataTableColumn } from "@/components/data-table/data-table";
+import { stringContains, stringEquals } from "@/components/filter-bar/logic";
 import { StatusDot } from "@/components/status-dot";
 import { TimeText } from "@/components/time-text";
 import { Badge } from "@/components/ui/badge";
@@ -88,21 +91,35 @@ export function traceColumnSpecs(names: readonly string[]): TraceColumn[] {
 export function orderedTraceColumns(
   rows: readonly Schema<"TraceSummary">[],
   visible: readonly string[],
+  onFilter?: (conjunct: string) => void,
 ): DataTableColumn<Schema<"TraceSummary">>[] {
-  const byId = new Map(traceColumnDefs(scoreNames(rows)).map((column) => [column.id, column]));
+  const byId = new Map(
+    traceColumnDefs(scoreNames(rows), onFilter).map((column) => [column.id, column]),
+  );
   return visible.flatMap((id) => {
     const column = byId.get(id);
     return column ? [column] : [];
   });
 }
 
-function traceColumnDefs(names: readonly string[]): DataTableColumn<Schema<"TraceSummary">>[] {
+function traceColumnDefs(
+  names: readonly string[],
+  onFilter?: (conjunct: string) => void,
+): DataTableColumn<Schema<"TraceSummary">>[] {
   const fixed: DataTableColumn<Schema<"TraceSummary">>[] = [
     {
       id: "status",
       size: 28,
       header: () => <span className="sr-only">Status</span>,
-      cell: ({ row }) => <StatusDot status={row.original.status} />,
+      cell: ({ row }) => (
+        <FilterHit
+          label={`Filter by status ${row.original.status}`}
+          conjunct={stringEquals("status", row.original.status)}
+          onFilter={onFilter}
+        >
+          <StatusDot status={row.original.status} />
+        </FilterHit>
+      ),
     },
     {
       id: "start",
@@ -116,7 +133,15 @@ function traceColumnDefs(names: readonly string[]): DataTableColumn<Schema<"Trac
       id: "name",
       size: 200,
       header: "Name",
-      cell: ({ row }) => row.original.name,
+      cell: ({ row }) => (
+        <FilterHit
+          label={`Filter by name ${row.original.name}`}
+          conjunct={stringEquals("name", row.original.name)}
+          onFilter={onFilter}
+        >
+          {row.original.name}
+        </FilterHit>
+      ),
     },
     {
       id: "input",
@@ -161,33 +186,48 @@ function traceColumnDefs(names: readonly string[]): DataTableColumn<Schema<"Trac
       id: "models",
       size: 140,
       header: "Models",
-      cell: ({ row }) => modelsLabel(row.original.models),
+      cell: ({ row }) => {
+        const first = row.original.models[0];
+        const label = modelsLabel(row.original.models);
+        if (!first) {
+          return label;
+        }
+        return (
+          <FilterHit
+            label={`Filter by models ${first}`}
+            conjunct={stringContains("models", first)}
+            onFilter={onFilter}
+          >
+            {label}
+          </FilterHit>
+        );
+      },
     },
     {
       id: "session",
       size: 120,
       header: "Session",
       meta: { mono: true },
-      cell: ({ row }) => row.original.session_id ?? "—",
+      cell: ({ row }) => filterText(row.original.session_id, "session", "session_id", onFilter),
     },
     {
       id: "user",
       size: 100,
       header: "User",
       meta: { mono: true },
-      cell: ({ row }) => row.original.user_id ?? "—",
+      cell: ({ row }) => filterText(row.original.user_id, "user", "user_id", onFilter),
     },
     {
       id: "tags",
       size: 140,
       header: "Tags",
-      cell: ({ row }) => <Tags tags={row.original.tags} />,
+      cell: ({ row }) => <Tags tags={row.original.tags} onFilter={onFilter} />,
     },
     {
       id: "env",
       size: 88,
       header: "Env",
-      cell: ({ row }) => row.original.environment ?? "—",
+      cell: ({ row }) => filterText(row.original.environment, "env", "environment", onFilter),
     },
     {
       id: "release",
@@ -299,7 +339,7 @@ function modelsLabel(models: string[]): string {
   return `${first} +${models.length - 1}`;
 }
 
-function Tags({ tags }: { tags: string[] }) {
+function Tags({ tags, onFilter }: { tags: string[]; onFilter?: (conjunct: string) => void }) {
   if (tags.length === 0) {
     return "—";
   }
@@ -308,11 +348,77 @@ function Tags({ tags }: { tags: string[] }) {
   return (
     <span className="flex min-w-0 items-center gap-1">
       {shown.map((tag) => (
-        <Badge key={tag} variant="secondary" className="h-4 px-1.5 text-[10px]">
-          {tag}
-        </Badge>
+        <span key={tag} className="group/tag inline-flex min-w-0 items-center">
+          <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
+            {tag}
+          </Badge>
+          {onFilter ? (
+            <button
+              type="button"
+              aria-label={`Filter by tag ${tag}`}
+              className="inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground opacity-0 group-hover/tag:opacity-100 focus-visible:opacity-100"
+              onClick={(event) => {
+                event.stopPropagation();
+                onFilter(stringContains("tags", tag));
+              }}
+            >
+              <Plus className="size-3" />
+            </button>
+          ) : null}
+        </span>
       ))}
       {rest > 0 ? <span className="text-muted-foreground">+{rest}</span> : null}
+    </span>
+  );
+}
+
+function filterText(
+  value: string | undefined,
+  label: string,
+  column: string,
+  onFilter?: (conjunct: string) => void,
+): ReactNode {
+  if (!value) {
+    return "—";
+  }
+  return (
+    <FilterHit
+      label={`Filter by ${label} ${value}`}
+      conjunct={stringEquals(column, value)}
+      onFilter={onFilter}
+    >
+      {value}
+    </FilterHit>
+  );
+}
+
+function FilterHit({
+  label,
+  conjunct,
+  onFilter,
+  children,
+}: {
+  label: string;
+  conjunct: string;
+  onFilter?: (conjunct: string) => void;
+  children: ReactNode;
+}) {
+  return (
+    <span className="group flex min-w-0 items-center gap-1">
+      <span className="min-w-0 truncate">{children}</span>
+      {onFilter ? (
+        <button
+          type="button"
+          aria-label={label}
+          className="inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+          onClick={(event) => {
+            event.stopPropagation();
+            onFilter(conjunct);
+          }}
+        >
+          <Plus className="size-3" />
+        </button>
+      ) : null}
     </span>
   );
 }

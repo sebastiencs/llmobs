@@ -11,6 +11,7 @@ export function traceListOptions(
     sort?: Schema<"TraceSort">;
     order?: Schema<"SortOrder">;
     search?: string;
+    filter?: string;
     includeEval?: boolean;
     includeExperiments?: boolean;
   },
@@ -23,6 +24,7 @@ export function traceListOptions(
     ...(query.sort ? { sort: query.sort } : {}),
     ...(query.order ? { order: query.order } : {}),
     ...(query.search ? { search: query.search } : {}),
+    ...(query.filter ? { filter: query.filter } : {}),
     ...(query.includeEval ? { include_eval: true } : {}),
     ...(query.includeExperiments ? { include_experiments: true } : {}),
   };

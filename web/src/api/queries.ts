@@ -62,6 +62,15 @@ export function traceDetailQuery(org: string, project: string, traceId: string) 
   });
 }
 
+export function schemaQuery(org: string, project: string) {
+  return {
+    ...$api.queryOptions("get", "/api/v1/projects/{project}/schema", {
+      params: { path: { project: projectRef(org, project) } },
+    }),
+    staleTime: Number.POSITIVE_INFINITY,
+  };
+}
+
 export function spanDetailQuery(org: string, project: string, traceId: string, spanId: string) {
   return $api.queryOptions("get", "/api/v1/projects/{project}/traces/{trace_id}/spans/{span_id}", {
     params: {

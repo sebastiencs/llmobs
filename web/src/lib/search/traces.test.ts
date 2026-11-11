@@ -27,3 +27,11 @@ it("keeps known column ids and score columns, and drops the rest", () => {
   ).toEqual({ cols: "env,score:helpfulness" });
   expect(parseTracesSearch({ cols: "nope" })).toEqual({});
 });
+
+it("keeps a filter and drops an empty or oversized one", () => {
+  expect(parseTracesSearch({ filter: " status = 'error' " })).toEqual({
+    filter: "status = 'error'",
+  });
+  expect(parseTracesSearch({ filter: "   " })).toEqual({});
+  expect(parseTracesSearch({ filter: "x".repeat(4097) })).toEqual({});
+});
