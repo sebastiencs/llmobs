@@ -10,6 +10,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+base64.workspace = true
 llmobs-core.workspace = true
 opentelemetry-proto.workspace = true
 prost.workspace = true
@@ -17,6 +18,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+# Integration tests encode fixture bytes directly.
 base64.workspace = true
 # Integration tests are a separate crate. They name OTLP and prost types directly.
 opentelemetry-proto.workspace = true

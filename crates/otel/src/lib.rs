@@ -3,8 +3,11 @@
 //!
 //! Decoding is specified in `docs/spec/02-ingestion.md` § Endpoints.
 
+mod bag;
 mod decode;
 mod error;
+mod value;
+mod warn;
 
 pub use decode::{decode_json, decode_protobuf};
 pub use error::{DecodeError, JsonErrorCategory};
