@@ -51,7 +51,7 @@ pub struct IngestContext {
     pub ingest_time: i64,
     /// How many days of history this project keeps. `None` means no cutoff.
     pub retention_days: Option<u32>,
-    /// Size limits. Truncation and media read them from N14 on.
+    /// Size limits. Media reads them. Truncation reads them from N15 on.
     pub limits: IngestLimits,
 }
 
@@ -78,7 +78,7 @@ impl Default for IngestLimits {
 
 /// Accepted spans, extracted blobs, and rejection counts.
 ///
-/// `media` stays empty until N14. `normalize` does not fail: a bad span is counted
+/// `normalize` does not fail: a bad span is counted
 /// in `rejections` and the rest of the request is kept.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Normalized {
@@ -96,6 +96,7 @@ pub struct Normalized {
 pub fn normalize(request: &ExportTraceServiceRequest, ctx: &IngestContext) -> Normalized {
     let mut spans = Vec::new();
     let mut rejections = Rejections::default();
+    let mut media = crate::media::MediaSink::new(&ctx.limits);
     for resource_spans in &request.resource_spans {
         let resource = encode_resource(resource_spans.resource.as_ref());
         for scope_spans in &resource_spans.scope_spans {
@@ -108,6 +109,7 @@ pub fn normalize(request: &ExportTraceServiceRequest, ctx: &IngestContext) -> No
                     scope_name.clone(),
                     scope_version.clone(),
                     &mut rejections,
+                    &mut media,
                 ) {
                     spans.push(built);
                 }
@@ -116,7 +118,7 @@ pub fn normalize(request: &ExportTraceServiceRequest, ctx: &IngestContext) -> No
     }
     Normalized {
         spans,
-        media: Vec::new(),
+        media: media.into_media(),
         rejections,
     }
 }
@@ -177,7 +179,9 @@ fn accept_span(
     scope_name: Option<String>,
     scope_version: Option<String>,
     rejections: &mut Rejections,
+    media: &mut crate::media::MediaSink<'_>,
 ) -> Option<Span> {
+    media.clear_refs();
     let trace_id = match TraceId::from_slice(&span.trace_id) {
         Ok(id) => id,
         Err(_) => {
@@ -221,7 +225,7 @@ fn accept_span(
         &mut warnings,
     );
     let ttft_ns = ttft(&mut bag, start_time, &mut warnings);
-    let assembled = payload::assemble(
+    let mut assembled = payload::assemble(
         &mut bag,
         &span.events,
         span_kind,
@@ -300,6 +304,8 @@ fn accept_span(
         ingest_time: ctx.ingest_time,
         schema_version: SCHEMA_VERSION,
     };
+    crate::media::extract_io(&mut assembled.io, media);
+    built.media_refs = media.media_refs();
     payload::write(&mut built, assembled.io);
     Some(built)
 }

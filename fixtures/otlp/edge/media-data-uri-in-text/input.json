@@ -1,0 +1,33 @@
+{
+  "resourceSpans": [
+    {
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "f87a0000000000000000000000000001",
+              "spanId": "f87a000000000001",
+              "name": "caption",
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "llmobs.input",
+                  "value": {
+                    "stringValue": "look data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg== now"
+                  }
+                },
+                {
+                  "key": "llmobs.input.format",
+                  "value": {
+                    "stringValue": "text"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

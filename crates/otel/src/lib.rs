@@ -12,6 +12,7 @@ mod detect;
 mod error;
 mod fields;
 mod kind;
+mod media;
 mod normalize;
 mod payload;
 mod reject;

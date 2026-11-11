@@ -1,0 +1,10 @@
+{
+  "description": "The same image on two spans is one media blob, referenced by both spans.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Media extraction"
+  ],
+  "settings": {
+    "media_min_bytes": 32
+  }
+}
