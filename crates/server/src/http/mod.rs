@@ -19,6 +19,7 @@ use axum::response::Response;
 use axum::routing::get;
 use llmobs_storage::Storage;
 
+use crate::auth::Limits;
 use crate::clock::Clock;
 use crate::config::ServerConfig;
 use crate::meta::MetaDb;
@@ -30,12 +31,13 @@ const BODY_LIMIT: usize = 1024 * 1024;
 #[derive(Clone)]
 pub(crate) struct AppState(Arc<AppInner>);
 
-/// Fields later sub-phases add to: limits, principals, mailer, setup.
+/// Fields later sub-phases add to: principals, mailer, setup.
 pub(crate) struct AppInner {
     pub(crate) config: ServerConfig,
     pub(crate) meta: MetaDb,
     pub(crate) storage: Arc<Storage>,
     pub(crate) clock: Clock,
+    pub(crate) limits: Limits,
 }
 
 impl AppState {

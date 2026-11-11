@@ -1,9 +1,12 @@
 //! Authentication building blocks. Roles, token generation, and password hashing.
 //! Sessions and the permission rules come later.
 
+mod limits;
 mod password;
 mod roles;
 mod secret;
+
+pub(crate) use limits::Limits;
 
 /// A failure while minting a token or hashing a password.
 ///

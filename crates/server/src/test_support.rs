@@ -23,6 +23,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 use crate::api::common::Problem;
+use crate::auth::Limits;
 use crate::clock::Clock;
 use crate::config::{AuthSettings, InitConfig, LogConfig, PublicUrl, ServerConfig};
 use crate::http::{AppInner, AppState, router, router_with};
@@ -79,6 +80,7 @@ impl TestApp {
             meta,
             storage: Arc::new(storage),
             clock: Clock::Manual(Arc::new(AtomicI64::new(MANUAL_NOW_NS))),
+            limits: Limits::new(),
         });
         let router = match routes {
             Some(routes) => router_with(state.clone(), routes),

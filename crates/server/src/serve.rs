@@ -21,6 +21,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
+use crate::auth::Limits;
 use crate::clock::Clock;
 use crate::config::{ConfigError, ServerConfig};
 use crate::http::{AppInner, AppState, router};
@@ -31,6 +32,9 @@ const DRAIN: Duration = Duration::from_secs(20);
 
 /// Best-effort cap on `Storage::shutdown` (spec 12).
 const STORAGE_SHUTDOWN: Duration = Duration::from_secs(30);
+
+/// How often idle rate-limit keys are dropped (D143).
+const PRUNE_EVERY: Duration = Duration::from_secs(60);
 
 /// Why `llmobs serve` stopped before it was listening, or the accept loop failed.
 #[derive(Debug, thiserror::Error)]
@@ -149,6 +153,7 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         meta,
         storage,
         clock: Clock::System,
+        limits: Limits::new(),
     });
     let listener = match TcpListener::bind(http_addr).await {
         Ok(listener) => listener,
@@ -184,8 +189,20 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         local_addr,
         serve: Some(serve),
         shutdown_tx: Some(shutdown_tx),
-        state: Some(state),
-        tasks: Vec::new(),
+        state: Some(state.clone()),
+        tasks: vec![spawn_prune(state)],
+    })
+}
+
+fn spawn_prune(state: AppState) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(PRUNE_EVERY);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            state.limits.prune(state.clock.now_ns());
+        }
     })
 }
 
@@ -207,8 +224,9 @@ impl Running {
             Some(serve) => drain(serve).await,
             None => None,
         };
-        for task in &self.tasks {
+        for task in self.tasks.drain(..) {
             task.abort();
+            let _ = task.await;
         }
         if let Some(state) = self.state.take() {
             match tokio::time::timeout(STORAGE_SHUTDOWN, state.storage.shutdown()).await {
