@@ -720,73 +720,85 @@
       "name": "now",
       "signature": "now() -> timestamp",
       "description": "Current time.",
-      "in_filter": true
+      "in_filter": true,
+      "in_sql": true
     },
     {
       "name": "lower",
       "signature": "lower(value: string) -> string",
       "description": "Lowercase a string.",
-      "in_filter": true
+      "in_filter": true,
+      "in_sql": true
     },
     {
       "name": "upper",
       "signature": "upper(value: string) -> string",
       "description": "Uppercase a string.",
-      "in_filter": true
+      "in_filter": true,
+      "in_sql": true
     },
     {
       "name": "length",
       "signature": "length(value: string) -> integer",
       "description": "Number of characters.",
-      "in_filter": true
+      "in_filter": true,
+      "in_sql": true
     },
     {
       "name": "coalesce",
       "signature": "coalesce(value: any, fallback: any) -> any",
       "description": "First non-null argument.",
-      "in_filter": true
+      "in_filter": true,
+      "in_sql": true
     },
     {
       "name": "array_has",
       "signature": "array_has(array: string_list, value: string) -> boolean",
       "description": "Whether the list contains the value.",
-      "in_filter": true
+      "in_filter": true,
+      "in_sql": true
     },
     {
       "name": "array_length",
       "signature": "array_length(array: string_list) -> integer",
       "description": "Number of elements.",
-      "in_filter": true
+      "in_filter": true,
+      "in_sql": true
     },
     {
       "name": "date_trunc",
       "signature": "date_trunc(unit: string, time: timestamp) -> timestamp",
       "description": "Truncate a timestamp to a unit such as day or hour.",
-      "in_filter": true
+      "in_filter": true,
+      "in_sql": true
     },
     {
       "name": "abs",
       "signature": "abs(value: float) -> float",
       "description": "Absolute value.",
-      "in_filter": true
+      "in_filter": true,
+      "in_sql": true
     },
     {
       "name": "score",
       "signature": "score(name: string) -> float",
       "description": "Latest numeric score of that name on the row's target.",
-      "in_filter": true
+      "in_filter": true,
+      "in_sql": false
     },
     {
       "name": "score_label",
       "signature": "score_label(name: string) -> string",
       "description": "Latest categorical or text score of that name.",
-      "in_filter": true
+      "in_filter": true,
+      "in_sql": false
     },
     {
       "name": "has_score",
       "signature": "has_score(name: string) -> boolean",
       "description": "Whether the row's target has a score of that name.",
-      "in_filter": true
+      "in_filter": true,
+      "in_sql": false
     }
   ]
 }

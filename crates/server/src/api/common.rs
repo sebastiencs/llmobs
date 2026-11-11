@@ -116,6 +116,14 @@ pub enum ProblemCode {
     BadRequest,
     /// A filter or SQL expression is invalid.
     InvalidFilter,
+    /// An execution error.
+    QueryFailed,
+    /// The query exceeded its time limit.
+    QueryTimeout,
+    /// The query needed more memory than the cap.
+    QueryTooLarge,
+    /// Admission control refused the query.
+    Busy,
     /// No credentials, or the credentials are invalid.
     Unauthorized,
     /// The credentials do not allow this operation.
@@ -132,24 +140,28 @@ impl ProblemCode {
     /// HTTP status for this code.
     pub fn status(self) -> u16 {
         match self {
-            Self::BadRequest | Self::InvalidFilter => 400,
+            Self::BadRequest | Self::InvalidFilter | Self::QueryFailed => 400,
             Self::Unauthorized => 401,
             Self::Forbidden => 403,
             Self::NotFound => 404,
+            Self::QueryTimeout | Self::QueryTooLarge => 422,
             Self::RateLimited => 429,
             Self::Internal => 500,
+            Self::Busy => 503,
         }
     }
 
     /// Canonical HTTP reason phrase of [`Self::status`].
     fn reason_phrase(self) -> &'static str {
         match self {
-            Self::BadRequest | Self::InvalidFilter => "Bad Request",
+            Self::BadRequest | Self::InvalidFilter | Self::QueryFailed => "Bad Request",
             Self::Unauthorized => "Unauthorized",
             Self::Forbidden => "Forbidden",
             Self::NotFound => "Not Found",
+            Self::QueryTimeout | Self::QueryTooLarge => "Unprocessable Content",
             Self::RateLimited => "Too Many Requests",
             Self::Internal => "Internal Server Error",
+            Self::Busy => "Service Unavailable",
         }
     }
 }
@@ -387,6 +399,30 @@ mod tests {
             .unwrap()
             .from
             .ns()
+    }
+
+    #[test]
+    fn query_problem_codes_map_to_their_statuses() {
+        assert_eq!(ProblemCode::QueryFailed.status(), 400);
+        assert_eq!(ProblemCode::QueryTimeout.status(), 422);
+        assert_eq!(ProblemCode::QueryTooLarge.status(), 422);
+        assert_eq!(ProblemCode::Busy.status(), 503);
+        assert_eq!(
+            Problem::new(ProblemCode::QueryFailed, None).title,
+            "Bad Request"
+        );
+        assert_eq!(
+            Problem::new(ProblemCode::QueryTimeout, None).title,
+            "Unprocessable Content"
+        );
+        assert_eq!(
+            Problem::new(ProblemCode::QueryTooLarge, None).title,
+            "Unprocessable Content"
+        );
+        assert_eq!(
+            Problem::new(ProblemCode::Busy, None).title,
+            "Service Unavailable"
+        );
     }
 
     #[test]

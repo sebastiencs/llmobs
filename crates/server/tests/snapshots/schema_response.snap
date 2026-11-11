@@ -22,7 +22,8 @@ expression: "serde_json::to_string_pretty(&response).unwrap()"
       "name": "score",
       "signature": "score(name: string) -> float",
       "description": "Latest numeric value of the named score.",
-      "in_filter": true
+      "in_filter": true,
+      "in_sql": false
     }
   ]
 }

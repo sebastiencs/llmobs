@@ -2745,7 +2745,8 @@
           "name",
           "signature",
           "description",
-          "in_filter"
+          "in_filter",
+          "in_sql"
         ],
         "properties": {
           "description": {
@@ -2754,7 +2755,11 @@
           },
           "in_filter": {
             "type": "boolean",
-            "description": "Whether the filter DSL allows the function. SQL allows every function."
+            "description": "Whether the filter DSL allows the function."
+          },
+          "in_sql": {
+            "type": "boolean",
+            "description": "Whether the SQL console allows the function."
           },
           "name": {
             "type": "string",
@@ -3233,6 +3238,10 @@
         "enum": [
           "bad_request",
           "invalid_filter",
+          "query_failed",
+          "query_timeout",
+          "query_too_large",
+          "busy",
           "unauthorized",
           "forbidden",
           "not_found",
