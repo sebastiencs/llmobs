@@ -52,17 +52,24 @@ fn run_case(case: &Case, bless: bool) -> Result<(), String> {
         fs::write(&path, canonical_json(&actual)).map_err(|err| format!("{label}: {err}"))?;
         return Ok(());
     }
-    let mut expected_spans = case.expected.spans.clone();
+    let Some(expected) = &case.expected else {
+        #[allow(clippy::print_stdout)]
+        {
+            println!("{}", awaiting_bless(&label));
+        }
+        return Ok(());
+    };
+    let mut expected_spans = expected.spans.clone();
     sort_spans(&mut expected_spans);
     let expected = Value::Object(Map::from_iter([
         (
             "spans".to_owned(),
             serde_json::to_value(&expected_spans).map_err(|err| err.to_string())?,
         ),
-        ("media".to_owned(), expected_media(&case.expected.media)),
+        ("media".to_owned(), expected_media(&expected.media)),
         (
             "rejected_spans".to_owned(),
-            Value::from(case.expected.rejected_spans),
+            Value::from(expected.rejected_spans),
         ),
     ]));
     let diff = first_diff(&actual, &expected, &label);
@@ -73,6 +80,10 @@ fn run_case(case: &Case, bless: bool) -> Result<(), String> {
         (false, Some(path)) => Err(path),
         (false, None) => Ok(()),
     }
+}
+
+fn awaiting_bless(label: &str) -> String {
+    format!("awaiting bless: {label}")
 }
 
 fn context_of(case: &Case) -> Result<IngestContext, String> {
@@ -190,6 +201,68 @@ fn first_diff(actual: &Value, expected: &Value, path: &str) -> Option<String> {
         }
         (actual, expected) if actual == expected => None,
         _ => Some(path.to_owned()),
+    }
+}
+
+#[test]
+fn bless_writes_expected_json_when_a_captured_case_has_none() {
+    let dir = std::env::temp_dir().join(format!("llmobs-bless-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap_or_else(|err| panic!("{err}"));
+    fs::write(dir.join("input.json"), "{\"resourceSpans\":[]}\n")
+        .unwrap_or_else(|err| panic!("{err}"));
+    let case = unblessed_case(&dir);
+    run_case(&case, true).unwrap_or_else(|err| panic!("{err}"));
+    let text = fs::read_to_string(dir.join("expected.json")).unwrap_or_else(|err| panic!("{err}"));
+    assert!(text.contains("\"spans\""));
+    assert!(text.contains("\"rejected_spans\""));
+    fs::remove_dir_all(&dir).unwrap_or_else(|err| panic!("{err}"));
+}
+
+#[test]
+fn captured_case_without_expected_json_is_skipped() {
+    let dir = std::env::temp_dir().join(format!("llmobs-await-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap_or_else(|err| panic!("{err}"));
+    fs::write(dir.join("input.json"), "{\"resourceSpans\":[]}\n")
+        .unwrap_or_else(|err| panic!("{err}"));
+    let case = unblessed_case(&dir);
+    run_case(&case, false).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(
+        awaiting_bless("edge/awaiting"),
+        "awaiting bless: edge/awaiting"
+    );
+    fs::remove_dir_all(&dir).unwrap_or_else(|err| panic!("{err}"));
+}
+
+fn unblessed_case(dir: &std::path::Path) -> Case {
+    use support::{CaseMeta, Context, Origin, Settings};
+    let project_id = support::DEFAULT_PROJECT_ID
+        .parse()
+        .unwrap_or_else(|err| panic!("{err}"));
+    Case {
+        group: "edge".to_owned(),
+        name: "awaiting".to_owned(),
+        dir: dir.to_owned(),
+        meta: CaseMeta {
+            description: "captured".to_owned(),
+            origin: Origin::Captured,
+            source: None,
+            spec_refs: vec!["02".to_owned()],
+            settings: Settings {
+                max_attribute_bytes: 8,
+                media_min_bytes: 1,
+                media_max_bytes: 10,
+                retention_days: None,
+            },
+            context: Context {
+                project_id,
+                ingest_time: 1_767_225_600_000_000_000,
+            },
+            notes: None,
+        },
+        input: Default::default(),
+        expected: None,
     }
 }
 
