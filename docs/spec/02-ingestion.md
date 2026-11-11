@@ -160,7 +160,7 @@ Per-modality counts (`gen_ai.usage.{audio,image,text}.*`, `llm.token_count.*_det
 | `user_id` | `llmobs.user.id`, `user.id`, `enduser.id`, `traceloop.association.properties.user_id`, `ai.telemetry.metadata.userId`, `langfuse.user.id`, `lmnr.association.properties.user_id` |
 | `tags` | `llmobs.tags`, `tag.tags`, `ai.telemetry.metadata.tags`, `langfuse.trace.tags`, `lmnr.association.properties.tags`. Each source is a string array or a string containing a JSON array of strings. Any other form, such as a comma-separated list, is not a tag source: it is consumed and stays in `attributes` (rule 2) |
 | `metadata` | `llmobs.metadata.*` (one attribute per key), `metadata` (OI, JSON object string), `ai.telemetry.metadata.*`, `ai.telemetry.functionId` (stored as `functionId`), `traceloop.association.properties.*`, `traceloop.workflow.name` (stored as `workflow`), `langfuse.trace.metadata.*`, `lmnr.association.properties.metadata.*` |
-| `environment` | `llmobs.environment`, resource `deployment.environment.name`, `deployment.environment`, `langfuse.environment` |
+| `environment` | `llmobs.environment`, resource `deployment.environment.name`, `deployment.environment`, `langfuse.environment`. A value `llmobs-eval` received over OTLP is rewritten to `llmobs-eval-external` by the OTLP handler after normalization, with a warning attribute (D161). `normalize` itself does not rewrite it, so in-process evaluation spans keep the name |
 | `release` | `llmobs.release`, resource `service.version`, `langfuse.release`, `lmnr.span.release` (span) |
 | `service_name` | resource `service.name` |
 | experiment linkage | `llmobs.experiment.id`, `llmobs.dataset_item.id` → stored in `metadata` under the reserved keys `llmobs.experiment_id`, `llmobs.dataset_item_id` (06) |

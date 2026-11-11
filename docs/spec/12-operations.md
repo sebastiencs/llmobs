@@ -104,7 +104,7 @@ llmobs admin backup --to /backups/llmobs-$(date +%F)   # online, consistent
 ## Security checklist (MVP)
 
 - All secrets encrypted at rest (04 §Encryption); keys/tokens hashed.
-- Outbound requests (webhooks, LLM connections, OIDC, Slack) go through an HTTP client with an SSRF guard: deny private/link-local/loopback ranges unless `security.allow_private_network_egress = true` (needed for local Ollama/vLLM — the setting is shown in the LLM connection form).
+- Outbound requests (webhooks, LLM connections, OIDC, Slack) go through an HTTP client with an SSRF guard. Unless `security.allow_private_network_egress = true` (needed for local Ollama/vLLM — the setting is shown in the LLM connection form), the client drops every resolved address, and any literal IP in the URL, in these ranges (D166): loopback, RFC 1918, CGNAT `100.64.0.0/10`, link-local, unique local `fc00::/7`, unspecified, multicast, broadcast, `192.0.0.0/24`, `198.18.0.0/15`, documentation ranges, and IPv4-mapped or NAT64 forms of any of these. If none is left, the call fails before connecting. Redirects are never followed. `http` and `https` only.
 - Request size limits everywhere; JSON depth limit 128.
 - Content-Security-Policy on the UI (`default-src 'self'`; media from `self` only); payloads rendered as text (no HTML injection from trace content).
 - `cargo deny` (advisories, bans, sources) on every CI run and `cargo deny check advisories` weekly (RustSec, the database `cargo audit` uses); Dependabot alerts for JS and Python; dependency licenses compatible with any license we later pick (license check enabled once D9 is decided, D57).
