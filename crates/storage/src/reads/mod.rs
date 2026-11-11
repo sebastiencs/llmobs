@@ -5,15 +5,29 @@
 //! server maps those batches to API types.
 
 mod cursor;
+mod sessions;
 mod traces;
+mod users;
 
 use arrow::record_batch::RecordBatch;
+use datafusion::logical_expr::Expr;
+use datafusion::prelude::DataFrame;
 
-use crate::views::TimeWindow;
+use crate::filter::{FilterView, exclusions, time_window};
+use crate::query_error::{RunError, classify};
+use crate::views::{QueryContext, TimeWindow};
 
+pub use sessions::{
+    MAX_SESSION_TURNS, SessionDetailData, SessionListRequest, SessionSort, session_detail,
+    session_list,
+};
 pub use traces::{
     MAX_TRACE_SPANS, SPAN_LIST_COLUMNS, SpanListRequest, SpanSort, TraceDetailData,
     TraceListRequest, TraceSort, span_detail, span_list, trace_detail, trace_list,
+};
+pub use users::{
+    MAX_USER_SESSIONS, USER_COLUMNS, UserDetailData, UserListRequest, UserSort, user_detail,
+    user_list,
 };
 
 /// Sort direction for a list. Nulls are last in both directions.
@@ -51,4 +65,30 @@ pub const MAX_PAGE: usize = 1000;
 /// Empty or all-whitespace text is no filter and no search.
 pub(crate) fn present(text: Option<&str>) -> Option<&str> {
     text.filter(|text| !text.chars().all(char::is_whitespace))
+}
+
+/// The `traces` view restricted by a list's window and default exclusions.
+pub(crate) async fn scoped_traces(
+    ctx: &QueryContext,
+    scope: ListScope,
+    references_environment: bool,
+) -> Result<DataFrame, RunError> {
+    let mut frame = ctx.session().table("traces").await.map_err(classify)?;
+    let mut conjuncts = Vec::new();
+    if let Some(window) = scope.window {
+        conjuncts.push(time_window(window));
+    }
+    if let Some(expr) = exclusions(
+        ctx,
+        FilterView::Traces,
+        scope.include_eval,
+        scope.include_experiments,
+        references_environment,
+    )? {
+        conjuncts.push(expr);
+    }
+    if let Some(predicate) = conjuncts.into_iter().reduce(Expr::and) {
+        frame = frame.filter(predicate).map_err(classify)?;
+    }
+    Ok(frame)
 }

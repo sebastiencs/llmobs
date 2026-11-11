@@ -2,7 +2,10 @@
 //!
 //! A cursor is the lowercase hex of a compact JSON object. Timestamps are
 //! stored as nanoseconds (`Int`). Float sort columns (`cost_total`) are JSON
-//! numbers decoded as `f64`, so an integer-valued cost stays a float.
+//! numbers decoded as `f64`, so an integer-valued cost stays a float. The
+//! number text is parsed with [`f64::from_str`]: serde_json's default parser
+//! is not a round trip, and one ulp makes the cursor's own row match `>`
+//! again, so a page walk never ends.
 
 use arrow::array::{Array, AsArray, RecordBatch};
 use arrow::datatypes::{DataType, Float64Type, Int64Type, TimeUnit, TimestampNanosecondType};
@@ -90,7 +93,8 @@ pub(crate) fn decode(
     let Some(object) = value.as_object() else {
         return Err(invalid_cursor());
     };
-    let (decoded_list, decoded_sort, decoded_order, cursor_value, tie) = parse_object(object)?;
+    let (decoded_list, decoded_sort, decoded_order, cursor_value, tie) =
+        parse_object(object, &bytes)?;
     if decoded_list != list || decoded_sort != sort || decoded_order != order {
         return Err(RunError::InvalidRequest(
             "the cursor belongs to another list or sort order".to_owned(),
@@ -107,6 +111,7 @@ pub(crate) fn decode(
 
 fn parse_object(
     object: &Map<String, Value>,
+    raw_json: &[u8],
 ) -> Result<(String, String, SortOrder, CursorValue, Vec<String>), RunError> {
     let list = object
         .get("l")
@@ -122,7 +127,7 @@ fn parse_object(
         _ => return Err(invalid_cursor()),
     };
     let value = object.get("v").ok_or_else(invalid_cursor)?;
-    let cursor_value = parse_value(sort_name, value)?;
+    let cursor_value = parse_value(sort_name, value, raw_json)?;
     let ties = object
         .get("t")
         .and_then(Value::as_array)
@@ -143,7 +148,7 @@ fn parse_object(
     ))
 }
 
-fn parse_value(sort: &str, value: &Value) -> Result<CursorValue, RunError> {
+fn parse_value(sort: &str, value: &Value, raw_json: &[u8]) -> Result<CursorValue, RunError> {
     if value.is_null() {
         return Ok(CursorValue::Null);
     }
@@ -151,9 +156,11 @@ fn parse_value(sort: &str, value: &Value) -> Result<CursorValue, RunError> {
         return Err(invalid_cursor());
     };
     if is_float_column(sort) {
-        let Some(value) = number.as_f64() else {
+        let token = json_field_token(raw_json, "v")?;
+        let value = token.parse::<f64>().map_err(|_| invalid_cursor())?;
+        if !value.is_finite() {
             return Err(invalid_cursor());
-        };
+        }
         return Ok(CursorValue::Float(value));
     }
     let Some(value) = number.as_i64() else {
@@ -316,6 +323,32 @@ fn tie_after(cols: &[&str], values: &[String], order: SortOrder) -> Expr {
     predicate.unwrap_or_else(|| lit(false))
 }
 
+/// The raw text of `"<field>":<token>` in compact cursor JSON.
+///
+/// Cursor values are null, numbers, and strings. A string cannot contain an
+/// unescaped `"v":`, so the first match is the field our encoder wrote.
+fn json_field_token<'a>(json: &'a [u8], field: &str) -> Result<&'a str, RunError> {
+    let key = format!("\"{field}\":");
+    let key = key.as_bytes();
+    let Some(start) = json.windows(key.len()).position(|window| window == key) else {
+        return Err(invalid_cursor());
+    };
+    let rest = &json[start + key.len()..];
+    let end = rest
+        .iter()
+        .position(|byte| *byte == b',' || *byte == b'}')
+        .ok_or_else(invalid_cursor)?;
+    let token = &rest[..end];
+    if token.is_empty()
+        || !token
+            .iter()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E'))
+    {
+        return Err(invalid_cursor());
+    }
+    std::str::from_utf8(token).map_err(|_| invalid_cursor())
+}
+
 fn is_timestamp_column(column: &str) -> bool {
     matches!(
         column,
@@ -356,4 +389,29 @@ fn invalid_cursor() -> RunError {
 
 fn internal(message: String) -> RunError {
     RunError::Internal(datafusion::error::DataFusionError::Internal(message))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cursor, CursorValue, SortOrder, decode};
+
+    #[test]
+    fn cost_cursor_keeps_the_float_bits() {
+        // serde_json's default parser turns this decimal into the next-lower
+        // f64. Paging compares the decoded bits with the stored sum.
+        let cost = f64::from_bits(0x3f7f_559b_3d07_c84c);
+        let cursor = Cursor {
+            list: "users".to_owned(),
+            sort: "cost_total".to_owned(),
+            order: SortOrder::Asc,
+            value: CursorValue::Float(cost),
+            tie: vec!["user-42".to_owned()],
+        };
+        let decoded =
+            decode(&cursor.encode(), "users", "cost_total", SortOrder::Asc).expect("cursor");
+        let CursorValue::Float(value) = decoded.value else {
+            panic!("cost cursor decoded as a non-float");
+        };
+        assert_eq!(value.to_bits(), cost.to_bits());
+    }
 }

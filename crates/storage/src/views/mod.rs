@@ -5,6 +5,8 @@ mod hex;
 mod scores;
 mod session;
 mod sessions;
+
+pub(crate) use sessions::sessions_from_traces;
 mod spans;
 mod traces;
 
@@ -192,7 +194,7 @@ impl QueryContext {
             register(
                 &session,
                 ViewName::Sessions,
-                map_plan(sessions::sessions_from_traces(traces_plan.clone()))?,
+                map_plan(sessions_from_traces(traces_plan.clone()))?,
             )?,
         );
         schemas.insert(
