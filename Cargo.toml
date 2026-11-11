@@ -87,6 +87,14 @@ tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "ti
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 thiserror = "2.0"
+# Server config (spec 12). `env` is enabled because `LLMOBS_*` is an env source;
+# the loader builds that source from an explicit map so tests do not touch the
+# process environment. `toml` reads `llmobs.toml`.
+figment = { version = "0.10.19", features = ["toml", "env"] }
+# `trusted_proxies` CIDRs (D142).
+ipnet = { version = "2.12.2", features = ["serde"] }
+# `public_url` parsing. Already in `Cargo.lock` (2.5.8).
+url = "2.5.8"
 # DataFusion 55's `TableProvider` is an `#[async_trait]` trait.
 async-trait = "0.1.92"
 hex = "0.4.3"

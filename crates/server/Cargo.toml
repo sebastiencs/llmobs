@@ -17,8 +17,13 @@ utoipa.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+figment.workspace = true
+ipnet.workspace = true
+url.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
+bytesize.workspace = true
 insta.workspace = true
 jsonschema.workspace = true
 serde_urlencoded.workspace = true
