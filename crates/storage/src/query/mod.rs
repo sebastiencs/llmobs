@@ -480,7 +480,13 @@ mod tests {
             let mut table = Memtable::new(Table::Spans);
             for (index, day) in days.iter().copied().enumerate() {
                 let start = day * DAY_NS + i64::try_from(index).unwrap() + 1;
-                table.insert(project, spans_at(&[start])).unwrap();
+                table
+                    .insert(
+                        project,
+                        spans_at(&[start]),
+                        u64::try_from(index).unwrap_or(u64::MAX),
+                    )
+                    .unwrap();
             }
             let snapshot = table.snapshot();
             let all = rows_for(project, &snapshot, "not_a_time_column", &[]);

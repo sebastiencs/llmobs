@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use arrow::array::RecordBatch;
 use llmobs_core::ids::ProjectId;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::AppendReceipt;
@@ -50,6 +50,10 @@ pub(crate) struct WriterShared {
     failed: AtomicBool,
     memtable_bytes: AtomicU64,
     memtable: Mutex<Memtable>,
+    /// Wakes the table's flush task once the active memtable reaches `flush.max_bytes`.
+    ///
+    /// The task itself starts in M2.6. A notify with no waiter is kept until then.
+    pub(crate) flush_notify: Arc<Notify>,
 }
 
 impl WriterShared {
@@ -58,7 +62,7 @@ impl WriterShared {
         self.failed.load(Ordering::Acquire)
     }
 
-    /// Bytes accounted by the memtable, for the backpressure check.
+    /// Bytes of the active and frozen memtables, for the backpressure check.
     pub(crate) fn memtable_bytes(&self) -> u64 {
         self.memtable_bytes.load(Ordering::Acquire)
     }
@@ -196,6 +200,8 @@ pub(crate) struct WriterParams {
     pub group_max_wait: Duration,
     /// Rotate once a segment reaches this size. A group may exceed it.
     pub segment_bytes: u64,
+    /// Notify the flush task when the active memtable reaches this many bytes.
+    pub flush_max_bytes: u64,
     /// Pause and fault points. A no-op outside tests.
     pub hooks: Hooks,
     /// Read state this table publishes into.
@@ -214,6 +220,7 @@ pub(crate) fn spawn(mut params: WriterParams) -> WalWriterHandle {
         failed: AtomicBool::new(false),
         memtable_bytes: AtomicU64::new(bytes),
         memtable: Mutex::new(memtable),
+        flush_notify: Arc::new(Notify::new()),
     });
     let task_state = Arc::clone(&state);
     let task = tokio::spawn(run(params, rx, task_state));
@@ -399,6 +406,7 @@ async fn run(
         group_max_bytes,
         group_max_wait,
         segment_bytes,
+        flush_max_bytes,
         hooks,
         published,
         memtable: _,
@@ -583,7 +591,7 @@ async fn run(
         hooks.note_group(prepared.len(), noted_bytes);
         hooks.pause(HookPoint::AfterWalSync);
 
-        if let Err(err) = insert_all(&shared, &prepared) {
+        if let Err(err) = insert_all(&shared, &prepared, flush_max_bytes) {
             tracing::error!(
                 table = table.name(),
                 segment = written.segment.name(),
@@ -638,16 +646,24 @@ async fn run(
 fn insert_all(
     shared: &WriterShared,
     prepared: &[Prepared],
+    flush_max_bytes: u64,
 ) -> Result<(), crate::error::MemtableError> {
-    let mut memtable = shared
-        .memtable
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    for item in prepared {
-        memtable.insert(item.project, item.batch.clone())?;
+    let notify = {
+        let mut memtable = shared
+            .memtable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for item in prepared {
+            memtable.insert(item.project, item.batch.clone(), item.seq)?;
+        }
+        let bytes = u64::try_from(memtable.bytes()).unwrap_or(u64::MAX);
+        let active = u64::try_from(memtable.active_bytes()).unwrap_or(u64::MAX);
+        shared.memtable_bytes.store(bytes, Ordering::Release);
+        active >= flush_max_bytes
+    };
+    if notify {
+        shared.flush_notify.notify_one();
     }
-    let bytes = u64::try_from(memtable.bytes()).unwrap_or(u64::MAX);
-    shared.memtable_bytes.store(bytes, Ordering::Release);
     Ok(())
 }
 
@@ -740,6 +756,22 @@ mod tests {
         group_max_wait: Duration,
         segment_bytes: u64,
     ) -> Running {
+        open_writer_with_flush(
+            sync,
+            group_max_bytes,
+            group_max_wait,
+            segment_bytes,
+            u64::MAX,
+        )
+    }
+
+    fn open_writer_with_flush(
+        sync: WalSync,
+        group_max_bytes: u64,
+        group_max_wait: Duration,
+        segment_bytes: u64,
+        flush_max_bytes: u64,
+    ) -> Running {
         let dir = tempfile::tempdir().unwrap();
         let hooks = Hooks::default();
         let segment = SegmentWriter::create(dir.path(), 1, segment_bytes, hooks.clone()).unwrap();
@@ -753,6 +785,7 @@ mod tests {
             group_max_bytes,
             group_max_wait,
             segment_bytes,
+            flush_max_bytes,
             hooks: hooks.clone(),
             published: Arc::clone(&published),
             memtable: Memtable::new(Table::Spans),
@@ -1136,5 +1169,39 @@ mod tests {
             }
         })?;
         rx.await.unwrap_or(Err(AppendError::WalFailed))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_writer_notifies_at_the_size_threshold() {
+        let size = batch_bytes();
+        let quiet = open_writer_with_flush(
+            WalSync::Always,
+            u64::MAX,
+            Duration::from_millis(5),
+            64 * 1024 * 1024,
+            size.saturating_add(1),
+        );
+        append_at(&quiet.handle, 1).await.unwrap();
+        let missed = tokio::time::timeout(
+            Duration::from_millis(50),
+            quiet.handle.shared().flush_notify.notified(),
+        )
+        .await;
+        assert!(missed.is_err(), "notified below the threshold");
+
+        let loud = open_writer_with_flush(
+            WalSync::Always,
+            u64::MAX,
+            Duration::from_millis(5),
+            64 * 1024 * 1024,
+            size,
+        );
+        append_at(&loud.handle, 1).await.unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            loud.handle.shared().flush_notify.notified(),
+        )
+        .await
+        .expect("notified at the threshold");
     }
 }

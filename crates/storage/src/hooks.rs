@@ -37,11 +37,16 @@ pub(crate) enum HookPoint {
     /// The rename has already happened. A fault here moves the file back to its
     /// temp name, so a failed `put_durable` does not leave the final path.
     ObjectDirSync,
+    /// After the active memtable is moved to frozen.
+    ///
+    /// The flush task pauses here in M2.6.
+    #[allow(dead_code)]
+    FlushAfterFreeze,
 }
 
 #[cfg(test)]
 impl HookPoint {
-    const COUNT: usize = 10;
+    const COUNT: usize = 11;
 
     const fn index(self) -> usize {
         match self {
@@ -55,6 +60,7 @@ impl HookPoint {
             Self::ObjectSync => 7,
             Self::ObjectRename => 8,
             Self::ObjectDirSync => 9,
+            Self::FlushAfterFreeze => 10,
         }
     }
 }

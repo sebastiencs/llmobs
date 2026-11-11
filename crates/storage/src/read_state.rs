@@ -1,7 +1,9 @@
 //! Published memtable snapshots and the catalog.
 //!
 //! A query loads one [`ReadState`] and keeps that `Arc` for the whole scan.
-//! The writer replaces the `Arc` after each group. M5 adds tombstones.
+//! Each table snapshot holds the active and frozen batches together, so a
+//! reader cannot tell a flush in progress from live rows. The writer replaces
+//! the `Arc` after each group. M5 adds tombstones.
 //!
 //! `load` is what a query calls. Open publishes the first state. Both land
 //! with `Storage`, so this module is only half-used until then.
@@ -16,9 +18,9 @@ use crate::wal::Table;
 /// Snapshots of both tables at one moment.
 #[derive(Debug, Clone)]
 pub(crate) struct ReadState {
-    /// Spans memtable as of this publish.
+    /// Spans memtable as of this publish, active and frozen batches together.
     pub spans: Arc<MemSnapshot>,
-    /// Scores memtable as of this publish.
+    /// Scores memtable as of this publish, active and frozen batches together.
     pub scores: Arc<MemSnapshot>,
     /// Catalog as of this publish. Empty until M2.6 loads `catalog.db` at open.
     pub catalog: Arc<Catalog>,

@@ -127,6 +127,7 @@ impl Storage {
             group_max_bytes: config.wal.group_max_bytes.0,
             group_max_wait: config.wal.group_max_wait,
             segment_bytes: config.wal.segment_bytes.0,
+            flush_max_bytes: config.flush.max_bytes.0,
         };
         #[allow(clippy::default_constructed_unit_structs)]
         let hooks = Hooks::default();
@@ -353,21 +354,15 @@ fn recover_table(
 ) -> Result<RecoveredTable, OpenError> {
     let mut memtable = Memtable::new(table);
     // M2 replaces this 0 with `flushed_seq` from catalog.db.
-    let outcome = replay(
-        dir,
-        table,
-        0,
-        config.wal.skip_corrupt,
-        &mut |_seq, batch| {
-            if batch.num_rows() == 0 {
-                return Ok(());
-            }
-            let project = project_of(&batch)?;
-            memtable
-                .insert(project, batch)
-                .map_err(|err| memtable_to_wal(&err))
-        },
-    )
+    let outcome = replay(dir, table, 0, config.wal.skip_corrupt, &mut |seq, batch| {
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+        let project = project_of(&batch)?;
+        memtable
+            .insert(project, batch, seq)
+            .map_err(|err| memtable_to_wal(&err))
+    })
     .map_err(replay_error)?;
     tracing::info!(
         table = table.name(),
@@ -396,6 +391,7 @@ struct WriterTune {
     group_max_bytes: u64,
     group_max_wait: std::time::Duration,
     segment_bytes: u64,
+    flush_max_bytes: u64,
 }
 
 fn spawn_writer(
@@ -415,6 +411,7 @@ fn spawn_writer(
         group_max_bytes: tune.group_max_bytes,
         group_max_wait: tune.group_max_wait,
         segment_bytes: tune.segment_bytes,
+        flush_max_bytes: tune.flush_max_bytes,
         hooks: share_hooks(hooks),
         published: Arc::clone(published),
         memtable: recovered.memtable,
