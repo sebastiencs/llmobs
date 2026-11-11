@@ -333,6 +333,7 @@ fn metadata(bag: &mut AttrBag<'_>, warnings: &mut Warnings) -> BTreeMap<String, 
     sweep_prefix(bag, attr::METADATA_PREFIX, &mut metadata, warnings);
     expand_metadata_object(bag, "metadata", &mut metadata);
     sweep_prefix(bag, "ai.telemetry.metadata.", &mut metadata, warnings);
+    function_id(bag, &mut metadata, warnings);
     sweep_prefix(
         bag,
         "traceloop.association.properties.",
@@ -389,6 +390,23 @@ fn sweep_prefix(
         bag.take(&key);
         metadata.insert(name.to_owned(), text);
     }
+}
+
+fn function_id(
+    bag: &mut AttrBag<'_>,
+    metadata: &mut BTreeMap<String, String>,
+    warnings: &mut Warnings,
+) {
+    if metadata.contains_key("functionId") || bag.get("ai.telemetry.functionId").is_none() {
+        return;
+    }
+    link(
+        bag,
+        "ai.telemetry.functionId",
+        "functionId",
+        metadata,
+        warnings,
+    );
 }
 
 fn expand_metadata_object(
@@ -681,6 +699,28 @@ mod tests {
         assert_eq!(fields.tags, vec!["red".to_owned(), "green".to_owned()]);
         assert_eq!(bag.state("tag.tags"), Some(Use::Consumed));
         assert_eq!(bag.state("langfuse.trace.tags"), Some(Use::Consumed));
+    }
+
+    #[test]
+    fn function_id_fills_metadata_unless_that_key_is_already_set() {
+        let attrs = [string_attr("ai.telemetry.functionId", "greet")];
+        let (fields, bag) = filled(&attrs, &[]);
+        assert_eq!(
+            fields.metadata.get("functionId").map(String::as_str),
+            Some("greet")
+        );
+        assert_eq!(bag.state("ai.telemetry.functionId"), Some(Use::Consumed));
+
+        let attrs = [
+            string_attr("ai.telemetry.metadata.functionId", "from-metadata"),
+            string_attr("ai.telemetry.functionId", "greet"),
+        ];
+        let (fields, bag) = filled(&attrs, &[]);
+        assert_eq!(
+            fields.metadata.get("functionId").map(String::as_str),
+            Some("from-metadata")
+        );
+        assert_eq!(bag.state("ai.telemetry.functionId"), Some(Use::Unread));
     }
 
     #[test]

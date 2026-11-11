@@ -2,13 +2,16 @@
 //!
 //! Spec 02 § Model, provider, usage, § Token semantics, and rules 3 and 4.
 //! Gemini `usage_metadata`, Langfuse `usage_details` and ADK-specific keys are
-//! not in these tables; later convention phases read them. `gen_ai.usage.*`
-//! stays inclusive and relies on the safety net.
+//! not in these tables; later convention phases read them. Anthropic cache
+//! write before Vercel v6 is read from `ai.response.providerMetadata`.
+//! `gen_ai.usage.*` stays inclusive and relies on the safety net.
 
 use llmobs_core::enums::{Convention, SpanKind};
 use llmobs_core::names::attr;
 use llmobs_core::time_serde::parse_rfc3339;
 use opentelemetry_proto::tonic::common::v1::AnyValue;
+use opentelemetry_proto::tonic::common::v1::any_value::Value;
+use serde_json::Value as Json;
 
 use crate::bag::AttrBag;
 use crate::fields::{ResourceView, Source, first_i64, span};
@@ -315,7 +318,10 @@ pub(crate) fn usage(
     let input = first_count(bag, &resource, INPUT, warnings);
     let output = first_count(bag, &resource, OUTPUT, warnings);
     let cache_read = first_count(bag, &resource, CACHE_READ, warnings).map(|(value, _, _)| value);
-    let cache_write = first_count(bag, &resource, CACHE_WRITE, warnings).map(|(value, _, _)| value);
+    let cache_write = match first_count(bag, &resource, CACHE_WRITE, warnings) {
+        Some((value, _, _)) => Some(value),
+        None => provider_cache_write(bag, warnings),
+    };
     let reasoning = first_count(bag, &resource, REASONING, warnings).map(|(value, _, _)| value);
     let reported_total = first_count(bag, &resource, TOTAL, warnings).map(|(value, _, _)| value);
 
@@ -413,6 +419,68 @@ fn first_count(
         }
     }
     None
+}
+
+/// Anthropic cache write recorded only inside `ai.response.providerMetadata`.
+///
+/// v5 uses `anthropic.cacheCreationInputTokens`. Later responses use
+/// `anthropic.usage.cache_creation_input_tokens`. The attribute stays unread:
+/// it also carries provider fields that are not token counts.
+fn provider_cache_write(bag: &AttrBag<'_>, warnings: &mut Warnings) -> Option<i64> {
+    let value = bag.get("ai.response.providerMetadata")?;
+    let json = crate::payload::decode_json_text(value, warnings)?;
+    match cache_write_count(&json) {
+        Ok(count) => count,
+        Err(InvalidNumber) => {
+            warnings.add(Warning::InvalidNumber);
+            None
+        }
+    }
+}
+
+fn cache_write_count(json: &Json) -> Result<Option<i64>, InvalidNumber> {
+    let Some(anthropic) = json.get("anthropic") else {
+        return Ok(None);
+    };
+    if let Some(count) = json_count(anthropic.get("cacheCreationInputTokens"))? {
+        return Ok(Some(count));
+    }
+    json_count(
+        anthropic
+            .get("usage")
+            .and_then(|usage| usage.get("cache_creation_input_tokens")),
+    )
+}
+
+fn json_count(value: Option<&Json>) -> Result<Option<i64>, InvalidNumber> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value {
+        Json::Null => Ok(None),
+        Json::Number(number) => number_count(number),
+        Json::String(text) => as_i64(&AnyValue {
+            value: Some(Value::StringValue(text.clone())),
+        }),
+        _ => Err(InvalidNumber),
+    }
+}
+
+fn number_count(number: &serde_json::Number) -> Result<Option<i64>, InvalidNumber> {
+    if let Some(value) = number.as_i64() {
+        return Ok(Some(value));
+    }
+    let Some(value) = number.as_f64() else {
+        return Err(InvalidNumber);
+    };
+    if !value.is_finite()
+        || value.fract() != 0.0
+        || value < i64::MIN as f64
+        || value >= i64::MAX as f64
+    {
+        return Err(InvalidNumber);
+    }
+    Ok(Some(value as i64))
 }
 
 fn vercel_legacy(bag: &AttrBag<'_>, provider: Option<&str>) -> bool {
@@ -682,6 +750,37 @@ mod tests {
         let (usage, _, _) = counted(&detailed, SpanKind::Llm, Some("anthropic"));
         assert_eq!(usage.input_tokens, Some(100));
         assert_eq!(usage.cache_read_tokens, Some(40));
+    }
+
+    #[test]
+    fn anthropic_cache_write_comes_from_provider_metadata_when_no_attribute_does() {
+        let metadata = r#"{"anthropic":{"cacheCreationInputTokens":20,"usage":{"cache_creation_input_tokens":99}}}"#;
+        let attrs = [
+            string_attr("ai.model.provider", "anthropic"),
+            int_attr("ai.usage.inputTokens", 100),
+            int_attr("ai.usage.outputTokens", 10),
+            string_attr("ai.response.providerMetadata", metadata),
+        ];
+        let (usage, warnings, bag) = counted(&attrs, SpanKind::Llm, Some("anthropic"));
+        assert_eq!(usage.cache_write_tokens, Some(20));
+        assert_eq!(usage.input_tokens, Some(120));
+        assert_eq!(warnings.to_attribute(), None);
+        assert_eq!(bag.state("ai.response.providerMetadata"), Some(Use::Unread));
+
+        let nested = r#"{"anthropic":{"usage":{"cache_creation_input_tokens":8}}}"#;
+        let attrs = [
+            int_attr("ai.usage.inputTokens", 100),
+            string_attr("ai.response.providerMetadata", nested),
+        ];
+        let (usage, _, _) = counted(&attrs, SpanKind::Llm, Some("anthropic"));
+        assert_eq!(usage.cache_write_tokens, Some(8));
+        assert_eq!(usage.input_tokens, Some(108));
+
+        let mut with_attribute = attrs.to_vec();
+        with_attribute.push(int_attr("ai.usage.inputTokenDetails.cacheWriteTokens", 3));
+        let (usage, _, bag) = counted(&with_attribute, SpanKind::Llm, Some("anthropic"));
+        assert_eq!(usage.cache_write_tokens, Some(3));
+        assert_eq!(bag.state("ai.response.providerMetadata"), Some(Use::Unread));
     }
 
     #[test]

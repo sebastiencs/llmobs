@@ -1,0 +1,84 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "next-app"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "ai",
+            "version": "4.3.19"
+          },
+          "spans": [
+            {
+              "traceId": "fb2a0000000000000000000000000001",
+              "spanId": "fb2a000000000001",
+              "name": "ai.generateText.doGenerate",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "ai.operationId",
+                  "value": {
+                    "stringValue": "ai.generateText.doGenerate"
+                  }
+                },
+                {
+                  "key": "ai.model.id",
+                  "value": {
+                    "stringValue": "gpt-4o-mini"
+                  }
+                },
+                {
+                  "key": "ai.model.provider",
+                  "value": {
+                    "stringValue": "openai.chat"
+                  }
+                },
+                {
+                  "key": "ai.prompt.messages",
+                  "value": {
+                    "stringValue": "[{\"role\": \"assistant\", \"content\": [{\"type\": \"tool-call\", \"toolCallId\": \"call_4\", \"toolName\": \"get_weather\", \"args\": {\"city\": \"Paris\"}}]}, {\"role\": \"tool\", \"content\": [{\"type\": \"tool-result\", \"toolCallId\": \"call_4\", \"toolName\": \"get_weather\", \"result\": {\"temp\": 18}}]}]"
+                  }
+                },
+                {
+                  "key": "ai.response.text",
+                  "value": {
+                    "stringValue": "18 C"
+                  }
+                },
+                {
+                  "key": "ai.response.finishReason",
+                  "value": {
+                    "stringValue": "stop"
+                  }
+                },
+                {
+                  "key": "ai.usage.promptTokens",
+                  "value": {
+                    "intValue": "12"
+                  }
+                },
+                {
+                  "key": "ai.usage.completionTokens",
+                  "value": {
+                    "intValue": "4"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

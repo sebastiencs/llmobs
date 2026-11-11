@@ -1,0 +1,149 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "next-app"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "ai",
+            "version": "5.0.0"
+          },
+          "spans": [
+            {
+              "traceId": "fb0a0000000000000000000000000001",
+              "spanId": "fb0a000000000001",
+              "name": "ai.streamText",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "ai.operationId",
+                  "value": {
+                    "stringValue": "ai.streamText"
+                  }
+                },
+                {
+                  "key": "ai.model.id",
+                  "value": {
+                    "stringValue": "gpt-4o-mini"
+                  }
+                },
+                {
+                  "key": "ai.model.provider",
+                  "value": {
+                    "stringValue": "openai.chat"
+                  }
+                },
+                {
+                  "key": "ai.prompt",
+                  "value": {
+                    "stringValue": "{\"prompt\":\"Stream hi\"}"
+                  }
+                },
+                {
+                  "key": "ai.response.text",
+                  "value": {
+                    "stringValue": "Hello"
+                  }
+                },
+                {
+                  "key": "ai.stream.msToFirstChunk",
+                  "value": {
+                    "intValue": "12"
+                  }
+                },
+                {
+                  "key": "ai.usage.inputTokens",
+                  "value": {
+                    "intValue": "9"
+                  }
+                },
+                {
+                  "key": "ai.usage.outputTokens",
+                  "value": {
+                    "intValue": "4"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "fb0a0000000000000000000000000001",
+              "spanId": "fb0a000000000002",
+              "name": "ai.streamText.doStream",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590100000000",
+              "endTimeUnixNano": "1767225591000000000",
+              "attributes": [
+                {
+                  "key": "ai.operationId",
+                  "value": {
+                    "stringValue": "ai.streamText.doStream"
+                  }
+                },
+                {
+                  "key": "ai.model.id",
+                  "value": {
+                    "stringValue": "gpt-4o-mini"
+                  }
+                },
+                {
+                  "key": "ai.model.provider",
+                  "value": {
+                    "stringValue": "openai.chat"
+                  }
+                },
+                {
+                  "key": "ai.prompt.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"content\":\"Stream hi\"}]"
+                  }
+                },
+                {
+                  "key": "ai.response.text",
+                  "value": {
+                    "stringValue": "Hello"
+                  }
+                },
+                {
+                  "key": "ai.response.finishReason",
+                  "value": {
+                    "stringValue": "stop"
+                  }
+                },
+                {
+                  "key": "ai.response.msToFirstChunk",
+                  "value": {
+                    "intValue": "8"
+                  }
+                },
+                {
+                  "key": "ai.usage.inputTokens",
+                  "value": {
+                    "intValue": "9"
+                  }
+                },
+                {
+                  "key": "ai.usage.outputTokens",
+                  "value": {
+                    "intValue": "4"
+                  }
+                }
+              ],
+              "parentSpanId": "fb0a000000000001"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

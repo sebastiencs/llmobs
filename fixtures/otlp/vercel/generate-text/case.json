@@ -10,5 +10,5 @@
     "02 § Normalization rules",
     "02 § Cost computation"
   ],
-  "notes": "ai.settings.maxRetries becomes request_params {\"maxRetries\":2} on the chain. ai.response.text stays plain text on the chain and becomes an assistant message on doGenerate. ai.telemetry.metadata.sessionId and userId fill context fields and are not copied into metadata."
+  "notes": "ai.settings.maxRetries becomes request_params {\"maxRetries\":2} on the chain. ai.response.text stays plain text on the chain and becomes an assistant message on doGenerate. ai.telemetry.metadata.sessionId and userId fill context fields and are not copied into metadata. ai.telemetry.functionId is stored as metadata.functionId."
 }

@@ -1,0 +1,56 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fb3a0000000000000000000000000001",
+      "span_id": "fb3a000000000001",
+      "name": "ai.generateText.doGenerate",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "next-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini",
+      "input_tokens": 10,
+      "output_tokens": 4,
+      "total_tokens": 14,
+      "cost_input": 0.00001,
+      "cost_output": 0.000016,
+      "cost_total": 0.000026,
+      "cost_source": "computed",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Describe this\"},{\"type\":\"uri\",\"modality\":\"image\",\"mime_type\":\"image/png\",\"uri\":\"media://b1ff9c8ea3a780bad09b346c423d2d0e46815926879b18e841d928376a946640\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"A red pixel\"}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "input_preview": "Describe this",
+      "output_preview": "A red pixel",
+      "attributes": {
+        "ai.model.id": "gpt-4o-mini",
+        "ai.model.provider": "openai.chat",
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.response.finishReason": "stop",
+        "ai.usage.inputTokens": "10",
+        "ai.usage.outputTokens": "4"
+      },
+      "scope_name": "ai",
+      "scope_version": "5.0.0",
+      "media_refs": [
+        "b1ff9c8ea3a780bad09b346c423d2d0e46815926879b18e841d928376a946640"
+      ],
+      "conventions": [
+        "vercel"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [
+    {
+      "sha256": "b1ff9c8ea3a780bad09b346c423d2d0e46815926879b18e841d928376a946640",
+      "mime_type": "image/png",
+      "size_bytes": 69
+    }
+  ],
+  "rejected_spans": 0
+}

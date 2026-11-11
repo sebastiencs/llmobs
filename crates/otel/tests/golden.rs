@@ -14,7 +14,7 @@ use serde_json::{Map, Value};
 use support::{Case, ExpectedMedia, canonical_json, load_all_cases, load_prices, sort_spans};
 
 /// Cases whose expected output needs a later sub-phase.
-const PENDING: &[&str] = &["vercel/generate-text"];
+const PENDING: &[&str] = &[];
 
 const COST_FIELDS: &[&str] = &["cost_input", "cost_output", "cost_total"];
 /// Absolute tolerance for the three cost fields. Spec fixtures README.

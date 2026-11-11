@@ -1,0 +1,11 @@
+{
+  "description": "v4 tool-call parts use args and tool results use result.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Input / output",
+    "02 § Normalization rules",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Cost computation"
+  ],
+  "notes": "hand-written from ai 4.3.19 telemetry; re-check against a B2 capture"
+}
