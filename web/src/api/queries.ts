@@ -287,6 +287,34 @@ export function userQuery(
   });
 }
 
+export function metricsQuery(
+  org: string,
+  project: string,
+  query: {
+    from: string;
+    to: string;
+    filter?: string;
+    groupBy?: Schema<"MetricsGroupBy">;
+    includeEval?: boolean;
+    includeExperiments?: boolean;
+  },
+) {
+  return $api.queryOptions("get", "/api/v1/projects/{project}/metrics", {
+    params: {
+      path: { project: projectRef(org, project) },
+      query: {
+        from: query.from,
+        to: query.to,
+        bucket: "auto",
+        ...(query.filter ? { filter: query.filter } : {}),
+        ...(query.groupBy ? { group_by: query.groupBy } : {}),
+        ...(query.includeEval ? { include_eval: true } : {}),
+        ...(query.includeExperiments ? { include_experiments: true } : {}),
+      },
+    },
+  });
+}
+
 export function savedViewsQuery(org: string, project: string, kind: Schema<"SavedViewKind">) {
   return $api.queryOptions("get", "/api/v1/projects/{project}/saved-views", {
     params: {
