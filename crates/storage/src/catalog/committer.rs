@@ -6,6 +6,7 @@
 //!
 //! `Storage` owns one committer. Flush, and later compaction, are its callers.
 
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,7 +16,7 @@ use tokio::sync::Mutex;
 
 use super::db::{TableState, load, open_catalog_db};
 use super::{Catalog, FileId, FileMeta, FileState, table_index};
-use crate::error::{CatalogError, CommitError};
+use crate::error::{CatalogError, CommitError, GcError};
 use crate::hooks::{HookPoint, Hooks};
 use crate::wal::Table;
 
@@ -85,9 +86,22 @@ impl Committer {
 
     /// Record `paths` in `staged_objects`. No precondition.
     pub(crate) async fn stage(&self, paths: &[String]) -> Result<(), CatalogError> {
+        self.insert_staged(paths, now_ns()).await
+    }
+
+    /// [`Self::stage`] with a chosen `created_at`, so tests can age a row.
+    #[cfg(test)]
+    pub(crate) async fn stage_at(
+        &self,
+        paths: &[String],
+        created_at: i64,
+    ) -> Result<(), CatalogError> {
+        self.insert_staged(paths, created_at).await
+    }
+
+    async fn insert_staged(&self, paths: &[String], created_at: i64) -> Result<(), CatalogError> {
         let mut inner = self.inner.lock().await;
         let mut transaction = inner.connection.begin().await.map_err(CatalogError::db)?;
-        let created_at = now_ns();
         for path in paths {
             if let Err(error) =
                 sqlx::query("INSERT INTO staged_objects (path, created_at) VALUES (?, ?)")
@@ -154,6 +168,76 @@ impl Committer {
         publish(&next);
         Ok(next)
     }
+
+    /// Staged paths whose `created_at` is strictly before `cutoff_ns`.
+    pub(crate) async fn staged_before(&self, cutoff_ns: i64) -> Result<Vec<String>, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        sqlx::query_scalar("SELECT path FROM staged_objects WHERE created_at < ? ORDER BY path")
+            .bind(cutoff_ns)
+            .fetch_all(&mut inner.connection)
+            .await
+            .map_err(CatalogError::db)
+    }
+
+    /// Delete one staged object that is not a catalog file, then its row.
+    ///
+    /// `delete` runs while this mutex is held, so a commit cannot publish the
+    /// same path between the check and the delete. A missing object is success
+    /// and still drops the row. A path that is also in `data_files` is left
+    /// untouched.
+    pub(crate) async fn collect_staged_path<F, Fut>(
+        &self,
+        path: &str,
+        hooks: &Hooks,
+        delete: F,
+    ) -> Result<StagedRemoval, GcError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<u64, crate::error::ObjectError>>,
+    {
+        let mut inner = self.inner.lock().await;
+        let published: Option<i64> = sqlx::query_scalar("SELECT 1 FROM data_files WHERE path = ?")
+            .bind(path)
+            .fetch_optional(&mut inner.connection)
+            .await
+            .map_err(CatalogError::db)?;
+        if published.is_some() {
+            return Ok(StagedRemoval::Published);
+        }
+        let staged: Option<i64> = sqlx::query_scalar("SELECT 1 FROM staged_objects WHERE path = ?")
+            .bind(path)
+            .fetch_optional(&mut inner.connection)
+            .await
+            .map_err(CatalogError::db)?;
+        if staged.is_none() {
+            return Ok(StagedRemoval::Gone);
+        }
+        hooks.pause(HookPoint::GcBeforeDelete);
+        if hooks.fail(HookPoint::GcBeforeDelete).is_some() {
+            return Err(GcError::Fault);
+        }
+        let bytes = delete().await?;
+        sqlx::query("DELETE FROM staged_objects WHERE path = ?")
+            .bind(path)
+            .execute(&mut inner.connection)
+            .await
+            .map_err(CatalogError::db)?;
+        Ok(StagedRemoval::Deleted { bytes })
+    }
+}
+
+/// What [`Committer::collect_staged_path`] did with one staged row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StagedRemoval {
+    /// The object and the staged row are gone. `bytes` is zero when the object was already missing.
+    Deleted {
+        /// Object size before the delete.
+        bytes: u64,
+    },
+    /// The path is in `data_files`. The object and the row stay.
+    Published,
+    /// The staged row was gone. Nothing was deleted.
+    Gone,
 }
 
 fn flushed_of(state: TableState) -> [u64; 2] {
@@ -163,7 +247,7 @@ fn flushed_of(state: TableState) -> [u64; 2] {
     flushed
 }
 
-fn now_ns() -> i64 {
+pub(crate) fn now_ns() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX))

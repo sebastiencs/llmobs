@@ -172,6 +172,19 @@ impl Objects {
         }
     }
 
+    /// Size of `path`, then [`Self::delete`]. A missing object is `0`.
+    pub(crate) async fn delete_len(&self, path: &str) -> Result<u64, ObjectError> {
+        validate_key(path)?;
+        let location = object_key(path)?;
+        let bytes = match self.store.head(&location).await {
+            Ok(meta) => meta.size,
+            Err(object_store::Error::NotFound { .. }) => 0,
+            Err(source) => return Err(ObjectError::store("reading object metadata", path, source)),
+        };
+        self.delete(path).await?;
+        Ok(bytes)
+    }
+
     /// Deletes leftover local temp files under `tables/`.
     ///
     /// Remote stores return `0`. This walks the filesystem on the calling

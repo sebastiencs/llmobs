@@ -43,6 +43,7 @@ pub(crate) mod catalog;
 pub mod config;
 pub mod error;
 pub(crate) mod flush;
+pub(crate) mod gc;
 pub(crate) mod objects;
 pub(crate) mod parquet;
 pub mod query;
@@ -105,6 +106,10 @@ pub struct Storage {
     scores: WalWriterHandle,
     spans_flush: FlushHandle,
     scores_flush: FlushHandle,
+    gc: gc::GcHandle,
+    /// Shared with the flush tasks and staged-object collection.
+    #[cfg_attr(not(test), allow(dead_code))]
+    objects: Arc<Objects>,
     /// Kept so tests can read `flushed_seq`. The flush tasks hold their own clones.
     #[cfg_attr(not(test), allow(dead_code))]
     committer: Arc<Committer>,
@@ -249,12 +254,24 @@ impl Storage {
             dir: data_dir.join("wal").join(Table::Scores.name()),
             shared: Arc::clone(scores.shared()),
             committer: Arc::clone(&committer),
-            objects,
+            objects: Arc::clone(&objects),
             published: Arc::clone(&published),
             hooks: share_hooks(&hooks),
             max_bytes: tune.flush_max_bytes,
             max_age,
             upload_concurrency,
+        });
+        if let Err(error) =
+            gc::collect_once(&committer, &objects, &hooks, catalog::now_ns(), gc::MAX_AGE).await
+        {
+            // The error names the object key. Keys contain project ids.
+            tracing::warn!("staged object collection failed");
+            tracing::debug!(%error, "staged object collection error");
+        }
+        let gc = gc::spawn(gc::GcStart {
+            committer: Arc::clone(&committer),
+            objects: Arc::clone(&objects),
+            hooks: share_hooks(&hooks),
         });
         Ok(Self {
             hard_limit,
@@ -266,6 +283,8 @@ impl Storage {
             scores,
             spans_flush,
             scores_flush,
+            gc,
+            objects,
             committer,
             runtime,
             replayed: [recovered.spans_records, recovered.scores_records],
@@ -351,6 +370,7 @@ impl Storage {
     /// on the next [`Self::open`].
     pub async fn shutdown(&self) -> Result<(), StorageError> {
         self.shutting_down.store(true, Ordering::Release);
+        self.gc.abort();
         let spans = self.spans.shutdown().await;
         let scores = self.scores.shutdown().await;
         self.finish_flushes().await;
@@ -486,6 +506,7 @@ impl Drop for Storage {
         self.scores.abort();
         self.spans_flush.abort();
         self.scores_flush.abort();
+        self.gc.abort();
     }
 }
 

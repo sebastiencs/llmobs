@@ -238,6 +238,23 @@ pub enum CatalogError {
     },
 }
 
+/// One staged-object collection failed.
+///
+/// [`GcError::Object`] names the key. Keys contain project ids, so callers log
+/// this error at debug.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum GcError {
+    /// `catalog.db` rejected the read or the row delete.
+    #[error(transparent)]
+    Catalog(#[from] CatalogError),
+    /// The object store rejected the delete.
+    #[error(transparent)]
+    Object(#[from] ObjectError),
+    /// A test fault armed at [`crate::hooks::HookPoint::GcBeforeDelete`].
+    #[error("staged collection was interrupted")]
+    Fault,
+}
+
 impl CatalogError {
     pub(crate) fn db(source: sqlx::Error) -> Self {
         Self::Db { source }

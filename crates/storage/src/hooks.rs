@@ -49,11 +49,13 @@ pub(crate) enum HookPoint {
     FlushAfterCommit,
     /// After WAL segments covered by `flushed_seq` are deleted and the directory is fsynced.
     FlushAfterTruncate,
+    /// Before GC deletes a staged object that is not in the catalog.
+    GcBeforeDelete,
 }
 
 #[cfg(test)]
 impl HookPoint {
-    const COUNT: usize = 15;
+    const COUNT: usize = 16;
 
     const fn index(self) -> usize {
         match self {
@@ -72,6 +74,7 @@ impl HookPoint {
             Self::FlushAfterWrite => 12,
             Self::FlushAfterCommit => 13,
             Self::FlushAfterTruncate => 14,
+            Self::GcBeforeDelete => 15,
         }
     }
 }
