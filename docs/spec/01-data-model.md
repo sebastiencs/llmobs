@@ -165,7 +165,12 @@ Rows of `spans` and `traces` are partitioned by the trace's **anchor day** (03 ย
 
 `duration_ns` is computed at query time as `end_time - start_time`.
 
-**Order.** "First non-null" and the choice among several root partials (or root spans) follow `(start_time, span_id)` ascending, inside a partial and when partials are merged. Results never depend on the order in which spans were flushed.
+**Order.** Results never depend on the order in which spans were flushed.
+- **Inside a partial**, "first non-null", the earliest span and the choice among several root spans follow `(start_time, span_id)` ascending.
+- **When partials are merged**, the root partial is the one with `has_root`. Among several, it is the one with the smallest `(start_time, root_span_id)`. It comes first, and the other partials follow in `start_time` order.
+- **Ties.** Partials tied on `start_time` contribute their smallest value: the smallest string, and for `metadata`, per key not yet present, the smallest value.
+
+With context fields set on every span of a trace (02 ยง Context fields), the merge equals the same rules applied to all of the trace's spans at once.
 
 **Root semantics.** The root is the span with null `parent_span_id`. If an application's root span is not exported (e.g. a parent span from an un-instrumented HTTP server), the trace has `has_root = false` and the UI shows the earliest span as the entry point.
 
