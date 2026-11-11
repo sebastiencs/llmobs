@@ -1,11 +1,14 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { columnChoiceKey } from "@/components/data-table/column-layout";
+import { ONBOARDING_POLL_MS, setOnboardingPollMs } from "@/components/onboarding/poll";
+import { otelSnippet } from "@/components/onboarding/snippets";
 import { defaultCollapsed } from "@/lib/tree";
 import { createDataset } from "@/mocks/generated/dataset";
 import { largeHandlers } from "@/mocks/generated/handlers";
 import { server } from "@/mocks/node";
+import { savedViewHandlers } from "@/mocks/saved-views";
 import { renderApp } from "@/test/render";
 
 const FIRST = "a1000000000000000000000000000006";
@@ -424,13 +427,88 @@ function near(url: URL, windowMs: number): boolean {
   return Math.abs(from - (Date.now() - windowMs)) < 15_000;
 }
 
-it("shows the empty state when the first page is empty", async () => {
+it("shows the plain empty state when the default filter matches nothing", async () => {
   server.use(
     http.get("/api/v1/projects/:project/traces", () =>
       HttpResponse.json({ data: [], next_cursor: null }),
     ),
   );
   await renderApp("/acme/support-bot/traces");
-  expect(await screen.findByRole("heading", { name: "No traces" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "No traces match" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Clear filters" })).toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "OTel env vars" })).not.toBeInTheDocument();
   expect(screen.getByText("0 loaded")).toBeInTheDocument();
 });
+
+it("shows onboarding snippets when the project has no traces", async () => {
+  savedViewHandlers([]);
+  server.use(
+    http.get("/api/v1/projects/:project/traces", () =>
+      HttpResponse.json({ data: [], next_cursor: null }),
+    ),
+  );
+  await renderApp("/acme/support-bot/traces");
+  expect(await screen.findByRole("tab", { name: "OTel env vars" })).toBeInTheDocument();
+  const endpoint = `${window.location.origin}/v1/traces`;
+  expect(screen.getByText(endpoint, { exact: false })).toBeInTheDocument();
+  expect(screen.getByText("Waiting for the first trace…")).toBeInTheDocument();
+  expect(screen.getByText("Create a secret key in Settings → API keys")).toBeInTheDocument();
+  const writeText = stubClipboard();
+  fireEvent.click(screen.getByRole("button", { name: "Copy OTel env vars" }));
+  await waitFor(() => {
+    expect(writeText).toHaveBeenCalledWith(otelSnippet(window.location.origin));
+  });
+});
+
+it("clears a filter and shows onboarding when nothing is left", async () => {
+  server.use(
+    http.get("/api/v1/projects/:project/traces", () =>
+      HttpResponse.json({ data: [], next_cursor: null }),
+    ),
+  );
+  const { router, user } = await renderApp(
+    "/acme/support-bot/traces?filter=name%20%3D%20%27missing%27",
+  );
+  expect(await screen.findByRole("heading", { name: "No traces match" })).toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "OTel env vars" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Clear filters" }));
+  await waitFor(() => {
+    expect(router.state.location.search.filter).toBeUndefined();
+  });
+  expect(router.state.location.search.range).toBe("24h");
+  expect(await screen.findByRole("tab", { name: "OTel env vars" })).toBeInTheDocument();
+});
+
+it("replaces onboarding with the table when a trace arrives", async () => {
+  savedViewHandlers([]);
+  setOnboardingPollMs(20);
+  let ready = false;
+  const dataset = createDataset({ seed: 1, now: Date.now(), traces: 1 });
+  const trace = dataset.traces[0];
+  if (!trace) {
+    throw new Error("missing trace");
+  }
+  server.use(
+    http.get("/api/v1/projects/:project/traces", () =>
+      HttpResponse.json({ data: ready ? [trace] : [], next_cursor: null }),
+    ),
+  );
+  try {
+    await renderApp("/acme/support-bot/traces");
+    expect(await screen.findByText("Waiting for the first trace…")).toBeInTheDocument();
+    ready = true;
+    expect(await screen.findByRole("grid", { name: "Traces" })).toHaveTextContent(trace.name);
+    expect(screen.queryByText("Waiting for the first trace…")).not.toBeInTheDocument();
+  } finally {
+    setOnboardingPollMs(ONBOARDING_POLL_MS);
+  }
+});
+
+function stubClipboard() {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  return writeText;
+}

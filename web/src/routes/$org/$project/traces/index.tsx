@@ -14,16 +14,19 @@ import {
 } from "@/components/data-table/column-layout";
 import { DataTable } from "@/components/data-table/data-table";
 import { traceListOptions } from "@/components/data-table/use-infinite-list";
-import { EmptyState } from "@/components/empty-state";
 import { FilterBar } from "@/components/filter-bar/filter-bar";
 import { appendFilter, filterMessage } from "@/components/filter-bar/logic";
 import { ListToolbar } from "@/components/list-toolbar";
+import { OnboardingPanel } from "@/components/onboarding/panel";
+import { onboardingPollMs } from "@/components/onboarding/poll";
+import { tracesNeedOnboarding } from "@/components/onboarding/state";
 import { useDefaultSavedView } from "@/components/saved-views/default-view";
 import { SavedViewsMenu } from "@/components/saved-views/saved-views-menu";
 import { useProject } from "@/components/shell/project-context";
 import { SplitPane } from "@/components/trace/split-pane";
 import { TraceView } from "@/components/trace/trace-view";
 import { orderedTraceColumns, scoreNames, traceColumnSpecs } from "@/components/trace-columns";
+import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { parseTracesSearch, type TraceMode, type TracesSearch } from "@/lib/search/traces";
 import { type RangeState, rangeFromSearch, resolveRange } from "@/lib/time-range";
@@ -99,6 +102,16 @@ function TracesPage() {
       includeExperiments: search.exp === 1,
     }),
     enabled: !hold,
+    refetchInterval: (query) => {
+      if (hold || !tracesNeedOnboarding(search, range)) {
+        return false;
+      }
+      const data = query.state.data;
+      if (!data || data.pages.some((page) => page.data.length > 0)) {
+        return false;
+      }
+      return onboardingPollMs();
+    },
   });
   const fetchNextPage = useCallback(() => {
     void list.fetchNextPage();
@@ -168,6 +181,15 @@ function TracesPage() {
   const filterError = problem?.code === "invalid_filter" ? problem : undefined;
   if (problem && !filterError) {
     throw list.error;
+  }
+  const onboarding =
+    !hold && list.data !== undefined && rows.length === 0 && tracesNeedOnboarding(search, range);
+  function clearConstraints() {
+    void navigate({
+      to: "/$org/$project/traces",
+      params: { org, project },
+      search: (prev) => withoutConstraints(prev),
+    });
   }
 
   return (
@@ -242,6 +264,10 @@ function TracesPage() {
                     <h2 className="text-sm font-medium">{filterError.title}</h2>
                     <p className="text-sm text-destructive">{filterMessage(filterError)}</p>
                   </div>
+                ) : onboarding ? (
+                  <div className="min-h-0 flex-1 overflow-auto">
+                    <OnboardingPanel origin={window.location.origin} />
+                  </div>
                 ) : !hold && list.data ? (
                   <DataTable
                     tableId="traces"
@@ -279,7 +305,20 @@ function TracesPage() {
                         search: (prev) => withSort(prev, next),
                       });
                     }}
-                    emptyState={<EmptyState icon={Waypoints} title="No traces" />}
+                    emptyState={
+                      <div className="flex flex-col items-center gap-3 px-4 py-16 text-center">
+                        <Waypoints className="size-8 text-muted-foreground" />
+                        <h2 className="text-lg font-medium">No traces match</h2>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={clearConstraints}
+                        >
+                          Clear filters
+                        </Button>
+                      </div>
+                    }
                   />
                 ) : null}
               </TooltipProvider>
@@ -369,6 +408,21 @@ function withSort(search: TracesSearch, next: { id: string; desc: boolean } | nu
 function withoutSpan(search: TracesSearch): TracesSearch {
   const { span: _span, ...rest } = search;
   return rest;
+}
+
+function withoutConstraints(search: TracesSearch): TracesSearch {
+  const {
+    filter: _filter,
+    search: _query,
+    eval: _eval,
+    exp: _exp,
+    from: _from,
+    to: _to,
+    view: _view,
+    ...rest
+  } = search;
+  // An empty search would reapply the default saved view and put the filter back.
+  return Object.keys(rest).length === 0 ? { range: "24h" } : rest;
 }
 
 function withoutTrace(search: TracesSearch): TracesSearch {
