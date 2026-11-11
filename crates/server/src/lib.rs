@@ -4,13 +4,14 @@
 //! (spec 12). [`meta`] opens `meta.db` (spec 04). [`api`] holds the request and
 //! response types for the observability read API (`docs/spec/09-api.md`).
 //! [`api::openapi::openapi`] is the contract written to `crates/server/openapi.json`.
-//! `http` is the axum router. The process does not listen yet.
+//! `http` is the axum router. [`serve`] binds it for `llmobs serve`.
 
 pub mod api;
 pub(crate) mod clock;
 pub mod config;
 pub(crate) mod http;
 pub(crate) mod meta;
+pub mod serve;
 
 #[cfg(test)]
 pub(crate) mod test_support;

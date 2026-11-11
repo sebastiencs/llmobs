@@ -10,10 +10,14 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+anyhow.workspace = true
 clap.workspace = true
 llmobs-core.workspace = true
 llmobs-server.workspace = true
 mimalloc.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [[bin]]
 name = "llmobs"

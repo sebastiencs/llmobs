@@ -136,7 +136,7 @@ impl MetaDb {
 /// Display text names paths, migration versions, and static reasons. It does
 /// not include row values.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum MetaError {
+pub enum MetaError {
     /// The file could not be opened.
     #[error("meta.db {path}: {source}")]
     Open {

@@ -42,6 +42,15 @@ impl AppState {
     pub(crate) fn new(inner: AppInner) -> Self {
         Self(Arc::new(inner))
     }
+
+    /// The state when this is the last clone. The router holds the other one
+    /// until its tasks finish.
+    pub(crate) fn into_inner(self) -> Result<AppInner, Self> {
+        match Arc::try_unwrap(self.0) {
+            Ok(inner) => Ok(inner),
+            Err(arc) => Err(Self(arc)),
+        }
+    }
 }
 
 impl std::ops::Deref for AppState {
