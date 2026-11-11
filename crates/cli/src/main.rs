@@ -1,3 +1,5 @@
+mod login;
+
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
@@ -34,6 +36,21 @@ enum Command {
     },
     /// Print the llmobs version.
     Version,
+    /// Save a personal access token for a server.
+    Login {
+        /// Server URL, for example `http://127.0.0.1:8080`.
+        #[arg(long)]
+        url: String,
+        /// Print the login URL and do not open a browser.
+        #[arg(long)]
+        no_browser: bool,
+    },
+    /// Revoke the saved personal access token.
+    Logout {
+        /// Server URL. Required when more than one server is saved.
+        #[arg(long)]
+        url: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -128,6 +145,10 @@ async fn run_cli(
         Command::Version => print_version()?,
         Command::Serve { config } => serve(config.as_deref()).await?,
         Command::Admin { command } => admin_command(command).await?,
+        Command::Login { url, no_browser } => {
+            login::login(&url, no_browser, &credentials_path()?, io::stdout()).await?;
+        }
+        Command::Logout { url } => login::logout(url.as_deref(), &credentials_path()?).await?,
     }
     Ok(())
 }
@@ -245,6 +266,11 @@ async fn admin_command(command: AdminCommand) -> anyhow::Result<()> {
 
 fn load_config(path: Option<&Path>) -> anyhow::Result<ServerConfig> {
     ServerConfig::load(path).context("loading config")
+}
+
+fn credentials_path() -> anyhow::Result<PathBuf> {
+    let config = dirs::config_dir().context("finding the config directory")?;
+    Ok(config.join("llmobs").join("credentials.toml"))
 }
 
 /// One stdin line, with a trailing `\n` or `\r\n` removed. The password itself is not trimmed.

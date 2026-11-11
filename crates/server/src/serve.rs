@@ -181,7 +181,9 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         clock: Clock::System,
         limits: Limits::new(),
         key_cache: crate::auth::principal::ApiKeyCache::new(),
+        pat_cache: crate::auth::principal::PatCache::new(),
         last_used: crate::auth::last_used::LastUsed::new(),
+        token_last_used: crate::auth::last_used::LastUsed::tokens(),
         setup: crate::bootstrap::SetupState::new(),
         password_hasher: tokio::sync::OnceCell::new(),
     });
@@ -271,6 +273,9 @@ fn spawn_last_used(state: AppState) -> JoinHandle<()> {
             if let Err(error) = state.last_used.flush(&state.meta).await {
                 tracing::error!(error = %error, "last_used flush failed");
             }
+            if let Err(error) = state.token_last_used.flush(&state.meta).await {
+                tracing::error!(error = %error, "last_used flush failed");
+            }
         }
     })
 }
@@ -311,6 +316,9 @@ impl Running {
         }
         if let Some(state) = self.state.take() {
             if let Err(error) = state.last_used.flush(&state.meta).await {
+                tracing::error!(error = %error, "last_used flush failed");
+            }
+            if let Err(error) = state.token_last_used.flush(&state.meta).await {
                 tracing::error!(error = %error, "last_used flush failed");
             }
             match tokio::time::timeout(STORAGE_SHUTDOWN, state.storage.shutdown()).await {

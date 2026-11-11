@@ -29,7 +29,10 @@ use super::account::{
     SignupResponse, UpdateMeRequest, UpdateOrgRequest, UpdateProjectRequest, User,
 };
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
-use super::keys::{ApiKey as ProjectApiKey, CreateApiKeyRequest, CreatedApiKey};
+use super::keys::{
+    ApiKey as ProjectApiKey, CreateApiKeyRequest, CreatePersonalTokenRequest, CreatedApiKey,
+    CreatedPersonalToken, PersonalToken,
+};
 use super::members::{OrgMember, ProjectMember, SetProjectOverrideRequest, UpdateOrgMemberRequest};
 use super::metrics::{MetricsBucket, MetricsGroupBy, MetricsParams, MetricsResponse};
 use super::saved_views::{CreateSavedView, SavedView, SavedViewListParams, UpdateSavedView};
@@ -104,6 +107,9 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<ProjectApiKey>();
     set.insert::<CreatedApiKey>();
     set.insert::<CreateApiKeyRequest>();
+    set.insert::<PersonalToken>();
+    set.insert::<CreatedPersonalToken>();
+    set.insert::<CreatePersonalTokenRequest>();
     set.insert::<TraceSummary>();
     set.insert::<SpanSummary>();
     set.insert::<TraceDetail>();
@@ -128,6 +134,7 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert_page::<ProjectMember>("ProjectMemberPage");
     set.insert_page::<Project>("ProjectPage");
     set.insert_page::<ProjectApiKey>("ApiKeyPage");
+    set.insert_page::<PersonalToken>("PersonalTokenPage");
     set.insert_page::<SavedView>("SavedViewPage");
     set
 }
@@ -474,6 +481,7 @@ fn paths() -> Paths {
     let paths = project_paths(paths);
     let paths = member_paths(paths);
     let paths = api_key_paths(paths);
+    let paths = token_paths(paths);
     let paths = trace_paths(paths);
     let paths = session_paths(paths);
     let paths = score_paths(paths);
@@ -816,6 +824,79 @@ fn api_key_paths(paths: PathsBuilder) -> PathsBuilder {
         .path(
             "/api/v1/projects/{project}/api-keys/{id}",
             PathItem::new(HttpMethod::Delete, delete),
+        )
+}
+
+fn token_paths(paths: PathsBuilder) -> PathsBuilder {
+    let session_only = vec![SecurityRequirement::new("session", [] as [&str; 0])];
+    let list = operation(
+        "list_personal_tokens",
+        "auth",
+        "List personal access tokens",
+    )
+    .securities(Some(session_only.clone()))
+    .parameters(Some(with_query::<PageParams>(Vec::new())))
+    .responses(responses(
+        "200",
+        json_named(
+            "PersonalTokenPage",
+            "One page of personal access tokens, newest first. The secret is not included.",
+        ),
+        QUERY_ERRORS,
+    ))
+    .build();
+    let create = operation(
+        "post_personal_token",
+        "auth",
+        "Create a personal access token",
+    )
+    .securities(Some(session_only.clone()))
+    .request_body(Some(json_body("CreatePersonalTokenRequest")))
+    .responses(responses(
+        "201",
+        json_of::<CreatedPersonalToken>("The token and its secret. The secret is shown only here."),
+        &[400, 401, 403, 429],
+    ))
+    .build();
+    let delete_one = operation(
+        "delete_personal_token",
+        "auth",
+        "Revoke a personal access token",
+    )
+    .securities(Some(session_only))
+    .parameters(Some(vec![path_uuid("id", "Personal access token id.")]))
+    .responses(responses(
+        "204",
+        ResponseBuilder::new()
+            .description("The token is revoked.")
+            .build(),
+        &[400, 401, 403, 404, 429],
+    ))
+    .build();
+    let delete_current = operation(
+        "delete_current_token",
+        "auth",
+        "Revoke the current personal access token",
+    )
+    .responses(responses(
+        "204",
+        ResponseBuilder::new()
+            .description("The token that authenticated this request is revoked.")
+            .build(),
+        AUTH_ERRORS,
+    ))
+    .build();
+    let mut tokens = PathItem::new(HttpMethod::Get, list);
+    tokens.post = Some(create);
+    paths
+        .path("/api/v1/me/tokens", tokens)
+        .path(
+            "/api/v1/me/tokens/current",
+            PathItem::new(HttpMethod::Delete, delete_current),
+        )
+        .path(
+            "/api/v1/me/tokens/{id}",
+            PathItem::new(HttpMethod::Delete, delete_one),
         )
 }
 

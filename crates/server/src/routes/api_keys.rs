@@ -763,7 +763,7 @@ mod tests {
             .send()
             .await;
         assert_eq!(alphabet.status, 401);
-        let personal = format!("Bearer pat-llmobs-{}", "A".repeat(32));
+        let personal = format!("Bearer pat-llmobs-{}", "A".repeat(31));
         let pat = app
             .request(Method::GET, "/api/v1/projects/current")
             .header(header::AUTHORIZATION.as_str(), &personal)

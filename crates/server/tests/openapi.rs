@@ -19,6 +19,14 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
     ("post", "/api/auth/password/reset", "post_password_reset"),
     ("patch", "/api/v1/me", "patch_me"),
     ("post", "/api/v1/me/password", "post_me_password"),
+    ("get", "/api/v1/me/tokens", "list_personal_tokens"),
+    ("post", "/api/v1/me/tokens", "post_personal_token"),
+    (
+        "delete",
+        "/api/v1/me/tokens/current",
+        "delete_current_token",
+    ),
+    ("delete", "/api/v1/me/tokens/{id}", "delete_personal_token"),
     ("get", "/api/v1/orgs", "list_orgs"),
     ("post", "/api/v1/orgs", "post_org"),
     ("get", "/api/v1/orgs/{org}", "get_org"),
@@ -141,6 +149,7 @@ const QUERY_OR_BODY: &[&str] = &[
     "list_project_members",
     "list_projects",
     "list_api_keys",
+    "list_personal_tokens",
     "list_traces",
     "stream_traces",
     "get_trace",
@@ -249,6 +258,9 @@ fn document_lint() {
                 | "list_api_keys"
                 | "post_api_key"
                 | "delete_api_key"
+                | "list_personal_tokens"
+                | "post_personal_token"
+                | "delete_personal_token"
         ) {
             let security = operation_security.unwrap_or_else(|| panic!("{id}"));
             assert_eq!(security.len(), 1, "{id}");
@@ -276,7 +288,7 @@ fn document_lint() {
             expected_errors.extend(["400", "403", "429"]);
         } else if *id == "patch_me" {
             expected_errors.extend(["400", "401", "403"]);
-        } else if *id == "post_me_password" {
+        } else if *id == "post_me_password" || *id == "post_personal_token" {
             expected_errors.extend(["400", "401", "403", "429"]);
         } else if *id == "list_orgs" {
             expected_errors.extend(["400", "401", "429"]);
@@ -290,6 +302,7 @@ fn document_lint() {
             || *id == "patch_project"
             || *id == "post_api_key"
             || *id == "delete_api_key"
+            || *id == "delete_personal_token"
         {
             expected_errors.extend(["400", "401", "403", "404", "429"]);
         } else if *id == "post_project" {
@@ -373,6 +386,7 @@ fn document_lint() {
         ("ProjectMemberPage", "ProjectMember"),
         ("ProjectPage", "Project"),
         ("ApiKeyPage", "ApiKey"),
+        ("PersonalTokenPage", "PersonalToken"),
         ("SavedViewPage", "SavedView"),
     ];
     for (page, item) in pages {
@@ -619,6 +633,7 @@ fn assert_nullability(schemas: &serde_json::Map<String, Value>) {
         "ProjectMemberPage",
         "ProjectPage",
         "ApiKeyPage",
+        "PersonalTokenPage",
         "SavedViewPage",
     ];
     let expected: BTreeSet<String> = pages

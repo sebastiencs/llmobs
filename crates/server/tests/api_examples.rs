@@ -15,7 +15,7 @@ use llmobs_server::api::account::{
     AuthConfig, Me, OrgMembership, OrgRole, Project, SetupResponse, SignupResponse,
 };
 use llmobs_server::api::common::Page;
-use llmobs_server::api::keys::{ApiKey, CreatedApiKey};
+use llmobs_server::api::keys::{ApiKey, CreatedApiKey, CreatedPersonalToken, PersonalToken};
 use llmobs_server::api::members::{OrgMember, ProjectMember};
 use llmobs_server::api::metrics::MetricsResponse;
 use llmobs_server::api::openapi::openapi;
@@ -403,6 +403,18 @@ fn build() -> Built {
             "application/json",
         ),
         example_status("post_api_key", "static/api-key-created.json", 201),
+        example(
+            "list_personal_tokens",
+            BTreeMap::new(),
+            BTreeMap::new(),
+            "static/personal-tokens.json",
+            "application/json",
+        ),
+        example_status(
+            "post_personal_token",
+            "static/personal-token-created.json",
+            201,
+        ),
         example(
             "get_schema",
             BTreeMap::new(),
@@ -952,6 +964,8 @@ fn static_files_match_their_types() {
     roundtrip::<Project>("static/project.json");
     roundtrip::<Page<ApiKey>>("static/api-keys.json");
     roundtrip::<CreatedApiKey>("static/api-key-created.json");
+    roundtrip::<Page<PersonalToken>>("static/personal-tokens.json");
+    roundtrip::<CreatedPersonalToken>("static/personal-token-created.json");
     roundtrip::<SchemaResponse>("static/schema.json");
     roundtrip::<Page<SavedView>>("static/saved-views.json");
     roundtrip::<MetricsResponse>("static/metrics.json");
@@ -976,6 +990,8 @@ fn generated_files_roundtrip() {
             "list_scores" => roundtrip::<Page<Score>>(&example.file),
             "list_api_keys" => roundtrip::<Page<ApiKey>>(&example.file),
             "post_api_key" => roundtrip::<CreatedApiKey>(&example.file),
+            "list_personal_tokens" => roundtrip::<Page<PersonalToken>>(&example.file),
+            "post_personal_token" => roundtrip::<CreatedPersonalToken>(&example.file),
             "get_auth_config"
             | "get_me"
             | "list_orgs"

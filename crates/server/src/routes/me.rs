@@ -72,7 +72,7 @@ async fn change_password(
 ) -> Result<Response, ApiError> {
     let (user, session_hash) = match &principal {
         Principal::Session { user, session_hash } => (user, session_hash),
-        Principal::ApiKey { .. } => {
+        Principal::ApiKey { .. } | Principal::Pat { .. } => {
             return Err(ApiError::Forbidden {
                 code: ProblemCode::Forbidden,
             });
@@ -130,17 +130,19 @@ async fn change_password(
     let user_id = row.id;
     let email = row.email.clone();
     let keep = session_hash.clone();
-    state
+    let hashes = state
         .meta
         .write(move |conn| {
             Box::pin(async move {
                 users::set_password_hash(conn, user_id, Some(&password_hash), now).await?;
                 delete_user_sessions(conn, user_id, Some(&keep)).await?;
-                revoke_user_tokens(conn, user_id, now).await?;
-                Ok(())
+                revoke_user_tokens(conn, user_id, now).await
             })
         })
         .await?;
+    for hash in hashes {
+        state.pat_cache.evict(&hash);
+    }
     state.limits.lockout.clear(&email);
     tracing::info!(target: "audit", %user_id, "password changed");
     Ok(StatusCode::NO_CONTENT.into_response())

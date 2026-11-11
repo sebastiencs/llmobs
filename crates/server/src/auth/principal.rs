@@ -1,7 +1,8 @@
 //! The caller of one request (D140).
 //!
 //! A bearer token wins over a cookie. When both are present the cookie is
-//! ignored and the session is not refreshed. Personal access tokens are P17.
+//! ignored and the session is not refreshed. A personal access token loads the
+//! user on every request, so a disabled account fails at once (D149).
 #![cfg_attr(not(test), allow(dead_code))]
 
 use std::fmt;
@@ -15,12 +16,14 @@ use uuid::Uuid;
 
 use crate::api::common::ProblemCode;
 use crate::auth::cache::KeyCache;
-use crate::auth::roles::KeyScopes;
+use crate::auth::roles::{KeyScope, KeyScopes};
 use crate::auth::secret::{self, KeyKind};
 use crate::auth::session::resolve_cookie_header;
 use crate::http::AppState;
 use crate::http::error::ApiError;
 use crate::meta::api_keys::{self, LoadedApiKey};
+use crate::meta::personal_tokens::{self, TokenRow};
+use crate::meta::users;
 
 /// A signed-in user. `Debug` omits the email.
 #[derive(Clone)]
@@ -64,6 +67,15 @@ pub(crate) enum Principal {
         /// Scopes stored on the key.
         scopes: KeyScopes,
     },
+    /// A personal access token. `Debug` omits the email. `write` is the `write` scope.
+    Pat {
+        /// The token's user, loaded for this request.
+        user: AuthUser,
+        /// `personal_tokens.id`.
+        token_id: Uuid,
+        /// The token has the `write` scope.
+        write: bool,
+    },
 }
 
 /// A cached successful key lookup. `expires_at` is checked on every use.
@@ -78,6 +90,19 @@ pub(crate) struct CachedKey {
     /// Scopes stored on the key.
     pub(crate) scopes: KeyScopes,
     /// When the key stops working. Absent means it does not expire.
+    pub(crate) expires_at: Option<i64>,
+}
+
+/// A cached successful personal-token lookup. The user is not cached.
+#[derive(Clone, Copy)]
+pub(crate) struct CachedPat {
+    /// `personal_tokens.id`.
+    pub(crate) id: Uuid,
+    /// `personal_tokens.user_id`.
+    pub(crate) user_id: Uuid,
+    /// Scopes stored on the token.
+    pub(crate) scopes: KeyScopes,
+    /// When the token stops working. Absent means it does not expire.
     pub(crate) expires_at: Option<i64>,
 }
 
@@ -100,18 +125,28 @@ impl fmt::Debug for Principal {
                 .field("kind", kind)
                 .field("scopes", scopes)
                 .finish(),
+            Self::Pat {
+                user,
+                token_id,
+                write,
+            } => formatter
+                .debug_struct("Pat")
+                .field("user", user)
+                .field("token_id", token_id)
+                .field("write", write)
+                .finish(),
         }
     }
 }
 
-/// The session user. A key is refused.
+/// The user behind a session or a personal access token. An API key is refused.
 ///
 /// # Errors
 ///
 /// Returns [`ApiError::Forbidden`] when `principal` is an API key.
 pub(crate) fn session_user(principal: &Principal) -> Result<&AuthUser, ApiError> {
     match principal {
-        Principal::Session { user, .. } => Ok(user),
+        Principal::Session { user, .. } | Principal::Pat { user, .. } => Ok(user),
         Principal::ApiKey { .. } => Err(ApiError::Forbidden {
             code: ProblemCode::Forbidden,
         }),
@@ -172,11 +207,11 @@ async fn bearer_principal(state: &AppState, headers: &HeaderMap) -> Result<Princ
     let Some(kind) = secret::parse_key(token) else {
         return Err(ApiError::Unauthorized);
     };
-    if kind == KeyKind::Personal {
-        return Err(ApiError::Unauthorized);
-    }
     let now = state.clock.now_ns();
     let hash = secret::hash_token(token);
+    if kind == KeyKind::Personal {
+        return personal_principal(state, &hash, now).await;
+    }
     if let Some(cached) = state.key_cache.get(&hash, now) {
         if expired(cached.expires_at, now) {
             state.key_cache.evict(&hash);
@@ -217,6 +252,57 @@ fn cached_from(loaded: &LoadedApiKey) -> Result<CachedKey, ApiError> {
     })
 }
 
+async fn personal_principal(state: &AppState, hash: &str, now: i64) -> Result<Principal, ApiError> {
+    if let Some(cached) = state.pat_cache.get(hash, now) {
+        if expired(cached.expires_at, now) {
+            state.pat_cache.evict(hash);
+            return Err(ApiError::Unauthorized);
+        }
+        return pat_principal(state, cached, now).await;
+    }
+    let Some(row) = personal_tokens::token_by_hash(state.meta.reader(), hash).await? else {
+        return Err(ApiError::Unauthorized);
+    };
+    if row.revoked_at.is_some() || expired(row.expires_at, now) {
+        return Err(ApiError::Unauthorized);
+    }
+    let cached = cached_pat(&row);
+    state.pat_cache.put(hash.to_owned(), cached, now);
+    pat_principal(state, cached, now).await
+}
+
+async fn pat_principal(
+    state: &AppState,
+    cached: CachedPat,
+    now: i64,
+) -> Result<Principal, ApiError> {
+    let Some(row) = users::user_by_id(state.meta.reader(), cached.user_id).await? else {
+        return Err(ApiError::Unauthorized);
+    };
+    if row.disabled_at.is_some() {
+        return Err(ApiError::Unauthorized);
+    }
+    state.token_last_used.record(cached.id, now);
+    Ok(Principal::Pat {
+        user: AuthUser {
+            id: row.id,
+            is_instance_admin: row.is_instance_admin,
+            email: row.email,
+        },
+        token_id: cached.id,
+        write: cached.scopes.contains(KeyScope::Write),
+    })
+}
+
+fn cached_pat(row: &TokenRow) -> CachedPat {
+    CachedPat {
+        id: row.id,
+        user_id: row.user_id,
+        scopes: KeyScopes::from_scopes(&row.scopes),
+        expires_at: row.expires_at,
+    }
+}
+
 fn expired(expires_at: Option<i64>, now: i64) -> bool {
     matches!(expires_at, Some(at) if at <= now)
 }
@@ -242,6 +328,9 @@ fn bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
 
 /// The cache used by [`authenticate`]. Declared here so `AppState` can name it.
 pub(crate) type ApiKeyCache = KeyCache<CachedKey>;
+
+/// The personal-token cache used by [`authenticate`].
+pub(crate) type PatCache = KeyCache<CachedPat>;
 
 #[cfg(test)]
 mod tests {

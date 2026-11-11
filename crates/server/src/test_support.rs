@@ -92,7 +92,9 @@ impl TestApp {
             clock: Clock::Manual(Arc::new(AtomicI64::new(MANUAL_NOW_NS))),
             limits: Limits::new(),
             key_cache: crate::auth::principal::ApiKeyCache::new(),
+            pat_cache: crate::auth::principal::PatCache::new(),
             last_used: crate::auth::last_used::LastUsed::new(),
+            token_last_used: crate::auth::last_used::LastUsed::tokens(),
             setup: crate::bootstrap::SetupState::new(),
             password_hasher: tokio::sync::OnceCell::new(),
         });

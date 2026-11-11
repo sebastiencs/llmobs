@@ -148,6 +148,12 @@ base64 = "0.23.1"
 argon2 = "0.6.0"
 # OS CSPRNG for keys and salts (`SysRng`). Already resolved in `Cargo.lock`.
 rand = "0.10.3"
+# CLI credentials directory (P17).
+dirs = "7.0.0"
+# CLI credentials file (P17). Figment still uses toml 0.8.
+toml = "1.2.1"
+# CLI login and logout (P17). `openidconnect` later uses this pin.
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json"] }
 # Constant-time compare of token hashes.
 subtle = "2.6.1"
 # OpenAPI 3.1 schemas. `uuid` enables the `format: uuid` schema. Do not enable

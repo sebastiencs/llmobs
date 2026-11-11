@@ -364,6 +364,14 @@
     "file": "static/orgs.json"
   },
   {
+    "operation_id": "list_personal_tokens",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/personal-tokens.json"
+  },
+  {
     "operation_id": "list_project_members",
     "path_params": {},
     "query": {},
@@ -474,6 +482,14 @@
     "status": 200,
     "content_type": "application/json",
     "file": "static/me.json"
+  },
+  {
+    "operation_id": "post_personal_token",
+    "path_params": {},
+    "query": {},
+    "status": 201,
+    "content_type": "application/json",
+    "file": "static/personal-token-created.json"
   },
   {
     "operation_id": "post_setup",

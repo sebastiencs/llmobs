@@ -98,6 +98,71 @@ pub struct CreateApiKeyRequest {
     pub expires_at: Option<TimeParam>,
 }
 
+/// `read` or `write` on a personal access token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PersonalTokenScope {
+    /// Safe methods.
+    Read,
+    /// Methods other than GET and HEAD, except session-only routes.
+    Write,
+}
+
+/// A personal access token. The secret is not a field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PersonalToken {
+    /// Token id.
+    pub id: Uuid,
+    /// Display name.
+    pub name: String,
+    /// Type prefix plus the first 6 random characters.
+    pub prefix: String,
+    /// `read`, or `read` then `write`.
+    pub scopes: Vec<PersonalTokenScope>,
+    /// Creation time. JSON is RFC 3339.
+    #[serde(with = "time_serde")]
+    #[schema(value_type = String, format = DateTime)]
+    pub created_at: i64,
+    /// When the token stops working. Omitted when the token does not expire.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_time"
+    )]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub expires_at: Option<i64>,
+    /// Last successful authentication. Omitted until a flush has written it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_time"
+    )]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub last_used_at: Option<i64>,
+}
+
+/// `POST /api/v1/me/tokens`. The response is the only place the secret appears.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CreatedPersonalToken {
+    /// The stored token, without the secret.
+    pub token: PersonalToken,
+    /// The bearer value. Shown only in this response.
+    pub secret: String,
+}
+
+/// `POST /api/v1/me/tokens` body.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreatePersonalTokenRequest {
+    /// Display name, 1 to 100 characters.
+    pub name: String,
+    /// `[read]` or `[read, write]`.
+    pub scopes: Vec<PersonalTokenScope>,
+    /// When the token stops working. Absent when the token does not expire.
+    #[serde(default)]
+    pub expires_at: Option<TimeParam>,
+}
+
 mod optional_time {
     use serde::de::Error;
     use serde::{Deserialize, Deserializer, Serializer};

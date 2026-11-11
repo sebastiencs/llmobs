@@ -107,6 +107,7 @@ pub(crate) fn routes() -> Vec<RouteDef> {
     routes.extend(crate::routes::projects::routes());
     routes.extend(crate::routes::members::routes());
     routes.extend(crate::routes::api_keys::routes());
+    routes.extend(crate::routes::tokens::routes());
     routes
 }
 
@@ -151,6 +152,14 @@ async fn prepare(state: AppState, access: Access, request: Request) -> Result<Re
         return Err(ApiError::Unauthorized);
     };
     if session_only(access) && !matches!(principal, Principal::Session { .. }) {
+        return Err(forbidden());
+    }
+    if let Principal::Pat { write: false, .. } = &principal
+        && !matches!(
+            parts.method,
+            axum::http::Method::GET | axum::http::Method::HEAD
+        )
+    {
         return Err(forbidden());
     }
     match access {
@@ -217,8 +226,9 @@ async fn grant_org(
     key: &str,
     perm: OrgPerm,
 ) -> Result<(), ApiError> {
-    let Principal::Session { user, .. } = principal else {
-        return Err(forbidden());
+    let user = match principal {
+        Principal::Session { user, .. } | Principal::Pat { user, .. } => user,
+        Principal::ApiKey { .. } => return Err(forbidden()),
     };
     let org = load_org(state, key).await?;
     let Some(org) = org else {
@@ -253,7 +263,7 @@ async fn grant_project(
     perm: ProjectPerm,
 ) -> Result<(), ApiError> {
     match principal {
-        Principal::Session { user, .. } => {
+        Principal::Session { user, .. } | Principal::Pat { user, .. } => {
             grant_session_project(state, parts, user, key, perm).await
         }
         Principal::ApiKey {
@@ -496,13 +506,16 @@ mod tests {
     }
 
     async fn echo_user(Extension(principal): Extension<Principal>) -> Json<Value> {
-        let Principal::Session { user, .. } = principal else {
-            return Json(json!({
-                "org": null,
-                "project": null,
-                "role": null,
-                "admin": false,
-            }));
+        let user = match principal {
+            Principal::Session { user, .. } | Principal::Pat { user, .. } => user,
+            Principal::ApiKey { .. } => {
+                return Json(json!({
+                    "org": null,
+                    "project": null,
+                    "role": null,
+                    "admin": false,
+                }));
+            }
         };
         Json(json!({
             "org": null,

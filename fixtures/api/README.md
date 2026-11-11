@@ -26,6 +26,7 @@ Do not edit `responses/` or `manifest.json` by hand. Regenerate them with `just 
 | User | `01900000-0000-7000-8000-000000000100`, `ada@example.com`, `Ada Example`, instance admin, org owner |
 | Member | `01900000-0000-7000-8000-000000000101`, `bob@example.com`, `Bob Example`, org member. Used by the member examples |
 | API key | `01900000-0000-7000-8000-000000000200`, prefix `sk-llmobs-EXAMPL`. `api-key-created.json` uses the same synthetic `sk-llmobs-EXAMPLE0…` secret as `setup-response.json`. It is not a live key |
+| Personal token | `01900000-0000-7000-8000-000000000201`, prefix `pat-llmobs-EXAMPL`. `personal-token-created.json` uses the synthetic `pat-llmobs-EXAMPLE0…` secret. It is not a live token |
 | Trace ids | `a1000000000000000000000000000001` through `…0006` |
 | Span ids | `b1000000000000` plus the trace digit and the span digit. Trace 1 span 2 is `b100000000000012` |
 | Missing parent of trace 6 | `b1000000000000ff` |

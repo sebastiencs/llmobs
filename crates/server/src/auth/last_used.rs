@@ -11,16 +11,34 @@ use uuid::Uuid;
 
 use crate::meta::MetaDb;
 use crate::meta::MetaError;
-use crate::meta::api_keys::set_last_used;
 
-/// In-memory `last_used_at` updates, one timestamp per key.
+/// Which table a [`LastUsed`] map writes.
+#[derive(Clone, Copy)]
+enum Table {
+    ApiKeys,
+    Tokens,
+}
+
+/// In-memory `last_used_at` updates, one timestamp per id.
 pub(crate) struct LastUsed {
+    table: Table,
     times: Mutex<HashMap<Uuid, i64>>,
 }
 
 impl LastUsed {
+    /// Updates for `api_keys`.
     pub(crate) fn new() -> Self {
+        Self::with_table(Table::ApiKeys)
+    }
+
+    /// Updates for `personal_tokens`.
+    pub(crate) fn tokens() -> Self {
+        Self::with_table(Table::Tokens)
+    }
+
+    fn with_table(table: Table) -> Self {
         Self {
+            table,
             times: Mutex::new(HashMap::new()),
         }
     }
@@ -57,8 +75,18 @@ impl LastUsed {
             std::mem::take(&mut *times).into_iter().collect::<Vec<_>>()
         };
         let saved = rows.clone();
+        let table = self.table;
         let written = meta
-            .write(move |conn| Box::pin(async move { set_last_used(conn, &rows).await }))
+            .write(move |conn| {
+                Box::pin(async move {
+                    match table {
+                        Table::ApiKeys => crate::meta::api_keys::set_last_used(conn, &rows).await,
+                        Table::Tokens => {
+                            crate::meta::personal_tokens::set_last_used(conn, &rows).await
+                        }
+                    }
+                })
+            })
             .await;
         if let Err(error) = written {
             let mut times = self.lock();
