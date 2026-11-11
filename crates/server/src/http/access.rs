@@ -83,7 +83,7 @@ pub(crate) struct ProjectAccess {
 
 /// Health probes. Later sub-phases append their handlers here.
 pub(crate) fn routes() -> Vec<RouteDef> {
-    vec![
+    let mut routes = vec![
         RouteDef {
             method: axum::http::Method::GET,
             path: "/healthz",
@@ -98,7 +98,9 @@ pub(crate) fn routes() -> Vec<RouteDef> {
             documented: false,
             handler: get(health::readyz),
         },
-    ]
+    ];
+    routes.extend(crate::routes::auth::routes());
+    routes
 }
 
 /// Registers `routes`, with [`enforce`] on each method.

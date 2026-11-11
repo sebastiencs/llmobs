@@ -8,10 +8,12 @@
 
 pub mod api;
 pub(crate) mod auth;
+pub(crate) mod bootstrap;
 pub(crate) mod clock;
 pub mod config;
 pub(crate) mod http;
 pub(crate) mod meta;
+pub(crate) mod routes;
 pub mod serve;
 
 #[cfg(test)]

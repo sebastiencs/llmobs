@@ -38,6 +38,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create the first admin */
+        post: operations["post_setup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orgs/{org}/projects": {
         parameters: {
             query?: never;
@@ -1206,6 +1223,38 @@ export interface components {
             /** @description Trace row. */
             trace: components["schemas"]["TraceSummary"];
         };
+        /** @description `POST /api/auth/setup`. The token is the one logged at startup (D144). */
+        SetupRequest: {
+            /** @description Email address of the first admin. */
+            email: string;
+            /** @description Display name. Absent when the admin does not set one. */
+            name?: string;
+            /** @description Name of the first organization. */
+            org_name: string;
+            /** @description Password of the first admin. */
+            password: string;
+            /** @description Name of the first project. */
+            project_name: string;
+            /** @description The setup token from the startup log. */
+            setup_token: string;
+        };
+        /**
+         * @description The first admin, org, project, and the secret key shown once.
+         *
+         *     `POST /api/auth/setup` returns 201. `secret_key` is not stored.
+         */
+        SetupResponse: {
+            /** @description The org, with the owner role. */
+            org: components["schemas"]["OrgMembership"];
+            /** @description The project, with the owner role. */
+            project: components["schemas"]["Project"];
+            /** @description Secret API key. Shown once. */
+            secret_key: string;
+            /** @description Type prefix plus the first 6 characters of the key tail. */
+            secret_key_prefix: string;
+            /** @description The instance admin. */
+            user: components["schemas"]["User"];
+        };
         /**
          * @description Who may register after the first user exists.
          *
@@ -1881,6 +1930,66 @@ export interface operations {
             };
             /** @description No credentials, or the credentials are invalid. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    post_setup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupRequest"];
+            };
+        };
+        responses: {
+            /** @description The admin, org, project, and secret key shown once. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupResponse"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request conflicts with the current state. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -1,10 +1,10 @@
 //! Authentication building blocks: roles, tokens, passwords, rate limits, and web sessions.
 
 mod limits;
-mod password;
+pub(crate) mod password;
 pub(crate) mod principal;
 pub(crate) mod roles;
-mod secret;
+pub(crate) mod secret;
 pub(crate) mod session;
 
 pub(crate) use limits::Limits;

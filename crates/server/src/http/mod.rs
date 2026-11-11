@@ -6,7 +6,7 @@
 #![cfg_attr(not(test), allow(dead_code))] // `llmobs serve` binds this in P5
 
 pub(crate) mod access;
-mod client_ip;
+pub(crate) mod client_ip;
 mod csrf;
 pub(crate) mod error;
 mod health;
@@ -33,13 +33,14 @@ const BODY_LIMIT: usize = 1024 * 1024;
 #[derive(Clone)]
 pub(crate) struct AppState(Arc<AppInner>);
 
-/// Fields later sub-phases add to: mailer, setup.
+/// Fields later sub-phases add to: mailer.
 pub(crate) struct AppInner {
     pub(crate) config: ServerConfig,
     pub(crate) meta: MetaDb,
     pub(crate) storage: Arc<Storage>,
     pub(crate) clock: Clock,
     pub(crate) limits: Limits,
+    pub(crate) setup: crate::bootstrap::SetupState,
 }
 
 impl AppState {

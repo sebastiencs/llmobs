@@ -11,6 +11,7 @@ use llmobs_server::api::openapi::openapi;
 
 const OPERATIONS: &[(&str, &str, &str)] = &[
     ("get", "/api/auth/config", "get_auth_config"),
+    ("post", "/api/auth/setup", "post_setup"),
     ("get", "/api/auth/me", "get_me"),
     ("get", "/api/v1/orgs/{org}/projects", "list_projects"),
     ("get", "/api/v1/projects/{project}", "get_project"),
@@ -170,7 +171,7 @@ fn document_lint() {
         );
 
         let operation_security = operation.get("security").and_then(Value::as_array);
-        if *id == "get_auth_config" {
+        if *id == "get_auth_config" || *id == "post_setup" {
             assert_eq!(operation_security.map(Vec::len), Some(0), "{id}");
         } else {
             assert!(operation_security.is_none(), "{id} overrides security");
@@ -186,6 +187,8 @@ fn document_lint() {
         let mut expected_errors = BTreeSet::new();
         if *id == "get_me" {
             expected_errors.extend(["401", "429"]);
+        } else if *id == "post_setup" {
+            expected_errors.extend(["400", "403", "409", "429"]);
         } else if *id == "get_media" {
             expected_errors.extend(["401", "403", "404", "416", "429"]);
         } else if *id != "get_auth_config" && QUERY_OR_BODY.contains(id) {

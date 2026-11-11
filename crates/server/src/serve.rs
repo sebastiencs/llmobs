@@ -63,6 +63,26 @@ pub enum ServeError {
     /// Creating `data_dir`, or the accept loop, failed.
     #[error(transparent)]
     Serve(io::Error),
+    /// Headless init failed a check. The reason names the rule or the variable,
+    /// not the password, the key, or the email.
+    #[error("init failed: {reason}")]
+    Init {
+        /// What was wrong.
+        reason: String,
+    },
+}
+
+fn serve_bootstrap(error: crate::bootstrap::BootstrapError) -> ServeError {
+    match error {
+        crate::bootstrap::BootstrapError::Meta(error) => ServeError::Meta(error),
+        crate::bootstrap::BootstrapError::Init { reason } => ServeError::Init { reason },
+        crate::bootstrap::BootstrapError::Auth(error) => ServeError::Init {
+            reason: error.to_string(),
+        },
+        crate::bootstrap::BootstrapError::Lock => ServeError::Init {
+            reason: "setup token lock poisoned".to_owned(),
+        },
+    }
 }
 
 impl From<OpenError> for ServeError {
@@ -157,7 +177,12 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         storage,
         clock: Clock::System,
         limits: Limits::new(),
+        setup: crate::bootstrap::SetupState::new(),
     });
+    if let Err(error) = crate::bootstrap::prepare(&state).await {
+        release_state(state).await;
+        return Err(serve_bootstrap(error));
+    }
     let listener = match TcpListener::bind(http_addr).await {
         Ok(listener) => listener,
         Err(source) => {
@@ -333,6 +358,39 @@ mod tests {
 
     use super::*;
     use crate::config::{AuthSettings, InitConfig, LogConfig, PublicUrl};
+
+    #[tokio::test]
+    async fn an_empty_database_logs_the_setup_url_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (running, logs) = crate::test_support::capture_logs(bind(config(dir.path()))).await;
+        let running = running.unwrap();
+        assert_eq!(
+            logs.matches("setup required: open http://localhost:8080/setup?token=")
+                .count(),
+            1,
+            "{logs}"
+        );
+        running.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_bad_init_secret_fails_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config(dir.path());
+        config.init = serde_json::from_value(serde_json::json!({
+            "admin_email": "ada@example.com",
+            "admin_password": "llmobs-ok1",
+            "org": "Acme",
+            "project": "Support bot",
+            "secret_key": "not-a-secret-key",
+        }))
+        .unwrap();
+        let error = bind(config).await.unwrap_err();
+        let text = error.to_string();
+        assert!(matches!(error, ServeError::Init { .. }), "{text}");
+        assert!(text.contains("LLMOBS_INIT_SECRET_KEY"), "{text}");
+        assert!(!text.contains("not-a-secret-key"), "{text}");
+    }
 
     #[tokio::test]
     async fn healthz_over_tcp_and_shutdown_releases_the_lock() {

@@ -11,7 +11,7 @@ use llmobs_core::ids::{SpanId, TraceId};
 use llmobs_core::message::{Message, Part};
 use llmobs_core::score::{Score, ScoreTarget, ScoreValue};
 use llmobs_core::span::Span;
-use llmobs_server::api::account::{AuthConfig, Me, OrgRole, Project};
+use llmobs_server::api::account::{AuthConfig, Me, OrgRole, Project, SetupResponse};
 use llmobs_server::api::common::Page;
 use llmobs_server::api::metrics::MetricsResponse;
 use llmobs_server::api::openapi::openapi;
@@ -63,6 +63,17 @@ fn params(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         .iter()
         .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
         .collect()
+}
+
+fn example_status(operation_id: &str, file: &str, status: u16) -> Example {
+    Example {
+        operation_id: operation_id.to_owned(),
+        path_params: BTreeMap::new(),
+        query: BTreeMap::new(),
+        status,
+        content_type: "application/json".to_owned(),
+        file: file.to_owned(),
+    }
 }
 
 fn example(
@@ -322,6 +333,7 @@ fn build() -> Built {
             "static/auth-config.json",
             "application/json",
         ),
+        example_status("post_setup", "static/setup-response.json", 201),
         example(
             "get_me",
             BTreeMap::new(),
@@ -720,7 +732,7 @@ fn contract_document() -> PathBuf {
 const OPENAPI_URI: &str = "urn:llmobs:openapi";
 
 fn schema_pointer(document: &Value, entry: &Example, failures: &mut Vec<String>) -> Option<String> {
-    let Some((path, operation)) = operation_at(document, &entry.operation_id) else {
+    let Some((path, method, operation)) = operation_at(document, &entry.operation_id) else {
         failures.push(format!(
             "{}: operation {} is missing",
             entry.file, entry.operation_id
@@ -736,20 +748,28 @@ fn schema_pointer(document: &Value, entry: &Example, failures: &mut Vec<String>)
         ));
         return None;
     }
+    let path = uri_escape(&pointer_token(&path));
+    let method = uri_escape(&pointer_token(&method));
+    let status = uri_escape(&pointer_token(&status));
+    let content = uri_escape(&pointer_token(&entry.content_type));
     Some(format!(
-        "/paths/{}/get/responses/{}/content/{}/schema",
-        uri_escape(&pointer_token(&path)),
-        uri_escape(&pointer_token(&status)),
-        uri_escape(&pointer_token(&entry.content_type))
+        "/paths/{path}/{method}/responses/{status}/content/{content}/schema"
     ))
 }
 
-fn operation_at(document: &Value, operation_id: &str) -> Option<(String, Value)> {
+fn operation_at(document: &Value, operation_id: &str) -> Option<(String, String, Value)> {
     let paths = document.get("paths")?.as_object()?;
     for (path, item) in paths {
-        let operation = &item["get"];
-        if operation["operationId"] == operation_id {
-            return Some((path.clone(), operation.clone()));
+        let Some(item) = item.as_object() else {
+            continue;
+        };
+        for method in ["get", "post", "put", "patch", "delete", "head"] {
+            let Some(operation) = item.get(method) else {
+                continue;
+            };
+            if operation["operationId"] == operation_id {
+                return Some((path.clone(), method.to_owned(), operation.clone()));
+            }
         }
     }
     None
@@ -758,9 +778,21 @@ fn operation_at(document: &Value, operation_id: &str) -> Option<(String, Value)>
 fn get_operation<'a>(document: &'a Value, operation_id: &str) -> Option<(&'a Value, &'a Value)> {
     let paths = document.get("paths")?.as_object()?;
     for item in paths.values() {
-        let operation = &item["get"];
-        if operation["operationId"] == operation_id {
+        if let Some(operation) = method_operation(item, operation_id) {
             return Some((item, operation));
+        }
+    }
+    None
+}
+
+fn method_operation<'a>(item: &'a Value, operation_id: &str) -> Option<&'a Value> {
+    let item = item.as_object()?;
+    for method in ["get", "post", "put", "patch", "delete", "head"] {
+        let Some(operation) = item.get(method) else {
+            continue;
+        };
+        if operation["operationId"] == operation_id {
+            return Some(operation);
         }
     }
     None
@@ -861,6 +893,7 @@ fn collect_names(dir: &Path, prefix: &str, files: &mut Vec<String>) {
 #[test]
 fn static_files_match_their_types() {
     roundtrip::<AuthConfig>("static/auth-config.json");
+    roundtrip::<SetupResponse>("static/setup-response.json");
     roundtrip::<Me>("static/me.json");
     roundtrip::<Page<Project>>("static/projects.json");
     roundtrip::<Project>("static/project.json");
@@ -887,7 +920,7 @@ fn generated_files_roundtrip() {
             "get_user" => roundtrip::<EndUserDetail>(&example.file),
             "list_scores" => roundtrip::<Page<Score>>(&example.file),
             "get_auth_config" | "get_me" | "list_projects" | "get_project" | "get_schema"
-            | "list_saved_views" | "get_metrics" => {}
+            | "list_saved_views" | "get_metrics" | "post_setup" => {}
             other => panic!("{other} has no round-trip"),
         }
     }

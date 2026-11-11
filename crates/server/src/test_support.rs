@@ -91,6 +91,7 @@ impl TestApp {
             storage: Arc::new(storage),
             clock: Clock::Manual(Arc::new(AtomicI64::new(MANUAL_NOW_NS))),
             limits: Limits::new(),
+            setup: crate::bootstrap::SetupState::new(),
         });
         let router = if let Some(table) = table {
             serve_router(state.clone(), table)

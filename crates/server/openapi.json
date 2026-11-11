@@ -69,6 +69,78 @@
         }
       }
     },
+    "/api/auth/setup": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Create the first admin",
+        "operationId": "post_setup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The admin, org, project, and secret key shown once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
     "/api/v1/orgs/{org}/projects": {
       "get": {
         "tags": [
@@ -3974,6 +4046,77 @@
           }
         }
       },
+      "SetupRequest": {
+        "type": "object",
+        "description": "`POST /api/auth/setup`. The token is the one logged at startup (D144).",
+        "required": [
+          "setup_token",
+          "email",
+          "password",
+          "org_name",
+          "project_name"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address of the first admin."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name. Absent when the admin does not set one."
+          },
+          "org_name": {
+            "type": "string",
+            "description": "Name of the first organization."
+          },
+          "password": {
+            "type": "string",
+            "description": "Password of the first admin."
+          },
+          "project_name": {
+            "type": "string",
+            "description": "Name of the first project."
+          },
+          "setup_token": {
+            "type": "string",
+            "description": "The setup token from the startup log."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SetupResponse": {
+        "type": "object",
+        "description": "The first admin, org, project, and the secret key shown once.\n\n`POST /api/auth/setup` returns 201. `secret_key` is not stored.",
+        "required": [
+          "user",
+          "org",
+          "project",
+          "secret_key",
+          "secret_key_prefix"
+        ],
+        "properties": {
+          "org": {
+            "$ref": "#/components/schemas/OrgMembership",
+            "description": "The org, with the owner role."
+          },
+          "project": {
+            "$ref": "#/components/schemas/Project",
+            "description": "The project, with the owner role."
+          },
+          "secret_key": {
+            "type": "string",
+            "description": "Secret API key. Shown once."
+          },
+          "secret_key_prefix": {
+            "type": "string",
+            "description": "Type prefix plus the first 6 characters of the key tail."
+          },
+          "user": {
+            "$ref": "#/components/schemas/User",
+            "description": "The instance admin."
+          }
+        }
+      },
       "SignupPolicy": {
         "type": "string",
         "description": "Who may register after the first user exists.\n\nSpec 08 `LLMOBS_AUTH_SIGNUP`.",
@@ -5070,7 +5213,7 @@
   "tags": [
     {
       "name": "auth",
-      "description": "Login methods and the current user."
+      "description": "Login methods, first-run setup, and the current user."
     },
     {
       "name": "projects",

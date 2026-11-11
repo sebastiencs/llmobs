@@ -134,6 +134,42 @@ pub struct Project {
     pub created_at: i64,
 }
 
+/// `POST /api/auth/setup`. The token is the one logged at startup (D144).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetupRequest {
+    /// The setup token from the startup log.
+    pub setup_token: String,
+    /// Email address of the first admin.
+    pub email: String,
+    /// Password of the first admin.
+    pub password: String,
+    /// Display name. Absent when the admin does not set one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Name of the first organization.
+    pub org_name: String,
+    /// Name of the first project.
+    pub project_name: String,
+}
+
+/// The first admin, org, project, and the secret key shown once.
+///
+/// `POST /api/auth/setup` returns 201. `secret_key` is not stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SetupResponse {
+    /// The instance admin.
+    pub user: User,
+    /// The org, with the owner role.
+    pub org: OrgMembership,
+    /// The project, with the owner role.
+    pub project: Project,
+    /// Secret API key. Shown once.
+    pub secret_key: String,
+    /// Type prefix plus the first 6 characters of the key tail.
+    pub secret_key_prefix: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

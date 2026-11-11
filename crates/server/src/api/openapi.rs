@@ -23,7 +23,7 @@ use utoipa::openapi::tag::{Tag, TagBuilder};
 use utoipa::openapi::{Content, InfoBuilder, OpenApi, OpenApiBuilder, Ref, RefOr, Required};
 use utoipa::{IntoParams, PartialSchema, ToSchema};
 
-use super::account::{AuthConfig, Me, Project};
+use super::account::{AuthConfig, Me, Project, SetupRequest, SetupResponse};
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
 use super::metrics::{MetricsBucket, MetricsGroupBy, MetricsParams, MetricsResponse};
 use super::saved_views::{CreateSavedView, SavedView, SavedViewListParams, UpdateSavedView};
@@ -75,6 +75,8 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<MetricsBucket>();
     set.insert::<MetricsGroupBy>();
     set.insert::<AuthConfig>();
+    set.insert::<SetupRequest>();
+    set.insert::<SetupResponse>();
     set.insert::<Me>();
     set.insert::<Project>();
     set.insert::<TraceSummary>();
@@ -160,7 +162,10 @@ pub fn openapi() -> OpenApi {
                 .build(),
         )
         .tags(Some([
-            tag("auth", "Login methods and the current user."),
+            tag(
+                "auth",
+                "Login methods, first-run setup, and the current user.",
+            ),
             tag("projects", "Projects the caller can see."),
             tag("traces", "Trace list, detail, and live streams."),
             tag("spans", "Span list and detail."),
@@ -453,6 +458,15 @@ fn auth_paths(paths: PathsBuilder) -> PathsBuilder {
             &[],
         ))
         .build();
+    let setup = operation("post_setup", "auth", "Create the first admin")
+        .securities(Some(Vec::new()))
+        .request_body(Some(json_body("SetupRequest")))
+        .responses(responses(
+            "201",
+            json_of::<SetupResponse>("The admin, org, project, and secret key shown once."),
+            &[400, 403, 409, 429],
+        ))
+        .build();
     let me = operation("get_me", "auth", "Get the current user")
         .responses(responses(
             "200",
@@ -462,6 +476,7 @@ fn auth_paths(paths: PathsBuilder) -> PathsBuilder {
         .build();
     paths
         .path("/api/auth/config", PathItem::new(HttpMethod::Get, config))
+        .path("/api/auth/setup", PathItem::new(HttpMethod::Post, setup))
         .path("/api/auth/me", PathItem::new(HttpMethod::Get, me))
 }
 
@@ -952,6 +967,7 @@ fn problem(code: u16) -> Response {
         401 => "No credentials, or the credentials are invalid.",
         403 => "The credentials do not allow this operation.",
         404 => "The resource does not exist.",
+        409 => "The request conflicts with the current state.",
         416 => "The Range header does not overlap the blob.",
         429 => "Too many requests.",
         _ => "Request failed.",

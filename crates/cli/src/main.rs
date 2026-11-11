@@ -95,6 +95,7 @@ fn annotate(error: ServeError) -> anyhow::Error {
         ServeError::Meta(_) => "opening meta.db",
         ServeError::Bind { .. } => "binding",
         ServeError::Serve(_) => "serving",
+        ServeError::Init { .. } => "applying init",
     };
     anyhow::Error::from(error).context(context)
 }
