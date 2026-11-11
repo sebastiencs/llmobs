@@ -12,6 +12,9 @@ use llmobs_server::api::openapi::openapi;
 const OPERATIONS: &[(&str, &str, &str)] = &[
     ("get", "/api/auth/config", "get_auth_config"),
     ("post", "/api/auth/setup", "post_setup"),
+    ("post", "/api/auth/login", "post_login"),
+    ("post", "/api/auth/logout", "post_logout"),
+    ("post", "/api/auth/signup", "post_signup"),
     ("get", "/api/auth/me", "get_me"),
     ("get", "/api/v1/orgs/{org}/projects", "list_projects"),
     ("get", "/api/v1/projects/{project}", "get_project"),
@@ -171,7 +174,10 @@ fn document_lint() {
         );
 
         let operation_security = operation.get("security").and_then(Value::as_array);
-        if *id == "get_auth_config" || *id == "post_setup" {
+        if matches!(
+            *id,
+            "get_auth_config" | "post_setup" | "post_login" | "post_logout" | "post_signup"
+        ) {
             assert_eq!(operation_security.map(Vec::len), Some(0), "{id}");
         } else {
             assert!(operation_security.is_none(), "{id} overrides security");
@@ -187,8 +193,12 @@ fn document_lint() {
         let mut expected_errors = BTreeSet::new();
         if *id == "get_me" {
             expected_errors.extend(["401", "429"]);
-        } else if *id == "post_setup" {
+        } else if *id == "post_setup" || *id == "post_signup" {
             expected_errors.extend(["400", "403", "409", "429"]);
+        } else if *id == "post_login" {
+            expected_errors.extend(["401", "403", "429"]);
+        } else if *id == "post_logout" {
+            // The handler always answers 204. CSRF is the shared origin check.
         } else if *id == "get_media" {
             expected_errors.extend(["401", "403", "404", "416", "429"]);
         } else if *id != "get_auth_config" && QUERY_OR_BODY.contains(id) {

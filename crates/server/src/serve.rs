@@ -178,6 +178,7 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         clock: Clock::System,
         limits: Limits::new(),
         setup: crate::bootstrap::SetupState::new(),
+        password_hasher: tokio::sync::OnceCell::new(),
     });
     if let Err(error) = crate::bootstrap::prepare(&state).await {
         release_state(state).await;

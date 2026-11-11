@@ -28,6 +28,83 @@
         "security": []
       }
     },
+    "/api/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Log in with a password",
+        "operationId": "post_login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The signed-in user and org memberships.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Log out",
+        "operationId": "post_logout",
+        "responses": {
+          "204": {
+            "description": "The session is deleted and the cookie is cleared."
+          }
+        },
+        "security": []
+      }
+    },
     "/api/auth/me": {
       "get": {
         "tags": [
@@ -93,6 +170,78 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SetupResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/auth/signup": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Create an account",
+        "operationId": "post_signup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new account, or a verification requirement.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignupResponse"
                 }
               }
             }
@@ -2885,6 +3034,25 @@
         "maximum": 1000,
         "minimum": 1
       },
+      "LoginRequest": {
+        "type": "object",
+        "description": "`POST /api/auth/login`.",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address."
+          },
+          "password": {
+            "type": "string",
+            "description": "Password."
+          }
+        },
+        "additionalProperties": false
+      },
       "Me": {
         "type": "object",
         "description": "The signed-in user and the orgs they belong to.\n\n`GET /api/auth/me`. Spec 09 § Auth.",
@@ -4126,6 +4294,46 @@
           "disabled"
         ]
       },
+      "SignupRequest": {
+        "type": "object",
+        "description": "`POST /api/auth/signup`. P20 adds `invite_token`.",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name. Absent when the user does not set one."
+          },
+          "password": {
+            "type": "string",
+            "description": "Password."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SignupResponse": {
+        "type": "object",
+        "description": "`POST /api/auth/signup` returns 201.\n\n`me` is present when a session was started.",
+        "required": [
+          "verification_required"
+        ],
+        "properties": {
+          "me": {
+            "$ref": "#/components/schemas/Me",
+            "description": "The new user and their orgs, when a session was started."
+          },
+          "verification_required": {
+            "type": "boolean",
+            "description": "The account cannot sign in until the email is verified."
+          }
+        }
+      },
       "SortOrder": {
         "type": "string",
         "description": "Sort direction. Default is descending.\n\nSpec 09 § Conventions.",
@@ -5213,7 +5421,7 @@
   "tags": [
     {
       "name": "auth",
-      "description": "Login methods, first-run setup, and the current user."
+      "description": "Login, logout, sign-up, first-run setup, and the current user."
     },
     {
       "name": "projects",

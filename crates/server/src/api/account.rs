@@ -170,6 +170,41 @@ pub struct SetupResponse {
     pub secret_key_prefix: String,
 }
 
+/// `POST /api/auth/login`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LoginRequest {
+    /// Email address.
+    pub email: String,
+    /// Password.
+    pub password: String,
+}
+
+/// `POST /api/auth/signup`. P20 adds `invite_token`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SignupRequest {
+    /// Email address.
+    pub email: String,
+    /// Password.
+    pub password: String,
+    /// Display name. Absent when the user does not set one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// `POST /api/auth/signup` returns 201.
+///
+/// `me` is present when a session was started.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SignupResponse {
+    /// The new user and their orgs, when a session was started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub me: Option<Me>,
+    /// The account cannot sign in until the email is verified.
+    pub verification_required: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

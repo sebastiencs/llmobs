@@ -5,6 +5,9 @@ use std::collections::HashSet;
 use std::num::NonZero;
 use std::sync::{Arc, LazyLock};
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use argon2::password_hash::phc::PasswordHash;
 use argon2::password_hash::{PasswordHasher, PasswordVerifier};
 use argon2::{Algorithm, Argon2, Params, Version};
@@ -50,6 +53,9 @@ pub(crate) struct Verified {
 pub(crate) struct Hasher {
     permits: Arc<Semaphore>,
     dummy: String,
+    /// Login counts `verify` calls. Each request must run it once (D145).
+    #[cfg(test)]
+    verifies: AtomicU64,
 }
 
 impl Hasher {
@@ -73,7 +79,15 @@ impl Hasher {
         Ok(Self {
             permits: Arc::new(Semaphore::new(permits)),
             dummy,
+            #[cfg(test)]
+            verifies: AtomicU64::new(0),
         })
+    }
+
+    /// How many times [`Self::verify`] has run on this hasher.
+    #[cfg(test)]
+    pub(crate) fn verify_count(&self) -> u64 {
+        self.verifies.load(Ordering::Relaxed)
     }
 
     /// NFC-normalizes `password` and returns its PHC string.
@@ -106,6 +120,8 @@ impl Hasher {
         password: &str,
         phc: Option<&str>,
     ) -> Result<Verified, AuthError> {
+        #[cfg(test)]
+        self.verifies.fetch_add(1, Ordering::Relaxed);
         let password = nfc(password);
         let unknown = phc.is_none();
         let phc = phc.unwrap_or(&self.dummy).to_owned();
@@ -244,6 +260,8 @@ fn needs_rehash(phc: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicU64;
+
     use super::*;
 
     #[test]
@@ -307,6 +325,7 @@ mod tests {
                 let limited = Hasher {
                     permits: hasher_permits,
                     dummy,
+                    verifies: AtomicU64::new(0),
                 };
                 limited.hash(&format!("llmobs-ok{index}")).await.unwrap();
             }));

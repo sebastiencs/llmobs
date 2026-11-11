@@ -11,7 +11,9 @@ use llmobs_core::ids::{SpanId, TraceId};
 use llmobs_core::message::{Message, Part};
 use llmobs_core::score::{Score, ScoreTarget, ScoreValue};
 use llmobs_core::span::Span;
-use llmobs_server::api::account::{AuthConfig, Me, OrgRole, Project, SetupResponse};
+use llmobs_server::api::account::{
+    AuthConfig, Me, OrgRole, Project, SetupResponse, SignupResponse,
+};
 use llmobs_server::api::common::Page;
 use llmobs_server::api::metrics::MetricsResponse;
 use llmobs_server::api::openapi::openapi;
@@ -334,6 +336,14 @@ fn build() -> Built {
             "application/json",
         ),
         example_status("post_setup", "static/setup-response.json", 201),
+        example(
+            "post_login",
+            BTreeMap::new(),
+            BTreeMap::new(),
+            "static/me.json",
+            "application/json",
+        ),
+        example_status("post_signup", "static/signup-response.json", 201),
         example(
             "get_me",
             BTreeMap::new(),
@@ -894,6 +904,7 @@ fn collect_names(dir: &Path, prefix: &str, files: &mut Vec<String>) {
 fn static_files_match_their_types() {
     roundtrip::<AuthConfig>("static/auth-config.json");
     roundtrip::<SetupResponse>("static/setup-response.json");
+    roundtrip::<SignupResponse>("static/signup-response.json");
     roundtrip::<Me>("static/me.json");
     roundtrip::<Page<Project>>("static/projects.json");
     roundtrip::<Project>("static/project.json");
@@ -920,7 +931,7 @@ fn generated_files_roundtrip() {
             "get_user" => roundtrip::<EndUserDetail>(&example.file),
             "list_scores" => roundtrip::<Page<Score>>(&example.file),
             "get_auth_config" | "get_me" | "list_projects" | "get_project" | "get_schema"
-            | "list_saved_views" | "get_metrics" | "post_setup" => {}
+            | "list_saved_views" | "get_metrics" | "post_setup" | "post_login" | "post_signup" => {}
             other => panic!("{other} has no round-trip"),
         }
     }

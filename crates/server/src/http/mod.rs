@@ -14,6 +14,8 @@ mod health;
 use std::sync::Arc;
 use std::time::Instant;
 
+use tokio::sync::OnceCell;
+
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, MatchedPath, Request};
 use axum::middleware::{self, Next};
@@ -41,6 +43,8 @@ pub(crate) struct AppInner {
     pub(crate) clock: Clock,
     pub(crate) limits: Limits,
     pub(crate) setup: crate::bootstrap::SetupState,
+    /// Built on the first password check, so tests that never log in skip argon2.
+    pub(crate) password_hasher: OnceCell<crate::auth::password::Hasher>,
 }
 
 impl AppState {
@@ -63,6 +67,22 @@ impl std::ops::Deref for AppState {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl AppState {
+    /// The process hasher, created on the first password check.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`error::ApiError::Internal`] when the dummy hash cannot be computed.
+    pub(crate) async fn passwords(
+        &self,
+    ) -> Result<&crate::auth::password::Hasher, error::ApiError> {
+        self.password_hasher
+            .get_or_try_init(crate::auth::password::Hasher::new)
+            .await
+            .map_err(|error| error::ApiError::Internal(Box::new(error)))
     }
 }
 

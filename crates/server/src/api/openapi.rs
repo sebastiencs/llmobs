@@ -1,4 +1,4 @@
-//! The OpenAPI document for the 22 read-API operations.
+//! The OpenAPI document.
 //!
 //! Spec 09. Handlers are not implemented yet; this module is the contract.
 
@@ -23,7 +23,10 @@ use utoipa::openapi::tag::{Tag, TagBuilder};
 use utoipa::openapi::{Content, InfoBuilder, OpenApi, OpenApiBuilder, Ref, RefOr, Required};
 use utoipa::{IntoParams, PartialSchema, ToSchema};
 
-use super::account::{AuthConfig, Me, Project, SetupRequest, SetupResponse};
+use super::account::{
+    AuthConfig, LoginRequest, Me, Project, SetupRequest, SetupResponse, SignupRequest,
+    SignupResponse,
+};
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
 use super::metrics::{MetricsBucket, MetricsGroupBy, MetricsParams, MetricsResponse};
 use super::saved_views::{CreateSavedView, SavedView, SavedViewListParams, UpdateSavedView};
@@ -77,6 +80,9 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<AuthConfig>();
     set.insert::<SetupRequest>();
     set.insert::<SetupResponse>();
+    set.insert::<LoginRequest>();
+    set.insert::<SignupRequest>();
+    set.insert::<SignupResponse>();
     set.insert::<Me>();
     set.insert::<Project>();
     set.insert::<TraceSummary>();
@@ -164,7 +170,7 @@ pub fn openapi() -> OpenApi {
         .tags(Some([
             tag(
                 "auth",
-                "Login methods, first-run setup, and the current user.",
+                "Login, logout, sign-up, first-run setup, and the current user.",
             ),
             tag("projects", "Projects the caller can see."),
             tag("traces", "Trace list, detail, and live streams."),
@@ -467,6 +473,34 @@ fn auth_paths(paths: PathsBuilder) -> PathsBuilder {
             &[400, 403, 409, 429],
         ))
         .build();
+    let login = operation("post_login", "auth", "Log in with a password")
+        .securities(Some(Vec::new()))
+        .request_body(Some(json_body("LoginRequest")))
+        .responses(responses(
+            "200",
+            json_of::<Me>("The signed-in user and org memberships."),
+            &[401, 403, 429],
+        ))
+        .build();
+    let logout = operation("post_logout", "auth", "Log out")
+        .securities(Some(Vec::new()))
+        .responses(responses(
+            "204",
+            ResponseBuilder::new()
+                .description("The session is deleted and the cookie is cleared.")
+                .build(),
+            &[],
+        ))
+        .build();
+    let signup = operation("post_signup", "auth", "Create an account")
+        .securities(Some(Vec::new()))
+        .request_body(Some(json_body("SignupRequest")))
+        .responses(responses(
+            "201",
+            json_of::<SignupResponse>("The new account, or a verification requirement."),
+            &[400, 403, 409, 429],
+        ))
+        .build();
     let me = operation("get_me", "auth", "Get the current user")
         .responses(responses(
             "200",
@@ -477,6 +511,9 @@ fn auth_paths(paths: PathsBuilder) -> PathsBuilder {
     paths
         .path("/api/auth/config", PathItem::new(HttpMethod::Get, config))
         .path("/api/auth/setup", PathItem::new(HttpMethod::Post, setup))
+        .path("/api/auth/login", PathItem::new(HttpMethod::Post, login))
+        .path("/api/auth/logout", PathItem::new(HttpMethod::Post, logout))
+        .path("/api/auth/signup", PathItem::new(HttpMethod::Post, signup))
         .path("/api/auth/me", PathItem::new(HttpMethod::Get, me))
 }
 

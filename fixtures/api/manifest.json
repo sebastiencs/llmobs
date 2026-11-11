@@ -416,11 +416,27 @@
     "file": "responses/users.json"
   },
   {
+    "operation_id": "post_login",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/me.json"
+  },
+  {
     "operation_id": "post_setup",
     "path_params": {},
     "query": {},
     "status": 201,
     "content_type": "application/json",
     "file": "static/setup-response.json"
+  },
+  {
+    "operation_id": "post_signup",
+    "path_params": {},
+    "query": {},
+    "status": 201,
+    "content_type": "application/json",
+    "file": "static/signup-response.json"
   }
 ]

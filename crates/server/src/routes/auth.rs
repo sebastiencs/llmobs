@@ -1,26 +1,31 @@
-//! `GET /api/auth/config` and `POST /api/auth/setup` (spec 08, D144).
+//! Auth routes: config, setup, login, logout, signup, and the current user (spec 08, D144).
 #![cfg_attr(not(test), allow(dead_code))]
 
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use uuid::Uuid;
 
 use crate::api::account::{
-    AuthConfig, OrgMembership, OrgRole, Project, SetupRequest, SetupResponse, User,
+    AuthConfig, LoginRequest, Me, OrgMembership, OrgRole, Project, SetupRequest, SetupResponse,
+    SignupPolicy, SignupRequest, SignupResponse, User,
 };
 use crate::api::common::{FieldError, Problem, ProblemCode};
 use crate::auth::password::check_policy;
+use crate::auth::principal::Principal;
 use crate::auth::secret::constant_time_eq;
-use crate::auth::session::start_session;
+use crate::auth::session::{clear_cookie, resolve_cookie_header, start_session};
 use crate::bootstrap::{self, BootstrapError};
 use crate::http::AppState;
 use crate::http::access::{Access, RouteDef};
 use crate::http::client_ip::ClientIp;
 use crate::http::error::{self, ApiError};
-use crate::meta::users::normalize_email;
+use crate::meta::orgs::orgs_of_user;
+use crate::meta::users::{self, UserRow, normalize_email};
+use crate::meta::web_sessions::delete_session;
 
-/// Auth routes. Both are public. CSRF still applies to the POST (D141).
+/// Auth routes. CSRF still applies to every POST under `/api/auth/` (D141).
 pub(crate) fn routes() -> Vec<RouteDef> {
     vec![
         RouteDef {
@@ -37,11 +42,41 @@ pub(crate) fn routes() -> Vec<RouteDef> {
             documented: true,
             handler: post(setup),
         },
+        RouteDef {
+            method: axum::http::Method::POST,
+            path: "/api/auth/login",
+            access: Access::Public,
+            documented: true,
+            handler: post(login),
+        },
+        RouteDef {
+            method: axum::http::Method::POST,
+            path: "/api/auth/logout",
+            access: Access::Public,
+            documented: true,
+            handler: post(logout),
+        },
+        RouteDef {
+            method: axum::http::Method::POST,
+            path: "/api/auth/signup",
+            access: Access::Public,
+            documented: true,
+            handler: post(signup),
+        },
+        RouteDef {
+            method: axum::http::Method::GET,
+            path: "/api/auth/me",
+            access: Access::User {
+                session_only: false,
+            },
+            documented: true,
+            handler: get(me),
+        },
     ]
 }
 
 async fn config(State(state): State<AppState>) -> Result<error::Json<AuthConfig>, ApiError> {
-    let users = crate::meta::users::count_users(state.meta.reader()).await?;
+    let users = users::count_users(state.meta.reader()).await?;
     Ok(error::Json(AuthConfig {
         setup_required: users == 0,
         password_enabled: !state.config.auth.disable_password,
@@ -138,7 +173,274 @@ async fn setup(
     Ok(http)
 }
 
-fn user_view(user: &crate::meta::users::UserRow) -> User {
+async fn login(
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    headers: HeaderMap,
+    error::Json(body): error::Json<LoginRequest>,
+) -> Result<Response, ApiError> {
+    if state.config.auth.disable_password {
+        return Err(ApiError::Forbidden {
+            code: ProblemCode::Forbidden,
+        });
+    }
+    let Ok(email) = normalize_email(&body.email) else {
+        return Err(ApiError::Unauthorized);
+    };
+    let now = state.clock.now_ns();
+    state
+        .limits
+        .login
+        .check(&(ip, email.clone()), now)
+        .map_err(|retry| ApiError::RateLimited {
+            retry_after_s: retry.0.as_secs().max(1),
+        })?;
+    if domain_listed(&state.config.auth.enforce_sso_domains, &email) {
+        return Err(ApiError::Forbidden {
+            code: ProblemCode::SsoRequired,
+        });
+    }
+    let user = users::user_by_email(state.meta.reader(), &email).await?;
+    let locked = state.limits.lockout.is_locked(&email, now);
+    let disabled = user.as_ref().is_some_and(|user| user.disabled_at.is_some());
+    let stored_hash = user.as_ref().and_then(|user| user.password_hash.clone());
+    // Locked, unknown, password-less, and disabled accounts all verify once and
+    // then answer the same 401. A wrong password of a real account is the only
+    // failure that counts toward lockout (D145). The hasher borrow ends before
+    // the lockout map is touched.
+    let verified = {
+        let hasher = state.passwords().await?;
+        if locked || disabled || stored_hash.is_none() {
+            hasher
+                .verify(&body.password, None)
+                .await
+                .map_err(auth_error)?;
+            None
+        } else {
+            let verified = hasher
+                .verify(&body.password, stored_hash.as_deref())
+                .await
+                .map_err(auth_error)?;
+            verified.ok.then_some(verified.needs_rehash)
+        }
+    };
+    let accepted = if verified.is_none() && !locked && !disabled && stored_hash.is_some() {
+        state.limits.lockout.record_failure(&email, now);
+        None
+    } else {
+        verified
+    };
+    let Some(user) = user else {
+        audit_login_failed(None);
+        return Err(ApiError::Unauthorized);
+    };
+    let Some(needs_rehash) = accepted else {
+        audit_login_failed(Some(user.id));
+        return Err(ApiError::Unauthorized);
+    };
+    if state.config.auth.require_email_verification && user.email_verified_at.is_none() {
+        return Err(ApiError::Forbidden {
+            code: ProblemCode::EmailNotVerified,
+        });
+    }
+    if needs_rehash {
+        let password_hash = {
+            let hasher = state.passwords().await?;
+            hasher.hash(&body.password).await.map_err(auth_error)?
+        };
+        let user_id = user.id;
+        state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    users::set_password_hash(conn, user_id, Some(&password_hash), now).await
+                })
+            })
+            .await?;
+    }
+    state.limits.lockout.clear(&email);
+    let me = me_from(&state, &user).await?;
+    let cookie = session_cookie(&state, user.id, &headers, Some(ip)).await?;
+    tracing::info!(target: "audit", user_id = %user.id, "login");
+    Ok(json_cookie(StatusCode::OK, &me, cookie))
+}
+
+async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
+    if let Some((row, _)) = resolve_cookie_header(&state, &headers, state.clock.now_ns()).await? {
+        let hash = row.hash;
+        state
+            .meta
+            .write(move |conn| Box::pin(async move { delete_session(conn, &hash).await }))
+            .await?;
+    }
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    response
+        .headers_mut()
+        .insert(axum::http::header::SET_COOKIE, clear_cookie(&state));
+    Ok(response)
+}
+
+async fn signup(
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    headers: HeaderMap,
+    error::Json(body): error::Json<SignupRequest>,
+) -> Result<Response, ApiError> {
+    state
+        .limits
+        .ip_forms
+        .check(&ip, state.clock.now_ns())
+        .map_err(|retry| ApiError::RateLimited {
+            retry_after_s: retry.0.as_secs().max(1),
+        })?;
+    if state.config.auth.disable_password {
+        return Err(ApiError::Forbidden {
+            code: ProblemCode::Forbidden,
+        });
+    }
+    match state.config.auth.signup {
+        SignupPolicy::Disabled => {
+            return Ok(forbidden(Some("sign-up is disabled")));
+        }
+        SignupPolicy::InviteOnly => {
+            return Ok(forbidden(Some("sign-up requires an invitation")));
+        }
+        SignupPolicy::Open => {}
+    }
+    let email = normalize_email(&body.email).map_err(|_| field_error("email", "invalid email"))?;
+    if !state.config.auth.signup_domains.is_empty()
+        && !domain_listed(&state.config.auth.signup_domains, &email)
+    {
+        return Err(ApiError::Forbidden {
+            code: ProblemCode::Forbidden,
+        });
+    }
+    if domain_listed(&state.config.auth.enforce_sso_domains, &email) {
+        return Err(ApiError::Forbidden {
+            code: ProblemCode::SsoRequired,
+        });
+    }
+    check_policy(&body.password, &email)
+        .map_err(|error| field_error("password", &error.to_string()))?;
+    let name = optional_name(body.name)?;
+    let password_hash = {
+        let hasher = state.passwords().await?;
+        hasher.hash(&body.password).await.map_err(auth_error)?
+    };
+    let now = state.clock.now_ns();
+    let email_for_insert = email.clone();
+    let name_for_insert = name.clone();
+    let user = state
+        .meta
+        .write(move |conn| {
+            Box::pin(async move {
+                users::insert_user(
+                    conn,
+                    users::NewUser {
+                        email: email_for_insert,
+                        name: name_for_insert,
+                        password_hash: Some(password_hash),
+                        email_verified_at: None,
+                        is_instance_admin: false,
+                    },
+                    now,
+                )
+                .await
+            })
+        })
+        .await?;
+    if state.config.auth.require_email_verification {
+        let response = SignupResponse {
+            me: None,
+            verification_required: true,
+        };
+        return Ok((StatusCode::CREATED, error::Json(response)).into_response());
+    }
+    let me = me_from(&state, &user).await?;
+    let cookie = session_cookie(&state, user.id, &headers, Some(ip)).await?;
+    let response = SignupResponse {
+        me: Some(me),
+        verification_required: false,
+    };
+    Ok(json_cookie(StatusCode::CREATED, &response, cookie))
+}
+
+async fn me(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+) -> Result<error::Json<Me>, ApiError> {
+    let Principal::Session { user, .. } = &principal;
+    let Some(row) = users::user_by_id(state.meta.reader(), user.id).await? else {
+        return Err(ApiError::Unauthorized);
+    };
+    Ok(error::Json(me_from(&state, &row).await?))
+}
+
+async fn me_from(state: &AppState, user: &UserRow) -> Result<Me, ApiError> {
+    let orgs = orgs_of_user(state.meta.reader(), user.id).await?;
+    Ok(Me {
+        user: user_view(user),
+        orgs: orgs
+            .into_iter()
+            .map(|(org, role)| OrgMembership {
+                id: org.id,
+                slug: org.slug,
+                name: org.name,
+                role,
+            })
+            .collect(),
+    })
+}
+
+async fn session_cookie(
+    state: &AppState,
+    user_id: Uuid,
+    headers: &HeaderMap,
+    ip: Option<std::net::IpAddr>,
+) -> Result<axum::http::HeaderValue, ApiError> {
+    start_session(
+        state,
+        user_id,
+        headers
+            .get(axum::http::header::USER_AGENT)
+            .and_then(|value| value.to_str().ok()),
+        ip,
+    )
+    .await
+}
+
+fn json_cookie(
+    status: StatusCode,
+    body: &impl serde::Serialize,
+    cookie: axum::http::HeaderValue,
+) -> Response {
+    let mut response = (status, error::Json(body)).into_response();
+    response
+        .headers_mut()
+        .insert(axum::http::header::SET_COOKIE, cookie);
+    response
+}
+
+fn domain_listed(domains: &[String], email: &str) -> bool {
+    let Some(domain) = email.split_once('@').map(|(_, domain)| domain) else {
+        return false;
+    };
+    domains.iter().any(|item| item == domain)
+}
+
+fn audit_login_failed(user_id: Option<Uuid>) {
+    if let Some(user_id) = user_id {
+        tracing::info!(target: "audit", %user_id, "login failed");
+    } else {
+        tracing::info!(target: "audit", account = "unknown", "login failed");
+    }
+}
+
+fn auth_error(error: crate::auth::AuthError) -> ApiError {
+    ApiError::Internal(Box::new(error))
+}
+
+fn user_view(user: &UserRow) -> User {
     User {
         id: user.id,
         email: user.email.clone(),
@@ -386,5 +688,583 @@ mod tests {
             .await
             .json();
         assert!(!config.password_enabled);
+    }
+
+    use std::net::IpAddr;
+    use std::time::Duration;
+
+    use crate::api::account::{LoginRequest, Me, SignupRequest, SignupResponse};
+    use crate::auth::password::Hasher;
+    use crate::meta::members::add_org_member;
+    use crate::meta::orgs::insert_org_with_derived_slug;
+    use crate::meta::users::{NewUser, insert_user, set_disabled};
+
+    fn login_body(email: &str, password: &str) -> LoginRequest {
+        LoginRequest {
+            email: email.to_owned(),
+            password: password.to_owned(),
+        }
+    }
+
+    fn signup_body(email: &str, password: &str, name: Option<&str>) -> SignupRequest {
+        SignupRequest {
+            email: email.to_owned(),
+            password: password.to_owned(),
+            name: name.map(str::to_owned),
+        }
+    }
+
+    fn session_cookie(response: &crate::test_support::TestResponse) -> String {
+        let set = response
+            .headers
+            .get(axum::http::header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        set.split(';').next().unwrap().to_owned()
+    }
+
+    fn verifies(app: &TestApp) -> u64 {
+        app.state
+            .password_hasher
+            .get()
+            .map(Hasher::verify_count)
+            .unwrap_or(0)
+    }
+
+    async fn insert_account(
+        app: &TestApp,
+        email: &str,
+        password: Option<&str>,
+        verified: bool,
+    ) -> Uuid {
+        let hash = match password {
+            Some(password) => Some(
+                app.state
+                    .passwords()
+                    .await
+                    .unwrap()
+                    .hash(password)
+                    .await
+                    .unwrap(),
+            ),
+            None => None,
+        };
+        let email = email.to_owned();
+        let now = app.state.clock.now_ns();
+        let verified_at = verified.then_some(now);
+        app.state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    insert_user(
+                        conn,
+                        NewUser {
+                            email,
+                            name: Some("Ada".to_owned()),
+                            password_hash: hash,
+                            email_verified_at: verified_at,
+                            is_instance_admin: false,
+                        },
+                        now,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap()
+            .id
+    }
+
+    #[tokio::test]
+    async fn login_sets_a_cookie_and_me_returns_the_user() {
+        let app = TestApp::new().await;
+        let user_id = insert_account(&app, "ada@example.com", Some(PASSWORD), true).await;
+        let now = app.state.clock.now_ns();
+        app.state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    let org = insert_org_with_derived_slug(conn, "Acme", now).await?;
+                    add_org_member(conn, org.id, user_id, OrgRole::Owner, now).await?;
+                    Ok(org)
+                })
+            })
+            .await
+            .unwrap();
+        let logged_in = app
+            .request(Method::POST, "/api/auth/login")
+            .json(&login_body("Ada@Example.com", PASSWORD))
+            .send()
+            .await;
+        assert_eq!(logged_in.status, 200);
+        let cookie = session_cookie(&logged_in);
+        let me: Me = logged_in.json();
+        assert_eq!(me.user.email, "ada@example.com");
+        assert_eq!(me.user.name.as_deref(), Some("Ada"));
+        assert_eq!(me.orgs.len(), 1);
+        assert_eq!(me.orgs[0].slug, "acme");
+        assert_eq!(me.orgs[0].role, OrgRole::Owner);
+        let again: Me = app
+            .request(Method::GET, "/api/auth/me")
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .json();
+        assert_eq!(again, me);
+    }
+
+    #[tokio::test]
+    async fn failed_logins_answer_the_same_and_each_verifies_once() {
+        let app = TestApp::new().await;
+        insert_account(&app, "ada@example.com", Some(PASSWORD), true).await;
+        let disabled = insert_account(&app, "off@example.com", Some(PASSWORD), true).await;
+        insert_account(&app, "sso@example.com", None, true).await;
+        let now = app.state.clock.now_ns();
+        app.state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move { set_disabled(conn, disabled, Some(now), now).await })
+            })
+            .await
+            .unwrap();
+        for _ in 0..20 {
+            app.state
+                .limits
+                .lockout
+                .record_failure("locked@example.com", now);
+        }
+        insert_account(&app, "locked@example.com", Some(PASSWORD), true).await;
+
+        let cases = [
+            login_body("missing@example.com", PASSWORD),
+            login_body("ada@example.com", "not-the-password"),
+            login_body("off@example.com", PASSWORD),
+            login_body("sso@example.com", PASSWORD),
+            login_body("locked@example.com", PASSWORD),
+        ];
+        let mut bodies = Vec::new();
+        for case in cases {
+            let before = verifies(&app);
+            let response = app
+                .request(Method::POST, "/api/auth/login")
+                .json(&case)
+                .send()
+                .await;
+            assert_eq!(
+                response.status,
+                401,
+                "{}",
+                String::from_utf8_lossy(&response.body)
+            );
+            assert_eq!(verifies(&app) - before, 1);
+            bodies.push(response.body);
+        }
+        for body in &bodies[1..] {
+            assert_eq!(body, &bodies[0]);
+        }
+        let before = verifies(&app);
+        let invalid = app
+            .request(Method::POST, "/api/auth/login")
+            .json(&login_body("not-an-email", PASSWORD))
+            .send()
+            .await;
+        assert_eq!(invalid.status, 401);
+        assert_eq!(invalid.body, bodies[0]);
+        assert_eq!(verifies(&app), before);
+    }
+
+    #[tokio::test]
+    async fn lockout_and_the_login_rate_limit() {
+        let app = TestApp::new().await;
+        insert_account(&app, "ada@example.com", Some(PASSWORD), true).await;
+        let mut failures = 0;
+        while failures < 20 {
+            let response = app
+                .request(Method::POST, "/api/auth/login")
+                .json(&login_body("ada@example.com", "not-the-password"))
+                .send()
+                .await;
+            if response.status == 429 {
+                app.state.clock.advance(Duration::from_secs(60));
+                continue;
+            }
+            assert_eq!(response.status, 401);
+            failures += 1;
+        }
+        app.state.clock.advance(Duration::from_secs(60));
+        let other: IpAddr = "127.0.0.2".parse().unwrap();
+        let locked = app
+            .request(Method::POST, "/api/auth/login")
+            .peer(other)
+            .json(&login_body("ada@example.com", PASSWORD))
+            .send()
+            .await;
+        assert_eq!(locked.status, 401);
+        app.state.clock.advance(Duration::from_secs(15 * 60));
+        let opened = app
+            .request(Method::POST, "/api/auth/login")
+            .json(&login_body("ada@example.com", PASSWORD))
+            .send()
+            .await;
+        assert_eq!(opened.status, 200);
+
+        let limited = TestApp::new().await;
+        insert_account(&limited, "ada@example.com", Some(PASSWORD), true).await;
+        for _ in 0..10 {
+            let response = limited
+                .request(Method::POST, "/api/auth/login")
+                .json(&login_body("ada@example.com", "not-the-password"))
+                .send()
+                .await;
+            assert_eq!(response.status, 401);
+        }
+        let blocked = limited
+            .request(Method::POST, "/api/auth/login")
+            .json(&login_body("ada@example.com", "not-the-password"))
+            .send()
+            .await;
+        assert_eq!(blocked.status, 429);
+        assert_eq!(
+            blocked
+                .headers
+                .get(axum::http::header::RETRY_AFTER)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "6"
+        );
+        let elsewhere = limited
+            .request(Method::POST, "/api/auth/login")
+            .peer(other)
+            .json(&login_body("ada@example.com", "not-the-password"))
+            .send()
+            .await;
+        assert_eq!(elsewhere.status, 401);
+    }
+
+    #[tokio::test]
+    async fn an_sso_domain_refuses_known_and_unknown_accounts() {
+        let app = TestApp::with_config(|config| {
+            config.auth.enforce_sso_domains = vec!["example.com".to_owned()];
+        })
+        .await;
+        insert_account(&app, "ada@example.com", Some(PASSWORD), true).await;
+        let before = verifies(&app);
+        for email in ["ada@example.com", "missing@example.com"] {
+            let response = app
+                .request(Method::POST, "/api/auth/login")
+                .json(&login_body(email, PASSWORD))
+                .send()
+                .await;
+            assert_eq!(response.status, 403);
+            assert_eq!(response.problem().code, ProblemCode::SsoRequired);
+        }
+        assert_eq!(verifies(&app), before);
+    }
+
+    #[tokio::test]
+    async fn email_not_verified_requires_the_right_password() {
+        let app = TestApp::with_config(|config| {
+            config.auth.require_email_verification = true;
+            config.auth.signup = SignupPolicy::Open;
+        })
+        .await;
+        let created = app
+            .request(Method::POST, "/api/auth/signup")
+            .json(&signup_body("ada@example.com", PASSWORD, None))
+            .send()
+            .await;
+        assert_eq!(created.status, 201);
+        assert!(
+            created
+                .headers
+                .get(axum::http::header::SET_COOKIE)
+                .is_none()
+        );
+        let body: SignupResponse = created.json();
+        assert!(body.me.is_none());
+        assert!(body.verification_required);
+        let wrong = app
+            .request(Method::POST, "/api/auth/login")
+            .json(&login_body("ada@example.com", "not-the-password"))
+            .send()
+            .await;
+        assert_eq!(wrong.status, 401);
+        assert_eq!(wrong.problem().code, ProblemCode::Unauthorized);
+        let right = app
+            .request(Method::POST, "/api/auth/login")
+            .json(&login_body("ada@example.com", PASSWORD))
+            .send()
+            .await;
+        assert_eq!(right.status, 403);
+        assert_eq!(right.problem().code, ProblemCode::EmailNotVerified);
+    }
+
+    #[tokio::test]
+    async fn a_weaker_hash_is_replaced_on_login() {
+        let app = TestApp::new().await;
+        let hash = weak_hash(PASSWORD);
+        assert!(hash.contains(",t=1,"));
+        let email = "ada@example.com".to_owned();
+        let now = app.state.clock.now_ns();
+        app.state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    insert_user(
+                        conn,
+                        NewUser {
+                            email,
+                            name: None,
+                            password_hash: Some(hash),
+                            email_verified_at: Some(now),
+                            is_instance_admin: false,
+                        },
+                        now,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        let response = app
+            .request(Method::POST, "/api/auth/login")
+            .json(&login_body("ada@example.com", PASSWORD))
+            .send()
+            .await;
+        assert_eq!(response.status, 200);
+        let stored: String = sqlx::query_scalar("SELECT password_hash FROM users")
+            .fetch_one(app.state.meta.reader())
+            .await
+            .unwrap();
+        assert!(stored.contains(",t=2,"), "{stored}");
+        assert!(!stored.contains(",t=1,"), "{stored}");
+    }
+
+    #[tokio::test]
+    async fn logout_deletes_the_session() {
+        let app = TestApp::new().await;
+        insert_account(&app, "ada@example.com", Some(PASSWORD), true).await;
+        let logged_in = app
+            .request(Method::POST, "/api/auth/login")
+            .json(&login_body("ada@example.com", PASSWORD))
+            .send()
+            .await;
+        let cookie = session_cookie(&logged_in);
+        let gone = app
+            .request(Method::POST, "/api/auth/logout")
+            .header("cookie", &cookie)
+            .send()
+            .await;
+        assert_eq!(gone.status, 204);
+        let cleared = gone
+            .headers
+            .get(axum::http::header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(cleared.contains("Max-Age=0"), "{cleared}");
+        let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM web_sessions")
+            .fetch_one(app.state.meta.reader())
+            .await
+            .unwrap();
+        assert_eq!(sessions, 0);
+        let me = app
+            .request(Method::GET, "/api/auth/me")
+            .header("cookie", &cookie)
+            .send()
+            .await;
+        assert_eq!(me.status, 401);
+    }
+
+    #[tokio::test]
+    async fn signup_follows_the_policy_and_rejects_a_duplicate() {
+        let disabled =
+            TestApp::with_config(|config| config.auth.signup = SignupPolicy::Disabled).await;
+        let closed = disabled
+            .request(Method::POST, "/api/auth/signup")
+            .json(&signup_body("ada@example.com", PASSWORD, None))
+            .send()
+            .await;
+        assert_eq!(closed.status, 403);
+        assert_eq!(
+            closed.problem().detail.as_deref(),
+            Some("sign-up is disabled")
+        );
+
+        let invited = TestApp::new().await;
+        let needs_invite = invited
+            .request(Method::POST, "/api/auth/signup")
+            .json(&signup_body("ada@example.com", PASSWORD, None))
+            .send()
+            .await;
+        assert_eq!(needs_invite.status, 403);
+        assert_eq!(
+            needs_invite.problem().detail.as_deref(),
+            Some("sign-up requires an invitation")
+        );
+
+        let passwords_off =
+            TestApp::with_config(|config| config.auth.disable_password = true).await;
+        let refused = passwords_off
+            .request(Method::POST, "/api/auth/signup")
+            .json(&signup_body("ada@example.com", PASSWORD, None))
+            .send()
+            .await;
+        assert_eq!(refused.status, 403);
+        assert_eq!(refused.problem().code, ProblemCode::Forbidden);
+        assert!(refused.problem().detail.is_none());
+        let login_refused = passwords_off
+            .request(Method::POST, "/api/auth/login")
+            .json(&login_body("ada@example.com", PASSWORD))
+            .send()
+            .await;
+        assert_eq!(login_refused.status, 403);
+        assert_eq!(login_refused.problem().code, ProblemCode::Forbidden);
+
+        let open = TestApp::with_config(|config| {
+            config.auth.signup = SignupPolicy::Open;
+            config.auth.signup_domains = vec!["example.com".to_owned(), "sso.example".to_owned()];
+            config.auth.enforce_sso_domains = vec!["sso.example".to_owned()];
+        })
+        .await;
+        let outside = open
+            .request(Method::POST, "/api/auth/signup")
+            .json(&signup_body("ada@other.test", PASSWORD, None))
+            .send()
+            .await;
+        assert_eq!(outside.status, 403);
+        assert_eq!(outside.problem().code, ProblemCode::Forbidden);
+        let sso = open
+            .request(Method::POST, "/api/auth/signup")
+            .json(&signup_body("ada@sso.example", PASSWORD, Some("Ada")))
+            .send()
+            .await;
+        assert_eq!(sso.status, 403);
+        assert_eq!(sso.problem().code, ProblemCode::SsoRequired);
+        let created = open
+            .request(Method::POST, "/api/auth/signup")
+            .json(&signup_body("Ada@Example.com", PASSWORD, Some(" Ada ")))
+            .send()
+            .await;
+        assert_eq!(created.status, 201);
+        let cookie = session_cookie(&created);
+        let response: SignupResponse = created.json();
+        assert!(!response.verification_required);
+        let me = response.me.unwrap();
+        assert_eq!(me.user.email, "ada@example.com");
+        assert_eq!(me.user.name.as_deref(), Some("Ada"));
+        assert!(!me.user.is_instance_admin);
+        assert!(me.orgs.is_empty());
+        let me_again: Me = open
+            .request(Method::GET, "/api/auth/me")
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .json();
+        assert_eq!(me_again.user.id, me.user.id);
+        let duplicate = open
+            .request(Method::POST, "/api/auth/signup")
+            .json(&signup_body("ADA@example.com", PASSWORD, None))
+            .send()
+            .await;
+        assert_eq!(duplicate.status, 409);
+        assert_eq!(
+            duplicate.problem().detail.as_deref(),
+            Some("email already registered")
+        );
+        let long_name = "n".repeat(101);
+        let named = open
+            .request(Method::POST, "/api/auth/signup")
+            .json(&signup_body("bea@example.com", PASSWORD, Some(&long_name)))
+            .send()
+            .await;
+        assert_eq!(named.status, 400);
+        assert_eq!(named.problem().errors[0].field, "name");
+    }
+
+    #[tokio::test]
+    async fn a_weak_signup_password_is_a_field_error() {
+        let app = TestApp::with_config(|config| config.auth.signup = SignupPolicy::Open).await;
+        let password = "nope-nope";
+        let response = assert_logs_clean(&[password, "ada@example.com"], async {
+            app.request(Method::POST, "/api/auth/signup")
+                .json(&signup_body("ada@example.com", password, None))
+                .send()
+                .await
+        })
+        .await;
+        assert_eq!(response.status, 400);
+        assert_eq!(response.problem().errors[0].field, "password");
+        assert_eq!(
+            response.problem().errors[0].message,
+            "password is too short"
+        );
+        assert!(!String::from_utf8_lossy(&response.body).contains(password));
+        assert_eq!(count_users(app.state.meta.reader()).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn login_without_origin_is_forbidden_and_passwords_are_not_logged() {
+        let app = TestApp::new().await;
+        insert_account(&app, "ada@example.com", Some(PASSWORD), true).await;
+        let missing_origin = app
+            .request(Method::POST, "/api/auth/login")
+            .origin(None)
+            .json(&login_body("ada@example.com", PASSWORD))
+            .send()
+            .await;
+        assert_eq!(missing_origin.status, 403);
+        assert_eq!(
+            missing_origin.problem().detail.as_deref(),
+            Some("origin check failed")
+        );
+        let failed = assert_logs_clean(&[PASSWORD, "ada@example.com"], async {
+            app.request(Method::POST, "/api/auth/login")
+                .json(&login_body("ada@example.com", "not-the-password"))
+                .send()
+                .await
+        })
+        .await;
+        assert_eq!(failed.status, 401);
+        let (_, unknown_logs) = capture_logs(async {
+            app.request(Method::POST, "/api/auth/login")
+                .json(&login_body("missing@example.com", PASSWORD))
+                .send()
+                .await
+        })
+        .await;
+        assert!(unknown_logs.contains("login failed"), "{unknown_logs}");
+        assert!(unknown_logs.contains("unknown"), "{unknown_logs}");
+        assert!(
+            !unknown_logs.contains("missing@example.com"),
+            "{unknown_logs}"
+        );
+        assert!(!unknown_logs.contains(PASSWORD), "{unknown_logs}");
+        let (logged_in, logs) = capture_logs(async {
+            app.request(Method::POST, "/api/auth/login")
+                .json(&login_body("ada@example.com", PASSWORD))
+                .send()
+                .await
+        })
+        .await;
+        assert_eq!(logged_in.status, 200, "{logs}");
+        assert!(!logs.contains(PASSWORD), "{logs}");
+        assert!(!logs.contains("ada@example.com"), "{logs}");
+        assert!(logs.contains("login"), "{logs}");
+    }
+
+    fn weak_hash(password: &str) -> String {
+        use argon2::password_hash::PasswordHasher as _;
+        use argon2::{Algorithm, Argon2, Params, Version};
+
+        let params = Params::new(19_456, 1, 1, None).unwrap();
+        let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+        let salt = crate::auth::secret::random_bytes(16).unwrap();
+        argon2
+            .hash_password_with_salt(password.as_bytes(), &salt)
+            .unwrap()
+            .to_string()
     }
 }

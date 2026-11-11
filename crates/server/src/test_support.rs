@@ -92,6 +92,7 @@ impl TestApp {
             clock: Clock::Manual(Arc::new(AtomicI64::new(MANUAL_NOW_NS))),
             limits: Limits::new(),
             setup: crate::bootstrap::SetupState::new(),
+            password_hasher: tokio::sync::OnceCell::new(),
         });
         let router = if let Some(table) = table {
             serve_router(state.clone(), table)

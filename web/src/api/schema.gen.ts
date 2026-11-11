@@ -21,6 +21,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Log in with a password */
+        post: operations["post_login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Log out */
+        post: operations["post_logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/me": {
         parameters: {
             query?: never;
@@ -49,6 +83,23 @@ export interface paths {
         put?: never;
         /** Create the first admin */
         post: operations["post_setup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/signup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create an account */
+        post: operations["post_signup"];
         delete?: never;
         options?: never;
         head?: never;
@@ -626,6 +677,13 @@ export interface components {
          * @default 50
          */
         Limit: number;
+        /** @description `POST /api/auth/login`. */
+        LoginRequest: {
+            /** @description Email address. */
+            email: string;
+            /** @description Password. */
+            password: string;
+        };
         /**
          * @description The signed-in user and the orgs they belong to.
          *
@@ -1262,6 +1320,26 @@ export interface components {
          * @enum {string}
          */
         SignupPolicy: "open" | "invite_only" | "disabled";
+        /** @description `POST /api/auth/signup`. P20 adds `invite_token`. */
+        SignupRequest: {
+            /** @description Email address. */
+            email: string;
+            /** @description Display name. Absent when the user does not set one. */
+            name?: string;
+            /** @description Password. */
+            password: string;
+        };
+        /**
+         * @description `POST /api/auth/signup` returns 201.
+         *
+         *     `me` is present when a session was started.
+         */
+        SignupResponse: {
+            /** @description The new user and their orgs, when a session was started. */
+            me?: components["schemas"]["Me"];
+            /** @description The account cannot sign in until the email is verified. */
+            verification_required: boolean;
+        };
         /**
          * @description Sort direction. Default is descending.
          *
@@ -1910,6 +1988,75 @@ export interface operations {
             };
         };
     };
+    post_login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description The signed-in user and org memberships. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Me"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    post_logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session is deleted and the cookie is cleared. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     get_me: {
         parameters: {
             query?: never;
@@ -1968,6 +2115,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetupResponse"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request conflicts with the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    post_signup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignupRequest"];
+            };
+        };
+        responses: {
+            /** @description The new account, or a verification requirement. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignupResponse"];
                 };
             };
             /** @description The request is malformed or a filter is invalid. */
