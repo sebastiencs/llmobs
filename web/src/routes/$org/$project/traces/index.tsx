@@ -300,6 +300,7 @@ function TracesPage() {
               <TraceView
                 traceId={search.trace}
                 spanId={search.span}
+                onAddFilter={onFilter}
                 onSelectSpan={(spanId) => {
                   void navigate({
                     to: "/$org/$project/traces",

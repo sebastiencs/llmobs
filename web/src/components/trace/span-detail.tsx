@@ -3,19 +3,33 @@ import { useState } from "react";
 import { problemOf } from "@/api/problem";
 import { spanDetailQuery } from "@/api/queries";
 import type { Schema } from "@/api/types";
-import { KindIcon } from "@/components/kind-icon";
 import { useProject } from "@/components/shell/project-context";
-import { StatusDot } from "@/components/status-dot";
+import { AttributesTab } from "@/components/trace/attributes-tab";
+import { SpanHeader } from "@/components/trace/span-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatDuration } from "@/lib/format";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { STORAGE_PREFIX } from "@/product";
 
 /** Pretty JSON past this length is not drawn until the user asks for the raw text. */
 const RENDER_CAP = 1_000_000;
+const TAB_KEY = `${STORAGE_PREFIX}span-tab`;
+const TABS = new Set(["io", "attributes"]);
 
-export function SpanDetail({ traceId, spanId }: { traceId: string; spanId: string }) {
+export function SpanDetail({
+  traceId,
+  spanId,
+  detached = false,
+  onAddFilter,
+}: {
+  traceId: string;
+  spanId: string;
+  detached?: boolean;
+  onAddFilter?: (conjunct: string) => void;
+}) {
   const { org, project } = useProject();
   const span = useQuery(spanDetailQuery(org, project, traceId, spanId));
+  const [tab, setTab] = useState(storedTab);
 
   if (span.isPending) {
     return (
@@ -34,34 +48,43 @@ export function SpanDetail({ traceId, spanId }: { traceId: string; spanId: strin
 
   const detail = span.data;
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-[32px] shrink-0 items-center gap-2 border-b px-3">
-        <KindIcon kind={detail.span_kind} />
-        <span className="min-w-0 truncate text-sm">{detail.name}</span>
-        {detail.model ? (
-          <span className="min-w-0 truncate text-xs text-muted-foreground">{detail.model}</span>
-        ) : null}
-        <span className="num shrink-0 text-xs">{formatDuration(detail.duration_ns)}</span>
-        <StatusDot status={detail.status} />
-        {detail.status_message ? (
-          <span className="min-w-0 truncate text-xs">{detail.status_message}</span>
-        ) : null}
-      </div>
-      <Tabs defaultValue="io" className="min-h-0 flex-1 gap-0">
-        <TabsList variant="line" className="h-7 px-3">
-          <TabsTrigger value="io" className="text-xs">
-            Input / Output
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent value="io" className="min-h-0 overflow-auto px-3 pb-3">
-          <div className="flex flex-col gap-3">
-            <PayloadBlock label="Input" payload={detail.input} />
-            <PayloadBlock label="Output" payload={detail.output} />
-          </div>
-        </TabsContent>
-      </Tabs>
-    </div>
+    <TooltipProvider>
+      <section aria-label="Span" className="flex min-h-0 flex-1 flex-col">
+        <SpanHeader span={detail} detached={detached} />
+        <Tabs
+          value={tab}
+          onValueChange={(value) => {
+            setTab(value);
+            localStorage.setItem(TAB_KEY, value);
+          }}
+          className="min-h-0 flex-1 gap-0"
+        >
+          <TabsList variant="line" className="h-7 px-3">
+            <TabsTrigger value="io" className="text-xs">
+              Input / Output
+            </TabsTrigger>
+            <TabsTrigger value="attributes" className="text-xs">
+              Attributes
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="io" className="min-h-0 overflow-auto px-3 pb-3">
+            <div className="flex flex-col gap-3">
+              <PayloadBlock label="Input" payload={detail.input} />
+              <PayloadBlock label="Output" payload={detail.output} />
+            </div>
+          </TabsContent>
+          <TabsContent value="attributes" className="min-h-0 overflow-auto px-3 pb-3">
+            <AttributesTab span={detail} onAddFilter={onAddFilter} />
+          </TabsContent>
+        </Tabs>
+      </section>
+    </TooltipProvider>
   );
+}
+
+function storedTab(): string {
+  const stored = localStorage.getItem(TAB_KEY);
+  return stored && TABS.has(stored) ? stored : "io";
 }
 
 export function PayloadBlock({

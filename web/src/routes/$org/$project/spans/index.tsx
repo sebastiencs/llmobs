@@ -15,7 +15,7 @@ import {
 import { DataTable } from "@/components/data-table/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { FilterBar } from "@/components/filter-bar/filter-bar";
-import { filterMessage } from "@/components/filter-bar/logic";
+import { appendFilter, filterMessage } from "@/components/filter-bar/logic";
 import { ListToolbar } from "@/components/list-toolbar";
 import { useDefaultSavedView } from "@/components/saved-views/default-view";
 import { SavedViewsMenu } from "@/components/saved-views/saved-views-menu";
@@ -109,6 +109,16 @@ function SpansPage() {
     const fromUrl = search.cols?.split(",");
     return visibleColumnIds(specs, fromUrl ?? readColumnChoice(TABLE_ID));
   }, [search.cols, specs]);
+  const onFilter = useCallback(
+    (conjunct: string) => {
+      void navigate({
+        to: "/$org/$project/spans",
+        params: { org, project },
+        search: (prev) => withFilter(prev, appendFilter(prev.filter ?? "", conjunct)),
+      });
+    },
+    [navigate, org, project],
+  );
   const tableColumns = useMemo(() => orderedSpanColumns(visible), [visible]);
   function onColumns(ids: string[]) {
     const choice = sameColumnIds(ids, defaults) ? undefined : ids;
@@ -297,6 +307,7 @@ function SpansPage() {
               <TraceView
                 traceId={search.trace}
                 spanId={search.span}
+                onAddFilter={onFilter}
                 onSelectSpan={(spanId) => {
                   void navigate({
                     to: "/$org/$project/spans",

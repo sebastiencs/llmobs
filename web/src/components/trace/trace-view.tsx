@@ -14,10 +14,12 @@ export function TraceView({
   traceId,
   spanId,
   onSelectSpan,
+  onAddFilter,
 }: {
   traceId: string;
   spanId?: string;
   onSelectSpan: (spanId: string) => void;
+  onAddFilter?: (conjunct: string) => void;
 }) {
   const { org, project } = useProject();
   const trace = useQuery(traceDetailQuery(org, project, traceId));
@@ -39,6 +41,7 @@ export function TraceView({
 
   const detail = trace.data;
   const selected = spanId ?? detail.spans[0]?.span.span_id;
+  const detached = detail.spans.find((row) => row.span.span_id === selected)?.detached ?? false;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -68,7 +71,16 @@ export function TraceView({
                 onSelectSpan={onSelectSpan}
               />
             }
-            end={selected ? <SpanDetail traceId={traceId} spanId={selected} /> : null}
+            end={
+              selected ? (
+                <SpanDetail
+                  traceId={traceId}
+                  spanId={selected}
+                  detached={detached}
+                  onAddFilter={onAddFilter}
+                />
+              ) : null
+            }
           />
         </div>
       </div>
