@@ -493,3 +493,175 @@ fn sum_f64(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
     }
     total
 }
+
+mod fault_store {
+    use std::fmt;
+    use std::sync::{Arc, Mutex, PoisonError};
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use futures_util::stream::BoxStream;
+    use object_store::path::Path;
+    use object_store::{
+        CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+        PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    };
+
+    /// One injected failure for the next `put` or multipart upload.
+    #[derive(Debug, Clone)]
+    pub(crate) enum FaultKind {
+        /// Return an error and write nothing.
+        FailBefore,
+        /// Write, then return an error. The object may exist.
+        FailAfter,
+        /// Wait, then forward the call.
+        Delay(Duration),
+    }
+
+    /// [`ObjectStore`] that can fail or delay its next upload.
+    ///
+    /// This is a second implementation of the external trait so the remote
+    /// `put_durable` path runs in CI without AWS (D102).
+    #[derive(Debug, Clone)]
+    pub(crate) struct FaultStore {
+        inner: Arc<dyn ObjectStore>,
+        fault: Arc<Mutex<Option<FaultKind>>>,
+    }
+
+    impl FaultStore {
+        pub(crate) fn new(inner: Arc<dyn ObjectStore>) -> Self {
+            Self {
+                inner,
+                fault: Arc::new(Mutex::new(None)),
+            }
+        }
+
+        /// Arms a one-shot fault. A later upload consumes it.
+        pub(crate) fn arm(&self, kind: FaultKind) {
+            *self.fault.lock().unwrap_or_else(PoisonError::into_inner) = Some(kind);
+        }
+
+        fn take(&self) -> Option<FaultKind> {
+            self.fault
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take()
+        }
+    }
+
+    impl fmt::Display for FaultStore {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(formatter, "FaultStore({})", self.inner.as_ref())
+        }
+    }
+
+    fn injected() -> object_store::Error {
+        object_store::Error::Generic {
+            store: "fault",
+            source: Box::new(std::io::Error::other("injected fault")),
+        }
+    }
+
+    struct FaultMultipart {
+        inner: Box<dyn MultipartUpload>,
+        fail_after: bool,
+    }
+
+    impl fmt::Debug for FaultMultipart {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("FaultMultipart")
+                .field("fail_after", &self.fail_after)
+                .finish_non_exhaustive()
+        }
+    }
+
+    #[async_trait]
+    impl MultipartUpload for FaultMultipart {
+        fn put_part(&mut self, data: PutPayload) -> UploadPart {
+            self.inner.put_part(data)
+        }
+
+        async fn complete(&mut self) -> Result<PutResult> {
+            let result = self.inner.complete().await?;
+            if self.fail_after {
+                return Err(injected());
+            }
+            Ok(result)
+        }
+
+        async fn abort(&mut self) -> Result<()> {
+            self.inner.abort().await
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for FaultStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> Result<PutResult> {
+            match self.take() {
+                Some(FaultKind::FailBefore) => Err(injected()),
+                Some(FaultKind::FailAfter) => {
+                    self.inner.put_opts(location, payload, opts).await?;
+                    Err(injected())
+                }
+                Some(FaultKind::Delay(duration)) => {
+                    tokio::time::sleep(duration).await;
+                    self.inner.put_opts(location, payload, opts).await
+                }
+                None => self.inner.put_opts(location, payload, opts).await,
+            }
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> Result<Box<dyn MultipartUpload>> {
+            match self.take() {
+                Some(FaultKind::FailBefore) => Err(injected()),
+                Some(FaultKind::FailAfter) => {
+                    let inner = self.inner.put_multipart_opts(location, opts).await?;
+                    Ok(Box::new(FaultMultipart {
+                        inner,
+                        fail_after: true,
+                    }))
+                }
+                Some(FaultKind::Delay(duration)) => {
+                    tokio::time::sleep(duration).await;
+                    self.inner.put_multipart_opts(location, opts).await
+                }
+                None => self.inner.put_multipart_opts(location, opts).await,
+            }
+        }
+
+        async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+            self.inner.get_opts(location, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, Result<Path>>,
+        ) -> BoxStream<'static, Result<Path>> {
+            self.inner.delete_stream(locations)
+        }
+
+        fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+}
+
+pub(crate) use fault_store::{FaultKind, FaultStore};

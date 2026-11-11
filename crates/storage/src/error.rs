@@ -269,3 +269,95 @@ impl CommitError {
         Self::Conflict { reason }
     }
 }
+
+/// An object-store read, write, or delete failed.
+///
+/// `path` is an object key or a filesystem path. The message never includes
+/// object bytes.
+#[derive(Debug, thiserror::Error)]
+pub enum ObjectError {
+    /// A local filesystem call failed.
+    #[error("{action} {path}: {source}")]
+    Io {
+        /// What was being done, for example `writing object`.
+        action: &'static str,
+        /// Filesystem path involved in the failed call.
+        path: PathBuf,
+        /// The filesystem error.
+        #[source]
+        source: io::Error,
+    },
+    /// The final object name is already present.
+    ///
+    /// Names are unique, so this is a caller bug or a retried upload that
+    /// actually landed.
+    #[error("object already exists: {path}")]
+    AlreadyExists {
+        /// Relative object key.
+        path: String,
+    },
+    /// A remote `put` or multipart upload failed.
+    ///
+    /// The object may already exist: a failed completion is ambiguous. The
+    /// flush retries under a new name and leaves this key for GC.
+    #[error("object upload {path}: {source}")]
+    Upload {
+        /// Object key that was being written.
+        path: String,
+        /// The object-store error.
+        #[source]
+        source: Box<object_store::Error>,
+    },
+    /// A store operation other than an upload failed.
+    #[error("object store {action} {path}: {source}")]
+    Store {
+        /// What was being done, for example `deleting object`.
+        action: &'static str,
+        /// Object key.
+        path: String,
+        /// The object-store error.
+        #[source]
+        source: Box<object_store::Error>,
+    },
+    /// The object key is not a relative path of normal segments.
+    #[error("invalid object path")]
+    InvalidPath,
+    /// The S3 client or the local store could not be built.
+    #[error("object store client: {source}")]
+    Client {
+        /// The object-store error. It does not include credentials.
+        #[source]
+        source: Box<object_store::Error>,
+    },
+}
+
+impl ObjectError {
+    pub(crate) fn io(action: &'static str, path: &Path, source: io::Error) -> Self {
+        Self::Io {
+            action,
+            path: path.to_path_buf(),
+            source,
+        }
+    }
+
+    pub(crate) fn upload(path: &str, source: object_store::Error) -> Self {
+        Self::Upload {
+            path: path.to_owned(),
+            source: Box::new(source),
+        }
+    }
+
+    pub(crate) fn store(action: &'static str, path: &str, source: object_store::Error) -> Self {
+        Self::Store {
+            action,
+            path: path.to_owned(),
+            source: Box::new(source),
+        }
+    }
+
+    pub(crate) fn client(source: object_store::Error) -> Self {
+        Self::Client {
+            source: Box::new(source),
+        }
+    }
+}

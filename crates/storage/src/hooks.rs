@@ -26,11 +26,22 @@ pub(crate) enum HookPoint {
     ///
     /// `fail` rolls the transaction back. The in-memory catalog stays as it was.
     CatalogCommit,
+    /// Before the bytes of a local object are written to the temp file.
+    ObjectWrite,
+    /// Before `sync_all` on a local object temp file.
+    ObjectSync,
+    /// Before the temp file is renamed to its final name.
+    ObjectRename,
+    /// Before the directory fsync that publishes a local object.
+    ///
+    /// The rename has already happened. A fault here moves the file back to its
+    /// temp name, so a failed `put_durable` does not leave the final path.
+    ObjectDirSync,
 }
 
 #[cfg(test)]
 impl HookPoint {
-    const COUNT: usize = 6;
+    const COUNT: usize = 10;
 
     const fn index(self) -> usize {
         match self {
@@ -40,6 +51,10 @@ impl HookPoint {
             Self::BeforePublish => 3,
             Self::AfterPublish => 4,
             Self::CatalogCommit => 5,
+            Self::ObjectWrite => 6,
+            Self::ObjectSync => 7,
+            Self::ObjectRename => 8,
+            Self::ObjectDirSync => 9,
         }
     }
 }
@@ -88,6 +103,7 @@ mod fault {
         waiting_at: [AtomicUsize; HookPoint::COUNT],
         hits: [AtomicU64; HookPoint::COUNT],
         groups: Mutex<Vec<(usize, u64)>>,
+        passed: Mutex<Vec<HookPoint>>,
     }
 
     impl std::fmt::Debug for State {
@@ -110,6 +126,7 @@ mod fault {
                     waiting_at: [const { AtomicUsize::new(0) }; HookPoint::COUNT],
                     hits: [const { AtomicU64::new(0) }; HookPoint::COUNT],
                     groups: Mutex::new(Vec::new()),
+                    passed: Mutex::new(Vec::new()),
                 }),
             }
         }
@@ -123,6 +140,7 @@ mod fault {
         pub(crate) fn pause(&self, point: HookPoint) {
             let index = point.index();
             self.inner.hits[index].fetch_add(1, Ordering::SeqCst);
+            lock(&self.inner.passed).push(point);
             let mut held = lock(&self.inner.held);
             if !held.contains(&point) {
                 return;
@@ -196,6 +214,13 @@ mod fault {
         /// Each entry is `(requests, bytes)`.
         pub(crate) fn groups(&self) -> Vec<(usize, u64)> {
             lock(&self.inner.groups).clone()
+        }
+
+        /// Hook points entered through [`Self::pause`], in order.
+        ///
+        /// M2.9 asserts the durability order from this.
+        pub(crate) fn points(&self) -> Vec<HookPoint> {
+            lock(&self.inner.passed).clone()
         }
     }
 }

@@ -2590,11 +2590,13 @@ version = "0.0.0"
 dependencies = [
  "arrow",
  "async-trait",
+ "bytes",
  "bytesize",
  "chrono",
  "crc32c",
  "datafusion",
  "datafusion-datasource",
+ "futures-util",
  "hex",
  "humantime-serde",
  "llmobs-core",
