@@ -95,6 +95,19 @@ figment = { version = "0.10.19", features = ["toml", "env"] }
 ipnet = { version = "2.12.2", features = ["serde"] }
 # `public_url` parsing. Already in `Cargo.lock` (2.5.8).
 url = "2.5.8"
+# HTTP router (P4). No `tracing` feature: axum's span would record the URI (D150).
+# `matched-path` is the route template request logs use.
+axum = { version = "0.8.9", default-features = false, features = [
+    "http1",
+    "json",
+    "matched-path",
+    "query",
+    "tokio",
+] }
+# `ServiceExt::oneshot` for HTTP tests (D151).
+tower = { version = "0.5.3", default-features = false, features = ["util"] }
+# Field path of a JSON or query error, without the rejected value (P4).
+serde_path_to_error = "0.1.20"
 # DataFusion 55's `TableProvider` is an `#[async_trait]` trait.
 async-trait = "0.1.92"
 hex = "0.4.3"

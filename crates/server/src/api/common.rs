@@ -128,8 +128,20 @@ pub enum ProblemCode {
     Unauthorized,
     /// The credentials do not allow this operation.
     Forbidden,
+    /// The organization requires SSO for this account.
+    SsoRequired,
+    /// The account has not verified its email.
+    EmailNotVerified,
     /// The resource does not exist.
     NotFound,
+    /// The path exists, and this method is not allowed.
+    MethodNotAllowed,
+    /// The request body exceeds the limit.
+    PayloadTooLarge,
+    /// The request content type is not accepted.
+    UnsupportedMediaType,
+    /// The request conflicts with the current state.
+    Conflict,
     /// Too many requests.
     RateLimited,
     /// The server failed.
@@ -142,9 +154,13 @@ impl ProblemCode {
         match self {
             Self::BadRequest | Self::InvalidFilter | Self::QueryFailed => 400,
             Self::Unauthorized => 401,
-            Self::Forbidden => 403,
+            Self::Forbidden | Self::SsoRequired | Self::EmailNotVerified => 403,
             Self::NotFound => 404,
+            Self::MethodNotAllowed => 405,
+            Self::PayloadTooLarge => 413,
+            Self::UnsupportedMediaType => 415,
             Self::QueryTimeout | Self::QueryTooLarge => 422,
+            Self::Conflict => 409,
             Self::RateLimited => 429,
             Self::Internal => 500,
             Self::Busy => 503,
@@ -156,9 +172,13 @@ impl ProblemCode {
         match self {
             Self::BadRequest | Self::InvalidFilter | Self::QueryFailed => "Bad Request",
             Self::Unauthorized => "Unauthorized",
-            Self::Forbidden => "Forbidden",
+            Self::Forbidden | Self::SsoRequired | Self::EmailNotVerified => "Forbidden",
             Self::NotFound => "Not Found",
+            Self::MethodNotAllowed => "Method Not Allowed",
+            Self::PayloadTooLarge => "Payload Too Large",
+            Self::UnsupportedMediaType => "Unsupported Media Type",
             Self::QueryTimeout | Self::QueryTooLarge => "Unprocessable Content",
+            Self::Conflict => "Conflict",
             Self::RateLimited => "Too Many Requests",
             Self::Internal => "Internal Server Error",
             Self::Busy => "Service Unavailable",
@@ -423,6 +443,25 @@ mod tests {
             Problem::new(ProblemCode::Busy, None).title,
             "Service Unavailable"
         );
+        assert_eq!(ProblemCode::SsoRequired.status(), 403);
+        assert_eq!(ProblemCode::EmailNotVerified.status(), 403);
+        assert_eq!(ProblemCode::MethodNotAllowed.status(), 405);
+        assert_eq!(ProblemCode::Conflict.status(), 409);
+        assert_eq!(ProblemCode::PayloadTooLarge.status(), 413);
+        assert_eq!(ProblemCode::UnsupportedMediaType.status(), 415);
+        assert_eq!(
+            Problem::new(ProblemCode::MethodNotAllowed, None).title,
+            "Method Not Allowed"
+        );
+        assert_eq!(
+            Problem::new(ProblemCode::PayloadTooLarge, None).title,
+            "Payload Too Large"
+        );
+        assert_eq!(
+            Problem::new(ProblemCode::UnsupportedMediaType, None).title,
+            "Unsupported Media Type"
+        );
+        assert_eq!(Problem::new(ProblemCode::Conflict, None).title, "Conflict");
     }
 
     #[test]

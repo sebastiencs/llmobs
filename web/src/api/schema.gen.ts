@@ -826,7 +826,7 @@ export interface components {
          *     Spec 09 § Conventions. Later endpoints add codes.
          * @enum {string}
          */
-        ProblemCode: "bad_request" | "invalid_filter" | "query_failed" | "query_timeout" | "query_too_large" | "busy" | "unauthorized" | "forbidden" | "not_found" | "rate_limited" | "internal";
+        ProblemCode: "bad_request" | "invalid_filter" | "query_failed" | "query_timeout" | "query_too_large" | "busy" | "unauthorized" | "forbidden" | "sso_required" | "email_not_verified" | "not_found" | "method_not_allowed" | "payload_too_large" | "unsupported_media_type" | "conflict" | "rate_limited" | "internal";
         /**
          * @description A project the caller can see.
          *
