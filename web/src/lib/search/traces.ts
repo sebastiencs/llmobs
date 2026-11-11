@@ -12,6 +12,31 @@ import { PRESETS, type Preset } from "@/lib/time-range";
 const TRACE_SORTS = ["start_time", "duration", "cost_total", "total_tokens"] as const;
 const SORT_ORDERS = ["asc", "desc"] as const;
 
+export const TRACE_COLUMN_IDS = [
+  "status",
+  "start",
+  "name",
+  "input",
+  "output",
+  "duration",
+  "tokens",
+  "cost",
+  "models",
+  "session",
+  "user",
+  "tags",
+  "env",
+  "release",
+  "spans",
+  "errors",
+  "llm_calls",
+  "trace_id",
+] as const;
+
+export type TraceColumnId = (typeof TRACE_COLUMN_IDS)[number];
+
+const TRACE_COLUMN_ID_SET: ReadonlySet<string> = new Set(TRACE_COLUMN_IDS);
+
 export type TracesSearch = {
   sort?: Schema<"TraceSort">;
   order?: Schema<"SortOrder">;
@@ -23,7 +48,13 @@ export type TracesSearch = {
   search?: string;
   eval?: 1;
   exp?: 1;
+  cols?: string;
 };
+
+/** Fixed column ids, plus `score:<name>` for a non-empty name. */
+export function isTraceColumnId(id: string): boolean {
+  return TRACE_COLUMN_ID_SET.has(id) || (id.startsWith("score:") && id.length > "score:".length);
+}
 
 export function parseTracesSearch(search: Record<string, unknown>): TracesSearch {
   const sort = parseEnum(search.sort, TRACE_SORTS);
@@ -37,6 +68,7 @@ export function parseTracesSearch(search: Record<string, unknown>): TracesSearch
   const text = parseString(search.search, SEARCH_MAX);
   const evalOn = parseFlag(search.eval);
   const expOn = parseFlag(search.exp);
+  const cols = parseCols(search.cols);
   return {
     ...(sort ? { sort } : {}),
     ...(order ? { order } : {}),
@@ -47,5 +79,21 @@ export function parseTracesSearch(search: Record<string, unknown>): TracesSearch
     ...(text ? { search: text } : {}),
     ...(evalOn ? { eval: 1 } : {}),
     ...(expOn ? { exp: 1 } : {}),
+    ...(cols ? { cols } : {}),
   };
+}
+
+function parseCols(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const ids: string[] = [];
+  for (const part of value.split(",")) {
+    const id = part.trim();
+    if (!isTraceColumnId(id) || ids.includes(id)) {
+      continue;
+    }
+    ids.push(id);
+  }
+  return ids.length > 0 ? ids.join(",") : undefined;
 }

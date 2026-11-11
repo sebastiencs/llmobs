@@ -16,7 +16,7 @@ import {
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn } from "cn";
-import { Loader2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Loader2 } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import {
   columnSizesAfterReset,
@@ -50,7 +50,7 @@ export interface DataTableProps<Row extends RowData> {
   isFetchingNextPage: boolean;
   fetchNextPage: () => void;
   sorting?: { id: string; desc: boolean };
-  onSortingChange?: (next: { id: string; desc: boolean }) => void;
+  onSortingChange?: (next: { id: string; desc: boolean } | null) => void;
   emptyState: ReactNode;
 }
 
@@ -241,13 +241,23 @@ export function DataTable<Row extends RowData>({
                   <button
                     type="button"
                     id={`${tableId}-${header.id}-label`}
-                    className="min-w-0 truncate"
+                    className="inline-flex min-w-0 items-center gap-1"
                     onClick={() => {
-                      const desc = sorting?.id === header.column.id ? !sorting.desc : true;
-                      onSortingChange({ id: header.column.id, desc });
+                      if (sorting?.id !== header.column.id) {
+                        onSortingChange({ id: header.column.id, desc: true });
+                        return;
+                      }
+                      if (sorting.desc) {
+                        onSortingChange({ id: header.column.id, desc: false });
+                        return;
+                      }
+                      onSortingChange(null);
                     }}
                   >
-                    {flexRender(header.column.columnDef.header, header.getContext())}
+                    <span className="truncate">
+                      {flexRender(header.column.columnDef.header, header.getContext())}
+                    </span>
+                    <SortArrow direction={sorted} />
                   </button>
                 ) : (
                   <span id={`${tableId}-${header.id}-label`} className="min-w-0 truncate">
@@ -342,4 +352,14 @@ export function DataTable<Row extends RowData>({
       </div>
     </div>
   );
+}
+
+function SortArrow({ direction }: { direction: false | "asc" | "desc" }) {
+  if (direction === "asc") {
+    return <ArrowUp aria-hidden className="size-3 shrink-0" />;
+  }
+  if (direction === "desc") {
+    return <ArrowDown aria-hidden className="size-3 shrink-0" />;
+  }
+  return null;
 }

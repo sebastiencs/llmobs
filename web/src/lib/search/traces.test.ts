@@ -18,3 +18,12 @@ it("keeps valid trace search and drops the rest", () => {
   });
   expect(parseTracesSearch({ sort: "name", trace: "A".repeat(32), span: "zz" })).toEqual({});
 });
+
+it("keeps known column ids and score columns, and drops the rest", () => {
+  expect(
+    parseTracesSearch({
+      cols: "nope, env, score:helpfulness, env, score:",
+    }),
+  ).toEqual({ cols: "env,score:helpfulness" });
+  expect(parseTracesSearch({ cols: "nope" })).toEqual({});
+});

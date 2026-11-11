@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
+import { columnChoiceKey } from "@/components/data-table/column-layout";
 import { defaultCollapsed } from "@/lib/tree";
 import { createDataset } from "@/mocks/generated/dataset";
 import { largeHandlers } from "@/mocks/generated/handlers";
@@ -318,6 +319,104 @@ it("includes evaluation traces when eval is on", async () => {
   } finally {
     server.events.removeListener("request:start", onStart);
   }
+});
+
+it("shows score columns after cost", async () => {
+  await renderApp("/acme/support-bot/traces");
+  const grid = await screen.findByRole("grid", { name: "Traces" });
+  const headers = within(grid)
+    .getAllByRole("columnheader")
+    .map((header) => header.textContent);
+  const cost = headers.indexOf("Cost");
+  expect(headers.slice(cost, cost + 4)).toEqual(["Cost", "helpfulness", "note", "thumbs"]);
+  expect(within(grid).getByText("0.90")).toBeInTheDocument();
+  expect(within(grid).getByText("✓")).toBeInTheDocument();
+  expect(within(grid).getByText("Needs retry with backoff.")).toBeInTheDocument();
+  expect(within(grid).queryByRole("columnheader", { name: "Release" })).not.toBeInTheDocument();
+});
+
+it("restores column order from cols and ignores an unknown id", async () => {
+  await renderApp("/acme/support-bot/traces?cols=nope,user,name,status");
+  const grid = await screen.findByRole("grid", { name: "Traces" });
+  expect(
+    within(grid)
+      .getAllByRole("columnheader")
+      .map((header) => header.textContent),
+  ).toEqual(["User", "Name", "Status"]);
+});
+
+it("toggles a column from the chooser", async () => {
+  const { user, router } = await renderApp("/acme/support-bot/traces");
+  await screen.findByRole("grid", { name: "Traces" });
+  await user.click(screen.getByRole("button", { name: "Columns" }));
+  expect(await screen.findByRole("checkbox", { name: "Status" })).toBeDisabled();
+  expect(screen.getByRole("checkbox", { name: "Name" })).toBeDisabled();
+  await user.click(screen.getByRole("checkbox", { name: "Models" }));
+  await waitFor(() => {
+    expect(screen.queryByRole("columnheader", { name: "Models" })).not.toBeInTheDocument();
+  });
+  const cols = String(router.state.location.search.cols ?? "").split(",");
+  expect(cols).not.toContain("models");
+  expect(cols).toContain("score:helpfulness");
+  expect(cols).toContain("status");
+});
+
+it("sorts by cost, then ascending, then back to the default", async () => {
+  const urls: URL[] = [];
+  const onStart = ({ request }: { request: Request }) => {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/traces")) {
+      urls.push(url);
+    }
+  };
+  server.events.on("request:start", onStart);
+  try {
+    const { router } = await renderApp("/acme/support-bot/traces");
+    const header = await screen.findByRole("columnheader", { name: "Cost" });
+    const button = within(header).getByRole("button", { name: "Cost" });
+    fireEvent.click(button);
+    await waitFor(() => {
+      expect(urls.some((url) => url.searchParams.get("sort") === "cost_total")).toBe(true);
+      expect(screen.getByRole("columnheader", { name: "Cost" })).toHaveAttribute(
+        "aria-sort",
+        "descending",
+      );
+    });
+    expect(
+      urls.find((url) => url.searchParams.get("sort") === "cost_total")?.searchParams.get("order"),
+    ).toBe("desc");
+    expect(router.state.location.search).toMatchObject({ sort: "cost_total", order: "desc" });
+    fireEvent.click(screen.getByRole("button", { name: "Cost" }));
+    await waitFor(() => {
+      expect(router.state.location.search).toMatchObject({ sort: "cost_total", order: "asc" });
+      expect(screen.getByRole("columnheader", { name: "Cost" })).toHaveAttribute(
+        "aria-sort",
+        "ascending",
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cost" }));
+    await waitFor(() => {
+      expect(router.state.location.search.sort).toBeUndefined();
+      expect(router.state.location.search.order).toBeUndefined();
+      expect(screen.getByRole("columnheader", { name: "Start" })).toHaveAttribute(
+        "aria-sort",
+        "descending",
+      );
+    });
+  } finally {
+    server.events.removeListener("request:start", onStart);
+  }
+});
+
+it("uses the stored columns when the URL has no cols", async () => {
+  localStorage.setItem(columnChoiceKey("traces"), "user,name,status");
+  await renderApp("/acme/support-bot/traces");
+  const grid = await screen.findByRole("grid", { name: "Traces" });
+  expect(
+    within(grid)
+      .getAllByRole("columnheader")
+      .map((header) => header.textContent),
+  ).toEqual(["User", "Name", "Status"]);
 });
 
 function near(url: URL, windowMs: number): boolean {

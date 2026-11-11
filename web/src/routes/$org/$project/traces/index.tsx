@@ -3,116 +3,40 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Waypoints } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Schema } from "@/api/types";
-import { DataTable, type DataTableColumn } from "@/components/data-table/data-table";
+import { ColumnChooser } from "@/components/data-table/column-chooser";
+import {
+  readColumnChoice,
+  sameColumnIds,
+  visibleColumnIds,
+  writeColumnChoice,
+} from "@/components/data-table/column-layout";
+import { DataTable } from "@/components/data-table/data-table";
 import { traceListOptions } from "@/components/data-table/use-infinite-list";
 import { EmptyState } from "@/components/empty-state";
 import { ListToolbar } from "@/components/list-toolbar";
 import { useProject } from "@/components/shell/project-context";
-import { StatusDot } from "@/components/status-dot";
-import { TimeText } from "@/components/time-text";
 import { SplitPane } from "@/components/trace/split-pane";
 import { TraceView } from "@/components/trace/trace-view";
-import { Badge } from "@/components/ui/badge";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatCost, formatDuration, formatTokens } from "@/lib/format";
+import { orderedTraceColumns, scoreNames, traceColumnSpecs } from "@/components/trace-columns";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { parseTracesSearch, type TracesSearch } from "@/lib/search/traces";
 import { type RangeState, rangeFromSearch, resolveRange } from "@/lib/time-range";
 
-const TAGS_SHOWN = 2;
+const TABLE_ID = "traces";
 
-const columns: DataTableColumn<Schema<"TraceSummary">>[] = [
-  {
-    id: "status",
-    size: 28,
-    header: () => <span className="sr-only">Status</span>,
-    cell: ({ row }) => <StatusDot status={row.original.status} />,
-  },
-  {
-    id: "start_time",
-    accessorFn: (row) => row.start_time,
-    size: 132,
-    header: "Start",
-    enableSorting: true,
-    cell: ({ row }) => <TimeText value={row.original.start_time} style="datetime" />,
-  },
-  {
-    id: "name",
-    size: 200,
-    header: "Name",
-    cell: ({ row }) => row.original.name,
-  },
-  {
-    id: "input",
-    size: 280,
-    header: "Input",
-    cell: ({ row }) => <Preview text={row.original.input_preview} />,
-  },
-  {
-    id: "output",
-    size: 280,
-    header: "Output",
-    cell: ({ row }) => <Preview text={row.original.output_preview} />,
-  },
-  {
-    id: "duration",
-    accessorFn: (row) => row.duration_ns,
-    size: 80,
-    header: "Duration",
-    enableSorting: true,
-    meta: { align: "right" },
-    cell: ({ row }) => <span className="num">{formatDuration(row.original.duration_ns)}</span>,
-  },
-  {
-    id: "total_tokens",
-    accessorFn: (row) => row.total_tokens,
-    size: 72,
-    header: "Tokens",
-    enableSorting: true,
-    meta: { align: "right" },
-    cell: ({ row }) => <TokenCount trace={row.original} />,
-  },
-  {
-    id: "cost_total",
-    accessorFn: (row) => row.cost_total,
-    size: 80,
-    header: "Cost",
-    enableSorting: true,
-    meta: { align: "right" },
-    cell: ({ row }) => <span className="num">{formatCost(row.original.cost_total)}</span>,
-  },
-  {
-    id: "models",
-    size: 140,
-    header: "Models",
-    cell: ({ row }) => modelsLabel(row.original.models),
-  },
-  {
-    id: "session",
-    size: 120,
-    header: "Session",
-    meta: { mono: true },
-    cell: ({ row }) => row.original.session_id ?? "—",
-  },
-  {
-    id: "user",
-    size: 100,
-    header: "User",
-    meta: { mono: true },
-    cell: ({ row }) => row.original.user_id ?? "—",
-  },
-  {
-    id: "tags",
-    size: 140,
-    header: "Tags",
-    cell: ({ row }) => <Tags tags={row.original.tags} />,
-  },
-  {
-    id: "env",
-    size: 88,
-    header: "Env",
-    cell: ({ row }) => row.original.environment ?? "—",
-  },
-];
+const SORT_COLUMN: Record<Schema<"TraceSort">, string> = {
+  start_time: "start",
+  duration: "duration",
+  cost_total: "cost",
+  total_tokens: "tokens",
+};
+
+const COLUMN_SORT: Record<string, Schema<"TraceSort">> = {
+  start: "start_time",
+  duration: "duration",
+  cost: "cost_total",
+  tokens: "total_tokens",
+};
 
 export const Route = createFileRoute("/$org/$project/traces/")({
   validateSearch: (search) => parseTracesSearch(search),
@@ -150,6 +74,22 @@ function TracesPage() {
     void list.fetchNextPage();
   }, [list.fetchNextPage]);
   const rows = useMemo(() => list.data?.pages.flatMap((page) => page.data) ?? [], [list.data]);
+  const specs = useMemo(() => traceColumnSpecs(scoreNames(rows)), [rows]);
+  const defaults = useMemo(() => visibleColumnIds(specs, undefined), [specs]);
+  const visible = useMemo(() => {
+    const fromUrl = search.cols?.split(",");
+    return visibleColumnIds(specs, fromUrl ?? readColumnChoice(TABLE_ID));
+  }, [search.cols, specs]);
+  const tableColumns = useMemo(() => orderedTraceColumns(rows, visible), [rows, visible]);
+  function onColumns(ids: string[]) {
+    const choice = sameColumnIds(ids, defaults) ? undefined : ids;
+    writeColumnChoice(TABLE_ID, choice);
+    void navigate({
+      to: "/$org/$project/traces",
+      params: { org, project },
+      search: (prev) => withCols(prev, choice?.join(",")),
+    });
+  }
   const traceOpen = search.trace !== undefined;
   const listScroll = useRef(0);
   const wasOpen = useRef(traceOpen);
@@ -243,13 +183,16 @@ function TracesPage() {
                       search: (prev) => withFlag(prev, "exp", on),
                     });
                   }}
+                  columns={
+                    <ColumnChooser columns={specs} visible={visible} onVisible={onColumns} />
+                  }
                   loaded={list.data ? rows.length : undefined}
                 />
                 {list.data ? (
                   <DataTable
                     tableId="traces"
                     ariaLabel="Traces"
-                    columns={columns}
+                    columns={tableColumns}
                     rows={rows}
                     getRowId={(row) => row.trace_id}
                     selectedRowId={search.trace}
@@ -272,8 +215,15 @@ function TracesPage() {
                     isFetchingNextPage={list.isFetchingNextPage}
                     fetchNextPage={fetchNextPage}
                     sorting={{
-                      id: search.sort ?? "start_time",
+                      id: SORT_COLUMN[search.sort ?? "start_time"],
                       desc: (search.order ?? "desc") === "desc",
+                    }}
+                    onSortingChange={(next) => {
+                      void navigate({
+                        to: "/$org/$project/traces",
+                        params: { org, project },
+                        search: (prev) => withSort(prev, next),
+                      });
                     }}
                     emptyState={<EmptyState icon={Waypoints} title="No traces" />}
                   />
@@ -322,6 +272,23 @@ function withFlag(search: TracesSearch, key: "eval" | "exp", on: boolean): Trace
   return on ? { ...rest, [key]: 1 } : rest;
 }
 
+function withCols(search: TracesSearch, cols: string | undefined): TracesSearch {
+  const { cols: _cols, ...rest } = search;
+  return cols ? { ...rest, cols } : rest;
+}
+
+function withSort(search: TracesSearch, next: { id: string; desc: boolean } | null): TracesSearch {
+  const { sort: _sort, order: _order, ...rest } = search;
+  if (!next) {
+    return rest;
+  }
+  const sort = COLUMN_SORT[next.id];
+  if (!sort) {
+    return rest;
+  }
+  return { ...rest, sort, order: next.desc ? "desc" : "asc" };
+}
+
 function withoutSpan(search: TracesSearch): TracesSearch {
   const { span: _span, ...rest } = search;
   return rest;
@@ -330,64 +297,4 @@ function withoutSpan(search: TracesSearch): TracesSearch {
 function withoutTrace(search: TracesSearch): TracesSearch {
   const { trace: _trace, span: _span, ...rest } = search;
   return rest;
-}
-
-function Preview({ text }: { text?: string }) {
-  if (!text) {
-    return <span className="text-muted-foreground">—</span>;
-  }
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="block truncate text-muted-foreground">{text}</span>
-      </TooltipTrigger>
-      <TooltipContent>{text}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-function TokenCount({ trace }: { trace: Schema<"TraceSummary"> }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="num">{formatTokens(trace.total_tokens)}</span>
-      </TooltipTrigger>
-      <TooltipContent className="flex-col items-start">
-        <span>Input {formatTokens(trace.input_tokens)}</span>
-        <span>Output {formatTokens(trace.output_tokens)}</span>
-        <span>Cache read {formatTokens(trace.cache_read_tokens)}</span>
-        <span>Cache write {formatTokens(trace.cache_write_tokens)}</span>
-        <span>Reasoning {formatTokens(trace.reasoning_tokens)}</span>
-      </TooltipContent>
-    </Tooltip>
-  );
-}
-
-function modelsLabel(models: string[]): string {
-  const first = models[0];
-  if (!first) {
-    return "—";
-  }
-  if (models.length === 1) {
-    return first;
-  }
-  return `${first} +${models.length - 1}`;
-}
-
-function Tags({ tags }: { tags: string[] }) {
-  if (tags.length === 0) {
-    return "—";
-  }
-  const shown = tags.slice(0, TAGS_SHOWN);
-  const rest = tags.length - shown.length;
-  return (
-    <span className="flex min-w-0 items-center gap-1">
-      {shown.map((tag) => (
-        <Badge key={tag} variant="secondary" className="h-4 px-1.5 text-[10px]">
-          {tag}
-        </Badge>
-      ))}
-      {rest > 0 ? <span className="text-muted-foreground">+{rest}</span> : null}
-    </span>
-  );
 }
