@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Waypoints } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { problemOf } from "@/api/problem";
+import { projectRef } from "@/api/project-ref";
 import type { Schema } from "@/api/types";
 import { useShortcut } from "@/components/command/use-shortcut";
 import { ColumnChooser } from "@/components/data-table/column-chooser";
@@ -14,9 +15,11 @@ import {
 } from "@/components/data-table/column-layout";
 import { DataTable } from "@/components/data-table/data-table";
 import { traceListOptions } from "@/components/data-table/use-infinite-list";
+import { useLiveTraces } from "@/components/data-table/use-live-traces";
 import { FilterBar } from "@/components/filter-bar/filter-bar";
 import { appendFilter, filterMessage } from "@/components/filter-bar/logic";
 import { ListToolbar } from "@/components/list-toolbar";
+import { LiveToggle } from "@/components/live-toggle";
 import { OnboardingPanel } from "@/components/onboarding/panel";
 import { onboardingPollMs } from "@/components/onboarding/poll";
 import { tracesNeedOnboarding } from "@/components/onboarding/state";
@@ -28,7 +31,13 @@ import { TraceView } from "@/components/trace/trace-view";
 import { orderedTraceColumns, scoreNames, traceColumnSpecs } from "@/components/trace-columns";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { parseTracesSearch, type TraceMode, type TracesSearch } from "@/lib/search/traces";
+import {
+  parseTracesSearch,
+  type TraceMode,
+  type TracesSearch,
+  traceLiveReason,
+} from "@/lib/search/traces";
+import { traceStreamUrl } from "@/lib/sse";
 import { type RangeState, rangeFromSearch, resolveRange } from "@/lib/time-range";
 
 const TABLE_ID = "traces";
@@ -90,17 +99,18 @@ function TracesPage() {
     setAnchor(Date.now());
   }, [rangeKey]);
   const resolved = resolveRange(range, anchor);
+  const listOptions = traceListOptions(org, project, {
+    from: resolved.from,
+    to: resolved.to,
+    sort: search.sort,
+    order: search.order,
+    search: search.search,
+    filter: search.filter,
+    includeEval: search.eval === 1,
+    includeExperiments: search.exp === 1,
+  });
   const list = useInfiniteQuery({
-    ...traceListOptions(org, project, {
-      from: resolved.from,
-      to: resolved.to,
-      sort: search.sort,
-      order: search.order,
-      search: search.search,
-      filter: search.filter,
-      includeEval: search.eval === 1,
-      includeExperiments: search.exp === 1,
-    }),
+    ...listOptions,
     enabled: !hold,
     refetchInterval: (query) => {
       if (hold || !tracesNeedOnboarding(search, range)) {
@@ -179,11 +189,36 @@ function TracesPage() {
 
   const problem = list.isError ? problemOf(list.error) : undefined;
   const filterError = problem?.code === "invalid_filter" ? problem : undefined;
+  const onboarding =
+    !hold && list.data !== undefined && rows.length === 0 && tracesNeedOnboarding(search, range);
+  const reason = traceLiveReason(search);
+  const liveOn = search.live === 1 && reason === undefined && !hold;
+  const live = useLiveTraces({
+    url: liveOn
+      ? traceStreamUrl(projectRef(org, project), {
+          filter: search.filter,
+          includeEval: search.eval === 1,
+          includeExperiments: search.exp === 1,
+        })
+      : undefined,
+    queryKey: listOptions.queryKey,
+    selectedId: search.trace,
+    ready: !hold && list.data !== undefined && !filterError && !onboarding,
+  });
+  useEffect(() => {
+    if (search.live !== 1 || reason === undefined) {
+      return;
+    }
+    void navigate({
+      to: "/$org/$project/traces",
+      params: { org, project },
+      search: (prev) => withoutLive(prev),
+      replace: true,
+    });
+  }, [search.live, reason, navigate, org, project]);
   if (problem && !filterError) {
     throw list.error;
   }
-  const onboarding =
-    !hold && list.data !== undefined && rows.length === 0 && tracesNeedOnboarding(search, range);
   function clearConstraints() {
     void navigate({
       to: "/$org/$project/traces",
@@ -211,10 +246,31 @@ function TracesPage() {
                     void navigate({
                       to: "/$org/$project/traces",
                       params: { org, project },
-                      search: (prev) => withRange(prev, next),
+                      search: (prev) => {
+                        const ranged = withRange(prev, next);
+                        return traceLiveReason(ranged) ? withoutLive(ranged) : ranged;
+                      },
                     });
                   }}
                   onRefresh={() => setAnchor(Date.now())}
+                  live={
+                    <LiveToggle
+                      pressed={liveOn}
+                      disabled={reason !== undefined}
+                      reason={reason}
+                      status={live.status}
+                      onPressedChange={(on) => {
+                        if (on) {
+                          setAnchor(Date.now());
+                        }
+                        void navigate({
+                          to: "/$org/$project/traces",
+                          params: { org, project },
+                          search: (prev) => withLive(prev, on),
+                        });
+                      }}
+                    />
+                  }
                   search={search.search ?? ""}
                   onSearch={(value) => {
                     void navigate({
@@ -302,9 +358,20 @@ function TracesPage() {
                       void navigate({
                         to: "/$org/$project/traces",
                         params: { org, project },
-                        search: (prev) => withSort(prev, next),
+                        search: (prev) => {
+                          const sorted = withSort(prev, next);
+                          return traceLiveReason(sorted) ? withoutLive(sorted) : sorted;
+                        },
                       });
                     }}
+                    highlightedRowIds={live.highlighted}
+                    notice={
+                      live.pending > 0 ? (
+                        <Button type="button" size="xs" variant="secondary" onClick={live.reveal}>
+                          {live.pending} new traces ↑
+                        </Button>
+                      ) : null
+                    }
                     emptyState={
                       <div className="flex flex-col items-center gap-3 px-4 py-16 text-center">
                         <Waypoints className="size-8 text-muted-foreground" />
@@ -381,6 +448,16 @@ function withFilter(search: TracesSearch, value: string): TracesSearch {
   const { filter: _filter, ...rest } = search;
   const trimmed = value.trim();
   return trimmed.length > 0 ? { ...rest, filter: trimmed } : rest;
+}
+
+function withLive(search: TracesSearch, on: boolean): TracesSearch {
+  const rest = withoutLive(search);
+  return on ? { ...rest, live: 1 } : rest;
+}
+
+function withoutLive(search: TracesSearch): TracesSearch {
+  const { live: _live, ...rest } = search;
+  return rest;
 }
 
 function withFlag(search: TracesSearch, key: "eval" | "exp", on: boolean): TracesSearch {

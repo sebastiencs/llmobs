@@ -1,7 +1,9 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { expect, it, vi } from "vitest";
+import type { Schema } from "@/api/types";
 import { columnChoiceKey } from "@/components/data-table/column-layout";
+import { ROW_HEIGHT } from "@/components/data-table/data-table";
 import { ONBOARDING_POLL_MS, setOnboardingPollMs } from "@/components/onboarding/poll";
 import { otelSnippet } from "@/components/onboarding/snippets";
 import { defaultCollapsed } from "@/lib/tree";
@@ -9,6 +11,7 @@ import { createDataset } from "@/mocks/generated/dataset";
 import { largeHandlers } from "@/mocks/generated/handlers";
 import { server } from "@/mocks/node";
 import { savedViewHandlers } from "@/mocks/saved-views";
+import { type StreamEmit, traceStreamHandler } from "@/mocks/sse";
 import { renderApp } from "@/test/render";
 
 const FIRST = "a1000000000000000000000000000006";
@@ -503,6 +506,232 @@ it("replaces onboarding with the table when a trace arrives", async () => {
     setOnboardingPollMs(ONBOARDING_POLL_MS);
   }
 });
+
+it("opens the trace stream with the list filter", async () => {
+  const streams: URL[] = [];
+  const onStart = ({ request }: { request: Request }) => {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/traces/stream")) {
+      streams.push(url);
+    }
+  };
+  server.events.on("request:start", onStart);
+  server.use(traceStreamHandler(() => undefined));
+  try {
+    await renderApp(
+      `/acme/support-bot/traces?live=1&filter=${encodeURIComponent("status = 'error'")}&eval=1&exp=1`,
+    );
+    await waitFor(() => expect(streams.length).toBeGreaterThan(0));
+    expect(streams[0]?.searchParams.get("filter")).toBe("status = 'error'");
+    expect(streams[0]?.searchParams.get("include_eval")).toBe("true");
+    expect(streams[0]?.searchParams.get("include_experiments")).toBe("true");
+    expect(screen.getByRole("switch", { name: "Live" })).toBeEnabled();
+    expect(screen.getByRole("switch", { name: "Live" })).toBeChecked();
+  } finally {
+    server.events.removeListener("request:start", onStart);
+  }
+});
+
+it("prepends a new trace and highlights the row", async () => {
+  const { emit } = await openLive("/acme/support-bot/traces?live=1");
+  emit.trace(liveTrace("c1000000000000000000000000000001", "live arrival", LATER));
+  const name = await screen.findByText("live arrival");
+  expect(name.closest("[role=row]")).toHaveClass("live-row");
+  expect(screen.getByText("6 loaded")).toBeInTheDocument();
+});
+
+it("replaces a known trace in place", async () => {
+  const { emit } = await openLive("/acme/support-bot/traces?live=1");
+  emit.trace(liveTrace(FIRST, "renamed in place", "2026-01-01T10:30:00.000000000Z"));
+  expect(await screen.findByText("renamed in place")).toBeInTheDocument();
+  expect(screen.queryByText("chat claude-sonnet-4-5")).not.toBeInTheDocument();
+  expect(screen.getByText("renamed in place").closest("[role=row]")).not.toHaveClass("live-row");
+  expect(screen.getByText("5 loaded")).toBeInTheDocument();
+});
+
+it("buffers traces while the list is scrolled and inserts them from the pill", async () => {
+  const { emit } = await openLive("/acme/support-bot/traces?live=1");
+  const scroller = tracesScroller();
+  scroller.scrollTop = 400;
+  fireEvent.scroll(scroller);
+  emit.trace(liveTrace("c1000000000000000000000000000002", "buffered one", LATER));
+  emit.trace(liveTrace("c1000000000000000000000000000003", "buffered two", LATER_STILL));
+  const pill = await screen.findByRole("button", { name: "2 new traces ↑" });
+  expect(screen.queryByText("buffered one")).not.toBeInTheDocument();
+  expect(screen.queryByText("buffered two")).not.toBeInTheDocument();
+  fireEvent.click(pill);
+  expect(await screen.findByText("buffered one")).toBeInTheDocument();
+  expect(screen.getByText("buffered two")).toBeInTheDocument();
+  expect(scroller.scrollTop).toBe(0);
+});
+
+it("inserts buffered traces when the list scrolls back to the top", async () => {
+  const { emit } = await openLive("/acme/support-bot/traces?live=1");
+  const scroller = tracesScroller();
+  scroller.scrollTop = 400;
+  emit.trace(liveTrace("c1000000000000000000000000000004", "scrolled arrival", LATER));
+  expect(await screen.findByRole("button", { name: "1 new traces ↑" })).toBeInTheDocument();
+  scroller.scrollTop = 0;
+  fireEvent.scroll(scroller);
+  expect(await screen.findByText("scrolled arrival")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "1 new traces ↑" })).not.toBeInTheDocument();
+});
+
+it("refetches the list when the stream resyncs", async () => {
+  const urls: URL[] = [];
+  const onStart = ({ request }: { request: Request }) => {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/traces")) {
+      urls.push(url);
+    }
+  };
+  server.events.on("request:start", onStart);
+  try {
+    const { emit } = await openLive("/acme/support-bot/traces?live=1");
+    const before = urls.length;
+    expect(before).toBeGreaterThan(0);
+    emit.resync();
+    await waitFor(() => expect(urls.length).toBeGreaterThan(before));
+  } finally {
+    server.events.removeListener("request:start", onStart);
+  }
+});
+
+it("keeps the selected row in place when a trace is prepended", async () => {
+  const { emit } = await openLive(`/acme/support-bot/traces?live=1&trace=${FIRST}`);
+  const scroller = tracesScroller();
+  expect(scroller.scrollTop).toBe(0);
+  emit.trace(liveTrace("c1000000000000000000000000000005", "above selection", LATER));
+  await waitFor(() => expect(screen.getByText("6 loaded")).toBeInTheDocument());
+  expect(scroller.scrollTop).toBe(ROW_HEIGHT);
+});
+
+it("stops applying traces after live is turned off", async () => {
+  const { emit, user } = await openLive("/acme/support-bot/traces?live=1");
+  const toggle = screen.getByRole("switch", { name: "Live" });
+  await user.click(toggle);
+  await waitFor(() => expect(toggle).not.toBeChecked());
+  emit.trace(liveTrace("c1000000000000000000000000000099", "ghost trace", LATER));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  expect(screen.queryByText("ghost trace")).not.toBeInTheDocument();
+});
+
+it("disables live for an absolute range", async () => {
+  const streams: URL[] = [];
+  const onStart = ({ request }: { request: Request }) => {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/traces/stream")) {
+      streams.push(url);
+    }
+  };
+  server.events.on("request:start", onStart);
+  server.use(traceStreamHandler(() => undefined));
+  try {
+    const { user } = await renderApp(
+      "/acme/support-bot/traces?live=1&from=2026-01-01T00:00:00Z&to=2026-01-02T00:00:00Z",
+    );
+    const toggle = await screen.findByRole("switch", { name: "Live" });
+    expect(toggle).toBeDisabled();
+    await user.hover(screen.getByText("Live"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Live needs a relative time range",
+    );
+    expect(streams).toEqual([]);
+  } finally {
+    server.events.removeListener("request:start", onStart);
+  }
+});
+
+it("disables live when the list is not sorted by start time descending", async () => {
+  const { user } = await renderApp("/acme/support-bot/traces?sort=cost_total");
+  const toggle = await screen.findByRole("switch", { name: "Live" });
+  expect(toggle).toBeDisabled();
+  await user.hover(screen.getByText("Live"));
+  expect(await screen.findByRole("tooltip")).toHaveTextContent(
+    "Live follows start time, newest first",
+  );
+});
+
+it("re-anchors the range when live is turned on", async () => {
+  const urls: URL[] = [];
+  const streams: URL[] = [];
+  const onStart = ({ request }: { request: Request }) => {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/traces/stream")) {
+      streams.push(url);
+    } else if (url.pathname.endsWith("/traces")) {
+      urls.push(url);
+    }
+  };
+  server.events.on("request:start", onStart);
+  server.use(traceStreamHandler(() => undefined));
+  try {
+    const { user } = await renderApp("/acme/support-bot/traces?range=24h");
+    const toggle = await screen.findByRole("switch", { name: "Live" });
+    expect(toggle).toBeEnabled();
+    const before = urls.length;
+    const to = urls.at(-1)?.searchParams.get("to");
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+    try {
+      await user.click(toggle);
+      await waitFor(() => expect(toggle).toBeChecked());
+      await waitFor(() => expect(urls.length).toBeGreaterThan(before));
+      expect(urls.at(-1)?.searchParams.get("to")).not.toBe(to);
+      await waitFor(() => expect(streams.length).toBeGreaterThan(0));
+    } finally {
+      clock.mockRestore();
+    }
+  } finally {
+    server.events.removeListener("request:start", onStart);
+  }
+});
+
+const LATER = "2026-11-11T21:00:00.000000000Z";
+const LATER_STILL = "2026-11-11T21:00:01.000000000Z";
+
+function liveTrace(id: string, name: string, start: string): Schema<"TraceSummary"> {
+  return {
+    trace_id: id,
+    name,
+    start_time: start,
+    end_time: start,
+    duration_ns: 1_000_000_000,
+    status: "ok",
+    has_root: true,
+    error_count: 0,
+    llm_count: 0,
+    span_count: 1,
+    metadata: {},
+    models: [],
+    tags: [],
+    scores: [],
+  };
+}
+
+async function openLive(url: string) {
+  let emit: StreamEmit | undefined;
+  server.use(
+    traceStreamHandler((next) => {
+      emit = next;
+      return undefined;
+    }),
+  );
+  const view = await renderApp(url);
+  await screen.findByRole("grid", { name: "Traces" });
+  await waitFor(() => expect(emit).toBeDefined());
+  if (!emit) {
+    throw new Error("stream did not open");
+  }
+  return { ...view, emit };
+}
+
+function tracesScroller(): HTMLElement {
+  const node = document.querySelector<HTMLElement>('[aria-label="Traces"] [data-scroll-container]');
+  if (!node) {
+    throw new Error("missing traces scroller");
+  }
+  return node;
+}
 
 function stubClipboard() {
   const writeText = vi.fn().mockResolvedValue(undefined);

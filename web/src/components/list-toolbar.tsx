@@ -27,6 +27,7 @@ export function ListToolbar({
   columns,
   views,
   loaded,
+  live,
 }: {
   title: string;
   range: RangeState;
@@ -43,6 +44,7 @@ export function ListToolbar({
   columns?: ReactNode;
   views?: ReactNode;
   loaded?: number;
+  live?: ReactNode;
 }) {
   const searchRef = useRef<HTMLInputElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -73,6 +75,7 @@ export function ListToolbar({
       <Button type="button" variant="ghost" size="icon-xs" aria-label="Refresh" onClick={onRefresh}>
         <RefreshCw />
       </Button>
+      {live}
       <div className="min-w-0 flex-1">{filter}</div>
       {onSearch ? <SearchBox inputRef={searchRef} value={search ?? ""} onValue={onSearch} /> : null}
       <Flag

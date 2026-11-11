@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { parseTracePageSearch, parseTracesSearch } from "./traces";
+import { parseTracePageSearch, parseTracesSearch, traceLiveReason } from "./traces";
 
 it("keeps valid trace search and drops the rest", () => {
   expect(
@@ -52,6 +52,27 @@ it("keeps a span and a mode on the trace page", () => {
     }),
   ).toEqual({ span: "b".repeat(16), mode: "transcript" });
   expect(parseTracePageSearch({ span: "B".repeat(16), mode: "chat" })).toEqual({});
+});
+
+it("keeps live=1 and drops any other value", () => {
+  expect(parseTracesSearch({ live: 1 })).toEqual({ live: 1 });
+  expect(parseTracesSearch({ live: "1" })).toEqual({ live: 1 });
+  expect(parseTracesSearch({ live: "yes" })).toEqual({});
+  expect(parseTracesSearch({ live: 0 })).toEqual({});
+});
+
+it("allows live for a preset range sorted by start time, newest first", () => {
+  expect(traceLiveReason({})).toBeUndefined();
+  expect(traceLiveReason({ sort: "start_time", order: "desc" })).toBeUndefined();
+  expect(traceLiveReason({ sort: "cost_total" })).toBe("Live follows start time, newest first");
+  expect(traceLiveReason({ order: "asc" })).toBe("Live follows start time, newest first");
+  expect(
+    traceLiveReason({
+      from: "2026-01-01T00:00:00Z",
+      to: "2026-01-02T00:00:00Z",
+      sort: "cost_total",
+    }),
+  ).toBe("Live needs a relative time range");
 });
 
 it("keeps the trace list mode", () => {

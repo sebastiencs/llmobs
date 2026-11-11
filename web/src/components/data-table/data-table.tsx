@@ -34,7 +34,7 @@ const features = tableFeatures({
 
 export type DataTableColumn<Row extends RowData> = ColumnDef<typeof features, Row>;
 
-const ROW_HEIGHT = 28;
+export const ROW_HEIGHT = 28;
 const OVERSCAN = 12;
 const FETCH_AHEAD = 20;
 
@@ -53,6 +53,10 @@ export interface DataTableProps<Row extends RowData> {
   sorting?: { id: string; desc: boolean };
   onSortingChange?: (next: { id: string; desc: boolean } | null) => void;
   emptyState: ReactNode;
+  /** Trace ids that just arrived over the live stream. */
+  highlightedRowIds?: ReadonlySet<string>;
+  /** Floating control drawn over the top of the scrollport, for the live pill. */
+  notice?: ReactNode;
 }
 
 export function DataTable<Row extends RowData>({
@@ -70,6 +74,8 @@ export function DataTable<Row extends RowData>({
   sorting,
   onSortingChange,
   emptyState,
+  highlightedRowIds,
+  notice,
 }: DataTableProps<Row>) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [columnSizing, setColumnSizing] = useState(() => readColumnSizes(tableId));
@@ -283,6 +289,11 @@ export function DataTable<Row extends RowData>({
         </div>
       ) : null}
       <div ref={scrollRef} data-scroll-container className="relative min-h-0 flex-1 overflow-auto">
+        {notice ? (
+          <div className="sticky top-2 z-10 flex h-0 justify-center">
+            <div className="pointer-events-auto">{notice}</div>
+          </div>
+        ) : null}
         {rows.length === 0 ? (
           emptyState
         ) : (
@@ -310,6 +321,7 @@ export function DataTable<Row extends RowData>({
                       ? "bg-selection shadow-[inset_2px_0_0_var(--primary)]"
                       : "hover:bg-muted",
                     focused && !selected && "bg-muted",
+                    highlightedRowIds?.has(row.id) && "live-row",
                   )}
                   style={{
                     height: ROW_HEIGHT,

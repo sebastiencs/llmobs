@@ -72,7 +72,20 @@ export type TracesSearch = {
   filter?: string;
   view?: string;
   mode?: TraceMode;
+  /** `1` while the traces list follows the live stream. */
+  live?: 1;
 };
+
+/** Disabled reason for the live toggle. Undefined when a preset range sorted by start time, newest first, can follow the stream. */
+export function traceLiveReason(search: TracesSearch): string | undefined {
+  if (search.from !== undefined && search.to !== undefined) {
+    return "Live needs a relative time range";
+  }
+  if ((search.sort ?? "start_time") !== "start_time" || (search.order ?? "desc") !== "desc") {
+    return "Live follows start time, newest first";
+  }
+  return undefined;
+}
 
 /** Fixed column ids, plus `score:<name>` for a non-empty name. */
 export function isTraceColumnId(id: string): boolean {
@@ -95,6 +108,7 @@ export function parseTracesSearch(search: Record<string, unknown>): TracesSearch
   const filter = parseString(search.filter, FILTER_MAX);
   const view = parseViewId(search.view);
   const mode = parseEnum(search.mode, TRACE_MODES);
+  const live = parseFlag(search.live);
   return {
     ...(sort ? { sort } : {}),
     ...(order ? { order } : {}),
@@ -109,6 +123,7 @@ export function parseTracesSearch(search: Record<string, unknown>): TracesSearch
     ...(filter ? { filter } : {}),
     ...(view ? { view } : {}),
     ...(mode ? { mode } : {}),
+    ...(live ? { live: 1 } : {}),
   };
 }
 
