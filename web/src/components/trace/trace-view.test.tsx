@@ -18,7 +18,8 @@ describe("trace header", () => {
     expect(within(header).getByText("$0.00306")).toBeInTheDocument();
     const session = within(header).getByRole("link", { name: "sess-001" });
     expect(session.parentElement).toHaveTextContent("session sess-001");
-    expect(within(header).getByText("user user-42")).toBeInTheDocument();
+    const endUser = within(header).getByRole("link", { name: "user-42" });
+    expect(endUser.parentElement).toHaveTextContent("user user-42");
     expect(within(header).getByText("production")).toBeInTheDocument();
     expect(within(header).getByText("v1.4.0")).toBeInTheDocument();
     expect(within(header).getByText("beta")).toBeInTheDocument();

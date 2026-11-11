@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn } from "cn";
 import { useRef, useState } from "react";
@@ -118,11 +118,20 @@ export function SessionView({
 }
 
 function SessionHeader({ session }: { session: Schema<"SessionSummary"> }) {
+  const { org, project } = useProject();
   return (
     <header className="flex shrink-0 flex-col gap-1 border-b px-3 py-1.5 text-xs">
       <div className="flex min-w-0 items-center gap-2">
         <IdText value={session.session_id} kind="session" />
-        {session.user_id ? <span className="font-mono">{session.user_id}</span> : null}
+        {session.user_id ? (
+          <Link
+            to="/$org/$project/users/$userId"
+            params={{ org, project, userId: session.user_id }}
+            className="font-mono underline-offset-2 hover:underline"
+          >
+            {session.user_id}
+          </Link>
+        ) : null}
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
         <span>

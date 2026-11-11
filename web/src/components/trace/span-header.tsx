@@ -81,7 +81,17 @@ export function SpanHeader({ span, detached }: { span: Schema<"SpanDetail">; det
             </Link>
           </Pair>
         ) : null}
-        {span.user_id ? <Pair label="user">{span.user_id}</Pair> : null}
+        {span.user_id ? (
+          <Pair label="user">
+            <Link
+              to="/$org/$project/users/$userId"
+              params={{ org, project, userId: span.user_id }}
+              className="underline-offset-2 hover:underline"
+            >
+              {span.user_id}
+            </Link>
+          </Pair>
+        ) : null}
         {span.truncated.length > 0 ? (
           <Tooltip>
             <TooltipTrigger asChild>

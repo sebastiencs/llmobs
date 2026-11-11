@@ -29,11 +29,13 @@ export function FilterBar({
   value,
   onApply,
   error,
+  placeholder,
 }: {
   view: ViewName;
   value: string;
   onApply: (text: string) => void;
   error?: Problem;
+  placeholder?: string;
 }) {
   const { org, project } = useProject();
   const schema = useQuery(schemaQuery(org, project));
@@ -87,6 +89,7 @@ export function FilterBar({
             errorRange={errorRange}
             viewName={view}
             schema={schema.data}
+            placeholder={placeholder}
             onApply={apply}
             onCancel={() => {
               if (!error) {
@@ -100,6 +103,7 @@ export function FilterBar({
             columns={columns}
             view={view}
             onApply={apply}
+            placeholder={placeholder}
             onEditText={(range) => setTextMode(range ?? {})}
           />
         )}
@@ -116,12 +120,14 @@ function Chips({
   columns,
   view,
   onApply,
+  placeholder = "Filter…",
   onEditText,
 }: {
   conjuncts: { text: string; start: number; end: number; chip: Chip }[];
   columns: Schema<"ColumnSchema">[];
   view: ViewName;
   onApply: (text: string) => void;
+  placeholder?: string;
   onEditText: (range?: { from: number; to: number }) => void;
 }) {
   function replace(index: number, chip: Chip) {
@@ -165,7 +171,7 @@ function Chips({
         className="h-6 min-w-8 flex-1 truncate px-1 text-left text-xs text-muted-foreground"
         onClick={() => onEditText()}
       >
-        {conjuncts.length === 0 ? "Filter…" : ""}
+        {conjuncts.length === 0 ? placeholder : ""}
       </button>
       <button
         type="button"

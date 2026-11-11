@@ -2,7 +2,13 @@ import { autocompletion, type CompletionContext } from "@codemirror/autocomplete
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { sql } from "@codemirror/lang-sql";
 import { EditorState, StateField, type Transaction } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, keymap, placeholder } from "@codemirror/view";
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  keymap,
+  placeholder as placeholderExtension,
+} from "@codemirror/view";
 import { useEffect, useRef } from "react";
 import type { Schema } from "@/api/types";
 import { completeFilter } from "@/components/filter-bar/logic";
@@ -61,6 +67,7 @@ export function FilterEditor({
   errorRange,
   viewName,
   schema,
+  placeholder = "Filter, e.g. status = 'error' AND cost_total > 0.1",
   onApply,
   onCancel,
 }: {
@@ -69,6 +76,7 @@ export function FilterEditor({
   errorRange: { from: number; to: number } | null;
   viewName: Schema<"ViewName">;
   schema: Schema<"SchemaResponse"> | undefined;
+  placeholder?: string;
   onApply: (text: string) => void;
   onCancel: () => void;
 }) {
@@ -109,7 +117,7 @@ export function FilterEditor({
         extensions: [
           editorTheme,
           sql(),
-          placeholder("Filter, e.g. status = 'error' AND cost_total > 0.1"),
+          placeholderExtension(placeholder),
           history(),
           singleLine(),
           errorField(range),
@@ -154,7 +162,7 @@ export function FilterEditor({
     return () => {
       view.destroy();
     };
-  }, [value, selectFrom, selectTo, errorFrom, errorTo]);
+  }, [value, selectFrom, selectTo, errorFrom, errorTo, placeholder]);
 
   return <div ref={parent} className="min-w-0 flex-1" />;
 }

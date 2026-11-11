@@ -85,7 +85,18 @@ export function TraceHeader({
               </Link>
             </span>
           ) : null}
-          {trace.user_id ? <span>user {trace.user_id}</span> : null}
+          {trace.user_id ? (
+            <span>
+              user{" "}
+              <Link
+                to="/$org/$project/users/$userId"
+                params={{ org, project, userId: trace.user_id }}
+                className="text-foreground underline-offset-2 hover:underline"
+              >
+                {trace.user_id}
+              </Link>
+            </span>
+          ) : null}
           {trace.environment ? <span>{trace.environment}</span> : null}
           {trace.release ? <span>{trace.release}</span> : null}
           {trace.tags.map((tag) => (
