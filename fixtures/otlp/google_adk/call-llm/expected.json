@@ -1,0 +1,74 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fe0a0000000000000000000000000001",
+      "span_id": "fe0a000000000001",
+      "name": "invoke_agent planner",
+      "span_kind": "agent",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "adk-app",
+      "session_id": "sess-1",
+      "operation": "invoke_agent",
+      "attributes": {
+        "gen_ai.agent.name": "planner",
+        "gen_ai.conversation.id": "sess-1",
+        "gen_ai.operation.name": "invoke_agent"
+      },
+      "scope_name": "gcp.vertex.agent",
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "fe0a0000000000000000000000000001",
+      "span_id": "fe0a000000000002",
+      "parent_span_id": "fe0a000000000001",
+      "name": "call_llm",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.100000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "adk-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini",
+      "operation": "call_llm",
+      "input_tokens": 20,
+      "output_tokens": 10,
+      "total_tokens": 30,
+      "cost_input": 0.00002,
+      "cost_output": 0.00004,
+      "cost_total": 0.00006000000000000001,
+      "cost_source": "computed",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Hello\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Hi\"}],\"finish_reason\":\"STOP\"}]",
+      "output_format": "messages",
+      "input_preview": "Hello",
+      "output_preview": "Hi",
+      "system_instructions": "[{\"type\":\"text\",\"content\":\"Be brief.\"}]",
+      "tool_definitions": "[{\"type\":\"function\",\"name\":\"lookup\",\"description\":\"Look up a city.\",\"parameters\":{\"type\":\"OBJECT\",\"properties\":{\"city\":{\"type\":\"STRING\"}}}}]",
+      "attributes": {
+        "gcp.vertex.agent.session_id": "sess-1",
+        "gen_ai.operation.name": "call_llm",
+        "gen_ai.request.model": "gpt-4o-mini",
+        "gen_ai.usage.input_tokens": "20",
+        "gen_ai.usage.output_tokens": "10"
+      },
+      "scope_name": "gcp.vertex.agent",
+      "conventions": [
+        "genai",
+        "google_adk"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

@@ -60,7 +60,7 @@ fn present(bag: &AttrBag<'_>, key: &str) -> bool {
 
 fn genai_operation(text: &str) -> Option<SpanKind> {
     Some(match text {
-        "chat" | "text_completion" | "generate_content" | "response" => SpanKind::Llm,
+        "chat" | "text_completion" | "generate_content" | "response" | "call_llm" => SpanKind::Llm,
         "embeddings" => SpanKind::Embedding,
         "execute_tool" => SpanKind::Tool,
         "invoke_agent" | "create_agent" => SpanKind::Agent,
@@ -233,6 +233,7 @@ mod tests {
             ("text_completion", SpanKind::Llm),
             ("generate_content", SpanKind::Llm),
             ("response", SpanKind::Llm),
+            ("call_llm", SpanKind::Llm),
             ("embeddings", SpanKind::Embedding),
             ("execute_tool", SpanKind::Tool),
             ("invoke_agent", SpanKind::Agent),

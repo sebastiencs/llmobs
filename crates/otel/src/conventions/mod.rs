@@ -2,8 +2,9 @@
 //!
 //! Spec 02 § Input and output. llmobs and GenAI are N13. OpenInference is N18.
 //! Vercel is N19. OpenLLMetry is N20. Langfuse and Laminar are N21.
-//! Later conventions append one reader and one [`PayloadKeys`] entry.
+//! Google ADK is N22.
 
+mod adk;
 mod genai;
 mod laminar;
 mod langfuse;
@@ -23,7 +24,7 @@ use crate::value::{as_str, to_json};
 use crate::warn::Warnings;
 
 /// llmobs, then GenAI, then OpenInference, then Vercel, then OpenLLMetry,
-/// then Langfuse, then Laminar.
+/// then Langfuse, then Laminar, then Google ADK.
 pub(crate) const READERS: &[ConventionPayload] = &[
     ConventionPayload {
         convention: Convention::Llmobs,
@@ -52,6 +53,10 @@ pub(crate) const READERS: &[ConventionPayload] = &[
     ConventionPayload {
         convention: Convention::Laminar,
         read: laminar::read,
+    },
+    ConventionPayload {
+        convention: Convention::GoogleAdk,
+        read: adk::read,
     },
 ];
 
@@ -84,6 +89,10 @@ pub(crate) const REGISTRIES: &[PayloadKeys] = &[
     PayloadKeys {
         convention: Convention::Laminar,
         keys: laminar::PAYLOAD_KEYS,
+    },
+    PayloadKeys {
+        convention: Convention::GoogleAdk,
+        keys: adk::PAYLOAD_KEYS,
     },
 ];
 

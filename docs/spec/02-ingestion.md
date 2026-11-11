@@ -70,7 +70,7 @@ A convention is listed in `conventions` when the span has at least one attribute
 | Source | Value → `span_kind` |
 |---|---|
 | `llmobs.span.kind` | any valid kind, verbatim |
-| `gen_ai.operation.name` | `chat`, `text_completion`, `generate_content`, `response` → `llm`; `embeddings` → `embedding`; `execute_tool` → `tool`; `invoke_agent`, `create_agent` → `agent`; `retrieval` → `retriever`; `invoke_workflow`, `invoke_runner`, `plan` → `chain`. Any other value does not decide the kind |
+| `gen_ai.operation.name` | `chat`, `text_completion`, `generate_content`, `response`, `call_llm` → `llm`; `embeddings` → `embedding`; `execute_tool` → `tool`; `invoke_agent`, `create_agent` → `agent`; `retrieval` → `retriever`; `invoke_workflow`, `invoke_runner`, `plan` → `chain`. Any other value does not decide the kind |
 | `openinference.span.kind` | `LLM` → `llm`, `EMBEDDING` → `embedding`, `TOOL` → `tool`, `AGENT` → `agent`, `CHAIN` → `chain`, `RETRIEVER` → `retriever`, `RERANKER` → `reranker`, `GUARDRAIL` → `guardrail`, `EVALUATOR` → `evaluator` |
 | `ai.operationId` (Vercel) | `*.doGenerate`, `*.doStream` → `llm`; `ai.generateText`, `ai.streamText`, `ai.generateObject`, `ai.streamObject` → `chain`; `ai.toolCall` → `tool`; `ai.embed*` → `embedding` |
 | `traceloop.span.kind` | `workflow`, `task` → `chain`; `agent` → `agent`; `tool` → `tool` |
@@ -79,7 +79,7 @@ A convention is listed in `conventions` when the span has at least one attribute
 | `lmnr.span.type` | `LLM`, `CACHED` → `llm`; `TOOL` → `tool`; `EXECUTOR` → `agent`; `EVALUATOR`, `EVALUATION`, `HUMAN_EVALUATOR` → `evaluator`; others → `chain` |
 | fallback | `gen_ai.tool.name` or `gen_ai.tool.call.id` present → `tool`, checked before the model fallback; else has `gen_ai.request.model` or `llm.model_name` → `llm`; else `span` |
 
-Note: Vercel's outer `ai.generateText` is `chain` (not `llm`) so tokens/cost are not double-counted with its `doGenerate` child. Cost is only computed on `llm`/`embedding` spans.
+Note: Vercel's outer `ai.generateText` is `chain` (not `llm`) so tokens/cost are not double-counted with its `doGenerate` child. Cost is only computed on `llm`/`embedding` spans. `call_llm` is the Google ADK legacy LLM operation. Current adk-python names that span `call_llm`. The operation values it sets are `generate_content`, `execute_tool`, and `invoke_agent`. A span that sends `call_llm` is `llm`.
 
 `status` is the OTLP status code: 1 → `ok`, 2 → `error`, otherwise `unset`. `status_message` is the OTLP status message when it is non-empty. When the OTLP status is unset and `langfuse.observation.level` is `ERROR`, `status` is `error`. When the OTLP status message is empty, `langfuse.observation.status_message` fills `status_message`. An attribute is consumed when it fills a column.
 
@@ -95,7 +95,7 @@ Note: Vercel's outer `ai.generateText` is `chain` (not `llm`) so tokens/cost are
 | OpenLLMetry | `gen_ai.prompt.{i}.role/content` (+ `tool_calls`) → messages; else `traceloop.entity.input` | `gen_ai.completion.{i}.*`; else `traceloop.entity.output` |
 | Langfuse | `langfuse.observation.input`, else `langfuse.trace.input`. An OpenAI message array or one message object becomes messages; any other value follows rule 10 | `langfuse.observation.output`, else `langfuse.trace.output`, the same way |
 | Laminar | `lmnr.span.input`. Canonical messages (objects with `parts`) or an OpenAI message array or one message object; any other value follows rule 10 | `lmnr.span.output`, the same way |
-| Google ADK | `gcp.vertex.agent.llm_request`, `gcp.vertex.agent.tool_call_args` | `gcp.vertex.agent.llm_response`, `gcp.vertex.agent.tool_response` |
+| Google ADK | `gcp.vertex.agent.llm_request`: Gemini `contents` become messages, `config.system_instruction` becomes system instructions, and `config.tools` becomes tool definitions. On a tool span, `gcp.vertex.agent.tool_call_args` is JSON. An object without `contents` stays in `attributes` | `gcp.vertex.agent.llm_response`: `content` becomes one message and `finish_reason` is copied onto it. On a tool span, `gcp.vertex.agent.tool_response` is JSON |
 
 Message conversion: each converter (OpenAI chat format, Anthropic content blocks, Gemini `parts`, OpenInference flattened, Vercel `CoreMessage`) maps into the canonical format of 01. If a convention recognizes its source but cannot convert it, the raw value is stored with `format = json` and `attributes` gains `llmobs.normalize_error`. Each failure is a code `messages:<convention>:<field>`, where `<convention>` is the convention's stored name (`llmobs`, `genai`, `openinference`, `vercel`, `openllmetry`, `langfuse`, `laminar`, `google_adk`) and `<field>` is `input`, `output`, `system_instructions` or `tool_definitions`. Several failures are joined with `,` and no spaces, for example `messages:genai:input,messages:genai:output`. The attribute replaces a client-sent value with the same key. The code never contains payload text.
 
@@ -104,7 +104,8 @@ Message conversion: each converter (OpenAI chat format, Anthropic content blocks
 - `gen_ai.tool.definitions`;
 - OpenInference `llm.tools.N.tool.json_schema`;
 - Vercel `ai.prompt.tools` (an array of JSON strings);
-- OpenLLMetry `llm.request.functions.N.{name,description,parameters}`.
+- OpenLLMetry `llm.request.functions.N.{name,description,parameters}`;
+- Google ADK `gcp.vertex.agent.llm_request` `config.tools`. Each `function_declarations` entry becomes one `{type, name, description, parameters}` object. Any other tool object is kept as one element.
 
 Vercel tool-call parts use `args` (v4) or `input` (v5+). Tool-result parts use `result` (v4) or `output`, where v5+ sends `{type, value}` and the converter takes `value`. `image` and `file` parts carry raw base64 in `image` or `data`, with `mimeType` or `mediaType`, and become `blob` parts.
 
@@ -128,6 +129,8 @@ Vercel tool-call parts use `args` (v4) or `input` (v5+). Tool-result parts use `
 | `request_params` | every `gen_ai.request.*` except `gen_ai.request.model`, then `llm.invocation_parameters`, `ai.settings.*`, `langfuse.observation.model.parameters` (rule 8) |
 
 `langfuse.observation.usage_details` is a JSON object, read after the attribute sources above and only for a column those sources left empty. `input`, `output`, and `total` fill those columns. `input_cached_tokens`, else `cache_read_input_tokens`, fills cache read. `cache_creation_input_tokens` fills cache write. `output_reasoning_tokens`, else `reasoning_tokens`, fills reasoning. The `input` count excludes cache (see the token table). The attribute is consumed when it fills a column. A value that is not a JSON object stays in `attributes`.
+
+`gcp.vertex.agent.llm_response` may carry `usage_metadata`. It is read after the attribute sources and after `usage_details`, and only for a column those left empty. `prompt_token_count` fills input, `candidates_token_count` fills output, `thoughts_token_count` fills reasoning, `cached_content_token_count` fills cache read, and `total_token_count` fills total. `candidates_token_count` excludes thoughts, so reasoning is added to the output (see the token table). The attribute is the response payload and is not consumed by this read. `gen_ai.usage.*` on the same span stays inclusive (D113).
 
 ### Token semantics
 

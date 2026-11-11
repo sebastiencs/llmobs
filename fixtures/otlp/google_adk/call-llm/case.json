@@ -1,0 +1,12 @@
+{
+  "description": "A Google ADK call_llm span converts Gemini contents, system instructions, and tool declarations.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Cost computation",
+    "02 § Normalization rules"
+  ],
+  "notes": "hand-written from google/adk-python src/google/adk/telemetry/tracing.py (tracer gcp.vertex.agent). Re-check against a B2 capture. gen_ai.operation.name is call_llm. The live tracer names the span call_llm and sets generate_content on the model span."
+}

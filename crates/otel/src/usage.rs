@@ -1,8 +1,9 @@
 //! Token columns and time to first token.
 //!
 //! Spec 02 § Model, provider, usage, § Token semantics, and rules 3 and 4.
-//! Gemini `usage_metadata` and ADK-specific keys are not in these tables.
-//! Langfuse `usage_details` is read after the attribute sources. Anthropic
+//! Langfuse `usage_details` and Gemini `usage_metadata` inside
+//! `gcp.vertex.agent.llm_response` are read after the attribute sources.
+//! Anthropic
 //! cache write before Vercel v6 is read from `ai.response.providerMetadata`.
 //! `gen_ai.usage.*` stays inclusive and relies on the safety net.
 
@@ -370,6 +371,33 @@ pub(crate) fn usage(
     if from_details {
         bag.take(USAGE_DETAILS);
     }
+    let metadata = gemini_usage(bag, warnings);
+    let input = match input {
+        Some(found) => Some(found),
+        None => metadata
+            .as_ref()
+            .and_then(|metadata| metadata.input)
+            .map(|value| (value, Inclusive::Yes, Inclusive::Yes)),
+    };
+    let output = match output {
+        Some(found) => Some(found),
+        None => metadata
+            .as_ref()
+            .and_then(|metadata| metadata.output)
+            .map(|value| (value, Inclusive::Yes, Inclusive::No)),
+    };
+    fill_if_empty(
+        &mut cache_read,
+        metadata.as_ref().and_then(|metadata| metadata.cache_read),
+    );
+    fill_if_empty(
+        &mut reasoning,
+        metadata.as_ref().and_then(|metadata| metadata.reasoning),
+    );
+    fill_if_empty(
+        &mut reported_total,
+        metadata.as_ref().and_then(|metadata| metadata.total),
+    );
 
     let mut input_tokens = input.map(|(value, _, _)| value);
     let mut input_inclusive = input
@@ -419,6 +447,31 @@ pub(crate) fn usage(
     }
 }
 
+struct GeminiUsage {
+    input: Option<i64>,
+    output: Option<i64>,
+    total: Option<i64>,
+    cache_read: Option<i64>,
+    reasoning: Option<i64>,
+}
+
+/// `usage_metadata` inside `gcp.vertex.agent.llm_response`.
+///
+/// `candidates_token_count` excludes thoughts. The attribute stays in place:
+/// the ADK reader consumes it as the output payload.
+fn gemini_usage(bag: &AttrBag<'_>, warnings: &mut Warnings) -> Option<GeminiUsage> {
+    let value = bag.get("gcp.vertex.agent.llm_response")?;
+    let json = crate::payload::decode_json_text(value, warnings)?;
+    let object = json.get("usage_metadata")?.as_object()?;
+    Some(GeminiUsage {
+        input: detail_count(object, &["prompt_token_count"], warnings),
+        output: detail_count(object, &["candidates_token_count"], warnings),
+        total: detail_count(object, &["total_token_count"], warnings),
+        cache_read: detail_count(object, &["cached_content_token_count"], warnings),
+        reasoning: detail_count(object, &["thoughts_token_count"], warnings),
+    })
+}
+
 /// Time to first token, in nanoseconds, for any span kind.
 ///
 /// `warnings` is not in the plan's sketch; a non-numeric candidate records
@@ -456,6 +509,14 @@ struct LangfuseUsage {
     cache_read: Option<i64>,
     cache_write: Option<i64>,
     reasoning: Option<i64>,
+}
+
+fn fill_if_empty(slot: &mut Option<i64>, value: Option<i64>) {
+    if slot.is_none()
+        && let Some(value) = value
+    {
+        *slot = Some(value);
+    }
 }
 
 fn fill_detail(slot: &mut Option<i64>, value: Option<i64>, used: &mut bool) {
@@ -877,6 +938,32 @@ mod tests {
             bag.state("langfuse.observation.usage_details"),
             Some(Use::Unread)
         );
+    }
+
+    #[test]
+    fn gemini_usage_metadata_adds_thoughts_unless_gen_ai_already_counted() {
+        let response = r#"{"usage_metadata":{"prompt_token_count":100,"candidates_token_count":20,"thoughts_token_count":8,"total_token_count":128}}"#;
+        let attrs = [string_attr("gcp.vertex.agent.llm_response", response)];
+        let (usage, warnings, bag) = counted(&attrs, SpanKind::Llm, None);
+        assert_eq!(usage.input_tokens, Some(100));
+        assert_eq!(usage.output_tokens, Some(28));
+        assert_eq!(usage.reasoning_tokens, Some(8));
+        assert_eq!(usage.total_tokens, Some(128));
+        assert_eq!(warnings.to_attribute(), None);
+        assert_eq!(
+            bag.state("gcp.vertex.agent.llm_response"),
+            Some(Use::Unread)
+        );
+
+        let attrs = [
+            int_attr("gen_ai.usage.output_tokens", 30),
+            int_attr("gen_ai.usage.reasoning.output_tokens", 8),
+            string_attr("gcp.vertex.agent.llm_response", response),
+        ];
+        let (usage, _, _) = counted(&attrs, SpanKind::Llm, None);
+        assert_eq!(usage.output_tokens, Some(30));
+        assert_eq!(usage.reasoning_tokens, Some(8));
+        assert_eq!(usage.input_tokens, Some(100));
     }
 
     #[test]
