@@ -1,10 +1,27 @@
-//! MinIO coverage for remote puts (D119).
+//! Remote puts against a real S3-compatible server (D119).
 //!
 //! Skipped unless `LLMOBS_TEST_S3_ENDPOINT` is set. Also set
 //! `LLMOBS_TEST_S3_BUCKET`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+//! The bucket must exist.
+//!
+//! Any S3-compatible server works. The `minio/minio` image is no longer
+//! published; Versity Gateway serves a directory as S3. Start it (the
+//! `--tmpfs` gives it a writable `/data`):
 //!
 //! ```text
-//! docker run --rm -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin minio/minio server /data
+//! docker run --rm --name llmobs-s3 -p 7070:7070 --tmpfs /data:rw,mode=1777,size=2g -e ROOT_ACCESS_KEY=llmobs -e ROOT_SECRET_KEY=llmobs-secret -e VGW_BACKEND=posix -e VGW_BACKEND_ARGS=/data -e VGW_ARGS="--port :7070" versity/versitygw:v1.11.0
+//! ```
+//!
+//! Create the bucket with curl's built-in request signing:
+//!
+//! ```text
+//! curl --aws-sigv4 "aws:amz:us-east-1:s3" --user llmobs:llmobs-secret -X PUT http://127.0.0.1:7070/llmobs-test
+//! ```
+//!
+//! Then run:
+//!
+//! ```text
+//! LLMOBS_TEST_S3_ENDPOINT=http://127.0.0.1:7070 LLMOBS_TEST_S3_BUCKET=llmobs-test AWS_ACCESS_KEY_ID=llmobs AWS_SECRET_ACCESS_KEY=llmobs-secret cargo test -p llmobs-storage --test s3 -- --nocapture
 //! ```
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -220,7 +237,7 @@ async fn delete_prefix(endpoint: &str, bucket: &str, prefix: &str) -> Result<(),
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn minio_flush_round_trip() {
+async fn s3_flush_round_trip() {
     let Ok(endpoint) = std::env::var("LLMOBS_TEST_S3_ENDPOINT") else {
         println!("skipped: LLMOBS_TEST_S3_ENDPOINT is not set");
         return;

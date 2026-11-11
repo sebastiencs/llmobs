@@ -437,7 +437,7 @@ Each milestone ends merged, with `just check` green, and gets its own implementa
 Answered in M2:
 
 - DataFusion 55's file metadata cache does **not** include bloom-filter bitsets. It caches footers and page indexes (column and offset indexes) up to `query.metadata_cache_bytes`. Bloom pruning still runs: the bitset is read from the object. No custom reader factory was written (§ Query resources).
-- MinIO is not part of CI (D119). S3 coverage there is `FaultStore` around `InMemory`. `crates/storage/tests/s3.rs` runs when `LLMOBS_TEST_S3_ENDPOINT` is set. The M2 run could not pull an image: Docker Hub, quay.io and ghcr.io all denied `minio/minio`.
+- A real S3 server is not part of CI (D119). S3 coverage there is `FaultStore` around `InMemory`. `crates/storage/tests/s3.rs` runs when `LLMOBS_TEST_S3_ENDPOINT` is set. The `minio/minio` image is no longer published, so the test's doc comment uses Versity Gateway (`versity/versitygw:v1.11.0`). After M2 merged, the test passed against it, including a multipart upload.
 
 Still open:
 
