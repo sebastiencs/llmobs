@@ -37,6 +37,8 @@ const ENV_PREFIXES: &[&str] = &[
     "TRACELOOP_",
     "LANGFUSE_",
     "LMNR_",
+    "ANTHROPIC_",
+    "ADK_",
 ];
 const ENV_FORBIDDEN: &[&str] = &["sk-", "pk-", "Bearer ", "@"];
 
@@ -155,7 +157,8 @@ pub struct TimestampAttribute {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TimestampFormat {
-    /// RFC 3339 text.
+    /// RFC 3339 text. One pair of surrounding double quotes is the same instant:
+    /// Langfuse stores `json.dumps` of a datetime, and the quotes stay.
     Rfc3339,
     /// Nanoseconds since the Unix epoch, as a number or a decimal string.
     UnixNano,
@@ -390,7 +393,7 @@ impl Scenario {
         for (key, value) in &self.env {
             if !ENV_PREFIXES.iter().any(|prefix| key.starts_with(prefix)) {
                 return Err(format!(
-                    "env key \"{key}\" must start with OTEL_, OPENINFERENCE_, TRACELOOP_, LANGFUSE_, or LMNR_"
+                    "env key \"{key}\" must start with OTEL_, OPENINFERENCE_, TRACELOOP_, LANGFUSE_, LMNR_, ANTHROPIC_, or ADK_"
                 ));
             }
             if let Some(marker) = ENV_FORBIDDEN.iter().find(|marker| value.contains(**marker)) {
@@ -939,8 +942,14 @@ mod tests {
         value["env"] = json!({ "SECRET": "1" });
         assert_reason(
             value,
-            "env key \"SECRET\" must start with OTEL_, OPENINFERENCE_, TRACELOOP_, LANGFUSE_, or LMNR_",
+            "env key \"SECRET\" must start with OTEL_, OPENINFERENCE_, TRACELOOP_, LANGFUSE_, LMNR_, ANTHROPIC_, or ADK_",
         );
+        let mut allowed = chat();
+        allowed["env"] = json!({ "ANTHROPIC_OPEN_TELEMETRY": "false" });
+        load_value(allowed).expect("ANTHROPIC_ prefix");
+        let mut adk = chat();
+        adk["env"] = json!({ "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "true" });
+        load_value(adk).expect("ADK_ prefix");
 
         for marker in ["sk-", "pk-", "Bearer ", "@"] {
             let mut value = chat();

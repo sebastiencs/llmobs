@@ -1,0 +1,27 @@
+{
+  "description": "Vercel AI SDK v6 structured object generation through OpenAI chat.",
+  "spec_refs": [
+    "02 \u00a7 Convention detection",
+    "02 \u00a7 Mapping tables / Span kind",
+    "02 \u00a7 Mapping tables / Input / output",
+    "02 \u00a7 Mapping tables / Model, provider, usage",
+    "02 \u00a7 Normalization rules"
+  ],
+  "notes": "generateObject is deprecated in ai 6.0.322, so the call is generateText with Output.object and a jsonSchema. Telemetry is enabled through experimental_telemetry. recordInputs and recordOutputs stay at their defaults. The model is openai.chat, and the SDK makes one call. The span name is ai.generateText. Token counts are copied: input 24 and output 10, with inputTokenDetails present. ai.response.timestamp is the mock created_at, 2026-01-01T00:00:00.000Z.",
+  "instrumentation": "ai",
+  "libraries": ["ai", "@ai-sdk/openai", "@opentelemetry/api", "@opentelemetry/sdk-trace-node"],
+  "turns": [
+    {
+      "api": "openai.chat",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": {
+        "text": "{\"summary\":\"Clear skies over the harbor.\"}"
+      },
+      "finish": "stop",
+      "usage": {
+        "input": 24,
+        "output": 10
+      }
+    }
+  ]
+}

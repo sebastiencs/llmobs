@@ -1,0 +1,27 @@
+{
+  "description": "Gemini generateContent with text and an inline PNG, traced by OpenLLMetry.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "opentelemetry-instrumentation-google-generativeai",
+    "instrumentation_version": "0.62.4",
+    "language": "python",
+    "libraries": {
+      "google-genai": "2.34.0",
+      "opentelemetry-instrumentation-google-generativeai": "0.62.4",
+      "opentelemetry-sdk": "1.45.2",
+      "opentelemetry-semantic-conventions-ai": "0.5.1"
+    },
+    "captured_at": "2026-11-11T12:42:19Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "settings": {
+    "media_min_bytes": 64
+  },
+  "notes": "opentelemetry-instrumentation-google-generativeai 0.62.4 wraps google.genai.models, not the legacy google-generativeai package. TRACELOOP_TRACE_CONTENT is true, which is also the default, so message content is recorded on the span. TRACELOOP_METRICS_ENABLED is false. These provider packages have no TRACELOOP_TELEMETRY switch and no vendor export URL; spans go through the harness tracer provider. gen_ai.prompt.N is not written. The image is a 64x64 PNG generated in the program. The text part's content is the Part object's field dump, including text='Describe this square.'. The default upload hook does not return a URL, so the image stays a blob part. Usage copies prompt_token_count 90 and cached_content_token_count 40. prices.json has no Gemini model row."
+}

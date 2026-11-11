@@ -1,0 +1,256 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "capture-app"
+            }
+          },
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "nodejs"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "2.12.0"
+            }
+          }
+        ],
+        "droppedAttributesCount": 0,
+        "entityRefs": []
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "ai",
+            "version": "",
+            "attributes": [],
+            "droppedAttributesCount": 0
+          },
+          "spans": [
+            {
+              "traceId": "02c992eebd615b1888eb88e7860f4c5a",
+              "spanId": "fc7add3f1986bae8",
+              "traceState": "",
+              "parentSpanId": "",
+              "flags": 257,
+              "name": "ai.embedMany",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225590070000000",
+              "attributes": [
+                {
+                  "key": "operation.name",
+                  "value": {
+                    "stringValue": "ai.embedMany v5-embed-many"
+                  }
+                },
+                {
+                  "key": "resource.name",
+                  "value": {
+                    "stringValue": "v5-embed-many"
+                  }
+                },
+                {
+                  "key": "ai.operationId",
+                  "value": {
+                    "stringValue": "ai.embedMany"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.functionId",
+                  "value": {
+                    "stringValue": "v5-embed-many"
+                  }
+                },
+                {
+                  "key": "ai.model.provider",
+                  "value": {
+                    "stringValue": "openai.embedding"
+                  }
+                },
+                {
+                  "key": "ai.model.id",
+                  "value": {
+                    "stringValue": "text-embedding-3-small"
+                  }
+                },
+                {
+                  "key": "ai.settings.maxRetries",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "ai.request.headers.user-agent",
+                  "value": {
+                    "stringValue": "ai/5.0.285"
+                  }
+                },
+                {
+                  "key": "ai.values",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "\"alpha\""
+                        },
+                        {
+                          "stringValue": "\"beta\""
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "ai.embeddings",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "[-0.5,-0.4000000059604645,-0.30000001192092896,-0.19999998807907104,-0.09999999403953552,0,0.10000002384185791,0.19999998807907104]"
+                        },
+                        {
+                          "stringValue": "[0.19999998807907104,0.30000001192092896,0.3999999761581421,0.5,-0.5,-0.4000000059604645,-0.30000001192092896,-0.19999998807907104]"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "ai.usage.tokens",
+                  "value": {
+                    "intValue": "6"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "02c992eebd615b1888eb88e7860f4c5a",
+              "spanId": "bd2e639dd6b13d7a",
+              "traceState": "",
+              "parentSpanId": "fc7add3f1986bae8",
+              "flags": 257,
+              "name": "ai.embedMany.doEmbed",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590002000000",
+              "endTimeUnixNano": "1767225590067000000",
+              "attributes": [
+                {
+                  "key": "operation.name",
+                  "value": {
+                    "stringValue": "ai.embedMany.doEmbed v5-embed-many"
+                  }
+                },
+                {
+                  "key": "resource.name",
+                  "value": {
+                    "stringValue": "v5-embed-many"
+                  }
+                },
+                {
+                  "key": "ai.operationId",
+                  "value": {
+                    "stringValue": "ai.embedMany.doEmbed"
+                  }
+                },
+                {
+                  "key": "ai.telemetry.functionId",
+                  "value": {
+                    "stringValue": "v5-embed-many"
+                  }
+                },
+                {
+                  "key": "ai.model.provider",
+                  "value": {
+                    "stringValue": "openai.embedding"
+                  }
+                },
+                {
+                  "key": "ai.model.id",
+                  "value": {
+                    "stringValue": "text-embedding-3-small"
+                  }
+                },
+                {
+                  "key": "ai.settings.maxRetries",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "ai.request.headers.user-agent",
+                  "value": {
+                    "stringValue": "ai/5.0.285"
+                  }
+                },
+                {
+                  "key": "ai.values",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "\"alpha\""
+                        },
+                        {
+                          "stringValue": "\"beta\""
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "ai.embeddings",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "[-0.5,-0.4000000059604645,-0.30000001192092896,-0.19999998807907104,-0.09999999403953552,0,0.10000002384185791,0.19999998807907104]"
+                        },
+                        {
+                          "stringValue": "[0.19999998807907104,0.30000001192092896,0.3999999761581421,0.5,-0.5,-0.4000000059604645,-0.30000001192092896,-0.19999998807907104]"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "ai.usage.tokens",
+                  "value": {
+                    "intValue": "6"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            }
+          ],
+          "schemaUrl": ""
+        }
+      ],
+      "schemaUrl": ""
+    }
+  ]
+}

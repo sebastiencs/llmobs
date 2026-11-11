@@ -1,0 +1,47 @@
+{
+  "description": "LangChain ChatOpenAI with one bound tool: a tool call, the tool run, then the answer, traced by OpenLLMetry.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "TRACELOOP_TRACE_CONTENT is true, which is also the default, so message content is recorded on spans as gen_ai.input.messages and gen_ai.output.messages. TRACELOOP_METRICS_ENABLED is false. These packages have no TRACELOOP_TELEMETRY switch. Only LangchainInstrumentor is enabled. ChatOpenAI is pointed at the mock. The capture is three root spans: ChatOpenAI.chat, execute_tool get_weather, and ChatOpenAI.chat again. Token counts are copied from LangChain usage_metadata: input 82 then 131, output 17 then 12, cache_read 0 then 64. The total is the sum of those input and output counts. Finish reasons are mapped from tool_calls to tool_call, then stop. The chat spans also carry empty traceloop.workflow.name and traceloop.entity.path, plus LangChain metadata under traceloop.association.properties. LangChain run ids are pinned to a counter.",
+  "instrumentation": "opentelemetry-instrumentation-langchain",
+  "libraries": [
+    "langchain",
+    "langchain-openai",
+    "opentelemetry-instrumentation-langchain",
+    "opentelemetry-sdk",
+    "opentelemetry-semantic-conventions-ai"
+  ],
+  "env": {
+    "TRACELOOP_TRACE_CONTENT": "true",
+    "TRACELOOP_METRICS_ENABLED": "false"
+  },
+  "turns": [
+    {
+      "api": "openai.chat",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": {
+        "tool_calls": [
+          {
+            "id": "call_weather_1",
+            "name": "get_weather",
+            "arguments": { "city": "Paris" }
+          }
+        ]
+      },
+      "finish": "tool_calls",
+      "usage": { "input": 82, "output": 17 }
+    },
+    {
+      "api": "openai.chat",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": { "text": "It is 18 °C and sunny in Paris." },
+      "finish": "stop",
+      "usage": { "input": 131, "output": 12, "cache_read": 64 }
+    }
+  ]
+}

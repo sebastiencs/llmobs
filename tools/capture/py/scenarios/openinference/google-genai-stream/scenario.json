@@ -1,0 +1,27 @@
+{
+  "description": "One streamed Gemini answer with a reasoning part, traced by OpenInference.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "OpenInference records message content by default, and this scenario sets no content-capture environment variable. The mock waits 120 ms before the first chunk and splits reasoning and text into 4 chunks each. The span has no timing attribute. Prompt 48 is copied. Completion is 20, candidatesTokenCount 14 plus thoughtsTokenCount 6, and completion_details.reasoning is 6. The reasoning text is one message_content of type reasoning. output.value keeps candidatesTokenCount 14 and thoughtsTokenCount 6, and includes sdk_http_response headers; the mock pins Date so that string stays stable. prices.json has no Gemini model row.",
+  "instrumentation": "openinference-instrumentation-google-genai",
+  "libraries": ["google-genai", "openinference-instrumentation-google-genai", "opentelemetry-sdk"],
+  "turns": [
+    {
+      "api": "gemini.generate_content",
+      "model": "gemini-2.5-flash",
+      "message": {
+        "reasoning": "The harbor is calm.",
+        "text": "Clear skies over the harbor."
+      },
+      "finish": "stop",
+      "usage": { "input": 48, "output": 20, "reasoning": 6 },
+      "ttft_ms": 120,
+      "chunks": 4
+    }
+  ]
+}

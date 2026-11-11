@@ -441,6 +441,9 @@ fn ready(
             response = response.header(name, value);
         }
     }
+    // A fixed date keeps response headers stable. The Google GenAI SDK copies
+    // them into output.value, and the process clock would change every capture.
+    response = response.header(header::DATE, "Thu, 01 Jan 2026 00:00:00 GMT");
     response
         .body(body)
         .unwrap_or_else(|_| Response::new(Body::empty()))
@@ -688,6 +691,11 @@ mod tests {
                     assert!(headers.get("request-id").is_none());
                 }
             }
+            assert_eq!(
+                headers[header::DATE],
+                "Thu, 01 Jan 2026 00:00:00 GMT",
+                "{uri}"
+            );
             let rendered = expected(&turn, body, stream);
             let payload = bytes(response).await;
             match rendered {

@@ -1,0 +1,27 @@
+{
+  "description": "An @observe function that calls @observe(as_type=tool) and then one OpenAI drop-in chat completion.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output"
+  ],
+  "notes": "Langfuse 5.1.0 exports to {base_url}/api/public/otel/v1/traces. base_url is the receiver origin. LANGFUSE_PUBLIC_KEY is capture-public-key and LANGFUSE_SECRET_KEY is capture-secret-key. LANGFUSE_MEDIA_UPLOAD_ENABLED is false. LANGFUSE_OBSERVE_DECORATOR_IO_CAPTURE_ENABLED is true, which is also the default, so decorator arguments and return values are recorded on the spans. LANGFUSE_OTEL_COMPRESSION is none and the client also passes otel_compression none, because the receiver rejects a non-identity content encoding and the SDK default is gzip. There is no separate anonymous-telemetry switch in 5.1.0. The client installs its own tracer provider, so the scenario does not call harness.setup. Three spans on scope langfuse-sdk 5.1.0: answer-weather (type span), lookup_weather (type tool), and OpenAI-generation. Decorator input is a JSON object of args and kwargs, and the return value is a raw string. A non-streaming drop-in call does not set completion_start_time. usage_details copies the provider usage object: prompt_tokens 24, completion_tokens 12, total_tokens 36, prompt_tokens_details.cached_tokens 8, and completion_tokens_details.reasoning_tokens 3. model.parameters records the SDK defaults, and max_tokens is the string Infinity.",
+  "instrumentation": "langfuse",
+  "libraries": ["langfuse", "openai", "opentelemetry-sdk"],
+  "env": {
+    "LANGFUSE_PUBLIC_KEY": "capture-public-key",
+    "LANGFUSE_SECRET_KEY": "capture-secret-key",
+    "LANGFUSE_MEDIA_UPLOAD_ENABLED": "false",
+    "LANGFUSE_OBSERVE_DECORATOR_IO_CAPTURE_ENABLED": "true",
+    "LANGFUSE_OTEL_COMPRESSION": "none"
+  },
+  "turns": [
+    {
+      "api": "openai.chat",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": { "text": "It is 18 °C and sunny in Paris." },
+      "finish": "stop",
+      "usage": { "input": 24, "output": 12, "cache_read": 8, "reasoning": 3 }
+    }
+  ]
+}

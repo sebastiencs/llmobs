@@ -1,0 +1,42 @@
+{
+  "description": "OpenAI Agents SDK with one function tool, traced by OpenInference.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Only OpenAIAgentsInstrumentor is enabled. OpenInference records message content by default, and this scenario sets no content-capture environment variable. The agent talks to the Responses API through the mock. The instrumentor replaces the SDK trace processors, so the exporter that posts to api.openai.com is not registered. set_tracing_disabled is not called: it disables tracing globally and would drop these spans. The default client is pointed at the mock with use_for_tracing false. The capture keeps eight spans: agent, workflow chain, the weather agent, a turn, the LLM, the tool, a second turn, and the second LLM. Token counts are copied. The second span's prompt is 131 and prompt_details.cache_read is 64, with cache_write and reasoning written as 0. Both LLM spans set llm.finish_reason to stop, including the tool-call turn, and neither sets it on the message. Input messages are indexed from 1 and do not include the agent instructions. llm.invocation_parameters carries the response id and created_at.",
+  "instrumentation": "openinference-instrumentation-openai-agents",
+  "libraries": [
+    "openai",
+    "openai-agents",
+    "openinference-instrumentation-openai-agents",
+    "opentelemetry-sdk"
+  ],
+  "turns": [
+    {
+      "api": "openai.responses",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": {
+        "tool_calls": [
+          {
+            "id": "call_weather_1",
+            "name": "get_weather",
+            "arguments": { "city": "Paris" }
+          }
+        ]
+      },
+      "finish": "tool_calls",
+      "usage": { "input": 82, "output": 17 }
+    },
+    {
+      "api": "openai.responses",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": { "text": "It is 18 °C and sunny in Paris." },
+      "finish": "stop",
+      "usage": { "input": 131, "output": 12, "cache_read": 64 }
+    }
+  ]
+}

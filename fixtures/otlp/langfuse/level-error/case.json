@@ -1,10 +1,20 @@
 {
-  "description": "An unset OTLP status becomes error when langfuse.observation.level is ERROR, and trace input is used when the observation key is absent.",
-  "origin": "hand_written",
+  "description": "One observation with level ERROR and a status message, and no OTLP error status, plus one plain OpenAI chat completion.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "langfuse",
+    "instrumentation_version": "5.1.0",
+    "language": "python",
+    "libraries": {
+      "langfuse": "5.1.0",
+      "openai": "3.45.0",
+      "opentelemetry-sdk": "1.45.2"
+    },
+    "captured_at": "2026-11-11T13:11:40Z"
+  },
   "spec_refs": [
-    "02 § Mapping tables / Span kind",
-    "02 § Mapping tables / Input / output",
-    "02 § Normalization rules"
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind"
   ],
-  "notes": "hand-written from langfuse 5.2.0 (tracer langfuse-sdk). Re-check against a B2 capture. The OTLP status is omitted. status_message is copied from langfuse.observation.status_message."
+  "notes": "Langfuse 5.1.0 exports to {base_url}/api/public/otel/v1/traces. base_url is the receiver origin. LANGFUSE_PUBLIC_KEY is capture-public-key and LANGFUSE_SECRET_KEY is capture-secret-key. LANGFUSE_MEDIA_UPLOAD_ENABLED is false. LANGFUSE_OTEL_COMPRESSION is none and the client also passes otel_compression none, because the receiver rejects a non-identity content encoding and the SDK default is gzip. There is no separate anonymous-telemetry switch in 5.1.0. The client installs its own tracer provider, so the scenario does not call harness.setup. One span, failed-lookup, type span, on scope langfuse-sdk 5.1.0. Passing level ERROR to the SDK also sets the OTLP status to ERROR, and the Python SDK then ignores a later attempt to set the status back to unset. The scenario therefore writes langfuse.observation.level ERROR and langfuse.observation.status_message through the current span. The plain OpenAI call succeeds and is not its own span, so the export has no status field. Pins the rule that an unset OTLP status plus level ERROR is an error."
 }

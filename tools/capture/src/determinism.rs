@@ -125,7 +125,76 @@ fn merge(exports: Vec<ExportTraceServiceRequest>) -> Vec<ResourceGroup> {
             .spans
             .push(item.span);
     }
+    // A parent and its child can start within a millisecond of each other, and
+    // that race changes which one sorts first. Nesting keeps the time order
+    // among siblings and puts each parent before its children.
+    for group in &mut groups {
+        for scope in &mut group.scopes {
+            nest(&mut scope.spans);
+        }
+    }
     groups
+}
+
+/// Depth-first, parents before children. Siblings stay in their current order.
+fn nest(spans: &mut Vec<Span>) {
+    if spans.len() < 2 {
+        return;
+    }
+    let mut index_of: HashMap<Vec<u8>, usize> = HashMap::new();
+    for (index, span) in spans.iter().enumerate() {
+        if present(&span.span_id) {
+            index_of.entry(span.span_id.clone()).or_insert(index);
+        }
+    }
+    let mut children = vec![Vec::new(); spans.len()];
+    let mut is_child = vec![false; spans.len()];
+    for (index, span) in spans.iter().enumerate() {
+        if let Some(&parent) = index_of.get(&span.parent_span_id)
+            && parent != index
+        {
+            children[parent].push(index);
+            is_child[index] = true;
+        }
+    }
+    let mut ordered = Vec::with_capacity(spans.len());
+    let mut seen = vec![false; spans.len()];
+    let roots: Vec<usize> = is_child
+        .iter()
+        .enumerate()
+        .filter(|(_, child)| !*child)
+        .map(|(index, _)| index)
+        .collect();
+    for index in roots {
+        visit(index, &children, &mut seen, &mut ordered);
+    }
+    let rest: Vec<usize> = seen
+        .iter()
+        .enumerate()
+        .filter(|(_, visited)| !*visited)
+        .map(|(index, _)| index)
+        .collect();
+    for index in rest {
+        visit(index, &children, &mut seen, &mut ordered);
+    }
+    let mut slots: Vec<Option<Span>> = std::mem::take(spans).into_iter().map(Some).collect();
+    for index in ordered {
+        // `ordered` lists each span once, so every slot is still occupied.
+        if let Some(span) = slots[index].take() {
+            spans.push(span);
+        }
+    }
+}
+
+fn visit(index: usize, children: &[Vec<usize>], seen: &mut [bool], ordered: &mut Vec<usize>) {
+    if seen[index] {
+        return;
+    }
+    seen[index] = true;
+    ordered.push(index);
+    for &child in &children[index] {
+        visit(child, children, seen, ordered);
+    }
 }
 
 fn remint(groups: &mut [ResourceGroup], case: &str) {
@@ -211,13 +280,18 @@ fn replacement_patterns(
     traces: &HashMap<Vec<u8>, Vec<u8>>,
     spans: &HashMap<Vec<u8>, Vec<u8>>,
 ) -> Vec<(String, String)> {
-    let mut patterns: Vec<(String, String)> = traces
-        .iter()
-        .chain(spans.iter())
-        .map(|(original, minted)| (hex::encode(original), hex::encode(minted)))
-        .collect();
-    // A span id is 16 hex chars and a trace id is 32. Longer originals win so a
-    // span id that happens to sit inside a trace id hex does not split it.
+    let mut patterns: Vec<(String, String)> = Vec::new();
+    for (original, minted) in traces.iter().chain(spans.iter()) {
+        patterns.push((hex::encode(original), hex::encode(minted)));
+        // Laminar stores a span id as `UUID(int=span_id)`, so the hex is split
+        // by hyphens and the plain hex rewrite misses it.
+        if matches!(original.len(), 8 | 16) {
+            patterns.push((uuid_text(original), uuid_text(minted)));
+        }
+    }
+    // A span id is 16 hex chars, a trace id is 32, and a UUID form is 36.
+    // Longer originals win so a span id that happens to sit inside a trace id
+    // hex does not split it.
     patterns.sort_by(|left, right| {
         right
             .0
@@ -226,6 +300,24 @@ fn replacement_patterns(
             .then_with(|| left.0.cmp(&right.0))
     });
     patterns
+}
+
+/// Hyphenated UUID text for an 8-byte span id or a 16-byte trace id.
+///
+/// An 8-byte id is the low half, matching `UUID(int=span_id)`.
+fn uuid_text(id: &[u8]) -> String {
+    let mut bytes = [0_u8; 16];
+    let start = bytes.len() - id.len();
+    bytes[start..].copy_from_slice(id);
+    let hex = hex::encode(bytes);
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
 }
 
 fn rewrite_attributes(attributes: &mut [KeyValue], patterns: &[(String, String)]) {
@@ -581,7 +673,8 @@ fn read_timestamp(
             let Some(Value::StringValue(text)) = &value.value else {
                 return Err(bad());
             };
-            DateTime::parse_from_rfc3339(text)
+            let (body, _) = json_quoted(text);
+            DateTime::parse_from_rfc3339(body)
                 .ok()
                 .and_then(|parsed| parsed.timestamp_nanos_opt())
                 .ok_or_else(bad)
@@ -636,9 +729,10 @@ fn write_integer(value: &mut AnyValue, integer: i64) {
 }
 
 fn rewrite_rfc3339(original: &str, shifted_ns: i64) -> Result<String, ()> {
-    let parsed = DateTime::parse_from_rfc3339(original).map_err(|_| ())?;
+    let (body, quoted) = json_quoted(original);
+    let parsed = DateTime::parse_from_rfc3339(body).map_err(|_| ())?;
     let shifted = DateTime::from_timestamp_nanos(shifted_ns).with_timezone(parsed.offset());
-    let digits = fractional_digits(original);
+    let digits = fractional_digits(body);
     let mut text = shifted.format("%Y-%m-%dT%H:%M:%S").to_string();
     if digits > 0 {
         let nanos = shifted.timestamp_subsec_nanos();
@@ -647,12 +741,30 @@ fn rewrite_rfc3339(original: &str, shifted_ns: i64) -> Result<String, ()> {
         text.push('.');
         text.push_str(&frac[..digits]);
     }
-    if original.ends_with('Z') || original.ends_with('z') {
+    if body.ends_with('Z') || body.ends_with('z') {
         text.push('Z');
     } else {
         text.push_str(&shifted.format("%:z").to_string());
     }
+    if quoted {
+        text.insert(0, '"');
+        text.push('"');
+    }
     Ok(text)
+}
+
+/// Splits one pair of surrounding JSON quotes off an RFC 3339 value.
+///
+/// Langfuse stores `json.dumps` of a datetime, so the attribute text includes
+/// the quote characters. The inner text is the timestamp.
+fn json_quoted(text: &str) -> (&str, bool) {
+    match text
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    {
+        Some(inner) if !inner.is_empty() && !inner.contains('"') => (inner, true),
+        _ => (text, false),
+    }
 }
 
 fn fractional_digits(text: &str) -> usize {
@@ -941,16 +1053,16 @@ mod tests {
         )
         .unwrap();
         let spans = &result.resource_spans[0].scope_spans[0].spans;
-        let child = &spans[0];
-        let parent = &spans[1];
+        let parent = &spans[0];
+        let child = &spans[1];
         let linker = &spans[2];
 
-        // The child sorts first, so its span id is k = 0 and its parent is k = 1.
-        assert_eq!(child.span_id, expected_id("span", 0, 8));
-        assert_eq!(child.trace_id, expected_id("trace", 0, 16));
-        assert_eq!(child.parent_span_id, expected_id("span", 1, 8));
-        assert_eq!(parent.span_id, expected_id("span", 1, 8));
+        // The parent is written before the child, so its span id is k = 0.
+        assert_eq!(parent.span_id, expected_id("span", 0, 8));
         assert_eq!(parent.trace_id, expected_id("trace", 0, 16));
+        assert_eq!(child.span_id, expected_id("span", 1, 8));
+        assert_eq!(child.trace_id, expected_id("trace", 0, 16));
+        assert_eq!(child.parent_span_id, expected_id("span", 0, 8));
         assert_eq!(linker.trace_id, expected_id("trace", 1, 16));
         assert_eq!(linker.span_id, expected_id("span", 2, 8));
         assert_eq!(linker.links[0].trace_id, expected_id("trace", 2, 16));
@@ -963,7 +1075,7 @@ mod tests {
         let expected_parent = format!(
             "00-{}-{}-01",
             hex::encode(expected_id("trace", 0, 16)),
-            hex::encode(expected_id("span", 1, 8))
+            hex::encode(expected_id("span", 0, 8))
         );
         assert_eq!(traceparent, expected_parent);
 
@@ -975,6 +1087,79 @@ mod tests {
             _ => panic!("bag"),
         };
         assert_eq!(nested, hex::encode(expected_id("span", 3, 8)));
+    }
+
+    #[test]
+    fn a_uuid_encoded_span_id_is_reminted() {
+        let mut sample = span("work", MIN_START, MIN_START + 1_000);
+        sample.trace_id = vec![0x11; 16];
+        sample.span_id = vec![0x01; 8];
+        sample.attributes = vec![
+            kv(
+                "lmnr.span.ids_path",
+                string_value(&uuid_text(&sample.span_id)),
+            ),
+            kv("trace", string_value(&uuid_text(&sample.trace_id))),
+        ];
+        let result = deterministic(
+            vec![packaged("api", "genai", vec![sample])],
+            &case(),
+            INGEST,
+            &[],
+        )
+        .unwrap();
+        let span = &result.resource_spans[0].scope_spans[0].spans[0];
+        let values: Vec<String> = span
+            .attributes
+            .iter()
+            .map(|attribute| match &attribute.value.as_ref().unwrap().value {
+                Some(Value::StringValue(text)) => text.clone(),
+                _ => panic!("string"),
+            })
+            .collect();
+        assert_eq!(values[0], uuid_text(&expected_id("span", 0, 8)));
+        assert_eq!(values[1], uuid_text(&expected_id("trace", 0, 16)));
+    }
+
+    #[test]
+    fn a_child_that_starts_first_is_still_written_after_its_parent() {
+        let mut child_first = span("chat", MIN_START, MIN_START + 1_000);
+        child_first.trace_id = vec![0x11; 16];
+        child_first.span_id = vec![0x02; 8];
+        child_first.parent_span_id = vec![0x01; 8];
+        let mut parent_late = span("step", MIN_START + 5_000, MIN_START + 9_000);
+        parent_late.trace_id = vec![0x11; 16];
+        parent_late.span_id = vec![0x01; 8];
+
+        let mut parent_first = parent_late.clone();
+        parent_first.start_time_unix_nano = MIN_START;
+        let mut child_late = child_first.clone();
+        child_late.start_time_unix_nano = MIN_START + 5_000;
+
+        let child_started_first = deterministic(
+            vec![packaged("api", "genai", vec![child_first, parent_late])],
+            &case(),
+            INGEST,
+            &[],
+        )
+        .unwrap();
+        let parent_started_first = deterministic(
+            vec![packaged("api", "genai", vec![parent_first, child_late])],
+            &case(),
+            INGEST,
+            &[],
+        )
+        .unwrap();
+
+        let left = &child_started_first.resource_spans[0].scope_spans[0].spans;
+        let right = &parent_started_first.resource_spans[0].scope_spans[0].spans;
+        assert_eq!(left[0].name, "step");
+        assert_eq!(left[1].name, "chat");
+        assert_eq!(right[0].name, "step");
+        assert_eq!(right[1].name, "chat");
+        assert_eq!(left[0].span_id, right[0].span_id);
+        assert_eq!(left[1].span_id, right[1].span_id);
+        assert_eq!(left[1].parent_span_id, left[0].span_id);
     }
 
     #[test]
@@ -1144,6 +1329,45 @@ mod tests {
             Value::StringValue((base + 2_000_000).to_string())
         );
         assert_eq!(values[4], Value::IntValue(base / NS_PER_MS + 4));
+    }
+
+    #[test]
+    fn a_json_quoted_rfc3339_timestamp_keeps_its_quotes() {
+        let mut sample = span("work", MIN_START, MIN_START + 1_000);
+        let start = DateTime::from_timestamp_nanos(i64::try_from(MIN_START).unwrap());
+        let rfc_z = format!(
+            "{}.{:03}Z",
+            start.format("%Y-%m-%dT%H:%M:%S"),
+            start.timestamp_subsec_nanos() / 1_000_000
+        );
+        sample.attributes = vec![kv("when", string_value(&format!("\"{rfc_z}\"")))];
+        let specs = [TimestampAttribute {
+            key: "when".to_owned(),
+            format: TimestampFormat::Rfc3339,
+        }];
+        let result = deterministic(
+            vec![packaged("api", "genai", vec![sample])],
+            &case(),
+            INGEST,
+            &specs,
+        )
+        .unwrap();
+        let shifted = DateTime::from_timestamp_nanos(INGEST - TEN_SECONDS_NS);
+        let value = result.resource_spans[0].scope_spans[0].spans[0].attributes[0]
+            .value
+            .as_ref()
+            .unwrap()
+            .value
+            .clone()
+            .unwrap();
+        assert_eq!(
+            value,
+            Value::StringValue(format!(
+                "\"{}.{:03}Z\"",
+                shifted.format("%Y-%m-%dT%H:%M:%S"),
+                shifted.timestamp_subsec_nanos() / 1_000_000
+            ))
+        );
     }
 
     #[test]

@@ -1,0 +1,24 @@
+{
+  "description": "Vercel AI SDK v5 embedMany of two OpenAI embedding inputs.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "ai",
+    "instrumentation_version": "5.0.285",
+    "language": "typescript",
+    "libraries": {
+      "@ai-sdk/openai": "2.0.140",
+      "@opentelemetry/api": "1.9.0",
+      "@opentelemetry/sdk-trace-node": "2.12.0",
+      "ai": "5.0.285"
+    },
+    "captured_at": "2026-11-11T11:58:11Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Telemetry is enabled on the call. recordInputs and recordOutputs stay at their defaults. The model is openai.embedding. providerOptions.openai.dimensions is 8, and the provider requests encoding_format float. Two spans: embedMany and doEmbed. ai.usage.tokens is 6 on both. Neither span has a response timestamp."
+}

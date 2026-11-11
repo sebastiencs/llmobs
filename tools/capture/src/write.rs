@@ -121,10 +121,15 @@ pub fn write_case(
 }
 
 fn encode<T: Serialize>(file: &'static str, value: &T) -> Result<String, CaptureError> {
-    let mut text =
-        serde_json::to_string_pretty(value).map_err(|_| CaptureError::Encode { file })?;
-    text.push('\n');
-    Ok(text)
+    // prost's JSON encoder and serde_json print some f64 values differently. The
+    // fixture check parses the file and pretty-prints it again, so the writer does
+    // that same round trip before the file is written.
+    let text = serde_json::to_string(value).map_err(|_| CaptureError::Encode { file })?;
+    let parsed: Value = serde_json::from_str(&text).map_err(|_| CaptureError::Encode { file })?;
+    let mut pretty =
+        serde_json::to_string_pretty(&parsed).map_err(|_| CaptureError::Encode { file })?;
+    pretty.push('\n');
+    Ok(pretty)
 }
 
 #[cfg(test)]
@@ -139,7 +144,7 @@ mod tests {
     use crate::scenario::{Api, CasePath, Finish, Message, Turn, Usage};
     use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
     use opentelemetry_proto::tonic::common::v1::any_value::Value as Any;
-    use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue};
+    use opentelemetry_proto::tonic::common::v1::{AnyValue, ArrayValue, KeyValue};
     use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span};
 
     fn source(language: Language) -> Source {
@@ -305,6 +310,35 @@ mod tests {
         assert_eq!(keys(&case["context"]), ["project_id", "ingest_time"]);
         assert!(input_text.contains("\"boolValue\": false"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_widened_f32_uses_the_fixture_number_format() {
+        // Embedding vectors are f32 values widened to f64. prost's JSON and the
+        // fixture check's parse-and-pretty-print disagree on some of those values.
+        let request = request_with_double(f64::from(0.1_f32));
+        let dir = temp_dir("doubles");
+        write_case(&dir, &scenario(false), &request, &source(Language::Python)).unwrap();
+        let input_text = fs::read_to_string(dir.join("input.json")).unwrap();
+        assert_eq!(input_text, canonical(&input_text));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn request_with_double(value: f64) -> ExportTraceServiceRequest {
+        let mut request = request("embed");
+        let span = &mut request.resource_spans[0].scope_spans[0].spans[0];
+        span.attributes.push(KeyValue {
+            key: "embedding.embeddings.0.embedding.vector".to_owned(),
+            value: Some(AnyValue {
+                value: Some(Any::ArrayValue(ArrayValue {
+                    values: vec![AnyValue {
+                        value: Some(Any::DoubleValue(value)),
+                    }],
+                })),
+            }),
+            ..KeyValue::default()
+        });
+        request
     }
 
     #[test]

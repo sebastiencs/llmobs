@@ -1,0 +1,37 @@
+{
+  "description": "One streamed Gemini answer with a reasoning part, traced by the official OTel Google GenAI instrumentation.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Content is requested on spans: OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental and OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=span_only. GoogleGenAiSdkInstrumentor sets OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT=true while instrumenting generate_content; this span has no events. The mock waits 120 ms before the first chunk and splits reasoning and text into 4 chunks each. gen_ai.response.time_to_first_chunk is set. The instrumentor adds thoughtsTokenCount 6 to candidatesTokenCount 14 and writes gen_ai.usage.output_tokens 20, plus gen_ai.usage.reasoning.output_tokens 6. Output messages are one text part per chunk, and the reasoning text is not marked as a thought. prices.json has no Gemini model row.",
+  "instrumentation": "opentelemetry-instrumentation-google-genai",
+  "libraries": [
+    "google-genai",
+    "opentelemetry-instrumentation-google-genai",
+    "opentelemetry-sdk",
+    "opentelemetry-util-genai"
+  ],
+  "env": {
+    "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "span_only"
+  },
+  "timing_attributes": ["gen_ai.response.time_to_first_chunk"],
+  "turns": [
+    {
+      "api": "gemini.generate_content",
+      "model": "gemini-2.5-flash",
+      "message": {
+        "reasoning": "The harbor is calm.",
+        "text": "Clear skies over the harbor."
+      },
+      "finish": "stop",
+      "usage": { "input": 48, "output": 20, "reasoning": 6 },
+      "ttft_ms": 120,
+      "chunks": 4
+    }
+  ]
+}

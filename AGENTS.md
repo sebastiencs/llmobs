@@ -69,6 +69,7 @@ If the code has to deviate from the spec, update the spec **in the same change**
 - `LLMOBS_CRASH_ITERATIONS=N just test` runs the storage crash harness longer (default 25).
 - Tests cover the current behaviour only.
 - UI tests use the MSW mocks from `fixtures/api/`; a page test overrides an endpoint with `server.use` instead of mocking modules.
+- Captured OTLP fixtures are recorded with `just capture` (tools/capture) and never edited by hand; `just check-capture` before committing one.
 
 **Reference implementations.** The competitors' source code is checked out in `/home/sebastien/github/{lmnr,phoenix,langfuse,langwatch,helicone,opik,mlflow}`. Read it to compare designs and learn from their mistakes. Never copy code from it.
 
@@ -133,6 +134,7 @@ Run everything through `just`:
 | `just run <args>` | run the `llmobs` binary |
 | `just capture <group>/<case>` | record an OTLP fixture from a scenario, e.g. `just capture openinference/openai-chat-tool` |
 | `just capture-all` | recapture every scenario |
+| `just check-capture` | lint and type-check the capture scenarios, then recapture every scenario and compare (timing excluded) |
 
 Required tools:
 - `rustup` (the toolchain is pinned in `rust-toolchain.toml`)

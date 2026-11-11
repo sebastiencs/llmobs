@@ -1,0 +1,186 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.45.2"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "capture-app"
+            }
+          }
+        ],
+        "droppedAttributesCount": 0,
+        "entityRefs": []
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "openinference.instrumentation.google_genai",
+            "version": "1.5.0",
+            "attributes": [],
+            "droppedAttributesCount": 0
+          },
+          "spans": [
+            {
+              "traceId": "97b6ccb437d1ded230a0dcfbefd527e9",
+              "spanId": "2f5d9de763d028a4",
+              "traceState": "",
+              "parentSpanId": "",
+              "flags": 256,
+              "name": "GenerateContentStream",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225590177000000",
+              "attributes": [
+                {
+                  "key": "llm.provider",
+                  "value": {
+                    "stringValue": "google"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.role",
+                  "value": {
+                    "stringValue": "user"
+                  }
+                },
+                {
+                  "key": "llm.input_messages.0.message.content",
+                  "value": {
+                    "stringValue": "Describe the harbor in a few words."
+                  }
+                },
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"contents\": [{\"parts\": [{\"text\": \"Describe the harbor in a few words.\"}], \"role\": \"user\"}]}"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"The harbor is calm.\", \"thought\": true}, {\"text\": \"Clear skies over the harbor.\"}], \"role\": \"model\"}, \"finish_reason\": \"STOP\", \"index\": 0}], \"usage_metadata\": {\"prompt_token_count\": 48, \"total_token_count\": 68, \"candidates_token_count\": 14, \"thoughts_token_count\": 6}, \"model_version\": \"gemini-2.5-flash\", \"sdk_http_response\": {\"headers\": {\"content-type\": \"text/event-stream\", \"cache-control\": \"no-cache\", \"date\": \"Thu, 01 Jan 2026 00:00:00 GMT\", \"transfer-encoding\": \"chunked\"}}, \"response_id\": \"capture-1\"}"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "llm.model_name",
+                  "value": {
+                    "stringValue": "gemini-2.5-flash"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt",
+                  "value": {
+                    "intValue": "48"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion_details.reasoning",
+                  "value": {
+                    "intValue": "6"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion",
+                  "value": {
+                    "intValue": "20"
+                  }
+                },
+                {
+                  "key": "llm.token_count.total",
+                  "value": {
+                    "intValue": "68"
+                  }
+                },
+                {
+                  "key": "llm.finish_reason",
+                  "value": {
+                    "stringValue": "STOP"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.role",
+                  "value": {
+                    "stringValue": "model"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.contents.0.message_content.type",
+                  "value": {
+                    "stringValue": "reasoning"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.contents.0.message_content.text",
+                  "value": {
+                    "stringValue": "The harbor is calm."
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.contents.1.message_content.text",
+                  "value": {
+                    "stringValue": "Clear skies over the harbor."
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.contents.1.message_content.type",
+                  "value": {
+                    "stringValue": "text"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "LLM"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": {
+                "message": "",
+                "code": 1
+              }
+            }
+          ],
+          "schemaUrl": ""
+        }
+      ],
+      "schemaUrl": ""
+    }
+  ]
+}
