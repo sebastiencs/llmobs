@@ -128,8 +128,8 @@ Target: a dense developer-tool UI, closer to Laminar, Datadog, Linear and Grafan
 - **Avoid:** curated dashboards that must be duplicated before editing (Langfuse, Opik, LangWatch). That's a sign of a heavy dashboard model.
 - **Avoid:** high-cardinality group-bys without top-N limits. Langfuse had to forbid them.
 
-## Open questions for our plan
+## Answered (2026-11-11)
 
-- Do we ship Transcript mode at MVP, or tree+bars only? Laminar's switch to Transcript suggests agent users want it.
-- Is the facet sidebar in MVP scope, or only chips with autocomplete?
-- Default list: traces (as Laminar, Phoenix and Datadog do) or spans/observations (as Langfuse v4 does)?
+- Transcript ships as a toggle on the combined tree (D124).
+- No facet sidebar yet (D127, R3 in the C plan).
+- Traces and spans are separate pages (D131). There is no spans-first default.

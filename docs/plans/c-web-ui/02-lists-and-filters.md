@@ -47,7 +47,7 @@ In this sub-phase:
 - the title, the time range, and the **search box** (`search` param);
 - a 300 ms debounce, Enter applies immediately, Esc clears;
 - `/` focuses it when focus is not in an editable element.
-- **Toggles** "Eval" and "Experiments" (D119 default exclusions, spec 05): `eval=1` → `include_eval=true`, `exp=1` → `include_experiments=true`. Tooltips explain what they show.
+- **Toggles** "Eval" and "Experiments" (D121 default exclusions, spec 05): `eval=1` → `include_eval=true`, `exp=1` → `include_experiments=true`. Tooltips explain what they show.
 
 `lib/search/traces.ts` gains `range`, `from`, `to`, `search`, `eval` and `exp`. The traces query passes `from`/`to` (resolved), `search`, `include_eval` and `include_experiments`.
 
@@ -91,7 +91,7 @@ In this sub-phase:
 
 **Commit:** `web: parse filter conjuncts into chips`
 
-Pure TypeScript, no CodeMirror. It doesn't validate the DSL (the server does, D125); it only splits and recognises the shapes the chips can edit.
+Pure TypeScript, no CodeMirror. It doesn't validate the DSL (the server does, D127); it only splits and recognises the shapes the chips can edit.
 
 ```ts
 type Token = { kind: "ident" | "string" | "number" | "op" | "keyword" | "lparen" | "rparen" | "lbracket" | "rbracket" | "comma" | "other"; text: string; start: number; end: number };
@@ -172,7 +172,7 @@ Add the CodeMirror packages listed in the README.
 
   There are no value suggestions yet (R3).
 - **Apply:** `onApply(text)` writes `filter` (trimmed; an empty value removes the param). It replaces the URL entry (`replace: false`, so Back undoes a filter).
-- **Errors (D125):** when the list query fails with `invalid_filter`:
+- **Errors (D127):** when the list query fails with `invalid_filter`:
   - the bar gets a red border;
   - the chips row is replaced by the text editor holding the applied text, with a red wavy underline (a CodeMirror `Decoration.mark`) from the error position's column (1-based, in characters) to the end of that token, or one character when the token can't be found;
   - below the bar, the message (`errors[].message` for `field: "filter"`, else `detail`, else `title`) in red, 12 px;
@@ -197,7 +197,7 @@ The traces page wires the bar into the toolbar slot and passes `filter` to `list
 
 **Commit:** `web: spans list`
 
-- **The `/spans` route.** It has the same toolbar (time range, filter on the `spans` view, search, toggles, columns) and the same split behaviour as traces: `?trace=` and `?span=` open `TraceView` with that span selected (D121, D129).
+- **The `/spans` route.** It has the same toolbar (time range, filter on the `spans` view, search, toggles, columns) and the same split behaviour as traces: `?trace=` and `?span=` open `TraceView` with that span selected (D123, D131).
 - **Columns** (ids):
 
   | Shown by default | Hidden by default |

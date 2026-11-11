@@ -44,7 +44,7 @@ See [README.md](README.md) for the decisions, boundaries, dependency versions an
 
 `get_session` (with `eval` and `exp` passed through).
 - **Header:** the session ID (`IdText`), user (link to `/users/$userId` once U22 lands; text before), start → last activity, turns, total tokens, cost, errors, tags, latest scores as badges.
-- **Body:** a two-pane split (D121 style, ratio persisted as `${STORAGE_PREFIX}split.session`).
+- **Body:** a two-pane split (D123 style, ratio persisted as `${STORAGE_PREFIX}split.session`).
   - **Left: the conversation.** One block per turn (`SessionTurn`), in order:
     - a turn header (index, `TimeText`, trace name, duration, cost, `StatusDot`), then the root's `input` and `output` rendered with `ChatView` when `messages`, else `PayloadView`;
     - a turn with no root payloads shows "No root input/output". This happens when the trace has no root;
@@ -82,7 +82,7 @@ See [README.md](README.md) for the decisions, boundaries, dependency versions an
 `get_user`:
 - **Header:** the user ID, first and last seen, totals (traces, sessions, tokens, cost, errors).
 - **Body:** the user's sessions (`EndUserDetail.sessions`, up to 100) in a `DataTable` with the session columns from U21. Activating a row goes to the session detail.
-- No GDPR action (D119).
+- No GDPR action (D121).
 
 User IDs in trace headers, span headers and session headers now link here.
 
@@ -101,7 +101,7 @@ User IDs in trace headers, span headers and session headers now link here.
 
 **Commit:** `web: dashboard with KPIs and charts`
 
-Add `recharts` 3.10.1 through `pnpm dlx shadcn@4.23.0 add chart` (D124). It must load only with the dashboard route: autoCodeSplitting already splits routes. Check with `vite build` output that `recharts` is not in the entry chunk, and say so in the report.
+Add `recharts` 3.10.1 through `pnpm dlx shadcn@4.23.0 add chart` (D126). It must load only with the dashboard route: autoCodeSplitting already splits routes. Check with `vite build` output that `recharts` is not in the entry chunk, and say so in the report.
 
 ### Data
 
@@ -117,7 +117,7 @@ It refetches when any of these change. Results are cached server-side for 10 s (
 ### `lib/metrics.ts` (pure)
 
 - `seriesByMetric(response): Map<MetricName, MetricSeries[]>`.
-- `toChartRows(series[], bucketNs): Array<{time: number; [group]: number | null}>`: one row per bucket time, one key per group (`"all"` when ungrouped). A missing point is `null` (a gap), never 0 (D124).
+- `toChartRows(series[], bucketNs): Array<{time: number; [group]: number | null}>`: one row per bucket time, one key per group (`"all"` when ungrouped). A missing point is `null` (a gap), never 0 (D126).
 - `kpiDelta(kpi): {value, previous, changePct, direction}`. `direction` is `"up"`, `"down"` or `"flat"`. `changePct` is `undefined` when `previous` is 0 or absent.
 - **Formatters per metric:**
   - latencies and TTFT (ns) use `formatDuration`;
@@ -227,7 +227,7 @@ When the traces list is empty **and** no filter, search or custom range is set, 
 The panel has tabs **OTel env vars**, **Python**, **TypeScript** and **Vercel AI SDK**, with copyable snippets:
 - the OTLP endpoint is built from `window.location.origin` (`<origin>/v1/traces`, spec 02);
 - the SDK base URL from the same origin;
-- the key is written as `sk-llmobs-…` with a note "Create a secret key in Settings → API keys". The key-prefix version of spec 11 waits for the API keys contract (D119, R1).
+- the key is written as `sk-llmobs-…` with a note "Create a secret key in Settings → API keys". The key-prefix version of spec 11 waits for the API keys contract (D121, R1).
 
 Snippet content follows spec 10 § Configuration: env var names and `init()` options. Read spec 10 and use the exact names. There's also a "Waiting for the first trace…" line that polls the list every 5 s while the panel is shown (`refetchInterval`), so the page switches to the table as soon as data arrives.
 

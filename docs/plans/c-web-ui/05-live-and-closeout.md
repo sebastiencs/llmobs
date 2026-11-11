@@ -2,7 +2,7 @@
 
 See [README.md](README.md) for the decisions, boundaries, dependency versions and the rules that apply to every sub-phase.
 
-Live mode follows spec 09 § SSE and D130:
+Live mode follows spec 09 § SSE and D132:
 - `text/event-stream`;
 - events `span`, `trace`, `resync` and `ping` (every 15 s);
 - `span` carries a `SpanSummary` and `trace` a `TraceSummary`;
@@ -124,7 +124,7 @@ function useStream(url: string | undefined, onEvent: (e: StreamEvent) => void): 
    - **Transcript** on a trace with 200 LLM spans: at most 50 detail requests before "Load more";
    - **the JSON viewer** with a 20 000-key object: fewer than 100 rendered rows.
 
-   These replace no earlier tests; they gather the bar in one file (D128).
+   These replace no earlier tests; they gather the bar in one file (D130).
 2. **Keyboard pass.** Every page is usable with the keyboard alone: lists, open a trace, move in the tree, switch tabs, close, the palette, the time picker, the filter bar. Fix the gaps found. Add a test per page that tabs through the main controls and checks there's a visible focus ring (`:focus-visible` style present on the focused element).
 3. **Colour pass.** Status is never colour-only: dot plus text or icon, everywhere `StatusDot` and error states appear. Check the light and dark tokens for contrast against the background (WCAG AA for text; compute the ratio from the oklch tokens in a unit test of the token values, or check by hand and list the ratios in the report).
 4. **Bundle.** Run `vite build` and record:
