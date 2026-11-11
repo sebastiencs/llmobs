@@ -155,11 +155,7 @@ fn document_lint() {
 
     let security = document["security"].as_array().expect("security");
     assert_eq!(security.len(), 2);
-    assert!(
-        security
-            .iter()
-            .any(|item| item.get("session_cookie").is_some())
-    );
+    assert!(security.iter().any(|item| item.get("session").is_some()));
     assert!(security.iter().any(|item| item.get("bearer").is_some()));
 
     for (method, path, id) in &found {

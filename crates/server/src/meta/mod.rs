@@ -6,9 +6,9 @@
 //! migration is not this binary's.
 #![cfg_attr(not(test), allow(dead_code))] // `llmobs serve` opens this from P5 on
 
-mod members;
-mod orgs;
-mod projects;
+pub(crate) mod members;
+pub(crate) mod orgs;
+pub(crate) mod projects;
 pub(crate) mod users;
 pub(crate) mod web_sessions;
 

@@ -26,7 +26,8 @@ use crate::api::common::Problem;
 use crate::auth::Limits;
 use crate::clock::Clock;
 use crate::config::{AuthSettings, InitConfig, LogConfig, PublicUrl, ServerConfig};
-use crate::http::{AppInner, AppState, router, router_with};
+use crate::http::access::RouteDef;
+use crate::http::{AppInner, AppState, router, router_with, serve_router};
 use crate::meta::MetaDb;
 
 /// `2026-01-01T00:00:00Z`.
@@ -43,19 +44,19 @@ pub(crate) struct TestApp {
 impl TestApp {
     /// Defaults, `data_dir` in a temp directory, `public_url` `http://localhost:8080`.
     pub(crate) async fn new() -> Self {
-        Self::open(|_| {}, None).await
+        Self::open(|_| {}, None, None).await
     }
 
     /// `tweak` runs before storage and `meta.db` open.
     ///
     /// `storage.data_dir` is then copied from the top-level `data_dir`.
     pub(crate) async fn with_config(tweak: impl FnOnce(&mut ServerConfig)) -> Self {
-        Self::open(tweak, None).await
+        Self::open(tweak, None, None).await
     }
 
     /// Same as [`Self::new`] with extra routes inside the shared layers.
     pub(crate) async fn with_routes(routes: Router<AppState>) -> Self {
-        Self::open(|_| {}, Some(routes)).await
+        Self::open(|_| {}, Some(routes), None).await
     }
 
     /// [`Self::with_config`] and [`Self::with_routes`] together.
@@ -63,10 +64,19 @@ impl TestApp {
         tweak: impl FnOnce(&mut ServerConfig),
         routes: Router<AppState>,
     ) -> Self {
-        Self::open(tweak, Some(routes)).await
+        Self::open(tweak, Some(routes), None).await
     }
 
-    async fn open(tweak: impl FnOnce(&mut ServerConfig), routes: Option<Router<AppState>>) -> Self {
+    /// The given route table instead of the server's, with the same layers.
+    pub(crate) async fn with_route_table(routes: Vec<RouteDef>) -> Self {
+        Self::open(|_| {}, None, Some(routes)).await
+    }
+
+    async fn open(
+        tweak: impl FnOnce(&mut ServerConfig),
+        routes: Option<Router<AppState>>,
+        table: Option<Vec<RouteDef>>,
+    ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let mut config = default_config(dir.path());
         tweak(&mut config);
@@ -82,9 +92,12 @@ impl TestApp {
             clock: Clock::Manual(Arc::new(AtomicI64::new(MANUAL_NOW_NS))),
             limits: Limits::new(),
         });
-        let router = match routes {
-            Some(routes) => router_with(state.clone(), routes),
-            None => router(state.clone()),
+        let router = if let Some(table) = table {
+            serve_router(state.clone(), table)
+        } else if let Some(routes) = routes {
+            router_with(state.clone(), routes)
+        } else {
+            router(state.clone())
         };
         Self {
             _dir: dir,

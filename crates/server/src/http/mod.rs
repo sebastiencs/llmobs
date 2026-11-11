@@ -5,7 +5,9 @@
 //! read the socket peer. That binding is P5.
 #![cfg_attr(not(test), allow(dead_code))] // `llmobs serve` binds this in P5
 
+pub(crate) mod access;
 mod client_ip;
+mod csrf;
 pub(crate) mod error;
 mod health;
 
@@ -16,10 +18,10 @@ use axum::Router;
 use axum::extract::{DefaultBodyLimit, MatchedPath, Request};
 use axum::middleware::{self, Next};
 use axum::response::Response;
-use axum::routing::get;
 use llmobs_storage::Storage;
 
 use crate::auth::Limits;
+use crate::auth::principal::authenticate;
 use crate::clock::Clock;
 use crate::config::ServerConfig;
 use crate::meta::MetaDb;
@@ -31,7 +33,7 @@ const BODY_LIMIT: usize = 1024 * 1024;
 #[derive(Clone)]
 pub(crate) struct AppState(Arc<AppInner>);
 
-/// Fields later sub-phases add to: principals, mailer, setup.
+/// Fields later sub-phases add to: mailer, setup.
 pub(crate) struct AppInner {
     pub(crate) config: ServerConfig,
     pub(crate) meta: MetaDb,
@@ -69,14 +71,26 @@ pub(crate) fn router(state: AppState) -> Router {
 }
 
 /// [`router`] plus routes that tests add before the body limit and the log.
-pub(crate) fn router_with(state: AppState, routes: Router<AppState>) -> Router {
+pub(crate) fn router_with(state: AppState, extra: Router<AppState>) -> Router {
+    let routed = access::build_router(&state, access::routes()).merge(extra);
+    finish(state, routed)
+}
+
+/// The route table, then the shared layers. Tests pass their own table.
+pub(crate) fn serve_router(state: AppState, routes: Vec<access::RouteDef>) -> Router {
+    let routed = access::build_router(&state, routes);
+    finish(state, routed)
+}
+
+fn finish(state: AppState, routed: Router<AppState>) -> Router {
     // serde_json's default recursion limit is 128, which is spec 12's JSON depth limit.
-    routes
-        .route("/healthz", get(health::healthz))
-        .route("/readyz", get(health::readyz))
+    // Logging is the outer layer. Authentication runs next, then the origin check (D141).
+    routed
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
+        .layer(middleware::from_fn_with_state(state.clone(), csrf::csrf))
+        .layer(middleware::from_fn_with_state(state.clone(), authenticate))
         .layer(middleware::from_fn(log_request))
         .with_state(state)
 }

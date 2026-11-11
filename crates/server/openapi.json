@@ -5051,7 +5051,7 @@
         "scheme": "bearer",
         "description": "A personal access token (`pat-…`) or a secret key (`sk-…`)."
       },
-      "session_cookie": {
+      "session": {
         "type": "apiKey",
         "in": "cookie",
         "name": "llmobs_session",
@@ -5061,7 +5061,7 @@
   },
   "security": [
     {
-      "session_cookie": []
+      "session": []
     },
     {
       "bearer": []

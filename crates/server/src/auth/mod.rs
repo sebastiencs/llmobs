@@ -2,9 +2,10 @@
 
 mod limits;
 mod password;
-mod roles;
+pub(crate) mod principal;
+pub(crate) mod roles;
 mod secret;
-mod session;
+pub(crate) mod session;
 
 pub(crate) use limits::Limits;
 

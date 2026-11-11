@@ -174,7 +174,7 @@ pub fn openapi() -> OpenApi {
         ]))
         .components(Some(components(&schemas)))
         .security(Some([
-            SecurityRequirement::new("session_cookie", [] as [&str; 0]),
+            SecurityRequirement::new("session", [] as [&str; 0]),
             SecurityRequirement::new("bearer", [] as [&str; 0]),
         ]))
         .paths(paths())
@@ -406,7 +406,7 @@ fn components(schemas: &SchemaSet) -> Components {
     ComponentsBuilder::new()
         .schemas_from_iter(schemas.schemas.clone())
         .security_scheme(
-            "session_cookie",
+            "session",
             SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::with_description(
                 COOKIE_NAME,
                 "Browser session cookie.",
