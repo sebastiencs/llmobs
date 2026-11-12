@@ -405,11 +405,13 @@ fn publish_flush(
             spans: Arc::clone(&snapshot),
             scores: Arc::clone(&state.scores),
             catalog: Arc::clone(catalog),
+            tombstones: Arc::clone(&state.tombstones),
         },
         Table::Scores => ReadState {
             spans: Arc::clone(&state.spans),
             scores: Arc::clone(&snapshot),
             catalog: Arc::clone(catalog),
+            tombstones: Arc::clone(&state.tombstones),
         },
     });
     shared.set_memtable_bytes(bytes);
@@ -619,14 +621,7 @@ mod tests {
     use crate::wal::{Table, spans_named};
 
     fn batch(starts: &[i64], name: &str) -> MemBatch {
-        let batch = spans_named(starts, name);
-        MemBatch {
-            batch: std::sync::Arc::new(batch.clone()),
-            min_time: starts[0],
-            max_time: *starts.last().unwrap(),
-            bytes: batch.get_array_memory_size(),
-            partials: std::sync::Arc::new(std::sync::OnceLock::new()),
-        }
+        MemBatch::from_batch(Table::Spans, spans_named(starts, name)).unwrap()
     }
 
     fn names(batch: &arrow::array::RecordBatch) -> Vec<String> {

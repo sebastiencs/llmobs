@@ -539,7 +539,6 @@ mod tests {
     use datafusion::execution::context::{SessionConfig, SessionContext};
     use llmobs_core::batch::scores_to_record_batch;
     use llmobs_core::ids::ProjectId;
-    use llmobs_core::score::{Score, ScoreTarget, ScoreValue};
     use uuid::Uuid;
 
     use crate::Storage;
@@ -1012,49 +1011,44 @@ mod tests {
         storage.shutdown().await.unwrap();
     }
 
-    fn score_version(id: u128, updated_at: i64, ingest: i64, deleted: bool, name: &str) -> Score {
-        Score {
-            project_id: project(),
-            score_id: Uuid::from_u128(id),
-            target: ScoreTarget::Trace {
-                trace_id: "4bf92f3577b34da6a3ce929d0e0e4736".parse().unwrap(),
-            },
-            session_id: None,
-            user_id: None,
-            name: name.to_owned(),
-            value: ScoreValue::Numeric(0.5),
-            reason: None,
-            source: llmobs_core::enums::ScoreSource::Api,
-            evaluator_id: None,
-            rule_id: None,
-            experiment_id: None,
-            dataset_item_id: None,
-            author_user_id: None,
-            metadata: Default::default(),
-            created_at: at(10, 0, 0),
-            updated_at,
-            deleted,
-            ingest_time: ingest,
-        }
-    }
-
     /// Score `s` in three L0 files (newest deleted), score `t` live once.
     async fn score_setup(config: &StorageConfig) -> Storage {
         let mut storage = Storage::open(config.clone()).await.unwrap();
+        let created = at(10, 0, 0);
         let batches = [
             vec![
-                score_version(0x11, at(10, 0, 1), at(10, 0, 1), false, "s-old"),
-                score_version(0x22, at(10, 0, 5), at(10, 0, 5), false, "t"),
+                crate::test_support::score_row(
+                    0x11,
+                    0,
+                    created,
+                    at(10, 0, 1),
+                    at(10, 0, 1),
+                    false,
+                    "s-old",
+                ),
+                crate::test_support::score_row(
+                    0x22,
+                    0,
+                    created,
+                    at(10, 0, 5),
+                    at(10, 0, 5),
+                    false,
+                    "t",
+                ),
             ],
-            vec![score_version(
+            vec![crate::test_support::score_row(
                 0x11,
+                0,
+                created,
                 at(10, 0, 3),
                 at(10, 0, 3),
                 true,
                 "s-deleted",
             )],
-            vec![score_version(
+            vec![crate::test_support::score_row(
                 0x11,
+                0,
+                created,
                 at(10, 0, 2),
                 at(10, 0, 2),
                 false,

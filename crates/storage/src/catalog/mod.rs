@@ -8,7 +8,9 @@
 mod committer;
 mod db;
 
-pub(crate) use committer::{CatalogEdit, Committer, ObsoleteRemoval, StagedRemoval, now_ns};
+pub(crate) use committer::{
+    CatalogEdit, Committer, ObsoleteRemoval, Registered, StagedRemoval, now_ns,
+};
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;

@@ -6,7 +6,8 @@
 //!
 //! # What this crate does not do yet
 //!
-//! - deletion and retention are absent;
+//! - retention, media blobs and project drop are absent; deletion hides rows
+//!   from queries, and its flush, compaction and rewriter erasures land next;
 //! - the query runtime uses DataFusion's default memory pool.
 //!   Parquet footers and page indexes use DataFusion's built-in metadata cache.
 
@@ -22,11 +23,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 use arrow::array::{Array, RecordBatch, StringArray};
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use llmobs_core::ids::ProjectId;
+use uuid::Uuid;
 
-use crate::catalog::Committer;
+use crate::catalog::{Committer, Registered};
 use crate::config::StorageConfig;
 use crate::config::WalSync;
-use crate::error::{AppendError, MemtableError, OpenError, QueryError, StorageError, WalError};
+use crate::error::{
+    AppendError, DeletionError, MemtableError, OpenError, QueryError, StorageError, WalError,
+};
 use crate::flush::FlushHandle;
 use crate::hooks::Hooks;
 use crate::memtable::Memtable;
@@ -85,6 +89,8 @@ pub(crate) mod wal;
 
 #[cfg(test)]
 mod crash_tests;
+#[cfg(test)]
+mod deletion_tests;
 #[cfg(test)]
 mod test_support;
 
@@ -258,6 +264,7 @@ impl Storage {
             )
         })??;
         let catalog = committer.catalog().await;
+        let tombstones = committer.tombstones().await;
         let mut anchors = anchor::Anchors::new(window_ns);
         anchors.rebuild(&catalog, &objects).await?;
         let anchors = Arc::new(Mutex::new(anchors));
@@ -265,6 +272,7 @@ impl Storage {
             spans: recovered.spans.memtable.snapshot(),
             scores: recovered.scores.memtable.snapshot(),
             catalog,
+            tombstones,
         }));
         // Compaction gets a runtime of its own, so its memory pool is
         // independent of the query runtime's.
@@ -410,6 +418,10 @@ impl Storage {
     /// [`ProjectQuery::runtime`] and [`ProjectQuery::target_partitions`].
     /// The runtime is the one built at open. Its memory pool stays the default
     /// until a later milestone installs one.
+    ///
+    /// The snapshot's pending deletions hide their rows from every provider
+    /// (spec 03 §7): the memtable snapshots are filtered copies, and the
+    /// providers carry the tombstones for the file side.
     pub fn query(
         &self,
         project: ProjectId,
@@ -417,26 +429,40 @@ impl Storage {
     ) -> Result<ProjectQuery, QueryError> {
         let state = self.published.load();
         let partitions = self.target_partitions.get();
+        let deletions = state.tombstones.for_project(project);
+        let (spans_snapshot, scores_snapshot) = if deletions.is_empty() {
+            (Arc::clone(&state.spans), Arc::clone(&state.scores))
+        } else {
+            (
+                deletion::filter_snapshot(Table::Spans, &state.spans, project, &deletions)?,
+                deletion::filter_snapshot(Table::Scores, &state.scores, project, &deletions)?,
+            )
+        };
         let spans = Arc::new(query::SpansProvider::new(
             project,
-            Arc::clone(&state.spans),
+            Arc::clone(&spans_snapshot),
             Arc::clone(&state.catalog),
             partitions,
             options.around,
+            Arc::clone(&deletions),
         ));
         let scores = Arc::new(query::ScoresProvider::new(
             project,
-            Arc::clone(&state.scores),
+            scores_snapshot,
             Arc::clone(&state.catalog),
             partitions,
+            Arc::clone(&deletions),
         ));
+        // The traces provider reads the filtered spans snapshot too, so its
+        // memtable partials are computed from the rows that remain.
         let traces = Arc::new(query::TracesProvider::new(
             project,
             Arc::clone(&state.catalog),
-            Arc::clone(&state.spans),
+            spans_snapshot,
             options,
             self.lookback,
             partitions,
+            deletions,
         ));
         Ok(ProjectQuery {
             spans,
@@ -446,6 +472,36 @@ impl Storage {
             target_partitions: self.target_partitions,
             optimizer_rules: vec![Arc::new(query::TraceListRule)],
         })
+    }
+
+    /// Registers a `traces` or `user` deletion. Idempotent by `deletion.id`.
+    /// Rows in scope are hidden from every query once this returns (spec 03 §7).
+    pub async fn register_deletion(&self, deletion: Deletion) -> Result<(), DeletionError> {
+        let published = Arc::clone(&self.published);
+        let registered = self
+            .committer
+            .register_deletion(&deletion, catalog::now_ns(), move |tombstones| {
+                read_state::publish_tombstones(&published, tombstones);
+            })
+            .await?;
+        if let Registered::New { seq } = registered {
+            // Never log the scope: its ids name the person the deletion is about.
+            tracing::info!(
+                deletion_id = %deletion.id,
+                project = %deletion.project,
+                seq,
+                "deletion registered"
+            );
+        }
+        Ok(())
+    }
+
+    /// `Pending` or `Applied`. An unknown id is [`DeletionError::NotFound`].
+    pub async fn deletion_status(&self, id: Uuid) -> Result<DeletionStatus, DeletionError> {
+        self.committer
+            .deletion_status(id)
+            .await?
+            .ok_or(DeletionError::NotFound)
     }
 
     /// Writer flags and memtable accounting. Does not touch the disk.

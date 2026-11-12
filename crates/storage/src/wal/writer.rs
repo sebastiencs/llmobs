@@ -711,11 +711,13 @@ fn publish(table: Table, shared: &WriterShared, published: &Published) {
             spans: snapshot.clone(),
             scores: Arc::clone(&state.scores),
             catalog: Arc::clone(&state.catalog),
+            tombstones: Arc::clone(&state.tombstones),
         },
         Table::Scores => ReadState {
             spans: Arc::clone(&state.spans),
             scores: snapshot.clone(),
             catalog: Arc::clone(&state.catalog),
+            tombstones: Arc::clone(&state.tombstones),
         },
     });
     drop(memtable);

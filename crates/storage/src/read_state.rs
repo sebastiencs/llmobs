@@ -12,6 +12,7 @@
 use std::sync::{Arc, PoisonError, RwLock};
 
 use crate::catalog::Catalog;
+use crate::deletion::Tombstones;
 use crate::memtable::{MemSnapshot, Memtable};
 use crate::wal::Table;
 
@@ -24,6 +25,8 @@ pub(crate) struct ReadState {
     pub scores: Arc<MemSnapshot>,
     /// Catalog as of this publish.
     pub catalog: Arc<Catalog>,
+    /// Pending deletions as of this publish (spec 03 §7).
+    pub tombstones: Arc<Tombstones>,
 }
 
 impl ReadState {
@@ -33,6 +36,7 @@ impl ReadState {
             spans: Memtable::new(Table::Spans).snapshot(),
             scores: Memtable::new(Table::Scores).snapshot(),
             catalog: Arc::new(Catalog::empty()),
+            tombstones: Arc::new(Tombstones::default()),
         }
     }
 }
@@ -75,5 +79,17 @@ pub(crate) fn publish_catalog(published: &Published, catalog: &Arc<Catalog>) {
         spans: Arc::clone(&state.spans),
         scores: Arc::clone(&state.scores),
         catalog: Arc::clone(catalog),
+        tombstones: Arc::clone(&state.tombstones),
+    });
+}
+
+/// Publishes `tombstones` with everything else unchanged.
+/// Call it inside the committer's publish closure (the committer mutex is held).
+pub(crate) fn publish_tombstones(published: &Published, tombstones: &Arc<Tombstones>) {
+    published.replace(|state| ReadState {
+        spans: Arc::clone(&state.spans),
+        scores: Arc::clone(&state.scores),
+        catalog: Arc::clone(&state.catalog),
+        tombstones: Arc::clone(tombstones),
     });
 }
