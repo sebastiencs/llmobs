@@ -340,6 +340,25 @@ async fn trace_frame(
     list_frame(ctx, &ListPlan::traces(request)).await
 }
 
+/// The physical plan A2 builds for `trace_list`, as a display string.
+///
+/// Exposed for the `#[ignore]` M3 benchmark (`tests/trace_bench.rs`) to confirm
+/// the real list query — the `traces` view plus its default environment and
+/// experiment exclusions — is rewritten to list mode, not just a hand-written
+/// SQL query. Reads call `trace_list` itself, never this.
+#[doc(hidden)]
+pub async fn trace_list_plan(
+    ctx: &QueryContext,
+    request: TraceListRequest<'_>,
+) -> Result<String, RunError> {
+    let frame = trace_frame(ctx, &request).await?;
+    let plan = frame.create_physical_plan().await.map_err(classify)?;
+    Ok(format!(
+        "{}",
+        datafusion::physical_plan::displayable(plan.as_ref()).indent(true)
+    ))
+}
+
 async fn list_frame(ctx: &QueryContext, plan: &ListPlan<'_>) -> Result<DataFrame, RunError> {
     let filter = match present(plan.filter) {
         Some(text) => Some(ctx.parse_filter(plan.view, text)?),

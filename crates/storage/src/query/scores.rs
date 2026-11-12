@@ -37,7 +37,6 @@ pub(crate) struct ScoresProvider {
     snapshot: Arc<MemSnapshot>,
     catalog: Arc<Catalog>,
     target_partitions: usize,
-    around: Option<i64>,
 }
 
 impl ScoresProvider {
@@ -46,14 +45,12 @@ impl ScoresProvider {
         snapshot: Arc<MemSnapshot>,
         catalog: Arc<Catalog>,
         target_partitions: usize,
-        around: Option<i64>,
     ) -> Self {
         Self {
             project,
             snapshot,
             catalog,
             target_partitions,
-            around,
         }
     }
 
@@ -72,7 +69,7 @@ impl ScoresProvider {
             self.project,
             scores::CREATED_AT,
             filters,
-            self.around,
+            None,
         )
     }
 }
@@ -84,7 +81,6 @@ struct RawScores {
     snapshot: Arc<MemSnapshot>,
     catalog: Arc<Catalog>,
     target_partitions: usize,
-    around: Option<i64>,
 }
 
 #[async_trait]
@@ -116,7 +112,6 @@ impl TableProvider for ScoresProvider {
             snapshot: Arc::clone(&self.snapshot),
             catalog: Arc::clone(&self.catalog),
             target_partitions: self.target_partitions,
-            around: self.around,
         });
         let window = row_number()
             .partition_by(vec![col(scores::SCORE_ID)])
@@ -211,7 +206,7 @@ impl TableProvider for RawScores {
             catalog: &self.catalog,
             table: Table::Scores,
             time_column: scores::CREATED_AT,
-            around: self.around,
+            around: None,
             schema: scores_schema(),
             projection,
             filters,
@@ -570,6 +565,45 @@ mod tests {
             .unwrap();
         assert_eq!(live_names(&storage).await, vec!["late".to_owned()]);
         hooks.release(crate::hooks::HookPoint::FlushAfterFreeze);
+        storage.shutdown().await.unwrap();
+    }
+
+    /// D154 limits `around` to `spans` and `traces`. A `trace_id` lookup on
+    /// scores must still see a file whose `created_at` is far from the hint.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn around_does_not_prune_scores_files() {
+        use datafusion::common::ScalarValue;
+        use datafusion::logical_expr::{BinaryExpr, Operator, col};
+
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::Storage::open(aged(dir.path())).await.unwrap();
+        storage
+            .append_scores(project(), batch_of(&[version("v1", 1_000, 10, 1, false)]))
+            .await
+            .unwrap();
+        wait_flushed(&storage, 1).await;
+
+        let trace = "4bf92f3577b34da6a3ce929d0e0e4736"
+            .parse::<TraceId>()
+            .unwrap();
+        let filter = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col(scores::TRACE_ID)),
+            Operator::Eq,
+            Box::new(Expr::Literal(
+                ScalarValue::FixedSizeBinary(16, Some(trace.as_bytes().to_vec())),
+                None,
+            )),
+        ));
+        let around = 3 * 86_400_000_000_000;
+        let query = storage
+            .query(
+                project(),
+                crate::QueryOptions {
+                    around: Some(around),
+                },
+            )
+            .unwrap();
+        assert_eq!(scores_of(&query).candidate_files(&[filter]).len(), 1);
         storage.shutdown().await.unwrap();
     }
 }

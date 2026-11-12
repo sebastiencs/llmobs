@@ -42,8 +42,8 @@ A trace is anchored to the partition day of its **first partial**: the first tim
 Only traces near midnight need remembering. The storage keeps a map `(project_id, trace_id) → anchor day` for every trace with a row starting within `anchor.window` (default = `trace_lookback`, 1 h) of a UTC midnight, on either side. The nearest midnight wins; exactly noon rounds up.
 
 - **Assignment is per row.** A row goes to its trace's anchor day when its own UTC day is at most one day away, and to its own day otherwise. A row two or more days from the anchor stays in its own day, where the one-day query slack finds it.
-- **Expiry runs on ingest time.** An entry made by a flush expires at that flush's largest `ingest_time` + `2 × anchor.window`; an existing entry is refreshed the same way. Expired entries are dropped after each commit once the clock (the largest `ingest_time` any flush has committed) passes their deadline. Because this counts ingest time, not event age, backfilled data (old events ingested now) is anchored like live data.
-- **Rebuild at startup.** The map is rebuilt from the active `traces` files whose `max_ingest_time` is within `2 × anchor.window` of the clock. Only the row groups whose `last_ingest_time` statistics have a max in that window are read, projected to `trace_id`, `start_time` and `last_ingest_time`; rows with `last_ingest_time ≥ clock − 2 × anchor.window` and `start_time` near midnight restore an entry in the file's partition day. If several files name a trace, the earlier day and the later expiry win.
+- **Expiry runs on ingest time.** An entry made by a flush expires at that flush's largest `ingest_time` + `2 × anchor.window`; any flush with rows for a trace that already has an entry refreshes that entry's deadline the same way, even when none of its rows is near midnight. Expired entries are dropped after each commit once the clock (the largest `ingest_time` any flush has committed) passes their deadline. Because this counts ingest time, not event age, backfilled data (old events ingested now) is anchored like live data.
+- **Rebuild at startup.** The map is rebuilt from the active `traces` files whose `max_ingest_time` is within `2 × anchor.window` of the clock. Only the row groups whose `last_ingest_time` statistics have a max in that window are read, projected to `trace_id`, `start_time`, `end_time` and `last_ingest_time`; rows with `last_ingest_time ≥ clock − 2 × anchor.window` and `start_time` or `end_time` near midnight restore an entry in the file's partition day. A partial's `start_time` is the trace's earliest start, so `end_time` is what restores a trace whose child ends near midnight. If several files name a trace, the earlier day and the later expiry win.
 - **Replayed rows.** Rows replayed from the WAL get their anchor when they flush.
 - **Known limit.** A trace with no row near midnight before a flush, and rows past midnight later, gets an entry only from its later rows. Example: rows at 22:00 flushed, then rows at 00:30. Its earlier rows stay in the earlier day. The anchor guarantees one day only for traces whose rows reach the window before midnight.
 
@@ -176,6 +176,7 @@ CREATE TABLE file_sources (
   spans_file_id TEXT NOT NULL REFERENCES data_files(id) ON DELETE CASCADE,
   PRIMARY KEY (traces_file_id, spans_file_id)
 );
+CREATE INDEX file_sources_by_spans ON file_sources (spans_file_id);
 
 -- objects being written; anything left here after a crash is garbage (§5 GC)
 CREATE TABLE staged_objects (path TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
@@ -265,7 +266,7 @@ For each request, `Storage::query` returns a `ProjectQuery`: the project's `Tabl
    - the comparisons `=, <, <=, >, >=, BETWEEN`;
    - an `OR` gives the union of its sides' ranges; a side that is `start_time IS NULL` on the non-null column is dropped.
 
-   Prune file partitions by `day`, widened by one day on each side (§ Trace anchor), and files by `min_time`/`max_time`. A `trace_id` lookup (equality or `IN` with 16-byte literals) without a time range, with `QueryOptions::around` set, reads only the files that overlap `around ± 1 day` (D154).
+   Prune file partitions by `day`, widened by one day on each side (§ Trace anchor), and files by `min_time`/`max_time`. A `trace_id` lookup (equality or `IN` with 16-byte literals) without a time range, with `QueryOptions::around` set, reads only the `spans` and `traces` files that overlap `around ± 1 day` (D154); `scores` files are never pruned by `around`.
 2. Build a `ParquetExec` (DataFusion's Parquet scan) over the remaining files, with filter pushdown on, page-index pruning, bloom-filter pruning (equality on `trace_id`, `session_id`, `user_id`) and the metadata cache.
 3. Build a `MemoryExec` (in-memory scan) over the `active` and `frozen` batches of the same partitions. Same filters, applied in-memory.
 4. Combine both with a `UnionExec`, then wrap in the **tombstone filter** (§7) when there are pending tombstones whose `created_at` is at or after the file's or batch's `min_ingest_time`.

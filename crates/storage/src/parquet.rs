@@ -1,6 +1,6 @@
 //! Parquet encoding for one flush partition.
 //!
-//! `Storage` does not call this yet. M2.6 writes each frozen partition from
+//! The flush writes each frozen partition through `write_file` from
 //! `spawn_blocking`.
 
 #![allow(dead_code)]

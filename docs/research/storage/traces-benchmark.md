@@ -20,8 +20,9 @@ LLMOBS_TRACE_BENCH_DIR=/path/to/data cargo test --release \
 
 `LLMOBS_TRACE_BENCH_TRACES` overrides the trace count (default 5,000,000).
 `LLMOBS_TRACE_BENCH_DIR` is generated once (when it holds no `catalog.db`) and
-reused afterwards; a `bench-manifest.json` keeps the Q2r thresholds and Q4 id
-sample across runs. The data directory is never committed.
+reused afterwards; a `bench-manifest.json` keeps the dataset info and Q4 id
+sample across runs. The Q2r thresholds are recomputed each run with untimed
+range-mode queries, as S1b did. The data directory is never committed.
 
 Generation uses a seeded xorshift (seed 1), 10 spans per trace over 7 days from
 2026-03-02 00:00 UTC, a day/night rate cycle, log-normal duration/cost/tokens,

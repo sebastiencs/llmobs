@@ -685,7 +685,11 @@ impl TraceMerger {
             let fresh = !traces.contains_key(&trace);
             let acc = traces.entry(trace).or_insert_with(TraceAcc::new);
             if fresh {
-                *size += size_of::<TraceAcc>() + 16 + 32;
+                // The 29 accumulator slots live on the heap behind `TraceAcc`'s
+                // Vec, so `size_of::<TraceAcc>()` alone misses most of the
+                // allocation that the query memory pool has to account for.
+                *size +=
+                    size_of::<TraceAcc>() + Column::ALL.len() * size_of::<Option<Acc>>() + 16 + 32;
             }
             for column in &input {
                 let reader = by_column[column.index()]
@@ -751,9 +755,19 @@ pub(crate) fn partials_from_spans(spans: &RecordBatch) -> Result<RecordBatch, Pa
         }
         ordered
             .sort_by(|left, right| (left.1, left.2.as_slice()).cmp(&(right.1, right.2.as_slice())));
+        // Spec 01 § Order: the choice among several root spans is the earliest
+        // one. Only that span ranks ahead of the others; the remaining roots
+        // follow in (start_time, span_id) order like any other span.
+        let mut chosen_root: Option<Vec<u8>> = None;
+        for (row, _, span) in &ordered {
+            if value(&readers, spans::PARENT_SPAN_ID, *row)? == Val::Null {
+                chosen_root = Some(span.clone());
+                break;
+            }
+        }
         let mut acc = TraceAcc::new();
         for (row, _, _) in ordered {
-            append_span(&mut acc, &readers, row)?;
+            append_span(&mut acc, &readers, row, chosen_root.as_deref())?;
         }
         *acc.slot(Column::PartialCount) = Some(Acc::I32(1));
         traces.push((trace, acc));
@@ -838,6 +852,7 @@ fn append_span(
     acc: &mut TraceAcc,
     readers: &HashMap<&'static str, Reader<'_>>,
     row: usize,
+    chosen_root: Option<&[u8]>,
 ) -> Result<(), PartialsError> {
     let Val::I64(start_time) = value(readers, spans::START_TIME, row)? else {
         return Err(PartialsError::column(spans::START_TIME));
@@ -846,6 +861,7 @@ fn append_span(
         return Err(PartialsError::column(spans::SPAN_ID));
     };
     let root = value(readers, spans::PARENT_SPAN_ID, row)? == Val::Null;
+    let chosen = chosen_root == Some(span_id.as_slice());
     let Val::Str(kind) = value(readers, spans::SPAN_KIND, row)? else {
         return Err(PartialsError::column(spans::SPAN_KIND));
     };
@@ -857,12 +873,12 @@ fn append_span(
     };
     let ctx = RowCtx {
         rank: Rank {
-            root: u8::from(!root),
+            root: u8::from(!chosen),
             start_time,
             tie: Some(span_id.clone()),
         },
         root,
-        preview: root || kind == SpanKind::Llm.as_str(),
+        preview: chosen || kind == SpanKind::Llm.as_str(),
     };
 
     for (name, column) in DIRECT {
@@ -1085,6 +1101,7 @@ impl Builder {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::mem::size_of;
     use std::sync::Arc;
 
     use arrow::array::{Array, ArrayRef, AsArray, Int32Array, Int64Array, RecordBatch};
@@ -1097,7 +1114,7 @@ mod tests {
     use llmobs_core::span::Span;
     use proptest::prelude::*;
 
-    use super::{Column, MergeColumns, TraceMerger, partials_from_spans};
+    use super::{Acc, Column, MergeColumns, TraceMerger, partials_from_spans};
     use crate::error::PartialsError;
     use crate::test_support::{dataset_spans, trace_batch};
 
@@ -1469,6 +1486,56 @@ mod tests {
         let partials = partials_from_spans(&batch).unwrap();
         let oracle = trace_batch(&spans);
         assert_batches_equal(&sort_by_trace_id(&partials), &sort_by_trace_id(&oracle));
+    }
+
+    /// Spec 01 § Order: the choice among several root spans is the earliest
+    /// one. Only that span ranks ahead of the others, so a later root must not
+    /// outrank an earlier non-root span for context fields, metadata or
+    /// previews. Before the fix the later root won all three.
+    #[test]
+    fn several_root_spans_use_only_the_earliest_as_root() {
+        let trace = trace_id(1);
+        let mut root_1 = base_span(trace, span_id(1), 10);
+        root_1.name = "root-1".to_owned();
+        let mut child = base_span(trace, span_id(2), 20);
+        child.parent_span_id = Some(span_id(1));
+        child.span_kind = SpanKind::Llm;
+        child.session_id = Some("from-child".to_owned());
+        child
+            .metadata
+            .insert("k".to_owned(), "from-child".to_owned());
+        child.input_preview = Some("child-preview".to_owned());
+        let mut root_3 = base_span(trace, span_id(3), 30);
+        root_3.name = "root-3".to_owned();
+        root_3.session_id = Some("from-root-3".to_owned());
+        root_3
+            .metadata
+            .insert("k".to_owned(), "from-root-3".to_owned());
+        root_3.input_preview = Some("root-3-preview".to_owned());
+
+        let spans = [root_1, child, root_3];
+        let partials = partials_from_spans(&spans_batch(&spans)).unwrap();
+        let oracle = trace_batch(&spans);
+        assert_batches_equal(&sort_by_trace_id(&partials), &sort_by_trace_id(&oracle));
+    }
+
+    /// The 29 accumulator slots are on the heap behind `TraceAcc`'s Vec, so
+    /// `size()` must account for them or the query memory pool under-reports.
+    #[test]
+    fn size_accounts_for_every_accumulator_slot() {
+        let mut merger = TraceMerger::new(MergeColumns::all());
+        let partials = partials_from_spans(&spans_batch(&[
+            base_span(trace_id(1), span_id(1), 10),
+            base_span(trace_id(2), span_id(2), 20),
+        ]))
+        .unwrap();
+        merger.push(&partials).unwrap();
+        let heap = 2 * Column::ALL.len() * size_of::<Option<Acc>>();
+        assert!(
+            merger.size() >= heap,
+            "size() missed the accumulator heap: {} < {heap}",
+            merger.size()
+        );
     }
 
     #[test]

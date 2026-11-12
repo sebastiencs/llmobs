@@ -755,15 +755,16 @@ mod tests {
     async fn a_failed_commit_retries_with_the_same_anchor_days() {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::open(anchor_config(dir.path())).await.unwrap();
+        // Arm the failure on the FIRST flush — the one that creates the anchor
+        // entry. A failed attempt must not write it; the retry recomputes the
+        // same days with an untouched anchor state and commits it.
+        storage.hooks().arm_fail(HookPoint::CatalogCommit);
         let early = at(day(), 23, 59, 50);
         storage
             .append_spans(project(), spans_named(&[early], "a"))
             .await
             .unwrap();
         wait_rows(&storage, 1).await;
-        // The failed commit must leave the anchor state untouched, so the
-        // retry assigns the same day and keeps the late row in day D.
-        storage.hooks().arm_fail(HookPoint::CatalogCommit);
         let late = at(day().succ_opt().unwrap(), 0, 0, 10);
         storage
             .append_spans(project(), spans_named(&[late], "b"))
@@ -774,6 +775,33 @@ mod tests {
         // Both a spans and a traces file are committed for each day.
         assert_eq!(storage.catalog_paths(FileTable::Spans).len(), 2);
         assert_eq!(storage.catalog_paths(FileTable::Traces).len(), 2);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn rebuild_uses_a_partials_end_time_near_midnight() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = anchor_config(dir.path());
+        let storage = Storage::open(config.clone()).await.unwrap();
+        // One flush: root at 22:00, child at 23:30. At runtime the child's
+        // start makes the entry; the partial's start_time is 22:00, so only
+        // its end_time (23:30) restores the entry after a restart.
+        let root = at(day(), 22, 0, 0);
+        let child = at(day(), 23, 30, 0);
+        storage
+            .append_spans(project(), spans_named(&[root, child], "a"))
+            .await
+            .unwrap();
+        wait_rows(&storage, 2).await;
+        drop(storage);
+        let storage = Storage::open(config).await.unwrap();
+        let late = at(day().succ_opt().unwrap(), 0, 0, 10);
+        storage
+            .append_spans(project(), spans_named(&[late], "b"))
+            .await
+            .unwrap();
+        wait_rows(&storage, 3).await;
+        assert_eq!(span_days(&storage), vec![day(), day()]);
         storage.shutdown().await.unwrap();
     }
 

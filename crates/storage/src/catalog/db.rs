@@ -1,6 +1,6 @@
 //! `catalog.db`: one connection, the M2 schema, and the load into [`Catalog`].
 //!
-//! Wired into `Storage::open` in M2.6. Until then this module is reached from tests.
+//! `Storage::open` opens it and loads the in-memory [`Catalog`].
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, HashMap};
@@ -93,9 +93,8 @@ pub(crate) async fn load(
 ///
 /// Every active `spans` file is the source of exactly one active `traces` file,
 /// and every active `traces` file has at least one source, each an active
-/// `spans` file of the same `(project, day)`. `Storage::open` starts calling
-/// this once flush writes traces files (M3.3); M3.1 tests it on catalogs built
-/// with direct SQL.
+/// `spans` file of the same `(project, day)`. `Storage::open` calls it on every
+/// open; tests also build catalogs with direct SQL.
 pub(crate) async fn check_file_sources(
     connection: &mut SqliteConnection,
 ) -> Result<(), CatalogError> {

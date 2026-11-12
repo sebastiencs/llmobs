@@ -10,6 +10,7 @@
 //! few short time slices of partials, ranks trace ids, then fetches only the
 //! rows it will return.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::pin::Pin;
@@ -42,12 +43,13 @@ use datafusion::logical_expr::{
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::utils::conjunction_opt;
-use datafusion::physical_expr::{Partitioning, PhysicalExpr};
+use datafusion::physical_expr::{LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr};
 use datafusion::physical_plan::execution_plan::{
     Boundedness, EmissionType, collect as collect_plan,
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{
@@ -176,6 +178,9 @@ struct RangeSpec {
     projection: Projection,
     output_schema: SchemaRef,
     limit: Option<usize>,
+    /// Wrap the merge in a global sort with `fetch = rank` (phase 1 top-k),
+    /// so the plan emits at most `rank` rows and list mode stays bounded.
+    rank: Option<usize>,
 }
 
 #[async_trait]
@@ -226,13 +231,15 @@ impl TableProvider for TracesProvider {
                 projection: projection_kind,
                 output_schema,
                 limit,
+                rank: None,
             },
         )?)
     }
 }
 
-/// Builds one complete range-mode `TracesExec` (with its repartition and scans).
-fn build_range_plan(ctx: &ScanContext, spec: RangeSpec) -> DfResult<Arc<TracesExec>> {
+/// Builds one complete range-mode `TracesExec` (with its repartition and scans),
+/// optionally wrapped in a global top-k sort for list mode's phase 1.
+fn build_range_plan(ctx: &ScanContext, spec: RangeSpec) -> DfResult<Arc<dyn ExecutionPlan>> {
     let schema = traces_schema();
     let padded = padded_bounds(spec.bounds, ctx.lookback);
 
@@ -293,7 +300,7 @@ fn build_range_plan(ctx: &ScanContext, spec: RangeSpec) -> DfResult<Arc<TracesEx
         .position(|name| *name == traces::TRACE_ID)
         .ok_or_else(|| DataFusionError::Internal("trace_id missing from merge input".into()))?;
     let key: Arc<dyn PhysicalExpr> = Arc::new(Column::new(traces::TRACE_ID, trace_id_index));
-    let partitions = if spec.limit.is_some() {
+    let partitions = if spec.limit.is_some() || spec.rank.is_some() {
         1
     } else {
         ctx.partitions
@@ -321,7 +328,7 @@ fn build_range_plan(ctx: &ScanContext, spec: RangeSpec) -> DfResult<Arc<TracesEx
         batches.len(),
     );
 
-    Ok(Arc::new(TracesExec {
+    let exec: Arc<dyn ExecutionPlan> = Arc::new(TracesExec {
         input: repartition,
         properties: Arc::new(properties_for(&spec.output_schema, partitions)),
         scan_ctx: ctx.clone(),
@@ -331,17 +338,42 @@ fn build_range_plan(ctx: &ScanContext, spec: RangeSpec) -> DfResult<Arc<TracesEx
         predicate,
         bounds: spec.bounds,
         projection: spec.projection,
-        output_schema: spec.output_schema,
+        output_schema: Arc::clone(&spec.output_schema),
         limit: spec.limit,
         display,
-    }))
+    });
+    let Some(fetch) = spec.rank else {
+        return Ok(exec);
+    };
+    // A single-partition TopK: the slice merge is still memory-reserved by its
+    // own TracesExec, but the sort emits only `fetch` rows, so the caller
+    // never holds an unbounded set of matching traces.
+    let start_index = spec.output_schema.index_of(traces::START_TIME)?;
+    let trace_index = spec.output_schema.index_of(traces::TRACE_ID)?;
+    let descending = SortOptions {
+        descending: true,
+        nulls_first: false,
+    };
+    let ordering = LexOrdering::new([
+        PhysicalSortExpr::new(
+            Arc::new(Column::new(traces::START_TIME, start_index)),
+            descending,
+        ),
+        PhysicalSortExpr::new(
+            Arc::new(Column::new(traces::TRACE_ID, trace_index)),
+            descending,
+        ),
+    ])
+    .ok_or_else(|| DataFusionError::Internal("empty top-k ordering".into()))?;
+    let sort = SortExec::new(ordering, exec).with_fetch(Some(fetch));
+    Ok(Arc::new(sort))
 }
 
 fn properties_for(schema: &SchemaRef, partitions: usize) -> PlanProperties {
     PlanProperties::new(
         EquivalenceProperties::new(Arc::clone(schema)),
         Partitioning::UnknownPartitioning(partitions),
-        EmissionType::Incremental,
+        EmissionType::Final,
         Boundedness::Bounded,
     )
 }
@@ -716,6 +748,12 @@ impl ExecutionPlan for TracesExec {
     }
 
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        if self.limit.is_some() {
+            // Step 8: a limit uses one output partition. A key-partitioning
+            // requirement lets EnforceDistribution repartition back to
+            // target_partitions and repeat the whole merge once per partition.
+            return InputDistributionRequirements::new(vec![Distribution::SinglePartition]);
+        }
         InputDistributionRequirements::new(vec![Distribution::KeyPartitioned(self.key.clone())])
     }
 
@@ -1040,6 +1078,13 @@ struct Candidate {
     slice: usize,
 }
 
+fn newest_first(left: &Candidate, right: &Candidate) -> Ordering {
+    right
+        .start
+        .cmp(&left.start)
+        .then_with(|| right.id.as_bytes().cmp(left.id.as_bytes()))
+}
+
 /// Phase 1: rank `(start_time, trace_id)` over slices. Phase 2: fetch the kept
 /// ids with full columns. Returns the projected rows, newest first, at most k.
 async fn run_list(
@@ -1084,6 +1129,7 @@ async fn run_list(
                 projection: Projection::All,
                 output_schema: Arc::clone(&phase1_schema),
                 limit: None,
+                rank: Some(fetch),
             },
         )?;
         for batch in collect_plan(plan, Arc::clone(&context)).await? {
@@ -1112,19 +1158,19 @@ async fn run_list(
                 }
             }
         }
+        // Keep only the best k so far, and rebuild `seen` from them: both
+        // collections stay bounded by k even when a slice is very selective.
+        // A trace dropped here sorts below the current top-k, so re-seeing it
+        // in an older slice cannot change the answer.
+        candidates.sort_by(newest_first);
+        candidates.truncate(fetch);
+        seen = candidates.iter().map(|candidate| candidate.id).collect();
         // A slice with no matching trace is not empty; only an exhausted
         // intersection stops the walk. Stop once the total reaches k.
         if candidates.len() >= fetch {
             break;
         }
     }
-    candidates.sort_by(|left, right| {
-        right
-            .start
-            .cmp(&left.start)
-            .then_with(|| right.id.as_bytes().cmp(left.id.as_bytes()))
-    });
-    candidates.truncate(fetch);
     if candidates.is_empty() {
         return Ok(Vec::new());
     }
@@ -1154,13 +1200,15 @@ async fn run_list(
                 projection: Projection::All,
                 output_schema: Arc::clone(&phase2_schema),
                 limit: None,
+                rank: None,
             },
         )?;
         let batches = collect_plan(plan, Arc::clone(&context)).await?;
         let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
-        // Re-applying the filters held in phase 1; the inner plan evaluates
-        // them, so at most the requested ids come back.
-        debug_assert!(rows <= wanted, "phase 2 returned more rows than ranked");
+        // Re-applying the filters held in phase 1; the inner plan uses the
+        // same slice window, so exactly the ranked ids come back. A missing
+        // row means phase 1 and phase 2 disagreed on the merged values.
+        debug_assert_eq!(rows, wanted, "phase 2 lost or duplicated ranked rows");
         fetched.extend(batches);
     }
     if fetched.is_empty() {
@@ -2328,12 +2376,21 @@ mod tests {
         assert_eq!(rows(&collect(&ctx, "SELECT * FROM traces").await), 3);
 
         let explained = collect(&ctx, "EXPLAIN SELECT * FROM traces LIMIT 2").await;
-        let line = plan_text(&explained)
+        let plan = plan_text(&explained);
+        let line = plan
             .lines()
             .find(|line| line.contains("TracesExec:"))
             .unwrap()
             .to_owned();
         assert!(line.contains("mode=range"), "{line}");
+        // One output partition: EnforceDistribution must not repartition the
+        // single-partition limit scan back to target_partitions, which would
+        // repeat the whole merge once per partition.
+        assert!(
+            !plan.contains("RepartitionExec"),
+            "limit scan was repartitioned: {plan}"
+        );
+        assert!(plan.contains("CoalescePartitionsExec"), "{plan}");
         storage.shutdown().await.unwrap();
     }
 

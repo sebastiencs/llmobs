@@ -269,9 +269,11 @@ impl QueryContext {
 
     /// The session with the views registered.
     ///
-    /// Reads and the SQL console go through [`Self::sql_json`] and the read
-    /// endpoints, which apply the sandbox. This accessor exists for the M3
-    /// benchmark (`tests/trace_bench.rs`) to run raw SQL and `EXPLAIN ANALYZE`.
+    /// **Trusted in-process capability (D155).** Reads and the SQL console go
+    /// through `sql_json` / `sql_export` and the read endpoints, which apply the
+    /// D96 SQL sandbox. This accessor bypasses that sandbox: it exists only for
+    /// the M3 benchmark (`tests/trace_bench.rs`) to run raw SQL and
+    /// `EXPLAIN ANALYZE`. Never expose it to untrusted SQL.
     pub fn session(&self) -> &SessionContext {
         &self.session
     }

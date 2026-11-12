@@ -27,7 +27,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use arrow::array::{Array, RecordBatch, StringArray};
+use arrow::array::{Array, Float64Array, RecordBatch, StringArray};
 use bytesize::ByteSize;
 use chrono::{TimeZone, Utc};
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
@@ -42,6 +42,7 @@ use llmobs_storage::config::{
 use llmobs_storage::{
     Bucket, BucketWidth, ListScope, MetricsRequest, Page, ProjectQuery, QueryContext, QueryOptions,
     SortOrder, TimeWindow, TraceListRequest, TraceSort, metrics, trace_detail, trace_list,
+    trace_list_plan,
 };
 
 // ---------------------------------------------------------------- constants
@@ -205,7 +206,6 @@ struct TracePlan {
     release: usize,
     name: usize,
     split: bool,
-    cost: f64,
     groups: Vec<GroupPlan>,
 }
 
@@ -226,6 +226,16 @@ fn start_time(rng: &mut Rng, start: i64) -> i64 {
     }
     let frac = rng.unit();
     start + (day * DAY_SECONDS + hour * 3600) * NS + (frac * 3600.0 * NS as f64) as i64
+}
+
+/// A bitmask with 0–3 of the 10 tag bits set (spec 06 § Data: 0–3 tags/span).
+fn tag_mask(rng: &mut Rng) -> u16 {
+    let count = rng.below(4);
+    let mut mask = 0_u16;
+    for _ in 0..count {
+        mask |= 1_u16 << rng.below(TAGS.len());
+    }
+    mask
 }
 
 fn trace_plan(rng: &mut Rng, index: usize, start: i64, end: i64) -> TracePlan {
@@ -255,14 +265,11 @@ fn trace_plan(rng: &mut Rng, index: usize, start: i64, end: i64) -> TracePlan {
     let group_count = if split { 2 + rng.below(2) } else { 1 };
 
     let children: Vec<usize> = (1..SPANS_PER_TRACE).collect();
-    let late_groups = group_count - 1;
-    let per_group = if late_groups > 0 {
-        children.len().div_ceil(late_groups)
-    } else {
-        0
-    };
+    // Divide the children among ALL groups — the root group and the late ones —
+    // so a split trace still keeps children next to its root (spec 06 § Data).
+    let per_group = children.len().div_ceil(group_count);
     let mut child_groups: Vec<Vec<usize>> = Vec::new();
-    for g in 0..late_groups {
+    for g in 0..group_count - 1 {
         let from = g * per_group;
         if from >= children.len() {
             child_groups.push(Vec::new());
@@ -273,6 +280,10 @@ fn trace_plan(rng: &mut Rng, index: usize, start: i64, end: i64) -> TracePlan {
     }
 
     let mut groups = Vec::with_capacity(group_count);
+    // Exactly `llm_count` spans across the whole trace carry the cost, whether
+    // the trace is split or not. A shared budget avoids counting the per-trace
+    // cost once per group (spec 06 § Data).
+    let mut llm_left = llm_count;
     // Root group: the root span plus the children not handed to late groups.
     {
         let mut spans = Vec::new();
@@ -282,7 +293,7 @@ fn trace_plan(rng: &mut Rng, index: usize, start: i64, end: i64) -> TracePlan {
             span_index: 0,
             is_llm: false,
             is_root: true,
-            tag_mask: rng.below(1 << TAGS.len()) as u16,
+            tag_mask: tag_mask(rng),
             preview: Some((100 + rng.below(301), b'a' + rng.below(26) as u8)),
             tokens: None,
             model: None,
@@ -290,8 +301,11 @@ fn trace_plan(rng: &mut Rng, index: usize, start: i64, end: i64) -> TracePlan {
             cost_share: None,
         });
         let used: usize = child_groups.iter().map(Vec::len).sum();
-        for (ci, child) in children[used..].iter().enumerate() {
-            let is_llm = ci < llm_count;
+        for child in children[used..].iter() {
+            let is_llm = llm_left > 0;
+            if is_llm {
+                llm_left -= 1;
+            }
             let cs = root_start + (rng.unit() * duration as f64) as i64;
             let ce = (cs + duration / 10).min(root_end);
             let tokens = is_llm.then(|| rng.lognormal(800.0, 20_000.0) as i64);
@@ -301,7 +315,7 @@ fn trace_plan(rng: &mut Rng, index: usize, start: i64, end: i64) -> TracePlan {
                 span_index: *child,
                 is_llm,
                 is_root: false,
-                tag_mask: rng.below(1 << TAGS.len()) as u16,
+                tag_mask: tag_mask(rng),
                 preview: is_llm.then(|| (100 + rng.below(301), b'a' + rng.below(26) as u8)),
                 tokens,
                 model: is_llm.then(|| rng.below(MODELS.len())),
@@ -331,7 +345,10 @@ fn trace_plan(rng: &mut Rng, index: usize, start: i64, end: i64) -> TracePlan {
         }
         let mut spans = Vec::new();
         for (j, child) in child_group.iter().enumerate() {
-            let is_llm = j < llm_count;
+            let is_llm = llm_left > 0;
+            if is_llm {
+                llm_left -= 1;
+            }
             let cs = base + (j as i64 + 1) * (duration / SPANS_PER_TRACE as i64);
             let ce = cs + duration / SPANS_PER_TRACE as i64;
             let tokens = is_llm.then(|| rng.lognormal(800.0, 20_000.0) as i64);
@@ -341,11 +358,11 @@ fn trace_plan(rng: &mut Rng, index: usize, start: i64, end: i64) -> TracePlan {
                 span_index: *child,
                 is_llm,
                 is_root: false,
-                tag_mask: rng.below(1 << TAGS.len()) as u16,
+                tag_mask: tag_mask(rng),
                 preview: is_llm.then(|| (100 + rng.below(301), b'a' + rng.below(26) as u8)),
                 tokens,
                 model: is_llm.then(|| rng.below(MODELS.len())),
-                error: false,
+                error: has_error && error_span == *child,
                 cost_share: is_llm.then_some(cost_share),
             });
         }
@@ -365,7 +382,6 @@ fn trace_plan(rng: &mut Rng, index: usize, start: i64, end: i64) -> TracePlan {
         release,
         name,
         split,
-        cost,
         groups,
     }
 }
@@ -527,8 +543,6 @@ struct Manifest {
     files: Vec<usize>,
     gen_secs: f64,
     max_bytes: u64,
-    cost_2h: f64,
-    cost_15h: f64,
     sample: Vec<(String, i64)>,
     late_1_3h: usize,
 }
@@ -545,20 +559,6 @@ struct Pending {
     ingest: i64,
     trace: usize,
     group: usize,
-}
-
-fn cost_floor(plans: &[TracePlan], lookback: i64) -> f64 {
-    let cutoff = range_end() - lookback;
-    let mut costs: Vec<f64> = plans
-        .iter()
-        .filter(|p| p.start >= cutoff)
-        .map(|p| p.cost)
-        .collect();
-    costs.sort_by(f64::total_cmp);
-    if costs.len() <= 50 {
-        return 0.05;
-    }
-    costs[costs.len() - 50].max(1e-6)
 }
 
 fn q4_sample(plans: &[TracePlan]) -> Vec<(String, i64)> {
@@ -622,8 +622,6 @@ async fn generate(dir: &Path, traces: usize, max_bytes: ByteSize) -> (usize, Dur
         files: Vec::new(),
         gen_secs: 0.0,
         max_bytes: max_bytes.0,
-        cost_2h: cost_floor(&plans, 2 * HOUR),
-        cost_15h: cost_floor(&plans, 15 * HOUR),
         sample: q4_sample(&plans),
         late_1_3h,
     };
@@ -845,14 +843,66 @@ fn ts_string(ns: i64) -> String {
         .to_string()
 }
 
-/// The physical plan of a list query, to read its `mode=list|range`, plus the
-/// SQL for a possible `EXPLAIN ANALYZE` when its target misses.
+/// Q2r threshold: the 50th-largest `cost_total` among traces started within
+/// `lookback` of the range end, from an untimed range-mode query (spec 06 §
+/// Queries). With `cost_total > t`, matches number ~50 per such a window, so
+/// the 50 newest matches span about `lookback` — S1b's "50th match 2 h / 15 h
+/// back". It comes from the merged data, not from the generator's costs.
+async fn cost_threshold(range: &QueryContext, lookback: i64) -> f64 {
+    let cutoff = range_end() - lookback;
+    let sql = format!(
+        "SELECT cost_total FROM traces WHERE start_time >= TIMESTAMP '{}' \
+         ORDER BY cost_total DESC LIMIT 50",
+        ts_string(cutoff)
+    );
+    let batches = range
+        .session()
+        .sql(&sql)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let mut costs = Vec::new();
+    for batch in &batches {
+        if let Some(column) = batch
+            .column_by_name("cost_total")
+            .and_then(|c| c.as_any().downcast_ref::<Float64Array>())
+        {
+            for row in 0..column.len() {
+                if !column.is_null(row) {
+                    costs.push(column.value(row));
+                }
+            }
+        }
+    }
+    costs.sort_by(|a, b| b.total_cmp(a));
+    costs.get(49).copied().unwrap_or(0.05).max(1e-6)
+}
+
+/// The mode of A2's real `trace_list` query for these options, plus SQL for a
+/// possible `EXPLAIN ANALYZE` when its target misses. The mode comes from the
+/// physical plan A2 actually builds (`traces` view + default exclusions +
+/// filter/window + sort + limit), not from hand-written SQL that leaves out the
+/// environment filter.
 async fn plan_info(
     ctx: &QueryContext,
     filter: Option<&str>,
     window: Option<TimeWindow>,
 ) -> (String, String) {
-    let mut sql = String::from("SELECT * FROM traces WHERE 1 = 1");
+    let req = request(filter, 50, window);
+    let mode = match trace_list_plan(ctx, req).await {
+        Ok(plan) if plan.contains("mode=list") => "list".to_owned(),
+        _ => "range".to_owned(),
+    };
+    (mode, list_sql(filter, window))
+}
+
+/// Equivalent SQL for `EXPLAIN ANALYZE` on a missed target. A2's default list
+/// excludes eval rows, so keep that environment clause in the analysed plan.
+fn list_sql(filter: Option<&str>, window: Option<TimeWindow>) -> String {
+    let mut sql =
+        String::from("SELECT * FROM traces WHERE environment IS DISTINCT FROM 'llmobs-eval'");
     if let Some(w) = window {
         sql.push_str(&format!(
             " AND start_time >= TIMESTAMP '{}' AND start_time < TIMESTAMP '{}'",
@@ -864,22 +914,7 @@ async fn plan_info(
         sql.push_str(&format!(" AND ({f})"));
     }
     sql.push_str(" ORDER BY start_time DESC, trace_id DESC LIMIT 51");
-    let Ok(frame) = ctx.session().sql(&sql).await else {
-        return ("range".to_owned(), sql);
-    };
-    let Ok(plan) = frame.create_physical_plan().await else {
-        return ("range".to_owned(), sql);
-    };
-    let text = format!(
-        "{}",
-        datafusion::physical_plan::displayable(plan.as_ref()).indent(true)
-    );
-    let mode = if text.contains("mode=list") {
-        "list"
-    } else {
-        "range"
-    };
-    (mode.to_owned(), sql)
+    sql
 }
 
 /// For a missed target, the operator that took the time (EXPLAIN ANALYZE).
@@ -928,8 +963,6 @@ async fn trace_benchmark() {
             files: vec![count_spans_files(&dir)],
             gen_secs: 0.0,
             max_bytes: max_bytes.0,
-            cost_2h: 0.05,
-            cost_15h: 0.05,
             sample: Vec::new(),
             late_1_3h: 0,
         })
@@ -960,6 +993,18 @@ async fn trace_benchmark() {
     )
     .unwrap();
     let range = no_rule(&storage.query(project(), QueryOptions::default()).unwrap());
+
+    // Confirm A2's real `trace_list` — the `traces` view plus its default
+    // environment / experiment exclusions — is rewritten to list mode. The
+    // mode column below comes from the same real query, not a hand-written
+    // `SELECT` that leaves the environment filter out.
+    let default_plan = trace_list_plan(&ctx, request(None, 50, None))
+        .await
+        .unwrap_or_default();
+    assert!(
+        default_plan.contains("mode=list"),
+        "A2's real trace_list did not get list mode:\n{default_plan}"
+    );
 
     let mut rows: Vec<Row> = Vec::new();
 
@@ -995,8 +1040,13 @@ async fn trace_benchmark() {
 
     list_query!("Q1", 200.0, None, None);
     list_query!("Q2", 2000.0, Some("cost_total > 0.05"), None);
-    let t2 = format!("cost_total > {:.6}", manifest.cost_2h);
-    let t15 = format!("cost_total > {:.6}", manifest.cost_15h);
+    // Q2r thresholds come from untimed range-mode queries, as S1b did, so the
+    // 50th newest match is about 2 h / 15 h back — not from generator costs.
+    let t2 = format!("cost_total > {:.6}", cost_threshold(&range, 2 * HOUR).await);
+    let t15 = format!(
+        "cost_total > {:.6}",
+        cost_threshold(&range, 15 * HOUR).await
+    );
     list_query!("Q2r-2h", 2000.0, Some(t2.as_str()), None);
     list_query!("Q2r-15h", 2000.0, Some(t15.as_str()), None);
     list_query!("Q3", 500.0, Some("environment = 'production'"), None);

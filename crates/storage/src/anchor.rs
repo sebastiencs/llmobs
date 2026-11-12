@@ -4,7 +4,6 @@
 //! All anchor logic lives here. The flush asks for one partition day per trace
 //! and applies the returned plan only after its catalog commit succeeds. At
 //! open, the state is rebuilt from recent `traces` files.
-#![allow(dead_code)]
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -49,15 +48,6 @@ pub(crate) struct AnchorPlan {
     max_ingest: i64,
 }
 
-impl AnchorPlan {
-    pub(crate) fn empty() -> Self {
-        Self {
-            changes: Vec::new(),
-            max_ingest: i64::MIN,
-        }
-    }
-}
-
 /// One output partition and the exact rows assigned to it.
 pub(crate) struct AnchorPartition {
     pub(crate) key: PartitionKey,
@@ -81,10 +71,6 @@ impl Anchors {
             clock: i64::MIN,
             entries: HashMap::new(),
         }
-    }
-
-    pub(crate) fn window(&self) -> i64 {
-        self.window
     }
 
     /// Regroups a frozen spans view by anchor day and plans the entry changes.
@@ -167,11 +153,8 @@ impl Anchors {
                     .map(|row| start.value(usize::try_from(*row).unwrap_or(0)))
                     .min()
                     .unwrap_or(0);
-                let anchor = self
-                    .entries
-                    .get(&(*project, trace_id))
-                    .map(|entry| entry.day)
-                    .unwrap_or_else(|| day_of_ns(min_start));
+                let existing = self.entries.get(&(*project, trace_id)).map(|e| e.day);
+                let anchor = existing.unwrap_or_else(|| day_of_ns(min_start));
                 let anchor_number = day_number(anchor);
                 let mut near = false;
                 for row in &rows {
@@ -185,7 +168,10 @@ impl Anchors {
                     };
                     assigned.entry(day).or_default().push(*row);
                 }
-                if near {
+                // Spec 03 § Trace anchor: a near-midnight row makes an entry,
+                // and an existing entry is refreshed by the same deadline even
+                // when none of this flush's rows is near midnight.
+                if near || existing.is_some() {
                     changes.push((
                         *project,
                         trace_id,
@@ -262,6 +248,7 @@ impl Anchors {
                 [
                     traces::TRACE_ID,
                     traces::START_TIME,
+                    traces::END_TIME,
                     traces::LAST_INGEST_TIME,
                 ],
             );
@@ -301,6 +288,10 @@ fn collect_rebuild_rows(
         .column_by_name(traces::START_TIME)
         .and_then(|column| column.as_primitive_opt::<TimestampNanosecondType>())
         .ok_or_else(|| AnchorError::column(traces::START_TIME))?;
+    let end = batch
+        .column_by_name(traces::END_TIME)
+        .and_then(|column| column.as_primitive_opt::<TimestampNanosecondType>())
+        .ok_or_else(|| AnchorError::column(traces::END_TIME))?;
     let ingest = batch
         .column_by_name(traces::LAST_INGEST_TIME)
         .and_then(|column| column.as_primitive_opt::<TimestampNanosecondType>())
@@ -310,7 +301,12 @@ fn collect_rebuild_rows(
             continue;
         }
         let last_ingest = ingest.value(row);
-        if last_ingest < since || !near_midnight(start.value(row), anchors.window) {
+        // A partial's start_time is the trace's earliest start; a child ending
+        // near midnight is only visible through end_time. Without it a trace
+        // rooted well before midnight loses its anchor on restart.
+        let near = near_midnight(start.value(row), anchors.window)
+            || (!end.is_null(row) && near_midnight(end.value(row), anchors.window));
+        if last_ingest < since || !near {
             continue;
         }
         let Ok(trace_id) = TraceId::from_slice(trace.value(row)) else {
@@ -711,9 +707,37 @@ mod tests {
         let early = at(old, 23, 59, 50);
         let late = at(old.succ_opt().unwrap(), 0, 0, 10);
         let now = at(day(), 12, 0, 0);
+        // Two flushes: the entry made by the first must survive to the second
+        // because expiry counts ingest time, not the 30-day-old event time.
+        assert_eq!(flush(&mut a, &[span(1, 1, early, now)]), vec![(old, 1)]);
         assert_eq!(
-            flush(&mut a, &[span(1, 1, early, now), span(1, 2, late, now)]),
-            vec![(old, 2)]
+            flush(&mut a, &[span(1, 2, late, now + HOUR_NS)]),
+            vec![(old, 1)]
+        );
+    }
+
+    /// Spec 03 § Trace anchor: an existing entry is refreshed by every flush
+    /// with rows for that trace, not only flushes with a near-midnight row.
+    #[test]
+    fn an_existing_entry_is_refreshed_without_a_midnight_row() {
+        let mut a = anchors();
+        let early = at(day(), 23, 59, 50);
+        let ingest = early + NS_PER_SEC;
+        assert_eq!(
+            flush(&mut a, &[span(1, 1, early, ingest)]),
+            vec![(day(), 1)]
+        );
+        // Noon is far from midnight and three ingest-hours later. Without a
+        // refresh, the original deadline (ingest + 2h) would pass the clock
+        // and the entry would be dropped.
+        let noon = at(day().succ_opt().unwrap(), 12, 0, 0);
+        let past = ingest + 3 * HOUR_NS;
+        assert_eq!(flush(&mut a, &[span(1, 2, noon, past)]), vec![(day(), 1)]);
+        // The refreshed anchor still pulls a late row back to day D.
+        let late = at(day().succ_opt().unwrap(), 0, 0, 10);
+        assert_eq!(
+            flush(&mut a, &[span(1, 3, late, past + NS_PER_SEC)]),
+            vec![(day(), 1)]
         );
     }
 
