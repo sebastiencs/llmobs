@@ -135,6 +135,35 @@ impl OidcProvider {
         &self.display_name
     }
 
+    /// Verified-email domains. Empty means the provider does not restrict them.
+    pub(crate) fn allowed_domains(&self) -> &[String] {
+        &self.allowed_domains
+    }
+
+    /// Google checks `hd` as well as the email domain.
+    pub(crate) fn is_google(&self) -> bool {
+        self.kind == OidcKind::Google
+    }
+
+    /// Org membership added after a successful login.
+    pub(crate) fn auto_provision(&self) -> Option<&AutoProvision> {
+        self.auto_provision.as_ref()
+    }
+
+    /// Link a verified email onto an existing non-admin account.
+    pub(crate) fn link_existing_by_email(&self) -> bool {
+        self.link_existing_by_email
+    }
+
+    /// Points discovery at a mock issuer. The cache is still empty.
+    #[cfg(test)]
+    pub(crate) fn point_at(&mut self, issuer: &str) {
+        // The mock IdP's issuer is a URL this process just bound.
+        #[allow(clippy::expect_used)]
+        let issuer = IssuerUrl::new(issuer.to_owned()).expect("mock issuer");
+        self.issuer = issuer;
+    }
+
     /// Discovery document, fetched on first use and when older than an hour.
     ///
     /// A failed refresh keeps the previous document. With nothing cached, the

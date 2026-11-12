@@ -44,6 +44,8 @@ pub(crate) fn routes() -> Vec<RouteDef> {
 struct AuthorizeQuery {
     #[serde(default)]
     redirect: Option<String>,
+    #[serde(default)]
+    setup_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -61,7 +63,14 @@ async fn authorize(
     error::Path(provider): error::Path<String>,
     error::Query(query): error::Query<AuthorizeQuery>,
 ) -> Result<Response, ApiError> {
-    match flow::start(&state, &provider, query.redirect.as_deref()).await {
+    match flow::start(
+        &state,
+        &provider,
+        query.redirect.as_deref(),
+        query.setup_token.as_deref(),
+    )
+    .await
+    {
         Ok((location, cookie)) => redirect(&location, [cookie]),
         Err(StartError::NotFound) => Err(ApiError::NotFound),
         Err(StartError::Unavailable) => {
@@ -165,14 +174,14 @@ mod tests {
     use crate::auth::OrgRole;
     use crate::auth::secret::new_opaque_token;
     use crate::bootstrap;
-    use crate::config::{GithubAuth, OidcAuth, Secret};
+    use crate::config::{AutoProvision, GithubAuth, GoogleAuth, OidcAuth, Secret};
     use crate::meta::identities;
     use crate::meta::invites::{self, INVITE_TTL_NS};
     use crate::meta::users;
     use crate::test_support::mock_idp::{
         CLIENT_ID, CLIENT_SECRET, GithubEmail, GithubUser, Grant, MockIdp,
     };
-    use crate::test_support::{TestApp, TestResponse, assert_logs_clean};
+    use crate::test_support::{TestApp, TestResponse, assert_logs_clean, capture_logs};
 
     const OAUTH_NAME: &str = llmobs_core::llmobs_name!("_oauth");
     const SESSION_NAME: &str = llmobs_core::llmobs_name!("_session");
@@ -287,26 +296,30 @@ mod tests {
     }
 
     async fn begin(app: &TestApp, provider: &str, redirect: &str) -> Pending {
+        begin_with(app, provider, &[("redirect", redirect)]).await
+    }
+
+    async fn begin_with(app: &TestApp, provider: &str, query: &[(&str, &str)]) -> Pending {
         let response = app
             .request(
                 Method::GET,
                 &format!(
                     "/api/auth/authorize/{provider}?{}",
-                    serde_urlencoded::to_string([("redirect", redirect)]).expect("query")
+                    serde_urlencoded::to_string(query).expect("query")
                 ),
             )
             .send()
             .await;
         assert_eq!(response.status, StatusCode::FOUND);
         let url = url::Url::parse(location(&response)).expect("authorize url");
-        let query: std::collections::HashMap<String, String> =
+        let pairs: std::collections::HashMap<String, String> =
             url.query_pairs().into_owned().collect();
         Pending {
             cookie: one_cookie(&response, OAUTH_NAME),
-            state: query["state"].clone(),
-            nonce: query.get("nonce").cloned(),
-            challenge: query["code_challenge"].clone(),
-            redirect_uri: query["redirect_uri"].clone(),
+            state: pairs["state"].clone(),
+            nonce: pairs.get("nonce").cloned(),
+            challenge: pairs["code_challenge"].clone(),
+            redirect_uri: pairs["redirect_uri"].clone(),
         }
     }
 
@@ -338,6 +351,37 @@ mod tests {
             .await;
         assert_eq!(response.status, StatusCode::OK);
         response.json::<MeBody>().user
+    }
+
+    async fn signup(app: &TestApp, email: &str) -> String {
+        let response = app
+            .request(Method::POST, "/api/auth/signup")
+            .json(&json!({
+                "email": email,
+                "password": PASSWORD,
+                "name": "Grace",
+            }))
+            .send()
+            .await;
+        assert_eq!(response.status, StatusCode::CREATED);
+        one_cookie(&response, SESSION_NAME)
+    }
+
+    async fn password_status(app: &TestApp, email: &str) -> StatusCode {
+        app.request(Method::POST, "/api/auth/login")
+            .json(&json!({ "email": email, "password": PASSWORD }))
+            .send()
+            .await
+            .status
+    }
+
+    fn google(domains: &[&str], link: bool) -> GoogleAuth {
+        GoogleAuth {
+            client_id: CLIENT_ID.to_owned(),
+            client_secret: secret(CLIENT_SECRET),
+            allowed_domains: domains.iter().map(|domain| (*domain).to_owned()).collect(),
+            link_existing_by_email: link,
+        }
     }
 
     async fn invite(app: &TestApp, email: &str) {
@@ -926,5 +970,518 @@ mod tests {
             .send()
             .await;
         assert_eq!(missing.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn google_allowed_domains_require_the_email_and_hd() {
+        let idp = MockIdp::start().await;
+        let base = idp.issuer().to_owned();
+        let app = TestApp::with_google(&base, |config| {
+            config.auth.signup = SignupPolicy::Open;
+            config.auth.google = Some(google(&["acme.com"], true));
+        })
+        .await;
+        setup_admin(&app).await;
+
+        let pending = begin(&app, "google", "/").await;
+        let mut issued = grant(&pending, "ada@acme.com", Some(true));
+        issued.claims.hd = Some("acme.com".to_owned());
+        let code = idp.issue_code(issued);
+        let response = finish(
+            &app,
+            "google",
+            &pending,
+            &format!("code={code}&state={}", pending.state),
+        )
+        .await;
+        assert_eq!(location(&response), "/");
+
+        for hd in [None, Some("other.com".to_owned())] {
+            let pending = begin(&app, "google", "/").await;
+            let mut issued = grant(&pending, "ada@acme.com", Some(true));
+            issued.claims.sub = format!("other-{}", hd.as_deref().unwrap_or("missing"));
+            issued.claims.hd = hd;
+            let code = idp.issue_code(issued);
+            let response = finish(
+                &app,
+                "google",
+                &pending,
+                &format!("code={code}&state={}", pending.state),
+            )
+            .await;
+            assert!(location(&response).contains("error=domain_not_allowed"));
+        }
+    }
+
+    #[tokio::test]
+    async fn an_oidc_domain_list_rejects_an_outside_email() {
+        let idp = MockIdp::start().await;
+        let issuer = idp.issuer().to_owned();
+        let app = TestApp::with_config(move |config| {
+            config.auth.signup = SignupPolicy::Open;
+            let mut provider = oidc(&issuer);
+            provider.allowed_domains = vec!["acme.com".to_owned()];
+            config.auth.oidc = vec![provider];
+        })
+        .await;
+        setup_admin(&app).await;
+        let pending = begin(&app, "oidc:mock", "/").await;
+        let code = idp.issue_code(grant(&pending, "grace@example.com", Some(true)));
+        let response = finish(
+            &app,
+            "oidc:mock",
+            &pending,
+            &format!("code={code}&state={}", pending.state),
+        )
+        .await;
+        assert!(location(&response).contains("error=domain_not_allowed"));
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(app.state.meta.reader())
+            .await
+            .expect("count");
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn github_links_a_verified_user_and_revokes_sessions_and_tokens() {
+        let idp = MockIdp::start().await;
+        let base = idp.issuer().to_owned();
+        let app = TestApp::with_github(&base, |config| {
+            config.auth.signup = SignupPolicy::Open;
+            config.auth.github = Some(GithubAuth {
+                client_id: CLIENT_ID.to_owned(),
+                client_secret: secret(CLIENT_SECRET),
+                link_existing_by_email: true,
+            });
+        })
+        .await;
+        setup_admin(&app).await;
+        let session = signup(&app, "grace@example.com").await;
+        let user = me(&app, &session).await;
+        let now = app.state.clock.now_ns();
+        let user_id = user.id;
+        app.state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move { users::set_email_verified(conn, user_id, now).await })
+            })
+            .await
+            .expect("verify");
+        let minted = app
+            .request(Method::POST, "/api/v1/me/tokens")
+            .header(header::COOKIE.as_str(), &session)
+            .json(&json!({ "name": "cli", "scopes": ["read"] }))
+            .send()
+            .await;
+        assert_eq!(minted.status, StatusCode::CREATED);
+        let secret: String = minted.json::<serde_json::Value>()["secret"]
+            .as_str()
+            .expect("secret")
+            .to_owned();
+        let before = app
+            .request(Method::GET, "/api/auth/me")
+            .header(header::AUTHORIZATION.as_str(), &format!("Bearer {secret}"))
+            .send()
+            .await;
+        assert_eq!(before.status, StatusCode::OK);
+
+        let pending = begin(&app, "github", "/traces").await;
+        let code = idp.issue_github_code(GithubUser {
+            id: 42,
+            login: "grace".to_owned(),
+            name: Some("Grace".to_owned()),
+            emails: vec![GithubEmail {
+                email: "grace@example.com".to_owned(),
+                primary: true,
+                verified: true,
+            }],
+        });
+        let (response, logs) = capture_logs(finish(
+            &app,
+            "github",
+            &pending,
+            &format!("code={code}&state={}", pending.state),
+        ))
+        .await;
+        assert_eq!(location(&response), "/traces");
+        assert!(logs.contains("identity linked"));
+        assert!(!logs.contains("grace@example.com"));
+        let old = app
+            .request(Method::GET, "/api/auth/me")
+            .header(header::COOKIE.as_str(), &session)
+            .send()
+            .await;
+        assert_eq!(old.status, StatusCode::UNAUTHORIZED);
+        let pat = app
+            .request(Method::GET, "/api/auth/me")
+            .header(header::AUTHORIZATION.as_str(), &format!("Bearer {secret}"))
+            .send()
+            .await;
+        assert_eq!(pat.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            password_status(&app, "grace@example.com").await,
+            StatusCode::OK
+        );
+        let hash: Option<String> =
+            sqlx::query_scalar("SELECT password_hash FROM users WHERE email = ?")
+                .bind("grace@example.com")
+                .fetch_one(app.state.meta.reader())
+                .await
+                .expect("hash");
+        assert!(hash.is_some());
+        let providers = identities::user_identities(app.state.meta.reader(), user.id)
+            .await
+            .expect("identities");
+        assert_eq!(providers, vec!["github".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn generic_oidc_does_not_link_and_an_admin_is_never_linked() {
+        let idp = MockIdp::start().await;
+        let app = oidc_app(&idp, SignupPolicy::Open).await;
+        setup_admin(&app).await;
+        signup(&app, "grace@example.com").await;
+        let pending = begin(&app, "oidc:mock", "/").await;
+        let code = idp.issue_code(grant(&pending, "grace@example.com", Some(true)));
+        let response = finish(
+            &app,
+            "oidc:mock",
+            &pending,
+            &format!("code={code}&state={}", pending.state),
+        )
+        .await;
+        assert!(location(&response).contains("error=link_refused"));
+
+        let idp = MockIdp::start().await;
+        let base = idp.issuer().to_owned();
+        let app = TestApp::with_github(&base, |config| {
+            config.auth.signup = SignupPolicy::Open;
+            config.auth.github = Some(GithubAuth {
+                client_id: CLIENT_ID.to_owned(),
+                client_secret: secret(CLIENT_SECRET),
+                link_existing_by_email: true,
+            });
+        })
+        .await;
+        setup_admin(&app).await;
+        let pending = begin(&app, "github", "/").await;
+        let code = idp.issue_github_code(GithubUser {
+            id: 7,
+            login: "ada".to_owned(),
+            name: None,
+            emails: vec![GithubEmail {
+                email: "ada@example.com".to_owned(),
+                primary: true,
+                verified: true,
+            }],
+        });
+        let response = finish(
+            &app,
+            "github",
+            &pending,
+            &format!("code={code}&state={}", pending.state),
+        )
+        .await;
+        assert!(location(&response).contains("error=link_refused"));
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM identities")
+            .fetch_one(app.state.meta.reader())
+            .await
+            .expect("count");
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn an_unverified_password_loses_that_password_when_google_links_it() {
+        let idp = MockIdp::start().await;
+        let base = idp.issuer().to_owned();
+        let app = TestApp::with_google(&base, |config| {
+            config.auth.signup = SignupPolicy::Open;
+            config.auth.google = Some(google(&[], true));
+        })
+        .await;
+        setup_admin(&app).await;
+        signup(&app, "grace@example.com").await;
+        let pending = begin(&app, "google", "/").await;
+        let code = idp.issue_code(grant(&pending, "grace@example.com", Some(true)));
+        let response = finish(
+            &app,
+            "google",
+            &pending,
+            &format!("code={code}&state={}", pending.state),
+        )
+        .await;
+        assert_eq!(location(&response), "/");
+        let hash: Option<String> =
+            sqlx::query_scalar("SELECT password_hash FROM users WHERE email = ?")
+                .bind("grace@example.com")
+                .fetch_one(app.state.meta.reader())
+                .await
+                .expect("hash");
+        assert!(hash.is_none());
+        let verified: Option<i64> =
+            sqlx::query_scalar("SELECT email_verified_at FROM users WHERE email = ?")
+                .bind("grace@example.com")
+                .fetch_one(app.state.meta.reader())
+                .await
+                .expect("verified");
+        assert!(verified.is_some());
+        assert_eq!(
+            password_status(&app, "grace@example.com").await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn a_disabled_account_is_not_linked() {
+        let idp = MockIdp::start().await;
+        let base = idp.issuer().to_owned();
+        let app = TestApp::with_github(&base, |config| {
+            config.auth.signup = SignupPolicy::Open;
+            config.auth.github = Some(GithubAuth {
+                client_id: CLIENT_ID.to_owned(),
+                client_secret: secret(CLIENT_SECRET),
+                link_existing_by_email: true,
+            });
+        })
+        .await;
+        setup_admin(&app).await;
+        let session = signup(&app, "grace@example.com").await;
+        let user = me(&app, &session).await;
+        let now = app.state.clock.now_ns();
+        app.state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move { users::set_disabled(conn, user.id, Some(now), now).await })
+            })
+            .await
+            .expect("disable");
+        let pending = begin(&app, "github", "/").await;
+        let code = idp.issue_github_code(GithubUser {
+            id: 42,
+            login: "grace".to_owned(),
+            name: None,
+            emails: vec![GithubEmail {
+                email: "grace@example.com".to_owned(),
+                primary: true,
+                verified: true,
+            }],
+        });
+        let response = finish(
+            &app,
+            "github",
+            &pending,
+            &format!("code={code}&state={}", pending.state),
+        )
+        .await;
+        assert!(location(&response).contains("error=account_disabled"));
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM identities")
+            .fetch_one(app.state.meta.reader())
+            .await
+            .expect("count");
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn setup_through_sso_clears_the_token() {
+        let idp = MockIdp::start().await;
+        let app = oidc_app(&idp, SignupPolicy::Open).await;
+        bootstrap::prepare(&app.state).await.expect("prepare");
+        let token = app.state.setup.token().unwrap().expect("setup token");
+
+        let pending = begin(&app, "oidc:mock", "/").await;
+        let code = idp.issue_code(grant(&pending, "ada@example.com", Some(true)));
+        let missing = finish(
+            &app,
+            "oidc:mock",
+            &pending,
+            &format!("code={code}&state={}", pending.state),
+        )
+        .await;
+        assert!(location(&missing).contains("error=setup_required"));
+
+        let pending = begin_with(
+            &app,
+            "oidc:mock",
+            &[("redirect", "/traces"), ("setup_token", &token)],
+        )
+        .await;
+        let mut issued = grant(&pending, "ada@example.com", Some(true));
+        issued.claims.sub = "ada".to_owned();
+        let code = idp.issue_code(issued);
+        let (response, logs) = capture_logs(finish(
+            &app,
+            "oidc:mock",
+            &pending,
+            &format!("code={code}&state={}", pending.state),
+        ))
+        .await;
+        assert_eq!(location(&response), "/traces");
+        for needle in [
+            token.as_str(),
+            code.as_str(),
+            CLIENT_SECRET,
+            "ada@example.com",
+            "eyJ",
+        ] {
+            assert!(!logs.contains(needle), "log contains {needle}: {logs}");
+        }
+        assert!(logs.contains("setup completed"), "{logs}");
+        assert!(app.state.setup.token().unwrap().is_none());
+        let admin: i64 = sqlx::query_scalar("SELECT is_instance_admin FROM users WHERE email = ?")
+            .bind("ada@example.com")
+            .fetch_one(app.state.meta.reader())
+            .await
+            .expect("admin");
+        assert_eq!(admin, 1);
+
+        let pending = begin_with(
+            &app,
+            "oidc:mock",
+            &[("redirect", "/"), ("setup_token", &token)],
+        )
+        .await;
+        let mut grant = grant(&pending, "grace@example.com", Some(true));
+        grant.claims.sub = "grace".to_owned();
+        let code = idp.issue_code(grant);
+        let later = finish(
+            &app,
+            "oidc:mock",
+            &pending,
+            &format!("code={code}&state={}", pending.state),
+        )
+        .await;
+        assert_eq!(location(&later), "/");
+        let admin: i64 = sqlx::query_scalar("SELECT is_instance_admin FROM users WHERE email = ?")
+            .bind("grace@example.com")
+            .fetch_one(app.state.meta.reader())
+            .await
+            .expect("admin");
+        assert_eq!(admin, 0);
+        assert!(app.state.setup.token().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn auto_provision_joins_the_org_and_invites_under_invite_only() {
+        let idp = MockIdp::start().await;
+        let issuer = idp.issuer().to_owned();
+        let app = TestApp::with_config(move |config| {
+            config.auth.signup = SignupPolicy::InviteOnly;
+            let mut provider = oidc(&issuer);
+            provider.auto_provision = Some(AutoProvision {
+                org: "acme".to_owned(),
+                role: "member".to_owned(),
+            });
+            config.auth.oidc = vec![provider];
+        })
+        .await;
+        setup_admin(&app).await;
+        let pending = begin(&app, "oidc:mock", "/").await;
+        let code = idp.issue_code(grant(&pending, "grace@example.com", Some(true)));
+        let response = finish(
+            &app,
+            "oidc:mock",
+            &pending,
+            &format!("code={code}&state={}", pending.state),
+        )
+        .await;
+        assert_eq!(location(&response), "/");
+        let user = me(&app, &one_cookie(&response, SESSION_NAME)).await;
+        let role: String = sqlx::query_scalar("SELECT role FROM org_members WHERE user_id = ?")
+            .bind(user.id.to_string())
+            .fetch_one(app.state.meta.reader())
+            .await
+            .expect("role");
+        assert_eq!(role, "member");
+
+        let pending = begin(&app, "oidc:mock", "/").await;
+        let code = idp.issue_code(grant(&pending, "grace@example.com", Some(true)));
+        let again = finish(
+            &app,
+            "oidc:mock",
+            &pending,
+            &format!("code={code}&state={}", pending.state),
+        )
+        .await;
+        assert_eq!(location(&again), "/");
+        let memberships: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM org_members WHERE user_id = ?")
+                .bind(user.id.to_string())
+                .fetch_one(app.state.meta.reader())
+                .await
+                .expect("count");
+        assert_eq!(memberships, 1);
+    }
+
+    #[tokio::test]
+    async fn a_missing_provision_org_logs_the_slug_and_still_signs_in() {
+        let idp = MockIdp::start().await;
+        let issuer = idp.issuer().to_owned();
+        let app = TestApp::with_config(move |config| {
+            config.auth.signup = SignupPolicy::Open;
+            let mut provider = oidc(&issuer);
+            provider.auto_provision = Some(AutoProvision {
+                org: "absent-org".to_owned(),
+                role: "viewer".to_owned(),
+            });
+            config.auth.oidc = vec![provider];
+        })
+        .await;
+        setup_admin(&app).await;
+        let pending = begin(&app, "oidc:mock", "/").await;
+        let code = idp.issue_code(grant(&pending, "grace@example.com", Some(true)));
+        let (response, logs) = capture_logs(finish(
+            &app,
+            "oidc:mock",
+            &pending,
+            &format!("code={code}&state={}", pending.state),
+        ))
+        .await;
+        assert_eq!(location(&response), "/");
+        assert!(logs.contains("absent-org"), "{logs}");
+        assert!(!logs.contains("grace@example.com"), "{logs}");
+        let memberships: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM org_members WHERE user_id != \
+             (SELECT id FROM users WHERE email = 'ada@example.com')",
+        )
+        .fetch_one(app.state.meta.reader())
+        .await
+        .expect("count");
+        assert_eq!(memberships, 0);
+    }
+
+    #[tokio::test]
+    async fn signup_domains_apply_to_provider_signups() {
+        let idp = MockIdp::start().await;
+        let issuer = idp.issuer().to_owned();
+        let app = TestApp::with_config(move |config| {
+            config.auth.signup = SignupPolicy::Open;
+            config.auth.signup_domains = vec!["acme.test".to_owned()];
+            config.auth.oidc = vec![oidc(&issuer)];
+        })
+        .await;
+        setup_admin(&app).await;
+        let pending = begin(&app, "oidc:mock", "/").await;
+        let code = idp.issue_code(grant(&pending, "grace@example.com", Some(true)));
+        let closed = finish(
+            &app,
+            "oidc:mock",
+            &pending,
+            &format!("code={code}&state={}", pending.state),
+        )
+        .await;
+        assert!(location(&closed).contains("error=signup_closed"));
+
+        let pending = begin(&app, "oidc:mock", "/").await;
+        let mut grant = grant(&pending, "grace@acme.test", Some(true));
+        grant.claims.sub = "inside".to_owned();
+        let code = idp.issue_code(grant);
+        let opened = finish(
+            &app,
+            "oidc:mock",
+            &pending,
+            &format!("code={code}&state={}", pending.state),
+        )
+        .await;
+        assert_eq!(location(&opened), "/");
     }
 }

@@ -47,19 +47,19 @@ pub(crate) struct TestApp {
 impl TestApp {
     /// Defaults, `data_dir` in a temp directory, `public_url` `http://localhost:8080`.
     pub(crate) async fn new() -> Self {
-        Self::open(|_| {}, None, None, false, None).await
+        Self::open(|_| {}, None, None, false, None, None).await
     }
 
     /// `tweak` runs before storage and `meta.db` open.
     ///
     /// `storage.data_dir` is then copied from the top-level `data_dir`.
     pub(crate) async fn with_config(tweak: impl FnOnce(&mut ServerConfig)) -> Self {
-        Self::open(tweak, None, None, false, None).await
+        Self::open(tweak, None, None, false, None, None).await
     }
 
     /// Same as [`Self::new`] with extra routes inside the shared layers.
     pub(crate) async fn with_routes(routes: Router<AppState>) -> Self {
-        Self::open(|_| {}, Some(routes), None, false, None).await
+        Self::open(|_| {}, Some(routes), None, false, None, None).await
     }
 
     /// [`Self::with_config`] and [`Self::with_routes`] together.
@@ -67,27 +67,32 @@ impl TestApp {
         tweak: impl FnOnce(&mut ServerConfig),
         routes: Router<AppState>,
     ) -> Self {
-        Self::open(tweak, Some(routes), None, false, None).await
+        Self::open(tweak, Some(routes), None, false, None, None).await
     }
 
     /// The given route table instead of the server's, with the same layers.
     pub(crate) async fn with_route_table(routes: Vec<RouteDef>) -> Self {
-        Self::open(|_| {}, None, Some(routes), false, None).await
+        Self::open(|_| {}, None, Some(routes), false, None, None).await
     }
 
     /// The stub mailer. [`Self::sent`] reads what it accepted.
     pub(crate) async fn with_mailer() -> Self {
-        Self::open(|_| {}, None, None, true, None).await
+        Self::open(|_| {}, None, None, true, None, None).await
     }
 
     /// [`Self::with_config`] with the stub mailer.
     pub(crate) async fn with_mailer_config(tweak: impl FnOnce(&mut ServerConfig)) -> Self {
-        Self::open(tweak, None, None, true, None).await
+        Self::open(tweak, None, None, true, None, None).await
     }
 
     /// [`Self::with_config`] with GitHub's endpoints pointed at `base`.
     pub(crate) async fn with_github(base: &str, tweak: impl FnOnce(&mut ServerConfig)) -> Self {
-        Self::open(tweak, None, None, false, Some(base)).await
+        Self::open(tweak, None, None, false, Some(base), None).await
+    }
+
+    /// [`Self::with_config`] with Google's issuer pointed at `issuer`.
+    pub(crate) async fn with_google(issuer: &str, tweak: impl FnOnce(&mut ServerConfig)) -> Self {
+        Self::open(tweak, None, None, false, None, Some(issuer)).await
     }
 
     /// Messages the stub mailer accepted. Empty when the stub is not installed.
@@ -105,6 +110,7 @@ impl TestApp {
         table: Option<Vec<RouteDef>>,
         stub_mailer: bool,
         github_base: Option<&str>,
+        google_issuer: Option<&str>,
     ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let mut config = default_config(dir.path());
@@ -129,6 +135,9 @@ impl TestApp {
         };
         if let Some(base) = github_base {
             providers.retarget_github(base);
+        }
+        if let Some(issuer) = google_issuer {
+            providers.retarget_google(issuer);
         }
         let state = AppState::new(AppInner {
             config,

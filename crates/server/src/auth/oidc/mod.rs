@@ -39,8 +39,7 @@ pub(crate) struct LoginClaims {
     pub(crate) email: Option<String>,
     /// Missing means false.
     pub(crate) email_verified: bool,
-    /// Google hosted-domain claim. The domain check reads it later.
-    #[allow(dead_code)]
+    /// Google hosted-domain claim. Absent for GitHub and when Google omits it.
     pub(crate) hd: Option<String>,
     /// Display name, before trimming.
     pub(crate) name: Option<String>,
@@ -144,6 +143,18 @@ impl Providers {
     pub(crate) fn retarget_github(&mut self, base: &str) {
         if let Some(github) = &mut self.github {
             github.point_at(base);
+        }
+    }
+
+    /// Points Google's discovery issuer at a mock. No change when Google is absent.
+    #[cfg(test)]
+    pub(crate) fn retarget_google(&mut self, issuer: &str) {
+        if let Some(google) = self
+            .oidc
+            .iter_mut()
+            .find(|provider| provider.id() == "google")
+        {
+            google.point_at(issuer);
         }
     }
 }

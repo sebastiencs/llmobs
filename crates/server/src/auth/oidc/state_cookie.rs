@@ -43,6 +43,10 @@ pub(crate) struct OAuthState {
     pub(crate) pkce_verifier: String,
     /// Relative path to open after login. Already sanitized.
     pub(crate) redirect: String,
+    /// First-run setup token from the authorize query. Absent otherwise.
+    ///
+    /// A secret. [`Debug`] omits it.
+    pub(crate) setup_token: Option<String>,
     /// `Clock::now_ns` when the cookie was issued.
     pub(crate) created_ns: i64,
 }
@@ -201,6 +205,7 @@ mod tests {
             nonce: "nonce-token".to_owned(),
             pkce_verifier: "verifier-secret".to_owned(),
             redirect: redirect.to_owned(),
+            setup_token: None,
             created_ns,
         }
     }

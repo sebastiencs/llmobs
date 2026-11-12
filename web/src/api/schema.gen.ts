@@ -2934,6 +2934,8 @@ export interface operations {
             query?: {
                 /** @description Relative path to open after a successful login. */
                 redirect?: string;
+                /** @description First-run setup token. Stored in the login cookie and accepted only while no user exists. */
+                setup_token?: string;
             };
             header?: never;
             path: {

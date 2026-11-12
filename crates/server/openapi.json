@@ -32,6 +32,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "setup_token",
+            "in": "query",
+            "description": "First-run setup token. Stored in the login cookie and accepted only while no user exists.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {

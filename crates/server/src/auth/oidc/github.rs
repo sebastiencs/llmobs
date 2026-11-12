@@ -208,7 +208,7 @@ impl GithubProvider {
         self.client_secret.expose()
     }
 
-    #[cfg(test)]
+    /// Link a verified email onto an existing non-admin account.
     pub(crate) fn link_existing_by_email(&self) -> bool {
         self.link_existing_by_email
     }

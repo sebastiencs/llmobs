@@ -629,6 +629,11 @@ fn auth_paths(paths: PathsBuilder) -> PathsBuilder {
             "Relative path to open after a successful login.",
             false,
         ),
+        query_string(
+            "setup_token",
+            "First-run setup token. Stored in the login cookie and accepted only while no user exists.",
+            false,
+        ),
     ]))
     .responses(responses(
         "302",

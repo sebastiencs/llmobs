@@ -183,6 +183,26 @@ pub(crate) async fn user_by_email(
     )
 }
 
+/// [`user_by_email`] on the writer connection.
+///
+/// # Errors
+///
+/// Returns [`MetaError`] when the query fails or a stored flag is not 0 or 1.
+pub(crate) async fn user_by_email_tx(
+    conn: &mut SqliteConnection,
+    email: &str,
+) -> Result<Option<UserRow>, MetaError> {
+    fetch_user(
+        sqlx::query_as(
+            "SELECT id, email, name, password_hash, email_verified_at, is_instance_admin, \
+             disabled_at, created_at, updated_at FROM users WHERE email = ?",
+        )
+        .bind(email)
+        .fetch_optional(&mut *conn)
+        .await?,
+    )
+}
+
 /// How many users exist.
 ///
 /// # Errors
