@@ -20,6 +20,10 @@ lint:
 test:
     cargo test --workspace --all-features
 
+# Opt-in live provider tests. Ignored by `just check` (D167).
+eval-live:
+    cargo test -p llmobs-eval --test live -- --ignored --test-threads 1
+
 # Supply-chain checks (licenses deferred, D57)
 deny:
     cargo deny check advisories bans sources

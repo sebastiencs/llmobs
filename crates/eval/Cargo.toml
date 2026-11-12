@@ -11,6 +11,10 @@ autotests = false
 name = "runner"
 path = "tests/runner.rs"
 
+[[test]]
+name = "live"
+path = "tests/live.rs"
+
 [lints]
 workspace = true
 

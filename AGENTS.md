@@ -127,6 +127,7 @@ Run everything through `just`:
 | `just fmt` | format Rust, the web and TypeScript SDK (Biome), and the Python SDK (ruff) |
 | `just lint` | clippy, warnings as errors |
 | `just test` | all Rust tests |
+| `just eval-live` | opt-in live provider tests; ignored by `just check` (D167) |
 | `just deny` | supply-chain checks (advisories, bans, sources; licenses deferred, D57) |
 | `just deny-advisories` | RustSec advisories only |
 | `just assert-clean` | fail if the working tree changed; CI runs it after each job |
