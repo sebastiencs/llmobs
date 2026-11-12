@@ -54,6 +54,7 @@ fn quiet_config(dir: &Path) -> StorageConfig {
         query: QueryConfig::default(),
         anchor: Default::default(),
         gc: Default::default(),
+        compaction: Default::default(),
     }
 }
 

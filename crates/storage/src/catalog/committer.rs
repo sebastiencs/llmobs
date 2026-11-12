@@ -6,7 +6,7 @@
 //!
 //! `Storage` owns one committer. Flush, and later compaction, are its callers.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
@@ -96,6 +96,41 @@ impl Committer {
             .fetch_all(&mut inner.connection)
             .await
             .map_err(CatalogError::db)
+    }
+
+    /// For every active traces file with a source among `spans`, all of its
+    /// source pairs, deduplicated and in `(traces, spans)` order.
+    pub(crate) async fn derived_traces(
+        &self,
+        spans: &[FileId],
+    ) -> Result<Vec<(FileId, FileId)>, CommitError> {
+        let mut inner = self.inner.lock().await;
+        let mut pairs: BTreeSet<(FileId, FileId)> = BTreeSet::new();
+        for chunk in spans.chunks(500) {
+            let mut builder = sqlx::QueryBuilder::new(
+                "SELECT fs.traces_file_id, fs.spans_file_id FROM file_sources AS fs
+                 JOIN data_files AS t ON t.id = fs.traces_file_id
+                 WHERE t.state = 'active' AND fs.traces_file_id IN (
+                   SELECT traces_file_id FROM file_sources WHERE spans_file_id IN (",
+            );
+            let mut separated = builder.separated(", ");
+            for id in chunk {
+                separated.push_bind(id.to_string());
+            }
+            builder.push("))");
+            let rows = builder
+                .build_query_as::<(String, String)>()
+                .fetch_all(&mut inner.connection)
+                .await
+                .map_err(CommitError::db)?;
+            for (traces, spans) in rows {
+                pairs.insert((
+                    parse_file_id(&traces).map_err(|_| CommitError::conflict("invalid file id"))?,
+                    parse_file_id(&spans).map_err(|_| CommitError::conflict("invalid file id"))?,
+                ));
+            }
+        }
+        Ok(pairs.into_iter().collect())
     }
 
     /// Record `paths` in `staged_objects`. No precondition.

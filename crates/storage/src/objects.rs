@@ -445,6 +445,13 @@ pub(crate) struct OutputTarget {
     temp: PathBuf,
 }
 
+impl OutputTarget {
+    /// The temp file's path, for error messages.
+    pub(crate) fn temp(&self) -> &Path {
+        &self.temp
+    }
+}
+
 #[allow(clippy::clone_on_copy)]
 fn clone_hooks(hooks: &Hooks) -> Hooks {
     hooks.clone()
@@ -827,6 +834,7 @@ mod tests {
             query: QueryConfig::default(),
             anchor: Default::default(),
             gc: Default::default(),
+            compaction: Default::default(),
         }
     }
 

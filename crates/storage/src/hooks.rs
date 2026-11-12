@@ -57,11 +57,17 @@ pub(crate) enum HookPoint {
     ///
     /// A fault here leaves the row behind; the next collection removes it.
     GcObsoleteAfterDelete,
+    /// After a compaction slice's output paths are recorded in `staged_objects`.
+    CompactionAfterStage,
+    /// After every slice of a compaction job is written and published.
+    CompactionAfterWrite,
+    /// After the catalog commit that publishes a job's outputs.
+    CompactionAfterCommit,
 }
 
 #[cfg(test)]
 impl HookPoint {
-    const COUNT: usize = 18;
+    const COUNT: usize = 21;
 
     const fn index(self) -> usize {
         match self {
@@ -83,6 +89,9 @@ impl HookPoint {
             Self::GcBeforeDelete => 15,
             Self::GcObsoleteBeforeDelete => 16,
             Self::GcObsoleteAfterDelete => 17,
+            Self::CompactionAfterStage => 18,
+            Self::CompactionAfterWrite => 19,
+            Self::CompactionAfterCommit => 20,
         }
     }
 }

@@ -199,6 +199,7 @@ fn default_config(data_dir: &std::path::Path) -> ServerConfig {
             query: QueryConfig::default(),
             anchor: AnchorConfig::default(),
             gc: Default::default(),
+            compaction: Default::default(),
         },
         auth: AuthSettings::default(),
         smtp_url: None,

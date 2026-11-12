@@ -67,3 +67,13 @@ impl Published {
         *guard = Arc::new(next);
     }
 }
+
+/// Publishes `catalog` with the current memtable snapshots unchanged.
+/// Call it inside the committer's publish closure (the committer mutex is held).
+pub(crate) fn publish_catalog(published: &Published, catalog: &Arc<Catalog>) {
+    published.replace(|state| ReadState {
+        spans: Arc::clone(&state.spans),
+        scores: Arc::clone(&state.scores),
+        catalog: Arc::clone(catalog),
+    });
+}

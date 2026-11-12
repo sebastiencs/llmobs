@@ -77,6 +77,7 @@ fn config(dir: &std::path::Path, bucket: &str, prefix: &str, endpoint: &str) -> 
         query: QueryConfig::default(),
         anchor: Default::default(),
         gc: Default::default(),
+        compaction: Default::default(),
     }
 }
 

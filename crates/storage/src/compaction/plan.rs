@@ -10,6 +10,7 @@ use chrono::NaiveDate;
 use llmobs_core::ids::ProjectId;
 
 use crate::catalog::{Catalog, FileId, FileMeta, FileTable};
+use crate::config::CompactionConfig;
 
 /// The policy values, from `[storage.compaction]` (M4.6) or set directly by tests.
 #[derive(Debug, Clone, Copy)]
@@ -27,6 +28,19 @@ pub(crate) struct Policy {
     pub(crate) l0_age: i64,
     /// A day close runs this long after the partition day ended, ns.
     pub(crate) close_delay: i64,
+}
+
+impl From<&CompactionConfig> for Policy {
+    fn from(config: &CompactionConfig) -> Self {
+        Self {
+            target_file_size: config.target_file_size.0,
+            size_ratio: config.size_ratio,
+            l0_files: config.l0_files,
+            l0_bytes: config.l0_bytes.0,
+            l0_age: i64::try_from(config.l0_age.as_nanos()).unwrap_or(i64::MAX),
+            close_delay: i64::try_from(config.close_delay.as_nanos()).unwrap_or(i64::MAX),
+        }
+    }
 }
 
 /// The kind of one compaction job.

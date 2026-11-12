@@ -50,6 +50,9 @@ pub struct StorageConfig {
     /// Garbage collection settings.
     #[serde(default)]
     pub gc: GcConfig,
+    /// Compaction settings.
+    #[serde(default)]
+    pub compaction: CompactionConfig,
 }
 
 impl StorageConfig {
@@ -145,6 +148,69 @@ impl StorageConfig {
             return Err(ConfigError::invalid(
                 "storage.gc.grace",
                 "must be between 1s and 24h",
+            ));
+        }
+        let compaction = &self.compaction;
+        if compaction.interval < Duration::from_millis(100)
+            || compaction.interval > Duration::from_secs(3_600)
+        {
+            return Err(ConfigError::invalid(
+                "storage.compaction.interval",
+                "must be between 100ms and 1h",
+            ));
+        }
+        if !(1..=64).contains(&compaction.threads) {
+            return Err(ConfigError::invalid(
+                "storage.compaction.threads",
+                "must be between 1 and 64",
+            ));
+        }
+        if compaction.target_file_size < ByteSize::mib(1)
+            || compaction.target_file_size > ByteSize::gib(16)
+        {
+            return Err(ConfigError::invalid(
+                "storage.compaction.target_file_size",
+                "must be between 1MiB and 16GiB",
+            ));
+        }
+        if !(2..=100).contains(&compaction.size_ratio) {
+            return Err(ConfigError::invalid(
+                "storage.compaction.size_ratio",
+                "must be between 2 and 100",
+            ));
+        }
+        if !(2..=1000).contains(&compaction.l0_files) {
+            return Err(ConfigError::invalid(
+                "storage.compaction.l0_files",
+                "must be between 2 and 1000",
+            ));
+        }
+        if compaction.l0_bytes < ByteSize::mib(1) || compaction.l0_bytes > ByteSize::gib(16) {
+            return Err(ConfigError::invalid(
+                "storage.compaction.l0_bytes",
+                "must be between 1MiB and 16GiB",
+            ));
+        }
+        if compaction.l0_age < Duration::from_secs(1)
+            || compaction.l0_age > Duration::from_secs(24 * 3_600)
+        {
+            return Err(ConfigError::invalid(
+                "storage.compaction.l0_age",
+                "must be between 1s and 24h",
+            ));
+        }
+        if compaction.close_delay < Duration::from_secs(1)
+            || compaction.close_delay > Duration::from_secs(7 * 24 * 3_600)
+        {
+            return Err(ConfigError::invalid(
+                "storage.compaction.close_delay",
+                "must be between 1s and 7days",
+            ));
+        }
+        if compaction.max_memory < ByteSize::mib(16) || compaction.max_memory > ByteSize::tib(1) {
+            return Err(ConfigError::invalid(
+                "storage.compaction.max_memory",
+                "must be between 16MiB and 1TiB",
             ));
         }
         Ok(())
@@ -343,6 +409,96 @@ impl Default for GcConfig {
     }
 }
 
+fn default_compaction_interval() -> Duration {
+    Duration::from_secs(30)
+}
+
+fn default_compaction_threads() -> usize {
+    // One quarter of the cores, at least one.
+    std::thread::available_parallelism()
+        .map(|n| n.get() / 4)
+        .unwrap_or(0)
+        .max(1)
+}
+
+fn default_compaction_target_file_size() -> ByteSize {
+    ByteSize::mib(512)
+}
+
+fn default_compaction_size_ratio() -> u64 {
+    4
+}
+
+fn default_compaction_l0_files() -> usize {
+    8
+}
+
+fn default_compaction_l0_bytes() -> ByteSize {
+    ByteSize::mib(512)
+}
+
+fn default_compaction_l0_age() -> Duration {
+    Duration::from_secs(10 * 60)
+}
+
+fn default_compaction_close_delay() -> Duration {
+    Duration::from_secs(2 * 3_600)
+}
+
+fn default_compaction_max_memory() -> ByteSize {
+    ByteSize::gib(1)
+}
+
+/// `[storage.compaction]` (spec 03 §5).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompactionConfig {
+    /// How often the background task runs a pass.
+    #[serde(default = "default_compaction_interval", with = "humantime_serde")]
+    pub interval: Duration,
+    /// Jobs of one pass that run at the same time.
+    #[serde(default = "default_compaction_threads")]
+    pub threads: usize,
+    /// Outputs are cut at this many bytes.
+    #[serde(default = "default_compaction_target_file_size")]
+    pub target_file_size: ByteSize,
+    /// An L0 merge includes an L1 file only if the output so far is at least
+    /// this multiple of the L1 file's size.
+    #[serde(default = "default_compaction_size_ratio")]
+    pub size_ratio: u64,
+    /// L0 merges are due at this many L0 files.
+    #[serde(default = "default_compaction_l0_files")]
+    pub l0_files: usize,
+    /// L0 merges are due at this many bytes of L0.
+    #[serde(default = "default_compaction_l0_bytes")]
+    pub l0_bytes: ByteSize,
+    /// L0 merges are due at this age of the newest L0 file.
+    #[serde(default = "default_compaction_l0_age", with = "humantime_serde")]
+    pub l0_age: Duration,
+    /// A day close runs this long after the partition day ended.
+    #[serde(default = "default_compaction_close_delay", with = "humantime_serde")]
+    pub close_delay: Duration,
+    /// Memory pool shared by running merges.
+    #[serde(default = "default_compaction_max_memory")]
+    pub max_memory: ByteSize,
+}
+
+impl Default for CompactionConfig {
+    fn default() -> Self {
+        Self {
+            interval: default_compaction_interval(),
+            threads: default_compaction_threads(),
+            target_file_size: default_compaction_target_file_size(),
+            size_ratio: default_compaction_size_ratio(),
+            l0_files: default_compaction_l0_files(),
+            l0_bytes: default_compaction_l0_bytes(),
+            l0_age: default_compaction_l0_age(),
+            close_delay: default_compaction_close_delay(),
+            max_memory: default_compaction_max_memory(),
+        }
+    }
+}
+
 fn valid_window(window: Duration) -> bool {
     !window.is_zero() && window <= Duration::from_secs(24 * 60 * 60)
 }
@@ -535,6 +691,7 @@ mod tests {
             r#"{"data_dir":"/data","flush":{"extra":1}}"#,
             r#"{"data_dir":"/data","anchor":{"extra":1}}"#,
             r#"{"data_dir":"/data","gc":{"extra":1}}"#,
+            r#"{"data_dir":"/data","compaction":{"extra":1}}"#,
             r#"{"data_dir":"/data","s3":{"extra":1}}"#,
         ];
         for json in samples {
@@ -617,6 +774,78 @@ mod tests {
             (
                 r#"{"data_dir":"/data","gc":{"grace":"25h"}}"#,
                 "storage.gc.grace: must be between 1s and 24h",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"interval":"10ms"}}"#,
+                "storage.compaction.interval: must be between 100ms and 1h",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"interval":"2h"}}"#,
+                "storage.compaction.interval: must be between 100ms and 1h",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"threads":0}}"#,
+                "storage.compaction.threads: must be between 1 and 64",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"threads":65}}"#,
+                "storage.compaction.threads: must be between 1 and 64",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"target_file_size":"512KiB"}}"#,
+                "storage.compaction.target_file_size: must be between 1MiB and 16GiB",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"target_file_size":"17GiB"}}"#,
+                "storage.compaction.target_file_size: must be between 1MiB and 16GiB",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"size_ratio":1}}"#,
+                "storage.compaction.size_ratio: must be between 2 and 100",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"size_ratio":101}}"#,
+                "storage.compaction.size_ratio: must be between 2 and 100",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"l0_files":1}}"#,
+                "storage.compaction.l0_files: must be between 2 and 1000",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"l0_files":1001}}"#,
+                "storage.compaction.l0_files: must be between 2 and 1000",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"l0_bytes":"512KiB"}}"#,
+                "storage.compaction.l0_bytes: must be between 1MiB and 16GiB",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"l0_bytes":"17GiB"}}"#,
+                "storage.compaction.l0_bytes: must be between 1MiB and 16GiB",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"l0_age":"0s"}}"#,
+                "storage.compaction.l0_age: must be between 1s and 24h",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"l0_age":"25h"}}"#,
+                "storage.compaction.l0_age: must be between 1s and 24h",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"close_delay":"0s"}}"#,
+                "storage.compaction.close_delay: must be between 1s and 7days",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"close_delay":"8days"}}"#,
+                "storage.compaction.close_delay: must be between 1s and 7days",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"max_memory":"15MiB"}}"#,
+                "storage.compaction.max_memory: must be between 16MiB and 1TiB",
+            ),
+            (
+                r#"{"data_dir":"/data","compaction":{"max_memory":"2TiB"}}"#,
+                "storage.compaction.max_memory: must be between 16MiB and 1TiB",
             ),
         ];
         for (json, message) in cases {
@@ -715,6 +944,50 @@ mod tests {
     }
 
     #[test]
+    fn compaction_defaults_and_every_field_parses() {
+        let default = parse(r#"{"data_dir":"/data"}"#).unwrap();
+        assert_eq!(default.compaction, CompactionConfig::default());
+        assert_eq!(default.compaction.interval, Duration::from_secs(30));
+        assert_eq!(default.compaction.target_file_size, ByteSize::mib(512));
+        assert_eq!(default.compaction.size_ratio, 4);
+        assert_eq!(default.compaction.l0_files, 8);
+        assert_eq!(default.compaction.l0_bytes, ByteSize::mib(512));
+        assert_eq!(default.compaction.l0_age, Duration::from_secs(600));
+        assert_eq!(default.compaction.close_delay, Duration::from_secs(7_200));
+        assert_eq!(default.compaction.max_memory, ByteSize::gib(1));
+        assert!(default.compaction.threads >= 1);
+        default.validate().unwrap();
+
+        let full = parse(
+            r#"{
+                "data_dir": "/data",
+                "compaction": {
+                    "interval": "45s",
+                    "threads": 3,
+                    "target_file_size": "256MiB",
+                    "size_ratio": 8,
+                    "l0_files": 16,
+                    "l0_bytes": "1GiB",
+                    "l0_age": "5min",
+                    "close_delay": "1h",
+                    "max_memory": "2GiB"
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(full.compaction.interval, Duration::from_secs(45));
+        assert_eq!(full.compaction.threads, 3);
+        assert_eq!(full.compaction.target_file_size, ByteSize::mib(256));
+        assert_eq!(full.compaction.size_ratio, 8);
+        assert_eq!(full.compaction.l0_files, 16);
+        assert_eq!(full.compaction.l0_bytes, ByteSize::gib(1));
+        assert_eq!(full.compaction.l0_age, Duration::from_secs(300));
+        assert_eq!(full.compaction.close_delay, Duration::from_secs(3_600));
+        assert_eq!(full.compaction.max_memory, ByteSize::gib(2));
+        full.validate().unwrap();
+    }
+
+    #[test]
     fn only_data_dir_uses_every_default() {
         let config = parse(r#"{"data_dir":"/data"}"#).unwrap();
         assert_eq!(config.data_dir, PathBuf::from("/data"));
@@ -725,6 +998,7 @@ mod tests {
         assert_eq!(config.s3, S3Config::default());
         assert_eq!(config.anchor, AnchorConfig::default());
         assert_eq!(config.gc, GcConfig::default());
+        assert_eq!(config.compaction, CompactionConfig::default());
         assert_eq!(
             config.object_store_url(),
             ObjectStoreUrl::Local(PathBuf::from("/data/objects"))

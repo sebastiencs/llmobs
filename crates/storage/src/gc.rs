@@ -251,6 +251,7 @@ mod tests {
             query: QueryConfig::default(),
             anchor: Default::default(),
             gc: Default::default(),
+            compaction: Default::default(),
         }
     }
 
