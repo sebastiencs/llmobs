@@ -1,7 +1,8 @@
 import { inspect } from "node:util";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type Config, ConfigError, type LlmobsOptions, resolveConfig } from "./config.js";
+import { resetWarningsForTests } from "./log.js";
 
 const KEY = "sk-llmobs-test-key";
 const STORED_KEY = "sk-llmobs-super-secret-key-42";
@@ -22,17 +23,25 @@ function message(options: Record<string, unknown> = {}, env: Env = {}): string {
   throw new Error("expected a ConfigError");
 }
 
+function suppressWarn() {
+  return vi.spyOn(console, "warn").mockImplementation(() => {});
+}
+
+beforeEach(() => {
+  resetWarningsForTests();
+});
+
 describe("defaults", () => {
   it("fills the spec defaults when only the key is set", () => {
     const config = resolve({ apiKey: KEY });
     expect(config).toMatchObject({
       enabled: true,
       baseUrl: "http://localhost:8080",
+      serviceName: undefined,
       environment: undefined,
       release: undefined,
       captureContent: true,
       sampleRate: 1,
-      instrument: [],
       mask: undefined,
     });
     expect(config.apiKey).toBe(KEY);
@@ -50,17 +59,42 @@ describe("defaults", () => {
     expect(config.sampleRate).toBe(1);
   });
 
-  it("names both env vars when the key is missing", () => {
-    expect(() => resolve()).toThrow(ConfigError);
+  it("warns once and runs disabled when the key is missing (D-F-3)", () => {
+    const warn = suppressWarn();
     try {
+      const config = resolve();
+      expect(config.enabled).toBe(false);
+      expect(config.apiKey).toBeUndefined();
+      expect(config.baseUrl).toBe("http://localhost:8080");
+      expect(config.serviceName).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        "llmobs: no API key; set LLMOBS_API_KEY, or LLMOBS_ENABLED=false to silence this; tracing is disabled",
+      );
       resolve();
-    } catch (error) {
-      expect(error).toBeInstanceOf(ConfigError);
-      const configError = error as ConfigError;
-      expect(configError.option).toBe("apiKey");
-      expect(configError.message).toContain("LLMOBS_API_KEY");
-      expect(configError.message).toContain("LLMOBS_ENABLED");
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
     }
+  });
+
+  it("validates nothing else when the key is missing", () => {
+    const warn = suppressWarn();
+    try {
+      expect(resolve({ sampleRate: 4 }).enabled).toBe(false);
+      expect(resolve({}, { LLMOBS_BASE_URL: "ftp://bad" }).enabled).toBe(false);
+      // Two resolutions, one warning: warnOnce deduplicates by key.
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("still raises on a key with the wrong prefix", () => {
+    expect(message({ apiKey: "pk-llmobs-nope" })).toBe("apiKey: must start with sk-llmobs-");
+    expect(message({}, { LLMOBS_API_KEY: "pk-llmobs-nope" })).toBe(
+      "LLMOBS_API_KEY: must start with sk-llmobs-",
+    );
   });
 
   it("disables from the env when no key is set", () => {
@@ -275,21 +309,24 @@ describe("environment and release", () => {
   });
 });
 
-describe("instrument and mask", () => {
-  it("copies instrument into a frozen list", () => {
-    const names = ["openai"];
-    const config = resolve({ apiKey: KEY, instrument: names });
-    names.push("extra");
-    expect(config.instrument).toEqual(["openai"]);
-    expect(Object.isFrozen(config.instrument)).toBe(true);
+describe("serviceName", () => {
+  it("reads OTEL_SERVICE_NAME from the env source", () => {
+    expect(resolve({ apiKey: KEY }, { OTEL_SERVICE_NAME: "api" }).serviceName).toBe("api");
   });
 
-  it.each(["openai", ["", "x"], [1]])("rejects %j", (instrument) => {
-    expect(message({ apiKey: KEY, instrument })).toBe(
-      "instrument: must be a list of non-empty strings",
-    );
+  it("trims the value and treats an empty one as unset", () => {
+    expect(resolve({ apiKey: KEY }, { OTEL_SERVICE_NAME: "  api\t" }).serviceName).toBe("api");
+    for (const blank of ["", "   "]) {
+      expect(resolve({ apiKey: KEY }, { OTEL_SERVICE_NAME: blank }).serviceName).toBeUndefined();
+    }
   });
 
+  it("is undefined when disabled, even with the env var set", () => {
+    expect(resolve({ enabled: false }, { OTEL_SERVICE_NAME: "api" }).serviceName).toBeUndefined();
+  });
+});
+
+describe("mask", () => {
   it("accepts a function mask and rejects anything else", () => {
     const mask = (value: unknown) => value;
     expect(resolve({ apiKey: KEY, mask }).mask).toBe(mask);
@@ -320,16 +357,17 @@ describe("process.env", () => {
   });
 
   it("does not throw when process itself is missing", () => {
+    const warn = suppressWarn();
     const previous = globalThis.process;
     Object.defineProperty(globalThis, "process", { value: undefined, configurable: true });
     try {
       expect(resolveConfig({ apiKey: KEY }).baseUrl).toBe("http://localhost:8080");
-      expect(() => resolveConfig()).toThrow(ConfigError);
-      expect(() => resolveConfig()).toThrow(
-        "apiKey: required; set LLMOBS_API_KEY, or LLMOBS_ENABLED=false to run without llmobs",
-      );
+      // D-F-3: no env to read, so the key is missing; warn, do not raise.
+      expect(resolveConfig().enabled).toBe(false);
+      expect(warn).toHaveBeenCalledTimes(1);
     } finally {
       Object.defineProperty(globalThis, "process", { value: previous, configurable: true });
+      warn.mockRestore();
     }
   });
 });

@@ -5,6 +5,9 @@
  * Never log a resolved config; `apiKey` is on the object.
  */
 
+import { warnOnce } from "./log.js";
+import { runtimeGlobals } from "./web.js";
+
 const ENV_PREFIX = "LLMOBS_";
 const ENV_API_KEY = `${ENV_PREFIX}API_KEY`;
 const ENV_BASE_URL = `${ENV_PREFIX}BASE_URL`;
@@ -13,6 +16,8 @@ const ENV_RELEASE = `${ENV_PREFIX}RELEASE`;
 const ENV_CAPTURE_CONTENT = `${ENV_PREFIX}CAPTURE_CONTENT`;
 const ENV_SAMPLE_RATE = `${ENV_PREFIX}SAMPLE_RATE`;
 const ENV_ENABLED = `${ENV_PREFIX}ENABLED`;
+// OTel's own name, read from the same env source (README § Names).
+const ENV_SERVICE_NAME = "OTEL_SERVICE_NAME";
 
 const KEY_PREFIX = "sk-llmobs-";
 // Reserved evaluation environment. llmobs_core::names::environment::EVAL
@@ -37,11 +42,11 @@ export interface Config {
   readonly enabled: boolean;
   readonly apiKey: string | undefined;
   readonly baseUrl: string;
+  readonly serviceName: string | undefined;
   readonly environment: string | undefined;
   readonly release: string | undefined;
   readonly captureContent: boolean;
   readonly sampleRate: number;
-  readonly instrument: readonly string[];
   readonly mask: ((value: unknown) => unknown) | undefined;
 }
 
@@ -52,7 +57,6 @@ export interface LlmobsOptions {
   release?: string;
   captureContent?: boolean;
   sampleRate?: number;
-  instrument?: readonly string[];
   mask?: (value: unknown) => unknown;
   enabled?: boolean;
 }
@@ -61,11 +65,11 @@ interface ResolvedFields {
   enabled: boolean;
   apiKey: string | undefined;
   baseUrl: string;
+  serviceName: string | undefined;
   environment: string | undefined;
   release: string | undefined;
   captureContent: boolean;
   sampleRate: number;
-  instrument: readonly string[];
   mask: ((value: unknown) => unknown) | undefined;
 }
 
@@ -77,10 +81,20 @@ export function resolveConfig(options: LlmobsOptions = {}, env?: Env): Config {
   if (!enabled) {
     return finish(disabled());
   }
+  const apiKey = resolveApiKey(raw.apiKey, source);
+  if (apiKey === undefined) {
+    // D-F-3: a missing key warns once and runs disabled; nothing else is validated.
+    warnOnce(
+      "missing-api-key",
+      "llmobs: no API key; set LLMOBS_API_KEY, or LLMOBS_ENABLED=false to silence this; tracing is disabled",
+    );
+    return finish(disabled());
+  }
   return finish({
     enabled: true,
-    apiKey: resolveApiKey(raw.apiKey, source),
+    apiKey,
     baseUrl: resolveBaseUrl(raw.baseUrl, source),
+    serviceName: readEnv(source, ENV_SERVICE_NAME),
     environment: resolveEnvironment(raw.environment, source),
     release: resolveRelease(raw.release, source),
     captureContent: resolveBool(
@@ -91,14 +105,12 @@ export function resolveConfig(options: LlmobsOptions = {}, env?: Env): Config {
       true,
     ),
     sampleRate: resolveSampleRate(raw.sampleRate, source),
-    instrument: resolveInstrument(raw.instrument),
     mask: resolveMask(raw.mask),
   });
 }
 
 function defaultEnv(): Env {
-  const proc = (globalThis as { process?: { env?: Env } }).process;
-  return proc?.env ?? {};
+  return runtimeGlobals().process?.env ?? {};
 }
 
 function disabled(): ResolvedFields {
@@ -106,11 +118,11 @@ function disabled(): ResolvedFields {
     enabled: false,
     apiKey: undefined,
     baseUrl: DEFAULT_BASE_URL,
+    serviceName: undefined,
     environment: undefined,
     release: undefined,
     captureContent: true,
     sampleRate: 1,
-    instrument: [],
     mask: undefined,
   };
 }
@@ -119,11 +131,11 @@ function finish(fields: ResolvedFields): Config {
   const config = {
     enabled: fields.enabled,
     baseUrl: fields.baseUrl,
+    serviceName: fields.serviceName,
     environment: fields.environment,
     release: fields.release,
     captureContent: fields.captureContent,
     sampleRate: fields.sampleRate,
-    instrument: Object.freeze([...fields.instrument]),
     mask: fields.mask,
   };
   Object.defineProperty(config, "apiKey", {
@@ -170,7 +182,7 @@ function resolveBool(
   throw new ConfigError(envName, "must be a boolean");
 }
 
-function resolveApiKey(value: unknown, source: Env): string {
+function resolveApiKey(value: unknown, source: Env): string | undefined {
   if (value !== undefined) {
     if (typeof value !== "string" || !value.startsWith(KEY_PREFIX)) {
       throw new ConfigError("apiKey", `must start with ${KEY_PREFIX}`);
@@ -179,10 +191,7 @@ function resolveApiKey(value: unknown, source: Env): string {
   }
   const raw = readEnv(source, ENV_API_KEY);
   if (raw === undefined) {
-    throw new ConfigError(
-      "apiKey",
-      `required; set ${ENV_API_KEY}, or ${ENV_ENABLED}=false to run without llmobs`,
-    );
+    return undefined;
   }
   if (!raw.startsWith(KEY_PREFIX)) {
     throw new ConfigError(ENV_API_KEY, `must start with ${KEY_PREFIX}`);
@@ -288,23 +297,6 @@ function checkSampleRate(value: unknown, name: string): number {
     throw new ConfigError(name, "must be a number between 0 and 1");
   }
   return value;
-}
-
-function resolveInstrument(value: unknown): readonly string[] {
-  if (value === undefined) {
-    return [];
-  }
-  if (!Array.isArray(value)) {
-    throw new ConfigError("instrument", "must be a list of non-empty strings");
-  }
-  const items: string[] = [];
-  for (const item of value) {
-    if (typeof item !== "string" || item === "") {
-      throw new ConfigError("instrument", "must be a list of non-empty strings");
-    }
-    items.push(item);
-  }
-  return items;
 }
 
 function resolveMask(value: unknown): ((value: unknown) => unknown) | undefined {
