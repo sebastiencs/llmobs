@@ -665,6 +665,7 @@ mod tests {
             min_time: starts[0],
             max_time: *starts.last().unwrap(),
             bytes: batch.get_array_memory_size(),
+            partials: std::sync::Arc::new(std::sync::OnceLock::new()),
         }
     }
 

@@ -4,12 +4,13 @@
 //! `target_partitions`. It does not build a DataFusion session: the query
 //! layer does that and registers the user-facing views (spec 03 §6, D89, D91).
 //!
-//! A scan reads the files and the memtable of one read snapshot. Days
-//! are exact. M3 widens span days by one (spec 03 § Trace anchor) and adds the
-//! `traces` provider; until then `Storage::query` hands out an empty one.
+//! A scan reads the files and the memtable of one read snapshot. Span and
+//! trace file days are widened by one for the trace anchor (spec 03 § Trace
+//! anchor); memtable pruning stays exact.
 
 mod scores;
 mod spans;
+mod traces;
 
 use std::collections::BTreeSet;
 use std::ops::RangeInclusive;
@@ -34,7 +35,7 @@ use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_datasource::source::DataSourceExec;
 use llmobs_core::ids::ProjectId;
 use llmobs_core::ids::TraceId;
-use llmobs_core::schema::traces;
+use llmobs_core::schema::traces as trace_schema;
 
 use crate::catalog::{Catalog, FileMeta, FileTable};
 use crate::memtable::{MemBatch, MemSnapshot};
@@ -43,6 +44,7 @@ use crate::wal::Table;
 
 pub(crate) use scores::ScoresProvider;
 pub(crate) use spans::SpansProvider;
+pub(crate) use traces::TracesProvider;
 
 /// Nanoseconds in a UTC day.
 const DAY_NS: i64 = 86_400_000_000_000;
@@ -86,6 +88,31 @@ impl TimeBounds {
         self.min = Some(0);
         self.max = Some(-1);
     }
+
+    /// Bounds covering either predicate (`OR`). A side that sets no bound makes
+    /// the union open on that end.
+    fn union_with(&self, other: &TimeBounds) -> TimeBounds {
+        TimeBounds {
+            min: self.min.zip(other.min).map(|(a, b)| a.min(b)),
+            max: self.max.zip(other.max).map(|(a, b)| a.max(b)),
+        }
+    }
+
+    /// Bounds satisfying both predicates (`AND`).
+    fn intersect_with(&self, other: &TimeBounds) -> TimeBounds {
+        TimeBounds {
+            min: match (self.min, other.min) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (Some(a), None) | (None, Some(a)) => Some(a),
+                (None, None) => None,
+            },
+            max: match (self.max, other.max) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (Some(a), None) | (None, Some(a)) => Some(a),
+                (None, None) => None,
+            },
+        }
+    }
 }
 
 /// Inclusive bounds of `column` from the top-level conjuncts of `filters`.
@@ -107,9 +134,49 @@ fn walk(bounds: &mut TimeBounds, expr: &Expr, column: &str) {
             walk(bounds, &binary.left, column);
             walk(bounds, &binary.right, column);
         }
+        Expr::BinaryExpr(binary) if binary.op == Operator::Or => {
+            // The bounds of an OR are the union of each disjunct's bounds. A
+            // `column IS NULL` disjunct is dropped: `column` is non-null, so it
+            // matches no row. This keeps A2's keyset cursor as a bounded scan.
+            let mut disjuncts = Vec::new();
+            collect_or(expr, &mut disjuncts);
+            let mut union: Option<TimeBounds> = None;
+            for disjunct in disjuncts {
+                if is_null_on(disjunct, column) {
+                    continue;
+                }
+                let mut separate = TimeBounds::open();
+                walk(&mut separate, disjunct, column);
+                union = Some(match union {
+                    None => separate,
+                    Some(acc) => acc.union_with(&separate),
+                });
+            }
+            if let Some(union) = union {
+                *bounds = bounds.intersect_with(&union);
+            }
+        }
         Expr::BinaryExpr(binary) => constrain_binary(bounds, binary, column),
         Expr::Between(between) if !between.negated => constrain_between(bounds, between, column),
         _ => {}
+    }
+}
+
+/// Flattens a chain of `OR`s into its non-OR disjuncts.
+fn collect_or<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+    match peel(expr) {
+        Expr::BinaryExpr(binary) if binary.op == Operator::Or => {
+            collect_or(&binary.left, out);
+            collect_or(&binary.right, out);
+        }
+        other => out.push(other),
+    }
+}
+
+fn is_null_on(expr: &Expr, column: &str) -> bool {
+    match peel(expr) {
+        Expr::IsNull(inner) => matches!(peel(inner), Expr::Column(col) if col.name == column),
+        _ => false,
     }
 }
 
@@ -368,7 +435,7 @@ fn peel(expr: &Expr) -> &Expr {
 }
 
 fn is_trace_id(expr: &Expr) -> bool {
-    matches!(peel(expr), Expr::Column(column) if column.name == traces::TRACE_ID)
+    matches!(peel(expr), Expr::Column(column) if column.name == trace_schema::TRACE_ID)
 }
 
 /// A non-null 16-byte id literal, in one of the three forms A2's hex rewrite
@@ -748,6 +815,35 @@ mod tests {
     }
 
     #[test]
+    fn an_or_unions_bounds_and_drops_a_null_side() {
+        // A2's keyset cursor: (st < x) OR (st = x AND ties) OR st IS NULL.
+        // `start_time IS NULL` can't match (the column is non-null), so the
+        // union is (-inf, x]: b = x, no lower bound.
+        let cursor = column_cmp(Operator::Lt, nano(10, None))
+            .or(column_cmp(Operator::Eq, nano(10, None)).and(col("name").eq(lit("x"))))
+            .or(Expr::IsNull(Box::new(col("start_time"))));
+        assert_eq!(
+            bounds_of(cursor),
+            TimeBounds {
+                min: None,
+                max: Some(10)
+            }
+        );
+        // Two bounded sides: the union takes the weaker end of each.
+        let both = column_cmp(Operator::GtEq, nano(5, None))
+            .and(column_cmp(Operator::LtEq, nano(8, None)))
+            .or(column_cmp(Operator::GtEq, nano(1, None))
+                .and(column_cmp(Operator::LtEq, nano(3, None))));
+        assert_eq!(
+            bounds_of(both),
+            TimeBounds {
+                min: Some(1),
+                max: Some(8)
+            }
+        );
+    }
+
+    #[test]
     fn every_literal_form_converts_to_nanoseconds() {
         let cases = [
             (nano(42, Some("America/New_York")), 42),
@@ -889,7 +985,7 @@ mod tests {
     }
 
     fn trace_col() -> Expr {
-        col(traces::TRACE_ID)
+        col(trace_schema::TRACE_ID)
     }
 
     fn good_id() -> Expr {

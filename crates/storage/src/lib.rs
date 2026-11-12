@@ -6,10 +6,8 @@
 //!
 //! # What this crate does not do yet
 //!
-//! - there is no `traces` table; `Storage::query` returns an empty one;
 //! - compaction does not run, so level-0 files accumulate;
 //! - deletion and retention are absent;
-//! - day pruning is exact; the one-day anchor slack is not built;
 //! - the query runtime uses DataFusion's default memory pool.
 //!   Parquet footers and page indexes use DataFusion's built-in metadata cache.
 
@@ -23,7 +21,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow::array::{Array, RecordBatch, StringArray};
-use datafusion::datasource::MemTable;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use llmobs_core::ids::ProjectId;
 
@@ -116,6 +113,8 @@ pub struct StorageHealth {
 pub struct Storage {
     hard_limit: u64,
     target_partitions: NonZeroUsize,
+    /// `query.trace_lookback` in ns, the padded window around a trace range.
+    lookback: i64,
     shutting_down: AtomicBool,
     /// Released by [`Self::shutdown`] so another process can open the directory
     /// while this value is still alive.
@@ -191,6 +190,8 @@ impl Storage {
         };
         let max_age = config.flush.max_age;
         let upload_concurrency = config.flush.upload_concurrency;
+        // The padded trace window uses `query.trace_lookback` itself (D90, D86).
+        let lookback = i64::try_from(config.query.trace_lookback.as_nanos()).unwrap_or(i64::MAX);
         // Resolve the anchor window once; `validate` has bounded both sources.
         let window = config.anchor.window.unwrap_or(config.query.trace_lookback);
         let window_ns = i64::try_from(window.as_nanos()).unwrap_or(i64::MAX);
@@ -314,6 +315,7 @@ impl Storage {
         Ok(Self {
             hard_limit,
             target_partitions,
+            lookback,
             shutting_down: AtomicBool::new(false),
             lock: Mutex::new(Some(lock)),
             published,
@@ -376,11 +378,14 @@ impl Storage {
             partitions,
             options.around,
         ));
-        // There is no `traces` provider yet. Until then the view is empty.
-        let traces = Arc::new(MemTable::try_new(
-            llmobs_core::schema::traces_schema(),
-            vec![vec![]],
-        )?);
+        let traces = Arc::new(query::TracesProvider::new(
+            project,
+            Arc::clone(&state.catalog),
+            Arc::clone(&state.spans),
+            options,
+            self.lookback,
+            partitions,
+        ));
         Ok(ProjectQuery {
             spans,
             traces,

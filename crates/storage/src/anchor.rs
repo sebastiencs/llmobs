@@ -549,6 +549,7 @@ mod tests {
                     min_time,
                     max_time,
                     bytes,
+                    partials: Arc::new(std::sync::OnceLock::new()),
                 }],
             );
         }

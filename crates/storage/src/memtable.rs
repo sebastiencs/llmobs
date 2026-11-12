@@ -9,7 +9,7 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use arrow::array::{Array, BooleanArray, RecordBatch, TimestampNanosecondArray};
@@ -52,6 +52,9 @@ pub(crate) struct MemBatch {
     pub max_time: i64,
     /// [`RecordBatch::get_array_memory_size`] of `batch`.
     pub bytes: usize,
+    /// Trace partials of `batch`, computed once and shared by every read state
+    /// that holds this `MemBatch`. A coalesced batch starts with a fresh cache.
+    pub partials: Arc<OnceLock<Arc<RecordBatch>>>,
 }
 
 /// Rows accepting inserts, and the flush trigger measured from them.
@@ -312,7 +315,24 @@ impl MemBatch {
             min_time,
             max_time,
             bytes,
+            partials: Arc::new(OnceLock::new()),
         })
+    }
+
+    /// Trace partials of this spans batch, computed at most once and cached.
+    ///
+    /// The `Arc<OnceLock<...>>` is shared by every clone of this `MemBatch`, so
+    /// every read state that holds it reuses the same partials. Errors are not
+    /// cached (a valid spans batch always builds its partials).
+    pub(crate) fn trace_partials(&self) -> Result<Arc<RecordBatch>, crate::error::PartialsError> {
+        if let Some(cached) = self.partials.get() {
+            return Ok(Arc::clone(cached));
+        }
+        let built = Arc::new(crate::partials::partials_from_spans(self.batch.as_ref())?);
+        // A concurrent reader may have won the race; both values are built from
+        // the same immutable batch, so returning either is equivalent.
+        let _ = self.partials.set(Arc::clone(&built));
+        Ok(Arc::clone(self.partials.get().unwrap_or(&built)))
     }
 }
 
@@ -404,6 +424,7 @@ fn concat_small(smalls: &[MemBatch]) -> Result<MemBatch, MemtableError> {
         min_time,
         max_time,
         bytes,
+        partials: Arc::new(OnceLock::new()),
     })
 }
 
