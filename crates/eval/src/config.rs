@@ -554,40 +554,46 @@ fn validate_webhook_url(url: &str) -> Result<(), ConfigError> {
     if url.is_empty() || url.chars().any(char::is_whitespace) {
         return Err(invalid_url());
     }
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return Err(invalid_url());
+    // `https://` and `https://:443/` fail parsing as an empty host.
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return Err(if http_authority_has_no_host(url) {
+            missing_host()
+        } else {
+            invalid_url()
+        });
     };
-    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
         return Err(invalid_url());
     }
-    // `split` yields at least one piece, so an empty remainder is `Some("")`.
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    if authority.is_empty() {
+    if parsed.host_str().is_none_or(str::is_empty) {
         return Err(missing_host());
     }
-    if authority.contains('@') {
+    if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(ConfigError::Invalid {
             field: "url",
             reason: "must not include userinfo",
         });
     }
-    let host = if let Some(bracketed) = authority.strip_prefix('[') {
-        let Some((host, after)) = bracketed.split_once(']') else {
-            return Err(missing_host());
-        };
-        if !after.is_empty() && !after.starts_with(':') {
-            return Err(missing_host());
-        }
-        host
-    } else {
-        authority
-            .split_once(':')
-            .map_or(authority, |(host, _)| host)
-    };
-    if host.is_empty() {
-        return Err(missing_host());
-    }
     Ok(())
+}
+
+/// `http://` or `https://` whose host is empty, including a port with no host.
+fn http_authority_has_no_host(url: &str) -> bool {
+    let Some((scheme, rest)) = url.split_once(':') else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return false;
+    }
+    let Some(authority) = rest.strip_prefix("//") else {
+        return false;
+    };
+    let end = authority.find(['/', '?', '#']).unwrap_or(authority.len());
+    let authority = &authority[..end];
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    host.is_empty() || host.starts_with(':')
 }
 
 fn invalid_url() -> ConfigError {

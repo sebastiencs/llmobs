@@ -1,9 +1,9 @@
-//! Configuration, check, mapping, template, and judge errors.
+//! Configuration, check, mapping, template, judge, and egress errors.
 //!
 //! Messages name the evaluator kind, the field, the variable, the expression, the
-//! byte offset, or serde's error category with its line and column. They never
-//! quote prompt text, check inputs, patterns, header values, URLs, judge answers,
-//! or other payload.
+//! byte offset, the host, or serde's error category with its line and column.
+//! They never quote prompt text, check inputs, patterns, header values, URL paths
+//! or queries, judge answers, or other payload.
 
 use llmobs_core::enums::ScoreDataType;
 use serde_json::error::Category;
@@ -215,6 +215,37 @@ pub enum JudgeError {
     /// A categorical answer matches none of the configured labels.
     #[error("unknown label")]
     UnknownLabel,
+}
+
+/// An outbound judge or webhook call was refused or failed.
+///
+/// [`Self::Denied`] names the host. No variant includes a path, query, or body.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum EgressError {
+    /// The URL scheme is not `http` or `https`.
+    #[error("unsupported URL scheme")]
+    Scheme,
+    /// Every resolved address, or the literal address, is in a denied range.
+    #[error("denied host {host}")]
+    Denied {
+        /// Hostname or literal address. No port, path, or query.
+        host: String,
+    },
+    /// The call exceeded its timeout.
+    #[error("connection timed out")]
+    Timeout,
+    /// The connection could not be established.
+    #[error("connection failed")]
+    Connect,
+    /// The client could not build or send the request.
+    #[error("request failed")]
+    Request,
+    /// The response body grew past the configured limit.
+    #[error("response exceeds {limit} bytes")]
+    TooLarge {
+        /// The limit that was exceeded, in bytes.
+        limit: usize,
+    },
 }
 
 /// Fails the test when `message` contains `payload`.

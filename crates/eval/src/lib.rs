@@ -5,6 +5,9 @@
 
 mod check;
 mod config;
+// `post` is first called by the adapters in E11.
+#[cfg_attr(not(test), allow(dead_code))]
+mod egress;
 mod error;
 // The adapters in E11 are the first non-test caller.
 #[cfg_attr(not(test), allow(dead_code))]
@@ -19,7 +22,8 @@ pub use config::{
     Check, ContainsMode, Evaluator, EvaluatorConfig, JudgeConfig, JudgeOutput, OutputScore,
     WebhookConfig,
 };
-pub use error::{CheckError, ConfigError, JudgeError, MappingError, TemplateError};
+pub use egress::{EgressClient, EgressPolicy};
+pub use error::{CheckError, ConfigError, EgressError, JudgeError, MappingError, TemplateError};
 pub use mapping::resolve::{ItemData, TraceData, Variables, resolve};
 pub use mapping::{Expr, VariableMapping};
 pub use secret::Secret;

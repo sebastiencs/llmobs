@@ -139,6 +139,8 @@ serde_urlencoded = "0.7.1"
 tempfile = "3.27.0"
 # OTLP property tests in llmobs-otel. MSRV 1.88. Tests enable `std` only.
 proptest = "1.12.0"
+# Judges and webhooks (D166). rustls, no native-tls and no system proxy.
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json"] }
 # Capture mock. Default features serve HTTP/1.1 JSON and SSE.
 axum = "0.8.9"
 # axum 0.8.9's body trait. The streaming mock implements it; axum does not re-export `Frame`.
