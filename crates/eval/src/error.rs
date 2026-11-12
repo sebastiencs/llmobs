@@ -189,6 +189,16 @@ pub enum ErrorClass {
     Permanent,
 }
 
+impl ErrorClass {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Retryable => "retryable",
+            Self::Pause => "pause",
+            Self::Permanent => "permanent",
+        }
+    }
+}
+
 /// A judge answer could not be turned into a score, or the provider call failed.
 ///
 /// No variant stores the prompt or the answer text. [`Self::Provider`] keeps the
@@ -362,6 +372,24 @@ pub enum EvalError {
     /// The HTTP client failed before a status was available.
     #[error(transparent)]
     Egress(#[from] EgressError),
+}
+
+impl EvalError {
+    /// Class for the eval queue (D160).
+    ///
+    /// Configuration, check, mapping, and template failures are permanent.
+    /// A judge, webhook, or egress error keeps the class it was given.
+    #[must_use]
+    pub fn class(&self) -> ErrorClass {
+        match self {
+            Self::Config(_) | Self::Check(_) | Self::Mapping(_) | Self::Template(_) => {
+                ErrorClass::Permanent
+            }
+            Self::Judge(error) => error.class(),
+            Self::Webhook(error) => error.class(),
+            Self::Egress(error) => error.class(),
+        }
+    }
 }
 
 impl JudgeError {

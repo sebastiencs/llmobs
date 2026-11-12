@@ -26,7 +26,7 @@ pub struct EgressPolicy {
 
 /// One shared client. Redirects are not followed.
 #[derive(Debug, Clone)]
-pub struct EgressClient {
+pub(crate) struct EgressClient {
     http: reqwest::Client,
     policy: EgressPolicy,
 }
@@ -53,7 +53,7 @@ impl EgressClient {
     /// # Errors
     ///
     /// Returns [`EgressError::Request`] when the TLS backend cannot be initialized.
-    pub fn new(policy: EgressPolicy) -> Result<Self, EgressError> {
+    pub(crate) fn new(policy: EgressPolicy) -> Result<Self, EgressError> {
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()

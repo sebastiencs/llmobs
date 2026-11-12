@@ -15,20 +15,20 @@ const REGEX_SIZE_LIMIT: usize = 1 << 20;
 
 /// Values a check reads. Absent variables stay [`None`].
 #[derive(Debug, Clone, Copy)]
-pub struct CheckInput<'a> {
+pub(crate) struct CheckInput<'a> {
     /// The `output` variable.
-    pub output: Option<&'a Value>,
+    pub(crate) output: Option<&'a Value>,
     /// The `expected` variable.
-    pub expected: Option<&'a Value>,
+    pub(crate) expected: Option<&'a Value>,
 }
 
 /// The score a check produced.
 #[derive(Debug, Clone, PartialEq)]
-pub struct CheckResult {
+pub(crate) struct CheckResult {
     /// Boolean for every check except Levenshtein, which is a number in `0..=1`.
-    pub value: ScoreValue,
+    pub(crate) value: ScoreValue,
     /// Set when JSON was invalid or a schema keyword failed. Otherwise [`None`].
-    pub reason: Option<String>,
+    pub(crate) reason: Option<String>,
 }
 
 /// Compiles `pattern` with a 1 MiB program limit.
@@ -244,7 +244,7 @@ pub(crate) fn levenshtein(
 ///
 /// Returns [`CheckError`] when a required variable is absent, the pattern does
 /// not compile, or the schema does not compile.
-pub fn run_check(check: &Check, input: &CheckInput<'_>) -> Result<CheckResult, CheckError> {
+pub(crate) fn run_check(check: &Check, input: &CheckInput<'_>) -> Result<CheckResult, CheckError> {
     match check {
         Check::ExactMatch {
             case_sensitive,

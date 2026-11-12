@@ -2,18 +2,17 @@
 //!
 //! E11 is the OpenAI-compatible adapter, E12 is Anthropic, and E13 is Gemini.
 
-// `parse_answer` is first called by the runner in E17.
-#[cfg_attr(not(test), allow(dead_code))]
 mod answer;
 mod anthropic;
 mod gemini;
 mod http;
 mod openai;
 
-use std::str::FromStr;
 use std::time::Duration;
 
-pub use answer::{Answer, RawAnswer, parse_answer};
+#[cfg(test)]
+pub(crate) use answer::Answer;
+pub(crate) use answer::{RawAnswer, parse_answer};
 pub(crate) use answer::{cut_chars, normalize_label};
 use reqwest::Url;
 
@@ -43,12 +42,10 @@ impl Adapter {
             Self::Gemini => "gemini",
         }
     }
-}
 
-impl FromStr for Adapter {
-    type Err = UnknownName;
-
-    fn from_str(text: &str) -> Result<Self, Self::Err> {
+    /// Parses the stored connection value.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn from_name(text: &str) -> Result<Self, UnknownName> {
         match text {
             "openai" => Ok(Self::OpenAi),
             "anthropic" => Ok(Self::Anthropic),
@@ -92,12 +89,10 @@ impl StructuredOutput {
             Self::Prompt => "prompt",
         }
     }
-}
 
-impl FromStr for StructuredOutput {
-    type Err = UnknownName;
-
-    fn from_str(text: &str) -> Result<Self, Self::Err> {
+    /// Parses the stored connection value.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn from_name(text: &str) -> Result<Self, UnknownName> {
         match text {
             "native" => Ok(Self::Native),
             "tool" => Ok(Self::Tool),
@@ -107,11 +102,12 @@ impl FromStr for StructuredOutput {
     }
 }
 
-/// [`FromStr`](std::str::FromStr) failed for an adapter or a structured-output mode.
+/// [`Adapter::from_name`] or [`StructuredOutput::from_name`] rejected the text.
 ///
 /// The rejected text is omitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UnknownName;
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct UnknownName;
 
 impl std::fmt::Display for UnknownName {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -140,21 +136,21 @@ pub struct JudgeConnection {
 }
 
 /// One judge invocation. The caller owns the model, prompt, and output definition.
-pub struct JudgeCall<'a> {
+pub(crate) struct JudgeCall<'a> {
     /// Provider model id.
-    pub model: &'a str,
+    pub(crate) model: &'a str,
     /// Rendered prompt. Sent as one user message.
-    pub prompt: &'a str,
+    pub(crate) prompt: &'a str,
     /// Score the model must produce.
-    pub output: &'a JudgeOutput,
+    pub(crate) output: &'a JudgeOutput,
     /// Include `explanation` in the schema.
-    pub include_reason: bool,
+    pub(crate) include_reason: bool,
     /// Sampling temperature. Omitted from the request when unset.
-    pub temperature: Option<f64>,
+    pub(crate) temperature: Option<f64>,
     /// Completion cap, including reasoning tokens.
-    pub max_output_tokens: u32,
+    pub(crate) max_output_tokens: u32,
     /// Whole-call timeout. The client also has a 10 s connect timeout.
-    pub timeout: Duration,
+    pub(crate) timeout: Duration,
 }
 
 impl std::fmt::Debug for JudgeCall<'_> {
@@ -198,15 +194,15 @@ pub(crate) fn user_message(
 
 /// What the provider returned, before the answer parser runs.
 #[derive(Debug, Clone, PartialEq)]
-pub struct JudgeReply {
+pub(crate) struct JudgeReply {
     /// Tool-call arguments, or the message text.
-    pub answer: RawAnswer,
+    pub(crate) answer: RawAnswer,
     /// Text the model returned. Tool-call arguments are compact JSON.
-    pub output_text: String,
+    pub(crate) output_text: String,
     /// Token counts in OTel semantics.
-    pub usage: JudgeUsage,
+    pub(crate) usage: JudgeUsage,
     /// Model the provider says it ran.
-    pub response_model: Option<String>,
+    pub(crate) response_model: Option<String>,
 }
 
 /// Token counts. Input includes cached prompt tokens. Output includes reasoning tokens.
@@ -233,7 +229,7 @@ pub struct JudgeUsage {
 /// [`JudgeError::Transport`] when the client fails. A non-200 status becomes
 /// [`JudgeError::Provider`]. Refusal, truncation, and content filtering are
 /// their own variants and do not include the provider's text.
-pub async fn call(
+pub(crate) async fn call(
     client: &EgressClient,
     conn: &JudgeConnection,
     call: &JudgeCall<'_>,
@@ -301,37 +297,35 @@ mod tests {
 
     #[test]
     fn parses_adapter_and_mode_names() {
-        assert_eq!("openai".parse::<Adapter>(), Ok(Adapter::OpenAi));
+        assert_eq!(Adapter::from_name("openai"), Ok(Adapter::OpenAi));
         assert_eq!(Adapter::OpenAi.as_str(), "openai");
-        assert_eq!("anthropic".parse::<Adapter>(), Ok(Adapter::Anthropic));
+        assert_eq!(Adapter::from_name("anthropic"), Ok(Adapter::Anthropic));
         assert_eq!(Adapter::Anthropic.as_str(), "anthropic");
-        assert_eq!("gemini".parse::<Adapter>(), Ok(Adapter::Gemini));
+        assert_eq!(Adapter::from_name("gemini"), Ok(Adapter::Gemini));
         assert_eq!(Adapter::Gemini.as_str(), "gemini");
-        let err = "vertex/SECRET-PAYLOAD"
-            .parse::<Adapter>()
-            .expect_err("unknown adapter");
+        let err = Adapter::from_name("vertex/SECRET-PAYLOAD").expect_err("unknown adapter");
         assert_eq!(err, UnknownName);
         assert_eq!(err.to_string(), "unknown name");
         assert!(!err.to_string().contains("SECRET-PAYLOAD"));
-        assert!("OpenAI".parse::<Adapter>().is_err());
+        assert!(Adapter::from_name("OpenAI").is_err());
 
         assert_eq!(
-            "native".parse::<StructuredOutput>(),
+            StructuredOutput::from_name("native"),
             Ok(StructuredOutput::Native)
         );
         assert_eq!(StructuredOutput::default(), StructuredOutput::Native);
         assert_eq!(StructuredOutput::Native.as_str(), "native");
         assert_eq!(
-            "tool".parse::<StructuredOutput>(),
+            StructuredOutput::from_name("tool"),
             Ok(StructuredOutput::Tool)
         );
         assert_eq!(StructuredOutput::Tool.as_str(), "tool");
         assert_eq!(
-            "prompt".parse::<StructuredOutput>(),
+            StructuredOutput::from_name("prompt"),
             Ok(StructuredOutput::Prompt)
         );
         assert_eq!(StructuredOutput::Prompt.as_str(), "prompt");
-        assert!("Tool".parse::<StructuredOutput>().is_err());
+        assert!(StructuredOutput::from_name("Tool").is_err());
     }
 
     #[test]

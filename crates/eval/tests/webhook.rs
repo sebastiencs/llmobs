@@ -1,24 +1,19 @@
 //! Webhook evaluator against the in-process mock.
-//!
-//! This file is an integration test, so clippy's test allow does not apply.
 #![allow(clippy::expect_used)]
-
-mod support {
-    pub(crate) mod mock;
-}
 
 use std::collections::BTreeMap;
 
+use crate::config::{OutputScore, WebhookConfig};
+use crate::egress::{EgressClient, EgressPolicy};
+use crate::error::{EgressError, ErrorClass, WebhookError};
+use crate::mapping::resolve::Variables;
+use crate::mock::{Mock, MockReply};
+use crate::secret::Secret;
+use crate::webhook::{WebhookCall, call};
 use llmobs_core::enums::ScoreDataType;
 use llmobs_core::ids::{ProjectId, SpanId, TraceId};
 use llmobs_core::score::ScoreValue;
-use llmobs_eval::webhook::{WebhookCall, call};
-use llmobs_eval::{
-    EgressClient, EgressError, EgressPolicy, ErrorClass, OutputScore, Secret, Variables,
-    WebhookConfig, WebhookError,
-};
 use serde_json::{Value, json};
-use support::mock::{Mock, MockReply};
 use uuid::Uuid;
 
 const SECRET: &str = "whsec_SECRET-PAYLOAD";

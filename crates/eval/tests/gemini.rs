@@ -1,21 +1,16 @@
 //! Gemini adapter against the in-process mock. Nothing here calls a real provider.
-//!
-//! This file is an integration test, so clippy's test allow does not apply.
 #![allow(clippy::expect_used)]
-
-mod support {
-    pub(crate) mod mock;
-}
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use llmobs_eval::{
-    Adapter, EgressClient, EgressError, EgressPolicy, ErrorClass, JudgeCall, JudgeConnection,
-    JudgeError, JudgeOutput, RawAnswer, Secret, StructuredOutput, call,
-};
+use crate::config::JudgeOutput;
+use crate::egress::{EgressClient, EgressPolicy};
+use crate::error::{EgressError, ErrorClass, JudgeError};
+use crate::judge::{Adapter, JudgeCall, JudgeConnection, RawAnswer, StructuredOutput, call};
+use crate::mock::{Mock, MockReply};
+use crate::secret::Secret;
 use serde_json::{Value, json};
-use support::mock::{Mock, MockReply};
 
 const KEY: &str = "AIza-SECRET-PAYLOAD";
 const PROMPT: &str = "Grade the answer.";
@@ -563,7 +558,7 @@ async fn response_over_4_mib_is_permanent() {
 }
 
 async fn call_err(http: &EgressClient, conn: &JudgeConnection, call: &JudgeCall<'_>) -> JudgeError {
-    llmobs_eval::call(http, conn, call)
+    crate::judge::call(http, conn, call)
         .await
         .expect_err("provider error")
 }

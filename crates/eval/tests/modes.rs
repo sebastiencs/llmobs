@@ -1,21 +1,19 @@
 //! Tool and prompt structured-output modes against the in-process mock.
-//!
-//! This file is an integration test, so clippy's test allow does not apply.
 #![allow(clippy::expect_used)]
-
-mod support {
-    pub(crate) mod mock;
-}
 
 use std::time::Duration;
 
-use llmobs_core::score::ScoreValue;
-use llmobs_eval::{
-    Adapter, Answer, EgressClient, EgressPolicy, JudgeCall, JudgeConnection, JudgeError,
-    JudgeOutput, JudgeReply, RawAnswer, Secret, StructuredOutput, call, parse_answer,
+use crate::config::JudgeOutput;
+use crate::egress::{EgressClient, EgressPolicy};
+use crate::error::JudgeError;
+use crate::judge::{
+    Adapter, Answer, JudgeCall, JudgeConnection, JudgeReply, RawAnswer, StructuredOutput, call,
+    parse_answer,
 };
+use crate::mock::{Mock, MockReply};
+use crate::secret::Secret;
+use llmobs_core::score::ScoreValue;
 use serde_json::json;
-use support::mock::{Mock, MockReply};
 
 const KEY: &str = "mode-SECRET-PAYLOAD";
 const PROMPT: &str = "Grade the answer.";

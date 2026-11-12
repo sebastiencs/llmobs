@@ -43,42 +43,56 @@ const UNSUPPORTED_TYPE: &str = "unsupported data type";
 
 /// One webhook invocation. The secret is the decrypted signing key.
 #[derive(Debug)]
-pub struct WebhookCall<'a> {
+pub(crate) struct WebhookCall<'a> {
     /// Destination, timeout, and extra headers.
-    pub config: &'a WebhookConfig,
+    pub(crate) config: &'a WebhookConfig,
     /// HMAC key. Not placed in the body.
-    pub secret: &'a Secret,
+    pub(crate) secret: &'a Secret,
     /// `evaluators.id`.
-    pub evaluator_id: Uuid,
+    pub(crate) evaluator_id: Uuid,
     /// `evaluators.name`.
-    pub evaluator_name: &'a str,
+    pub(crate) evaluator_name: &'a str,
     /// Project the run belongs to.
-    pub project_id: ProjectId,
+    pub(crate) project_id: ProjectId,
     /// Target trace. JSON `null` when absent.
-    pub trace_id: Option<TraceId>,
+    pub(crate) trace_id: Option<TraceId>,
     /// Target span. JSON `null` when absent.
-    pub span_id: Option<SpanId>,
+    pub(crate) span_id: Option<SpanId>,
     /// Mapped variables. Serialized as a JSON object.
-    pub variables: &'a Variables,
+    pub(crate) variables: &'a Variables,
     /// Output definition the response must fit.
-    pub output: &'a OutputScore,
+    pub(crate) output: &'a OutputScore,
     /// Unix seconds written into the signature.
-    pub now_unix_s: i64,
+    pub(crate) now_unix_s: i64,
 }
 
 /// A 200 whose body fit the output definition.
 #[derive(Debug, Clone, PartialEq)]
-pub struct WebhookReply {
+pub(crate) struct WebhookReply {
     /// Score value. A categorical label uses the spelling stored on the evaluator.
-    pub value: ScoreValue,
+    pub(crate) value: ScoreValue,
     /// `reason`, cut to 8 000 characters. Absent when the field is missing or null.
-    pub reason: Option<String>,
+    pub(crate) reason: Option<String>,
     /// HTTP status. Always 200.
-    pub status: u16,
+    pub(crate) status: u16,
     /// Exact bytes that were signed and sent.
-    pub request_body: Vec<u8>,
+    pub(crate) request_body: Vec<u8>,
     /// Parsed response object.
-    pub response_body: Option<Value>,
+    pub(crate) response_body: Option<Value>,
+}
+
+/// What one webhook POST produced, including the bytes sent when the call got that far.
+pub(crate) struct WebhookExchange {
+    /// URL host, without the path or query. Absent when the URL did not parse.
+    pub(crate) host: Option<String>,
+    /// HTTP status, when a response arrived.
+    pub(crate) status: Option<u16>,
+    /// Exact request body. Empty when the body could not be built.
+    pub(crate) request_body: Vec<u8>,
+    /// Parsed response object, when the body was a score.
+    pub(crate) response_body: Option<Value>,
+    /// The score, or why the call failed.
+    pub(crate) result: Result<WebhookReply, WebhookError>,
 }
 
 /// POSTs the spec 06 body and reads a score from a 200 response.
@@ -92,37 +106,86 @@ pub struct WebhookReply {
 /// [`WebhookError::Status`] for any status other than 200, and
 /// [`WebhookError::BadResponse`] when a 200 body is not a score. Client failures
 /// are [`WebhookError::Transport`].
-pub async fn call(
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) async fn call(
     client: &EgressClient,
     call: &WebhookCall<'_>,
 ) -> Result<WebhookReply, WebhookError> {
-    let url = Url::parse(&call.config.url).map_err(|_| WebhookError::InvalidRequest)?;
-    let body = request_body(call)?;
-    let signature = signature(call.secret, call.now_unix_s, &body)?;
-    let response = client
+    exchange(client, call).await.result
+}
+
+pub(crate) async fn exchange(client: &EgressClient, call: &WebhookCall<'_>) -> WebhookExchange {
+    let Ok(url) = Url::parse(&call.config.url) else {
+        return failed(None, Vec::new(), WebhookError::InvalidRequest);
+    };
+    let host = url.host_str().map(str::to_owned);
+    let Ok(body) = request_body(call) else {
+        return failed(host, Vec::new(), WebhookError::InvalidRequest);
+    };
+    let Ok(signature) = signature(call.secret, call.now_unix_s, &body) else {
+        return failed(host, body, WebhookError::InvalidRequest);
+    };
+    let Ok(headers) = headers(call.config, signature) else {
+        return failed(host, body, WebhookError::InvalidHeader);
+    };
+    let response = match client
         .post(EgressRequest {
             url: &url,
-            headers: headers(call.config, signature)?,
+            headers,
             body: body.clone(),
             timeout: Duration::from_millis(u64::from(call.config.timeout_ms)),
             max_response_bytes: RESPONSE_CAP,
         })
-        .await?;
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => return failed(host, body, error.into()),
+    };
     let status = response.status.as_u16();
     if status != 200 {
-        return Err(WebhookError::Status {
-            status,
-            class: classify_status(status),
-        });
+        return WebhookExchange {
+            host,
+            status: Some(status),
+            request_body: body,
+            response_body: None,
+            result: Err(WebhookError::Status {
+                status,
+                class: classify_status(status),
+            }),
+        };
     }
-    let (value, reason, parsed) = parse_score(&response.body, call.output)?;
-    Ok(WebhookReply {
-        value,
-        reason,
-        status,
-        request_body: body,
-        response_body: Some(parsed),
-    })
+    match parse_score(&response.body, call.output) {
+        Ok((value, reason, parsed)) => WebhookExchange {
+            host,
+            status: Some(status),
+            request_body: body.clone(),
+            response_body: Some(parsed.clone()),
+            result: Ok(WebhookReply {
+                value,
+                reason,
+                status,
+                request_body: body,
+                response_body: Some(parsed),
+            }),
+        },
+        Err(error) => WebhookExchange {
+            host,
+            status: Some(status),
+            request_body: body,
+            response_body: None,
+            result: Err(error),
+        },
+    }
+}
+
+fn failed(host: Option<String>, request_body: Vec<u8>, error: WebhookError) -> WebhookExchange {
+    WebhookExchange {
+        host,
+        status: None,
+        request_body,
+        response_body: None,
+        result: Err(error),
+    }
 }
 
 /// `t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<body>")>`.

@@ -16,7 +16,7 @@ const EXPLANATION_CHARS: usize = 8_000;
 
 /// What an adapter received: tool-call arguments, or message text.
 #[derive(Debug, Clone, PartialEq)]
-pub enum RawAnswer {
+pub(crate) enum RawAnswer {
     /// A tool call's arguments, already a JSON object.
     Object(Map<String, Value>),
     /// Message text, which may wrap the object in prose or a fence.
@@ -25,11 +25,11 @@ pub enum RawAnswer {
 
 /// A score value and the optional explanation that becomes the score's reason.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Answer {
+pub(crate) struct Answer {
     /// The score, using the label spelling stored on the evaluator.
-    pub value: ScoreValue,
+    pub(crate) value: ScoreValue,
     /// At most 8 000 characters. Absent when the judge does not ask for one.
-    pub explanation: Option<String>,
+    pub(crate) explanation: Option<String>,
 }
 
 /// The schema sent to the model. Bounds are checked after parsing, not here.
@@ -81,7 +81,7 @@ fn json_type(kind: &str) -> Value {
 /// Returns [`JudgeError`] when the reply has no object, or the score field is
 /// missing, the wrong type, out of range, or not one of the configured labels.
 /// The message names the field and the configured bounds, never the answer.
-pub fn parse_answer(
+pub(crate) fn parse_answer(
     raw: RawAnswer,
     output: &JudgeOutput,
     include_reason: bool,
