@@ -17,11 +17,13 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   RUST_BACKTRACE: short
+  # Kache permits PR uploads only to a separate prefix; protected main ignores it.
+  KACHE_PULL_REQUEST_PREFIX: kache-pr-v2
   # Only main and owner-authored, owner-triggered same-repository PRs may use R2.
   # Check the re-run actor too; re-running another author's PR does not grant access.
   CI_CACHE_ALLOWED: >-
     ${{
-      ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'pull_request' &&
        github.event.pull_request.user.login == 'sebastiencs' &&
        github.event.pull_request.head.repo.full_name == github.repository &&
