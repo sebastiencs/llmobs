@@ -169,7 +169,7 @@ pub(crate) fn merge_plan(
         source = source.with_predicate(Arc::clone(&predicate));
         filter = Some(predicate);
     }
-    let scan = file_scan(inputs, source)?;
+    let scan = file_scan(inputs, source, &ordering)?;
     let input: Arc<dyn ExecutionPlan> = match filter {
         Some(predicate) => Arc::new(
             FilterExec::try_new(predicate, scan)
@@ -183,9 +183,15 @@ pub(crate) fn merge_plan(
 
 /// The scan over every input, one file per group: a group with several files
 /// would concatenate them, so it would not be sorted.
+///
+/// The declared `ordering` also turns on `preserve_order`. Without it,
+/// DataFusion's file-stream work stealing lets one partition read a sibling's
+/// file after its own, which concatenates two sorted runs into one unsorted
+/// input of the merge.
 fn file_scan(
     inputs: &[&Arc<FileMeta>],
     source: ParquetSource,
+    ordering: &LexOrdering,
 ) -> Result<Arc<dyn ExecutionPlan>, CompactionError> {
     let groups: Vec<FileGroup> = inputs
         .iter()
@@ -198,7 +204,9 @@ fn file_scan(
         })
         .collect();
     let url = ObjectStoreUrl::parse(OBJECT_STORE_URL).map_err(read_error)?;
-    let builder = FileScanConfigBuilder::new(url, Arc::new(source)).with_file_groups(groups);
+    let builder = FileScanConfigBuilder::new(url, Arc::new(source))
+        .with_file_groups(groups)
+        .with_output_ordering(vec![ordering.clone()]);
     Ok(DataSourceExec::from_data_source(builder.build()))
 }
 
@@ -836,5 +844,45 @@ mod tests {
         let text = displayable(plan.as_ref()).indent(true).to_string();
         assert!(text.contains("SortPreservingMergeExec"), "{text}");
         assert!(!text.contains("SortExec"), "{text}");
+    }
+
+    /// Work stealing would let one scan partition read a sibling's file after
+    /// its own, handing the merge an unsorted run. The race is timing
+    /// dependent, so the test checks the scan keeps every file in its own
+    /// partition, for bounded and unbounded slices.
+    #[tokio::test]
+    async fn the_scan_never_moves_a_file_to_another_partition() {
+        use datafusion::datasource::physical_plan::FileScanConfig;
+        use datafusion::datasource::source::DataSourceExec;
+
+        let dir = tempfile::tempdir().unwrap();
+        let objects = objects(&dir).await;
+        let inputs = three_span_inputs(&objects).await;
+        let ordered: Vec<&Arc<FileMeta>> = inputs.iter().collect();
+        let values = time_values(
+            objects.store(),
+            &inputs,
+            crate::parquet::time_column(FileTable::Spans),
+        )
+        .await
+        .unwrap();
+        let bounded = slices(&values, 2)[0];
+        for slice in [open_slice(), bounded] {
+            let plan = merge_plan(FileTable::Spans, &ordered, slice).unwrap();
+            let mut scans = Vec::new();
+            let mut stack = vec![plan];
+            while let Some(node) = stack.pop() {
+                if let Some(scan) = node.downcast_ref::<DataSourceExec>() {
+                    scans.push(
+                        scan.data_source()
+                            .downcast_ref::<FileScanConfig>()
+                            .unwrap()
+                            .preserve_order,
+                    );
+                }
+                stack.extend(node.children().into_iter().cloned());
+            }
+            assert_eq!(scans, vec![true], "{slice:?}");
+        }
     }
 }
