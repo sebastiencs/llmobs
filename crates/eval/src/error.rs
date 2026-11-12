@@ -5,6 +5,8 @@
 //! line and column. They never quote prompt text, check inputs, patterns, header
 //! values, URL paths or queries, judge answers, provider messages, or other payload.
 
+use std::fmt;
+
 use llmobs_core::enums::ScoreDataType;
 use serde_json::error::Category;
 
@@ -202,8 +204,9 @@ impl ErrorClass {
 /// A judge answer could not be turned into a score, or the provider call failed.
 ///
 /// No variant stores the prompt or the answer text. [`Self::Provider`] keeps the
-/// provider message for the UI and leaves it out of [`Display`](std::fmt::Display).
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+/// provider message for the UI and leaves it out of [`Display`](std::fmt::Display)
+/// and [`Debug`](std::fmt::Debug), which shows its length only.
+#[derive(Clone, PartialEq, thiserror::Error)]
 pub enum JudgeError {
     /// The model returned only whitespace.
     #[error("empty answer")]
@@ -270,7 +273,7 @@ pub enum JudgeError {
         provider_type: Option<String>,
         /// Provider error code, when it is a short token.
         provider_code: Option<String>,
-        /// Provider error message, cut to 500 characters. Never logged.
+        /// Provider error message, cut to 500 characters. Never logged; `Debug` prints its length.
         provider_message: Option<String>,
         /// Optional hint for the UI. Set by later modes.
         hint: Option<&'static str>,
@@ -278,6 +281,58 @@ pub enum JudgeError {
     /// The HTTP client failed before a provider status was available.
     #[error(transparent)]
     Transport(#[from] EgressError),
+}
+
+impl fmt::Debug for JudgeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Provider {
+                status,
+                class,
+                provider_type,
+                provider_code,
+                provider_message,
+                hint,
+            } => formatter
+                .debug_struct("Provider")
+                .field("status", status)
+                .field("class", class)
+                .field("provider_type", provider_type)
+                .field("provider_code", provider_code)
+                .field(
+                    "provider_message_chars",
+                    &provider_message
+                        .as_ref()
+                        .map(|message| message.chars().count()),
+                )
+                .field("hint", hint)
+                .finish(),
+            Self::Transport(error) => formatter.debug_tuple("Transport").field(error).finish(),
+            Self::MissingField { field } => formatter
+                .debug_struct("MissingField")
+                .field("field", field)
+                .finish(),
+            Self::WrongType { field } => formatter
+                .debug_struct("WrongType")
+                .field("field", field)
+                .finish(),
+            Self::OutOfRange { min, max } => formatter
+                .debug_struct("OutOfRange")
+                .field("min", min)
+                .field("max", max)
+                .finish(),
+            Self::EmptyAnswer => formatter.write_str("EmptyAnswer"),
+            Self::NotJson => formatter.write_str("NotJson"),
+            Self::NotAnObject => formatter.write_str("NotAnObject"),
+            Self::UnknownLabel => formatter.write_str("UnknownLabel"),
+            Self::InvalidModel => formatter.write_str("InvalidModel"),
+            Self::InvalidHeader => formatter.write_str("InvalidHeader"),
+            Self::InvalidRequest => formatter.write_str("InvalidRequest"),
+            Self::Refused => formatter.write_str("Refused"),
+            Self::ContentFiltered => formatter.write_str("ContentFiltered"),
+            Self::Truncated => formatter.write_str("Truncated"),
+        }
+    }
 }
 
 impl EgressError {
@@ -461,7 +516,36 @@ pub(crate) fn assert_no_payload(message: &str, payload: &str) {
 
 #[cfg(test)]
 mod class_tests {
-    use super::{EgressError, ErrorClass, JudgeError};
+    use super::{EgressError, ErrorClass, EvalError, JudgeError, assert_no_payload};
+
+    #[test]
+    fn debug_omits_the_provider_message() {
+        let err = JudgeError::Provider {
+            status: 400,
+            class: ErrorClass::Permanent,
+            provider_type: Some("invalid_request_error".to_owned()),
+            provider_code: None,
+            provider_message: Some("echoed SECRET-PAYLOAD".to_owned()),
+            hint: None,
+        };
+        let judge = format!("{err:?}");
+        assert_no_payload(&judge, "SECRET-PAYLOAD");
+        assert!(
+            judge.contains("provider_message_chars: Some(21)"),
+            "{judge}"
+        );
+        assert!(judge.contains("invalid_request_error"), "{judge}");
+        let eval = format!("{:?}", EvalError::from(err));
+        assert_no_payload(&eval, "SECRET-PAYLOAD");
+        assert_eq!(
+            format!("{:?}", JudgeError::Transport(EgressError::Timeout)),
+            "Transport(Timeout)"
+        );
+        assert_eq!(
+            format!("{:?}", JudgeError::MissingField { field: "value" }),
+            "MissingField { field: \"value\" }"
+        );
+    }
 
     #[test]
     fn classes_match_d160() {

@@ -236,12 +236,33 @@ fn u64_field(object: &Map<String, Value>, key: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::super::{endpoint, validate_model};
-    use super::DEFAULT_BASE;
+    use super::{DEFAULT_BASE, parse_completion};
     use crate::error::JudgeError;
+    use crate::hostile_tests::{body, check_reply, config, openai_reply};
+    use proptest::prelude::*;
     use reqwest::Url;
 
     fn chat_completions_url(base: Option<&Url>) -> Result<Url, JudgeError> {
         endpoint(base, DEFAULT_BASE, "chat/completions")
+    }
+
+    proptest! {
+        #![proptest_config(config())]
+
+        #[test]
+        fn a_hostile_completion_decodes_or_fails_cleanly(bytes in body(openai_reply())) {
+            match parse_completion(&bytes) {
+                Ok(reply) => check_reply(reply),
+                Err(
+                    JudgeError::EmptyAnswer
+                    | JudgeError::Refused
+                    | JudgeError::Truncated
+                    | JudgeError::ContentFiltered
+                    | JudgeError::NotJson,
+                ) => {}
+                Err(other) => panic!("undocumented decode error {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -271,6 +292,8 @@ mod tests {
             "",
             &"a".repeat(257),
             "gpt/4",
+            r"gpt\4",
+            "gpt%2f4",
             "a?b",
             "a#b",
             "a b",

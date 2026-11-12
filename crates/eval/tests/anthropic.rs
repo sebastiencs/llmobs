@@ -563,7 +563,5 @@ fn assert_hidden(err: &JudgeError) {
     assert!(!rendered.contains(PROMPT), "{rendered}");
     let debug = format!("{err:?}");
     assert!(!debug.contains(PROMPT), "{debug}");
-    if !matches!(err, JudgeError::Provider { .. }) {
-        assert!(!debug.contains("SECRET-PAYLOAD"), "{debug}");
-    }
+    assert!(!debug.contains("SECRET-PAYLOAD"), "{debug}");
 }

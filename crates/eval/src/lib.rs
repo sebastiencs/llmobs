@@ -53,6 +53,9 @@ mod anthropic_tests;
 #[path = "../tests/gemini.rs"]
 mod gemini_tests;
 #[cfg(test)]
+#[path = "../tests/hostile.rs"]
+mod hostile_tests;
+#[cfg(test)]
 #[path = "../tests/support/mock.rs"]
 mod mock;
 #[cfg(test)]

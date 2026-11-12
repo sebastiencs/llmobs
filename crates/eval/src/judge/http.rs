@@ -142,10 +142,50 @@ fn mentions_content_filter(value: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::provider_error;
+    use super::{MESSAGE_MAX_CHARS, TOKEN_MAX_CHARS, is_token, provider_error};
     use crate::error::{ErrorClass, JudgeError};
+    use crate::hostile_tests::{body, config, error_reply};
     use crate::judge::{Adapter, StructuredOutput};
+    use proptest::prelude::*;
     use serde_json::json;
+
+    fn safe_token(token: Option<&String>) -> bool {
+        token.is_none_or(|token| token.chars().count() <= TOKEN_MAX_CHARS && is_token(token))
+    }
+
+    proptest! {
+        #![proptest_config(config())]
+
+        #[test]
+        fn a_hostile_error_body_is_a_bounded_provider_error(
+            bytes in body(error_reply()),
+            status in any::<u16>(),
+            adapter in prop::sample::select(&[Adapter::OpenAi, Adapter::Anthropic, Adapter::Gemini][..]),
+            mode in prop::sample::select(
+                &[StructuredOutput::Native, StructuredOutput::Tool, StructuredOutput::Prompt][..],
+            ),
+        ) {
+            let err = provider_error(adapter, mode, status, &bytes);
+            assert_eq!(err.to_string(), format!("provider status {status}"));
+            let JudgeError::Provider {
+                status: kept,
+                provider_type,
+                provider_code,
+                provider_message,
+                ..
+            } = &err
+            else {
+                panic!("not a provider error: {err:?}");
+            };
+            assert_eq!(*kept, status);
+            assert!(safe_token(provider_type.as_ref()));
+            assert!(safe_token(provider_code.as_ref()));
+            assert!(adapter != Adapter::Gemini || provider_type.is_none());
+            assert!(provider_message.as_ref().is_none_or(|message| {
+                !message.is_empty() && message.chars().count() <= MESSAGE_MAX_CHARS
+            }));
+        }
+    }
 
     fn error(status: u16, body: &serde_json::Value) -> JudgeError {
         provider_error(

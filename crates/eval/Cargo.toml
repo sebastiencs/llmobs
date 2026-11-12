@@ -42,6 +42,7 @@ uuid.workspace = true
 [dev-dependencies]
 axum.workspace = true
 insta.workspace = true
+proptest = { workspace = true, default-features = false, features = ["std"] }
 # Integration tests name `Url` and JSON values directly.
 reqwest.workspace = true
 serde_json.workspace = true

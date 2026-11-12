@@ -2665,6 +2665,7 @@ dependencies = [
  "llmobs-otel",
  "minijinja",
  "opentelemetry-proto",
+ "proptest",
  "regex",
  "reqwest",
  "serde",

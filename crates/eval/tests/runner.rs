@@ -493,7 +493,57 @@ async fn a_provider_429_is_retryable_and_marks_the_llm_span() {
     assert_eq!(llm.span_kind, SpanKind::Llm);
     assert_eq!(llm.status, SpanStatus::Error);
     assert_eq!(llm.status_message.as_deref(), Some("provider status 429"));
+    let rendered = format!("{run:?}");
+    assert!(!rendered.contains("SECRET-PAYLOAD"), "{rendered}");
     let error = run.outcome.expect_err("rate limit");
     assert_eq!(error.class(), ErrorClass::Retryable);
     assert_eq!(error.to_string(), "provider status 429");
+}
+
+#[tokio::test]
+async fn debug_of_the_input_and_the_run_holds_no_payload() {
+    let mock = Mock::start().await;
+    mock.enqueue(MockReply {
+        status: 200,
+        body: json!({
+            "model": "gpt-4o",
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {"content": "{\"value\":0.5,\"explanation\":\"SECRET-PAYLOAD\"}"}
+            }]
+        }),
+        delay: std::time::Duration::ZERO,
+    });
+    let variables = variables_from("SECRET-PAYLOAD");
+    let evaluator = evaluator(
+        EvaluatorConfig::LlmJudge(judge_config("SECRET-PAYLOAD {{ output }}")),
+        ScoreDataType::Numeric,
+    );
+    let mut base = mock.url();
+    base.set_query(Some("token=SECRET-PAYLOAD"));
+    let connection = connection(base);
+    let ingest = ingest();
+    let input = RunInput {
+        evaluator: &evaluator,
+        variables: &variables,
+        connection: Some(&connection),
+        webhook_secret: None,
+        target: target(),
+        origin: EvalOrigin::Test,
+        judge_trace_id: judge_trace(),
+        ingest: &ingest,
+        prices: prices(),
+    };
+    let rendered = format!("{input:?}");
+    assert!(!rendered.contains("SECRET-PAYLOAD"), "{rendered}");
+    let run = runner().run(input).await;
+    assert_eq!(
+        run.outcome
+            .as_ref()
+            .map(|outcome| outcome.reason.as_deref()),
+        Ok(Some("SECRET-PAYLOAD"))
+    );
+    let rendered = format!("{run:?}");
+    assert!(!rendered.contains("SECRET-PAYLOAD"), "{rendered}");
+    assert!(rendered.contains("judge_spans: 2"), "{rendered}");
 }

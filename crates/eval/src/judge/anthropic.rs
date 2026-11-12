@@ -222,9 +222,29 @@ fn u64_field(object: &Map<String, Value>, key: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::super::{endpoint, validate_model};
-    use super::DEFAULT_BASE;
+    use super::{DEFAULT_BASE, parse_message};
     use crate::error::JudgeError;
+    use crate::hostile_tests::{anthropic_reply, body, check_reply, config};
+    use proptest::prelude::*;
     use reqwest::Url;
+
+    proptest! {
+        #![proptest_config(config())]
+
+        #[test]
+        fn a_hostile_message_decodes_or_fails_cleanly(bytes in body(anthropic_reply())) {
+            match parse_message(&bytes) {
+                Ok(reply) => check_reply(reply),
+                Err(
+                    JudgeError::EmptyAnswer
+                    | JudgeError::Refused
+                    | JudgeError::Truncated
+                    | JudgeError::NotJson,
+                ) => {}
+                Err(other) => panic!("undocumented decode error {other:?}"),
+            }
+        }
+    }
 
     #[test]
     fn joins_the_default_and_a_custom_base() {

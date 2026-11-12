@@ -248,9 +248,29 @@ fn u64_field(object: &Map<String, Value>, key: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::generate_content_url;
+    use super::{generate_content_url, parse_generate_content};
     use crate::error::JudgeError;
+    use crate::hostile_tests::{body, check_reply, config, gemini_reply};
+    use proptest::prelude::*;
     use reqwest::Url;
+
+    proptest! {
+        #![proptest_config(config())]
+
+        #[test]
+        fn a_hostile_generation_decodes_or_fails_cleanly(bytes in body(gemini_reply())) {
+            match parse_generate_content(&bytes) {
+                Ok(reply) => check_reply(reply),
+                Err(
+                    JudgeError::EmptyAnswer
+                    | JudgeError::ContentFiltered
+                    | JudgeError::Truncated
+                    | JudgeError::NotJson,
+                ) => {}
+                Err(other) => panic!("undocumented decode error {other:?}"),
+            }
+        }
+    }
 
     #[test]
     fn puts_the_model_in_the_path_and_keeps_the_key_out_of_the_query() {
@@ -283,5 +303,14 @@ mod tests {
     fn rejects_a_model_name_before_building_a_url() {
         let err = generate_content_url(None, "gemini/flash").expect_err("slash");
         assert_eq!(err, JudgeError::InvalidModel);
+    }
+
+    #[test]
+    fn rejects_a_model_that_would_leave_the_models_path() {
+        let custom = Url::parse("https://example.com/gemini/?version=1").expect("custom");
+        for model in [r"a\..\..\..\admin", "a%2f..%2f..%2fadmin"] {
+            let err = generate_content_url(Some(&custom), model).expect_err(model);
+            assert_eq!(err, JudgeError::InvalidModel, "{model:?}");
+        }
     }
 }

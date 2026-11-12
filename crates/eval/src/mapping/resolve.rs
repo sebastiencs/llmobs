@@ -6,6 +6,7 @@
 //! absent value into null.
 
 use std::collections::{BTreeMap, HashSet};
+use std::fmt;
 
 use llmobs_core::enums::{PayloadFormat, SpanKind};
 use llmobs_core::ids::SpanId;
@@ -19,14 +20,19 @@ use super::{
 use crate::error::MappingError;
 
 /// One trace's spans, with heavy columns loaded, in any order.
-#[derive(Debug, Clone, Copy)]
+///
+/// [`Debug`](fmt::Debug) prints the span count and the target span.
+#[derive(Clone, Copy)]
 pub struct TraceData<'a> {
     spans: &'a [Span],
     target_span: Option<SpanId>,
 }
 
 /// One dataset item.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// [`Debug`](fmt::Debug) prints the metadata keys and whether `expected` is
+/// present, not the values.
+#[derive(Clone, PartialEq)]
 pub struct ItemData {
     /// Item input. Always present for an item.
     pub input: Value,
@@ -37,8 +43,36 @@ pub struct ItemData {
 }
 
 /// The variables passed to a check, a judge, or a webhook.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// [`Debug`](fmt::Debug) prints the names, not the values.
+#[derive(Clone, PartialEq)]
 pub struct Variables(BTreeMap<String, Value>);
+
+impl fmt::Debug for TraceData<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TraceData")
+            .field("spans", &self.spans.len())
+            .field("target_span", &self.target_span)
+            .finish()
+    }
+}
+
+impl fmt::Debug for ItemData {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ItemData")
+            .field("has_expected", &self.expected.is_some())
+            .field("metadata_keys", &self.metadata.keys().collect::<Vec<_>>())
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for Variables {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_set().entries(self.0.keys()).finish()
+    }
+}
 
 impl<'a> TraceData<'a> {
     /// Borrows `spans` and records the span a bare `span.*` expression reads.
@@ -720,5 +754,35 @@ mod tests {
 
         let empty = resolve(&mapping(&json!({})), None, None).unwrap();
         assert!(empty.0.is_empty());
+    }
+
+    #[test]
+    fn debug_prints_names_and_counts_without_values() {
+        let span = text_io(
+            bare(1, None, "root", SpanKind::Span, 0),
+            Some(PLANTED),
+            Some(PLANTED),
+        );
+        let trace = TraceData::new(std::slice::from_ref(&span), Some(span.span_id));
+        let mut metadata = Map::new();
+        metadata.insert("tenant".to_owned(), json!(PLANTED));
+        let item = ItemData {
+            input: json!(PLANTED),
+            expected: Some(json!(PLANTED)),
+            metadata,
+        };
+        let vars = resolve(
+            &mapping(&json!({"answer": "trace.output", "gold": "expected"})),
+            Some(&trace),
+            Some(&item),
+        )
+        .unwrap();
+
+        let rendered = format!("{trace:?} {item:?} {vars:?}");
+        assert_no_payload(&rendered, PLANTED);
+        assert!(rendered.contains("spans: 1"), "{rendered}");
+        assert!(rendered.contains("has_expected: true"), "{rendered}");
+        assert!(rendered.contains("\"tenant\""), "{rendered}");
+        assert_eq!(format!("{vars:?}"), "{\"answer\", \"gold\"}");
     }
 }

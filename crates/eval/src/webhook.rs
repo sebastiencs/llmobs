@@ -73,12 +73,6 @@ pub(crate) struct WebhookReply {
     pub(crate) value: ScoreValue,
     /// `reason`, cut to 8 000 characters. Absent when the field is missing or null.
     pub(crate) reason: Option<String>,
-    /// HTTP status. Always 200.
-    pub(crate) status: u16,
-    /// Exact bytes that were signed and sent.
-    pub(crate) request_body: Vec<u8>,
-    /// Parsed response object.
-    pub(crate) response_body: Option<Value>,
 }
 
 /// What one webhook POST produced, including the bytes sent when the call got that far.
@@ -99,21 +93,11 @@ pub(crate) struct WebhookExchange {
 ///
 /// Redirects are not followed. The response body is capped at 64 KiB.
 ///
-/// # Errors
-///
-/// Returns [`WebhookError::InvalidHeader`] for a header that is not valid HTTP,
-/// [`WebhookError::InvalidRequest`] when the URL or the signature cannot be built,
-/// [`WebhookError::Status`] for any status other than 200, and
+/// `result` is [`WebhookError::InvalidHeader`] for a header that is not valid
+/// HTTP, [`WebhookError::InvalidRequest`] when the URL or the signature cannot be
+/// built, [`WebhookError::Status`] for any status other than 200, and
 /// [`WebhookError::BadResponse`] when a 200 body is not a score. Client failures
 /// are [`WebhookError::Transport`].
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) async fn call(
-    client: &EgressClient,
-    call: &WebhookCall<'_>,
-) -> Result<WebhookReply, WebhookError> {
-    exchange(client, call).await.result
-}
-
 pub(crate) async fn exchange(client: &EgressClient, call: &WebhookCall<'_>) -> WebhookExchange {
     let Ok(url) = Url::parse(&call.config.url) else {
         return failed(None, Vec::new(), WebhookError::InvalidRequest);
@@ -158,15 +142,9 @@ pub(crate) async fn exchange(client: &EgressClient, call: &WebhookCall<'_>) -> W
         Ok((value, reason, parsed)) => WebhookExchange {
             host,
             status: Some(status),
-            request_body: body.clone(),
-            response_body: Some(parsed.clone()),
-            result: Ok(WebhookReply {
-                value,
-                reason,
-                status,
-                request_body: body,
-                response_body: Some(parsed),
-            }),
+            request_body: body,
+            response_body: Some(parsed),
+            result: Ok(WebhookReply { value, reason }),
         },
         Err(error) => WebhookExchange {
             host,
@@ -342,4 +320,62 @@ fn reason_of(object: &Map<String, Value>) -> Result<Option<String>, WebhookError
 
 fn bad(reason: &'static str) -> WebhookError {
     WebhookError::BadResponse { reason }
+}
+
+#[cfg(test)]
+mod tests {
+    use llmobs_core::enums::ScoreDataType;
+    use llmobs_core::score::ScoreValue;
+    use proptest::prelude::*;
+
+    use super::{REASON_CHARS, parse_score};
+    use crate::config::OutputScore;
+    use crate::error::WebhookError;
+    use crate::hostile_tests::{body, config, score_object};
+
+    fn output() -> impl Strategy<Value = OutputScore> {
+        prop::sample::select(
+            &[
+                ScoreDataType::Numeric,
+                ScoreDataType::Boolean,
+                ScoreDataType::Categorical,
+                ScoreDataType::Text,
+            ][..],
+        )
+        .prop_map(|data_type| OutputScore {
+            name: "grade".to_owned(),
+            data_type,
+            categories: (data_type == ScoreDataType::Categorical)
+                .then(|| vec!["correct".to_owned(), "Incorrect".to_owned()]),
+        })
+    }
+
+    proptest! {
+        #![proptest_config(config())]
+
+        #[test]
+        fn a_hostile_webhook_body_scores_or_is_a_bad_response(
+            bytes in body(score_object()),
+            output in output(),
+        ) {
+            match parse_score(&bytes, &output) {
+                Ok((value, reason, parsed)) => {
+                    assert!(parsed.is_object());
+                    assert!(reason.is_none_or(|reason| reason.chars().count() <= REASON_CHARS));
+                    match (value, output.data_type) {
+                        (ScoreValue::Numeric(number), ScoreDataType::Numeric) => {
+                            assert!(number.is_finite());
+                        }
+                        (ScoreValue::Boolean(_), ScoreDataType::Boolean) => {}
+                        (ScoreValue::Categorical { label, value: None }, ScoreDataType::Categorical) => {
+                            assert!(output.categories.unwrap_or_default().contains(&label));
+                        }
+                        (value, data_type) => panic!("{value:?} does not fit {data_type:?}"),
+                    }
+                }
+                Err(WebhookError::BadResponse { .. }) => {}
+                Err(other) => panic!("undocumented webhook error {other:?}"),
+            }
+        }
+    }
 }

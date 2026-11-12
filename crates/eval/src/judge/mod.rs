@@ -118,11 +118,13 @@ impl std::fmt::Display for UnknownName {
 impl std::error::Error for UnknownName {}
 
 /// A decrypted provider connection. The server loads and decrypts it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct JudgeConnection {
     /// Provider API.
     pub adapter: Adapter,
     /// Override for the provider base. The OpenAI default is `https://api.openai.com/v1`.
+    ///
+    /// [`Debug`](std::fmt::Debug) prints its host only.
     pub base_url: Option<Url>,
     /// Provider credential. [`Debug`](std::fmt::Debug) redacts it.
     pub api_key: Secret,
@@ -133,6 +135,22 @@ pub struct JudgeConnection {
     pub extra_headers: Vec<(String, Secret)>,
     /// Structured-output mode.
     pub structured_output: StructuredOutput,
+}
+
+impl std::fmt::Debug for JudgeConnection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("JudgeConnection")
+            .field("adapter", &self.adapter)
+            .field(
+                "base_url_host",
+                &self.base_url.as_ref().and_then(Url::host_str),
+            )
+            .field("api_key", &self.api_key)
+            .field("extra_headers", &self.extra_headers)
+            .field("structured_output", &self.structured_output)
+            .finish()
+    }
 }
 
 /// One judge invocation. The caller owns the model, prompt, and output definition.
@@ -254,8 +272,9 @@ pub(crate) fn validate_model(model: &str) -> Result<(), JudgeError> {
     Ok(())
 }
 
+/// The URL parser reads `\` as `/` in http(s) paths, and `%` starts an escape.
 fn forbidden_in_model(ch: char) -> bool {
-    ch.is_whitespace() || ch.is_control() || ch == '/' || ch == '?' || ch == '#'
+    ch.is_whitespace() || ch.is_control() || matches!(ch, '/' | '\\' | '%' | '?' | '#')
 }
 
 /// Joins `path` onto a provider base, preserving a query string.
@@ -293,7 +312,29 @@ pub(crate) fn endpoint(
 
 #[cfg(test)]
 mod tests {
-    use super::{Adapter, StructuredOutput, UnknownName};
+    use super::{Adapter, JudgeConnection, StructuredOutput, UnknownName};
+    use crate::secret::Secret;
+
+    #[test]
+    fn connection_debug_shows_the_host_only() {
+        let conn = JudgeConnection {
+            adapter: Adapter::OpenAi,
+            base_url: Some(
+                reqwest::Url::parse("https://judge.example/SECRET-PAYLOAD/v1?key=SECRET-PAYLOAD")
+                    .expect("url"),
+            ),
+            api_key: Secret::new("sk-SECRET-PAYLOAD".to_owned()),
+            extra_headers: vec![(
+                "X-Tenant".to_owned(),
+                Secret::new("SECRET-PAYLOAD".to_owned()),
+            )],
+            structured_output: StructuredOutput::Native,
+        };
+        let debug = format!("{conn:?}");
+        crate::error::assert_no_payload(&debug, "SECRET-PAYLOAD");
+        assert!(debug.contains("judge.example"), "{debug}");
+        assert!(debug.contains("X-Tenant"), "{debug}");
+    }
 
     #[test]
     fn parses_adapter_and_mode_names() {

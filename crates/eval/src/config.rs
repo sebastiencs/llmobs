@@ -6,6 +6,7 @@
 //! `output_score`.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use llmobs_core::enums::ScoreDataType;
 use serde::Deserialize;
@@ -230,7 +231,9 @@ fn parse<T: for<'de> Deserialize<'de>>(
 }
 
 /// LLM-judge configuration. Unknown JSON fields are rejected.
-#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
+///
+/// [`Debug`](fmt::Debug) prints the prompt's length, not its text.
+#[derive(Clone, PartialEq, Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct JudgeConfig {
     /// Connection row that supplies the adapter and the decrypted API key.
@@ -255,6 +258,22 @@ pub struct JudgeConfig {
     /// Whole-call timeout in milliseconds. Defaults to 60_000, allowed 1_000..=300_000.
     #[serde(default = "default_judge_timeout")]
     pub timeout_ms: u32,
+}
+
+impl fmt::Debug for JudgeConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("JudgeConfig")
+            .field("connection_id", &self.connection_id)
+            .field("model", &self.model)
+            .field("prompt_bytes", &self.prompt.len())
+            .field("output", &self.output)
+            .field("include_reason", &self.include_reason)
+            .field("temperature", &self.temperature)
+            .field("max_output_tokens", &self.max_output_tokens)
+            .field("timeout_ms", &self.timeout_ms)
+            .finish()
+    }
 }
 
 impl JudgeConfig {
@@ -316,7 +335,8 @@ pub enum JudgeOutput {
     Boolean,
     /// One label from a closed list.
     Categorical {
-        /// Two to twenty labels, each 1..=64 characters, unique after trim and case-folding.
+        /// Two to twenty labels, each 1..=64 characters, unique after the answer
+        /// parser's normalization: trim, case-fold, and drop one trailing `.`.
         labels: Vec<String>,
         /// Optional numeric value per label. Keys must be labels as stored. Defaults to empty.
         #[serde(default)]
@@ -370,7 +390,7 @@ fn validate_labels(
                 reason: "must be 1 to 64 characters",
             });
         }
-        let folded = fold_label(label);
+        let folded = crate::judge::normalize_label(label);
         if folded.is_empty() {
             return Err(ConfigError::Invalid {
                 field: "labels",
@@ -399,10 +419,6 @@ fn validate_labels(
         }
     }
     Ok(())
-}
-
-fn fold_label(label: &str) -> String {
-    label.trim().to_lowercase()
 }
 
 /// Built-in check configuration. Tagged by `check`. Unknown JSON fields are rejected.
@@ -518,7 +534,10 @@ impl Check {
 ///
 /// Unknown JSON fields are ignored so the server can keep bookkeeping keys in
 /// the same document. Judge and check configs reject unknown fields.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, serde::Serialize)]
+///
+/// [`Debug`](fmt::Debug) prints the URL host and the header names. The URL path
+/// and query, the header values, and `secret_enc` are omitted.
+#[derive(Clone, PartialEq, Eq, Deserialize, serde::Serialize)]
 pub struct WebhookConfig {
     /// Absolute `http` or `https` URL with a host and no userinfo.
     pub url: String,
@@ -535,6 +554,21 @@ pub struct WebhookConfig {
     /// decrypted signing secret separately when the webhook runs.
     #[serde(default)]
     pub secret_enc: Option<String>,
+}
+
+impl fmt::Debug for WebhookConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let host = reqwest::Url::parse(&self.url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned));
+        formatter
+            .debug_struct("WebhookConfig")
+            .field("host", &host)
+            .field("timeout_ms", &self.timeout_ms)
+            .field("header_names", &self.headers.keys().collect::<Vec<_>>())
+            .field("has_secret_enc", &self.secret_enc.is_some())
+            .finish()
+    }
 }
 
 impl WebhookConfig {
@@ -726,6 +760,42 @@ mod tests {
             data_type,
             categories: categories.map(|labels| labels.into_iter().map(str::to_owned).collect()),
         }
+    }
+
+    #[test]
+    fn debug_omits_prompts_header_values_url_paths_and_the_secret() {
+        let webhook = super::WebhookConfig {
+            url: "https://hooks.example/SECRET-PAYLOAD?token=SECRET-PAYLOAD".to_owned(),
+            timeout_ms: 10_000,
+            headers: BTreeMap::from([("X-Api-Key".to_owned(), "SECRET-PAYLOAD".to_owned())]),
+            secret_enc: Some("SECRET-PAYLOAD".to_owned()),
+        };
+        let judge = JudgeConfig {
+            connection_id: connection(),
+            model: "m".to_owned(),
+            prompt: "Grade SECRET-PAYLOAD".to_owned(),
+            output: JudgeOutput::Boolean,
+            include_reason: false,
+            temperature: None,
+            max_output_tokens: 16,
+            timeout_ms: 1_000,
+        };
+        let rendered = format!(
+            "{:?} {:?}",
+            evaluator(
+                EvaluatorConfig::Webhook(webhook),
+                score(ScoreDataType::Boolean, None)
+            ),
+            evaluator(
+                EvaluatorConfig::LlmJudge(judge),
+                score(ScoreDataType::Boolean, None)
+            ),
+        );
+        assert_no_payload(&rendered, "SECRET-PAYLOAD");
+        assert!(rendered.contains("hooks.example"), "{rendered}");
+        assert!(rendered.contains("X-Api-Key"), "{rendered}");
+        assert!(rendered.contains("has_secret_enc: true"), "{rendered}");
+        assert!(rendered.contains("prompt_bytes: 20"), "{rendered}");
     }
 
     #[test]
@@ -1112,6 +1182,22 @@ mod tests {
             "output": {"type": "categorical", "labels": ["OK", " ok "]}
         });
         assert_invalid("llm_judge", &folded, "labels", "must be unique");
+
+        let dotted = json!({
+            "connection_id": ID,
+            "model": "m",
+            "prompt": "p",
+            "output": {"type": "categorical", "labels": ["ok", "OK."]}
+        });
+        assert_invalid("llm_judge", &dotted, "labels", "must be unique");
+
+        let dot = json!({
+            "connection_id": ID,
+            "model": "m",
+            "prompt": "p",
+            "output": {"type": "categorical", "labels": [" . ", "b"]}
+        });
+        assert_invalid("llm_judge", &dot, "labels", "must not be blank");
 
         let unknown_key = json!({
             "connection_id": ID,

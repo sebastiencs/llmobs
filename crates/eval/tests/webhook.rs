@@ -9,7 +9,7 @@ use crate::error::{EgressError, ErrorClass, WebhookError};
 use crate::mapping::resolve::Variables;
 use crate::mock::{Mock, MockReply};
 use crate::secret::Secret;
-use crate::webhook::{WebhookCall, call};
+use crate::webhook::{WebhookCall, WebhookReply, exchange};
 use llmobs_core::enums::ScoreDataType;
 use llmobs_core::ids::{ProjectId, SpanId, TraceId};
 use llmobs_core::score::ScoreValue;
@@ -96,6 +96,13 @@ fn ids() -> (TraceId, SpanId) {
     )
 }
 
+async fn call(
+    client: &EgressClient,
+    request: &WebhookCall<'_>,
+) -> Result<WebhookReply, WebhookError> {
+    exchange(client, request).await.result
+}
+
 fn assert_clean(rendered: &str) {
     assert!(!rendered.contains(SECRET), "{rendered}");
     assert!(!rendered.contains(VECTOR_SECRET), "{rendered}");
@@ -128,15 +135,17 @@ async fn signs_the_exact_body_and_sends_the_headers() {
         body: json!({"value": 0.5, "reason": "fits"}),
         delay: std::time::Duration::ZERO,
     });
-    let reply = call(&http, &request).await.expect("webhook");
-    assert_eq!(reply.status, 200);
-    assert_eq!(reply.request_body, BODY.as_bytes());
-    assert_eq!(reply.value, ScoreValue::Numeric(0.5));
-    assert_eq!(reply.reason.as_deref(), Some("fits"));
+    let sent = exchange(&http, &request).await;
+    assert_eq!(sent.host.as_deref(), Some("127.0.0.1"));
+    assert_eq!(sent.status, Some(200));
+    assert_eq!(sent.request_body, BODY.as_bytes());
     assert_eq!(
-        reply.response_body,
+        sent.response_body,
         Some(json!({"value": 0.5, "reason": "fits"}))
     );
+    let reply = sent.result.expect("webhook");
+    assert_eq!(reply.value, ScoreValue::Numeric(0.5));
+    assert_eq!(reply.reason.as_deref(), Some("fits"));
     assert_clean(&format!("{reply:?}"));
 
     let seen = mock.requests();

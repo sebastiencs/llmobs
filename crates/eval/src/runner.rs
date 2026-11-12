@@ -5,6 +5,7 @@
 //! always built.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use llmobs_core::ids::TraceId;
@@ -52,7 +53,10 @@ pub struct RunInput<'a> {
 }
 
 /// The score or the failure, and the normalized judge trace either way.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// [`Debug`](fmt::Debug) counts the judge trace's spans instead of printing
+/// their payloads.
+#[derive(Clone, PartialEq)]
 pub struct EvalRun {
     /// `Ok` when a score was produced.
     pub outcome: Result<EvalOutcome, EvalError>,
@@ -61,7 +65,9 @@ pub struct EvalRun {
 }
 
 /// A score and the judge metadata copied off the normalized trace (D161).
-#[derive(Debug, Clone, PartialEq)]
+///
+/// [`Debug`](fmt::Debug) prints the reason's length, not its text.
+#[derive(Clone, PartialEq)]
 pub struct EvalOutcome {
     /// The score.
     pub value: ScoreValue,
@@ -73,6 +79,33 @@ pub struct EvalOutcome {
     pub cost_usd: Option<f64>,
     /// The `llm` span had tokens and no price.
     pub unpriced_model: bool,
+}
+
+impl fmt::Debug for EvalRun {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EvalRun")
+            .field("outcome", &self.outcome)
+            .field("judge_spans", &self.judge_trace.spans.len())
+            .field("judge_media", &self.judge_trace.media.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for EvalOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EvalOutcome")
+            .field("value", &self.value)
+            .field(
+                "reason_chars",
+                &self.reason.as_ref().map(|reason| reason.chars().count()),
+            )
+            .field("metadata", &self.metadata)
+            .field("cost_usd", &self.cost_usd)
+            .field("unpriced_model", &self.unpriced_model)
+            .finish()
+    }
 }
 
 struct Finished {
