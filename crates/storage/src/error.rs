@@ -478,6 +478,24 @@ impl PartialsError {
     }
 }
 
+/// A batch could not be deduplicated. `reason` is a static description, never row content.
+#[derive(Debug, thiserror::Error)]
+#[error("dedup failed: {reason}")]
+pub struct DedupError {
+    /// Static reason. Never a cell value.
+    reason: &'static str,
+}
+
+impl DedupError {
+    pub(crate) fn new(reason: &'static str) -> Self {
+        Self { reason }
+    }
+
+    pub(crate) fn reason(&self) -> &'static str {
+        self.reason
+    }
+}
+
 /// A memtable flush failed before the catalog commit.
 ///
 /// The frozen memtable stays. The task retries with new file names.

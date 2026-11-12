@@ -41,6 +41,7 @@ use crate::wal::{SegmentWriter, replay};
 pub(crate) mod anchor;
 pub(crate) mod catalog;
 pub mod config;
+pub(crate) mod dedup;
 pub mod error;
 mod filter;
 pub(crate) mod flush;
