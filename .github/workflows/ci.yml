@@ -27,6 +27,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/rust # zizmor: ignore[self-repository] actionlint 1.7.12 rejects the $/ form
+        with:
+          r2-access-key-id: ${{ github.ref == 'refs/heads/main' && secrets.R2_ACCESS_KEY_ID || github.ref != 'refs/heads/main' && secrets.R2_READ_ACCESS_KEY_ID || '' }}
+          r2-secret-access-key: ${{ github.ref == 'refs/heads/main' && secrets.R2_SECRET_ACCESS_KEY || github.ref != 'refs/heads/main' && secrets.R2_READ_SECRET_ACCESS_KEY || '' }}
       - run: just fmt-check lint
       - run: just assert-clean
 
@@ -38,6 +41,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/rust # zizmor: ignore[self-repository] actionlint 1.7.12 rejects the $/ form
+        with:
+          r2-access-key-id: ${{ github.ref == 'refs/heads/main' && secrets.R2_ACCESS_KEY_ID || github.ref != 'refs/heads/main' && secrets.R2_READ_ACCESS_KEY_ID || '' }}
+          r2-secret-access-key: ${{ github.ref == 'refs/heads/main' && secrets.R2_SECRET_ACCESS_KEY || github.ref != 'refs/heads/main' && secrets.R2_READ_SECRET_ACCESS_KEY || '' }}
       - run: just test
       - run: just assert-clean
 
