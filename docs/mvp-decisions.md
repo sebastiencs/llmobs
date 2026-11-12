@@ -216,6 +216,13 @@ Competitor research: `research/competitors.md`.
 | D167 | Live provider tests | CI never calls a real provider. Integration tests use an in-process mock; live tests are ignored and run only through `just eval-live` (E19). |
 | D168 | QueryContext session | **`QueryContext::session()` is `pub`.** It returns `&SessionContext` so the `#[ignore]` benchmark `crates/storage/tests/trace_bench.rs` can run raw SQL (Q5) and `EXPLAIN ANALYZE` from an integration test, which the `sql_json` sandbox (D96) rejects. It is a trusted in-process capability only: the SQL console and read endpoints keep going through `sql_json`/`sql_export`, which apply the D96 sandbox, and callers of `session()` must not expose it to untrusted SQL. Deviation recorded for the M3 review, with no behaviour change to the product (spec 05). |
 
+## Track A1 — Storage engine
+
+| # | Topic | Decision |
+|---|---|---|
+| D-A1-1 | Compacted traces | **Compaction keeps one `traces` file per `spans` file.** Each `spans` output of a merge or day close gets its own `traces` file, computed from exactly its rows, and the `traces` files of the inputs are removed in the same commit. A day that fully merges ends with one partial per trace. A bigger day keeps one partial per trace and `spans` file, which the read-time merge already handles. Merging a whole day's partials into one file was rejected: its memory grows with the day's trace count (about 2 KB per trace), and many-source `traces` files would complicate later merges and the deletion rewrite (spec 03 §5). |
+| D-A1-2 | Compaction writes | **Compaction streams each `spans` and `scores` output into a temp file** (in the target directory on local disk, `<data_dir>/tmp/compaction/` with S3), then publishes it durably, so memory stays bounded by one row group per output. `traces` outputs stay in memory. Reserving disk before a merge moves to M6 with the rest of the disk-full handling (`min_free_bytes`): it needs a free-space API that the standard library lacks (spec 03 §5, §10). |
+
 ## Open
 
 - License (D9).
