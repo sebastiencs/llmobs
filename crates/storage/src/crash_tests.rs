@@ -1,7 +1,8 @@
 //! Deterministic flush crashes and the durability order.
 //!
 //! [`child`] is ignored. [`every_flush_hook_aborts_safely`] re-executes this
-//! test binary with one hook armed, then reopens the directory.
+//! test binary with one hook armed, then reopens the directory. It is ignored
+//! too, and `just test` runs it in a test process of its own.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -51,6 +52,7 @@ fn quiet_config(dir: &Path) -> StorageConfig {
         },
         memtable: MemtableConfig::default(),
         query: QueryConfig::default(),
+        anchor: Default::default(),
     }
 }
 
@@ -151,7 +153,7 @@ fn expected_ids() -> Vec<Vec<u8>> {
 }
 
 async fn stored_ids(storage: &crate::Storage) -> Vec<Vec<u8>> {
-    let query = storage.query(project()).unwrap();
+    let query = storage.query(project(), Default::default()).unwrap();
     let ctx = SessionContext::new_with_config_rt(
         SessionConfig::new(),
         std::sync::Arc::clone(&query.runtime),
@@ -210,7 +212,11 @@ async fn child() {
     panic!("shutdown finished without reaching {name}");
 }
 
+/// Run alone by `just test`. A spawned child holds a copy of every open file
+/// descriptor until it execs, including other tests' `LOCK` files, so a
+/// concurrent test that reopens its directory in that window gets `Locked`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "spawns processes; `just test` runs it in its own test process"]
 async fn every_flush_hook_aborts_safely() {
     for (name, _) in POINTS {
         let dir = tempfile::tempdir().unwrap();
@@ -256,9 +262,10 @@ async fn every_flush_hook_aborts_safely() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_flush_syncs_the_file_before_the_catalog_commit() {
     let dir = tempfile::tempdir().unwrap();
-    let storage = crate::Storage::open(quiet_config(dir.path()))
-        .await
-        .unwrap();
+    let mut config = quiet_config(dir.path());
+    // Serial uploads make the two objects' hook order deterministic.
+    config.flush.upload_concurrency = 1;
+    let storage = crate::Storage::open(config).await.unwrap();
     storage
         .append_spans(project(), spans_at(&[1]))
         .await
@@ -283,6 +290,11 @@ async fn a_flush_syncs_the_file_before_the_catalog_commit() {
     assert_eq!(
         steps,
         vec![
+            // The spans file, then the traces file derived from it.
+            HookPoint::ObjectWrite,
+            HookPoint::ObjectSync,
+            HookPoint::ObjectRename,
+            HookPoint::ObjectDirSync,
             HookPoint::ObjectWrite,
             HookPoint::ObjectSync,
             HookPoint::ObjectRename,

@@ -208,14 +208,15 @@ The committer applies it only if every precondition holds. Otherwise it rolls ba
 A trace is anchored to the partition day of its **first partial**, the first time a flush writes rows for it. Later rows of the same trace go to that day if their own UTC day is within one day of it. Otherwise they go to their own day, as the fallback.
 
 Only traces near midnight need remembering. A row whose own day equals its trace's anchor day needs no lookup. The anchor matters only for a trace whose rows straddle a day boundary, and with `trace_lookback` = 1 h those rows start within an hour of midnight. So `anchor.rs` keeps:
-- a map `trace_id → anchor day` for every partial whose rows start within `anchor.window` (default = `trace_lookback`, 1 h) of a day boundary, on either side;
-- entries are dropped `2 × anchor.window` after the boundary.
+- a map `(project_id, trace_id) → anchor day` for every trace with a row starting within `anchor.window` (default = `trace_lookback`, 1 h) of a UTC midnight, on either side;
+- each entry's deadline is the flush's largest `ingest_time` + `2 × anchor.window`; entries whose deadline the clock (largest `ingest_time` committed) has passed are dropped. Expiry therefore runs on ingest time, not event age, so backfills anchor like live data;
+- assignment is per row: a row goes to the anchor day when its own day is at most one day away, otherwise to its own day.
 
-That is about 1/12 of a day's traces, held for about 2 h. At startup the map is rebuilt from:
-- the WAL replay;
-- the `trace_id` column of the `traces` files whose time range touches the current boundary window.
+That is about 1/12 of a day's traces, held for about 2 h of ingest time. At startup the map is rebuilt from the active `traces` files whose `max_ingest_time` is within `2 × anchor.window` of the clock, reading only the row groups whose `last_ingest_time` statistics reach that window and only rows with `last_ingest_time` in it and `start_time` near midnight. WAL-replayed rows need no rebuild: they get their anchor when they flush.
 
-Rows in a partition whose day differs from their own start day are normal rows. Files still record their real `min_time`/`max_time`. Day pruning (spec 03 §6 step 1) widens the day range by one day on each side, and file pruning by `min_time`/`max_time` stays exact.
+A trace with no row near midnight before a flush, and rows past midnight later, gets an entry only from its later rows (e.g. rows at 22:00 flushed, then rows at 00:30): its earlier rows stay in the earlier day. The anchor guarantees one day only for traces whose rows reach the window before midnight.
+
+Rows in a partition whose day differs from their own start day are normal rows. Files still record their real `min_time`/`max_time`. Day pruning (spec 03 §6 step 1) widens the day range by one day on each side, and file pruning by `min_time`/`max_time` stays exact. Memtable pruning stays exact.
 
 The partition key is `(project_id, anchor day)` for `spans` and `traces`; `scores` keep the day of `created_at`.
 

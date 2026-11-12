@@ -25,6 +25,7 @@ pub(crate) struct SpansProvider {
     snapshot: Arc<MemSnapshot>,
     catalog: Arc<Catalog>,
     target_partitions: usize,
+    around: Option<i64>,
 }
 
 impl SpansProvider {
@@ -33,12 +34,14 @@ impl SpansProvider {
         snapshot: Arc<MemSnapshot>,
         catalog: Arc<Catalog>,
         target_partitions: usize,
+        around: Option<i64>,
     ) -> Self {
         Self {
             project,
             snapshot,
             catalog,
             target_partitions,
+            around,
         }
     }
 
@@ -57,6 +60,7 @@ impl SpansProvider {
             self.project,
             spans::START_TIME,
             filters,
+            self.around,
         )
     }
 }
@@ -91,6 +95,7 @@ impl TableProvider for SpansProvider {
             catalog: &self.catalog,
             table: Table::Spans,
             time_column: spans::START_TIME,
+            around: self.around,
             schema: spans_schema(),
             projection,
             filters,
@@ -109,12 +114,14 @@ mod tests {
 
     use arrow::array::{Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray};
     use arrow::datatypes::DataType;
+    use datafusion::common::ScalarValue;
     use datafusion::execution::context::{SessionConfig, SessionContext};
     use datafusion::logical_expr::{BinaryExpr, Cast, Expr, Operator, col, lit};
-    use llmobs_core::ids::ProjectId;
+    use llmobs_core::ids::{ProjectId, TraceId};
     use llmobs_core::schema::spans;
 
     use crate::ProjectQuery;
+    use crate::QueryOptions;
     use crate::hooks::HookPoint;
 
     use super::super::DAY_NS;
@@ -144,6 +151,7 @@ mod tests {
                 target_partitions: 2,
                 ..QueryConfig::default()
             },
+            anchor: Default::default(),
         }
     }
 
@@ -199,7 +207,7 @@ mod tests {
             .append_spans(project(), spans_at(&[1, 2]))
             .await
             .unwrap();
-        let query = storage.query(project()).unwrap();
+        let query = storage.query(project(), Default::default()).unwrap();
         assert_eq!(query.target_partitions.get(), 2);
         let ctx = SessionContext::new();
         ctx.register_table("spans_t", Arc::clone(&query.spans))
@@ -245,7 +253,7 @@ mod tests {
             .append_spans(project(), spans_at(&[DAY_NS + 1_000]))
             .await
             .unwrap();
-        let query = storage.query(project()).unwrap();
+        let query = storage.query(project(), Default::default()).unwrap();
         let spans = query.spans.downcast_ref::<SpansProvider>().unwrap();
         let bound = start_ge(DAY_NS);
         assert_eq!(spans.candidate_batches(std::slice::from_ref(&bound)), 1);
@@ -299,7 +307,7 @@ mod tests {
             .await
             .unwrap();
         for (id, expected) in [(project(), 1), (other_project(), 1)] {
-            let query = storage.query(id).unwrap();
+            let query = storage.query(id, Default::default()).unwrap();
             let ctx = SessionContext::new();
             ctx.register_table("spans_t", query.spans).unwrap();
             let count = collect(&ctx, "SELECT count(*) FROM spans_t").await;
@@ -312,12 +320,12 @@ mod tests {
     async fn a_query_keeps_the_snapshot_it_was_opened_on() {
         let dir = tempfile::tempdir().unwrap();
         let storage = crate::Storage::open(config_in(dir.path())).await.unwrap();
-        let before = storage.query(project()).unwrap();
+        let before = storage.query(project(), Default::default()).unwrap();
         storage
             .append_spans(project(), spans_at(&[1]))
             .await
             .unwrap();
-        let after = storage.query(project()).unwrap();
+        let after = storage.query(project(), Default::default()).unwrap();
 
         let old = SessionContext::new();
         old.register_table("spans_t", before.spans).unwrap();
@@ -407,7 +415,7 @@ mod tests {
     async fn wait_flushed(storage: &crate::Storage, files: usize) {
         let started = Instant::now();
         loop {
-            let query = storage.query(project()).unwrap();
+            let query = storage.query(project(), Default::default()).unwrap();
             let spans = provider(&query);
             if spans.candidate_files(&[]).len() == files && spans.candidate_batches(&[]) == 0 {
                 return;
@@ -462,7 +470,7 @@ mod tests {
             .await
             .unwrap();
 
-        let query = storage.query(project()).unwrap();
+        let query = storage.query(project(), Default::default()).unwrap();
         let spans = provider(&query);
         assert_eq!(spans.candidate_files(&[]).len(), 1);
         assert!(spans.candidate_batches(&[]) >= 1);
@@ -496,7 +504,7 @@ mod tests {
                 .await
                 .unwrap();
             wait_held(&storage, point).await;
-            let query = storage.query(project()).unwrap();
+            let query = storage.query(project(), Default::default()).unwrap();
             let spans = provider(&query);
             let times =
                 start_times(&collect_off_runtime(&query, "SELECT start_time FROM spans_t").await);
@@ -516,7 +524,7 @@ mod tests {
                 };
                 drop(release);
                 wait_held(&storage, HookPoint::FlushAfterCommit).await;
-                let query = storage.query(project()).unwrap();
+                let query = storage.query(project(), Default::default()).unwrap();
                 let spans = provider(&query);
                 assert!(!spans.candidate_files(&[]).is_empty());
                 assert_eq!(spans.candidate_batches(&[]), 0);
@@ -533,9 +541,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn start_time_bounds_skip_files_from_other_days() {
+    async fn start_time_bounds_find_a_row_in_the_anchor_partition() {
         let dir = tempfile::tempdir().unwrap();
         let storage = crate::Storage::open(aged(dir.path())).await.unwrap();
+        // Both spans belong to the same trace and are near midnight, so the
+        // anchor keeps the day-2 row in the day-1 partition (D86).
         storage
             .append_spans(project(), spans_at(&[1_000]))
             .await
@@ -544,12 +554,13 @@ mod tests {
             .append_spans(project(), spans_at(&[DAY_NS + 1_000]))
             .await
             .unwrap();
-        wait_flushed(&storage, 2).await;
-        let query = storage.query(project()).unwrap();
+        wait_flushed(&storage, 1).await;
+        let query = storage.query(project(), Default::default()).unwrap();
         let spans = provider(&query);
         let bound = start_ge(DAY_NS);
+        // One day of file slack finds that day-1 file for a day-2 range.
         assert_eq!(spans.candidate_files(std::slice::from_ref(&bound)).len(), 1);
-        assert_eq!(spans.candidate_files(&[]).len(), 2);
+        assert_eq!(spans.candidate_files(&[]).len(), 1);
         let ctx = session(&query);
         ctx.register_table("spans_t", Arc::clone(&query.spans))
             .unwrap();
@@ -563,6 +574,45 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn around_narrows_a_lookup_to_the_hint_day() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::Storage::open(aged(dir.path())).await.unwrap();
+        // Noon on three days: none is near midnight, so no anchor merges them.
+        let noon = 12 * 3_600 * 1_000_000_000;
+        let base = 10 * DAY_NS + noon;
+        for start in [base - 2 * DAY_NS, base, base + 2 * DAY_NS] {
+            storage
+                .append_spans(project(), spans_at(&[start]))
+                .await
+                .unwrap();
+        }
+        wait_flushed(&storage, 3).await;
+        let trace_id: TraceId = "4bf92f3577b34da6a3ce929d0e0e4736".parse().unwrap();
+        let lookup = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col(spans::TRACE_ID)),
+            Operator::Eq,
+            Box::new(Expr::Literal(
+                ScalarValue::FixedSizeBinary(16, Some(trace_id.as_bytes().to_vec())),
+                None,
+            )),
+        ));
+        let all = storage.query(project(), QueryOptions::default()).unwrap();
+        assert_eq!(
+            provider(&all)
+                .candidate_files(std::slice::from_ref(&lookup))
+                .len(),
+            3
+        );
+        let hinted = storage
+            .query(project(), QueryOptions { around: Some(base) })
+            .unwrap();
+        let selected = provider(&hinted).candidate_files(&[lookup]);
+        assert_eq!(selected.len(), 1, "{selected:?}");
+        assert_eq!(selected[0].min_time, base);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_trace_id_equality_reads_the_flushed_file() {
         let dir = tempfile::tempdir().unwrap();
         let storage = crate::Storage::open(aged(dir.path())).await.unwrap();
@@ -571,7 +621,7 @@ mod tests {
             .await
             .unwrap();
         wait_flushed(&storage, 1).await;
-        let query = storage.query(project()).unwrap();
+        let query = storage.query(project(), Default::default()).unwrap();
         let ctx = session(&query);
         ctx.register_table("spans_t", Arc::clone(&query.spans))
             .unwrap();
@@ -617,8 +667,8 @@ mod tests {
             .unwrap();
         let started = Instant::now();
         loop {
-            let left = storage.query(project()).unwrap();
-            let right = storage.query(other_project()).unwrap();
+            let left = storage.query(project(), Default::default()).unwrap();
+            let right = storage.query(other_project(), Default::default()).unwrap();
             let left_spans = provider(&left);
             let right_spans = right.spans.downcast_ref::<SpansProvider>().unwrap();
             if left_spans.candidate_files(&[]).len() == 1
@@ -647,7 +697,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         for (id, expected) in [(project(), 1_i64), (other_project(), 1)] {
-            let query = storage.query(id).unwrap();
+            let query = storage.query(id, Default::default()).unwrap();
             let ctx = session(&query);
             ctx.register_table("spans_t", query.spans).unwrap();
             let count = collect(&ctx, "SELECT count(*) FROM spans_t").await;

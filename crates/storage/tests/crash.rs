@@ -16,8 +16,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use arrow::array::{Array, FixedSizeBinaryArray, StringArray};
+use arrow::array::{Array, FixedSizeBinaryArray, Int64Array, StringArray};
 use bytesize::ByteSize;
+use chrono::{Datelike, NaiveDate};
 use datafusion::execution::context::{SessionConfig, SessionContext};
 use llmobs_core::batch::spans_to_record_batch;
 use llmobs_core::enums::{SpanKind, SpanStatus};
@@ -27,6 +28,8 @@ use llmobs_storage::config::{
     FlushConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig, WalConfig, WalSync,
 };
 use llmobs_storage::{ProjectQuery, Storage};
+use parquet::arrow::ProjectionMask;
+use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use sqlx::ConnectOptions;
 use sqlx::sqlite::SqliteConnectOptions;
 
@@ -55,19 +58,42 @@ fn child_config(dir: &Path) -> StorageConfig {
             hard_limit: ByteSize::mib(256),
         },
         query: QueryConfig::default(),
+        anchor: Default::default(),
     }
 }
 
+/// 2026-03-05 23:30 UTC, in nanoseconds. The stream spreads over the hour
+/// `[D 23:30, D+1 00:30)`, so every row is within `anchor.window` (1 h) of
+/// the D+1 midnight.
+fn anchor_start() -> i64 {
+    let day = NaiveDate::from_ymd_opt(2026, 3, 5).unwrap();
+    let days = i64::from(day.num_days_from_ce()) - 719_163;
+    days * 86_400_000_000_000 + 23 * 3_600 * 1_000_000_000 + 30 * 60 * 1_000_000_000
+}
+
+/// `(iteration, trace index)` identifies a trace; span ids come from the batch
+/// counter. Each trace's rows are appended in three consecutive batches, far
+/// enough apart that a kill usually splits them across flushes.
 fn span_batch(batch_id: u64, rows: usize) -> arrow::array::RecordBatch {
     let project_id = project();
-    let trace_id = "4bf92f3577b34da6a3ce929d0e0e4736"
-        .parse::<TraceId>()
-        .unwrap();
+    let sequence = batch_id % 1_000_000;
+    let run_id = batch_id / 1_000_000;
+    let trace_index = sequence / 3;
+    let mut trace_bytes = [0_u8; 16];
+    trace_bytes[..8].copy_from_slice(&run_id.to_be_bytes());
+    trace_bytes[8..].copy_from_slice(&(trace_index + 1).to_be_bytes());
+    let trace_id = TraceId::from_bytes(trace_bytes).unwrap();
+    // Three consecutive batches of one trace land at 23:30, 23:50 and 00:10,
+    // so every trace straddles the D+1 midnight.
+    let start_base =
+        anchor_start() + i64::try_from((sequence * 1_200) % 3_600).unwrap() * 1_000_000_000;
     let spans: Vec<Span> = (0..rows)
         .map(|row| {
+            // A counter in the upper seven bytes; the row owns the last byte.
+            // Byte 6 is never zero, so the id is never all-zero.
             let mut bytes = (batch_id.saturating_add(1) << 8).to_be_bytes();
             bytes[7] = u8::try_from(row).unwrap_or(0);
-            let start = 1_000 + i64::try_from(row).unwrap_or(0);
+            let start = start_base + i64::try_from(row).unwrap_or(0) * 1_000_000_000;
             Span {
                 project_id,
                 trace_id,
@@ -119,7 +145,7 @@ fn span_batch(batch_id: u64, rows: usize) -> arrow::array::RecordBatch {
                 media_refs: Vec::new(),
                 truncated: Vec::new(),
                 conventions: Vec::new(),
-                ingest_time: start + 200,
+                ingest_time: start + 1_000_000_000,
                 schema_version: 1,
             }
         })
@@ -297,7 +323,7 @@ async fn check_dir(dir: &Path, before: &[Ack], previous: (u64, u64)) -> Result<(
         .map_err(|error| error.to_string())?;
     let stored = stored_rows(
         &storage
-            .query(project())
+            .query(project(), Default::default())
             .map_err(|error| error.to_string())?,
     )
     .await;
@@ -305,6 +331,12 @@ async fn check_dir(dir: &Path, before: &[Ack], previous: (u64, u64)) -> Result<(
     // iteration of this directory would not see them in the memtable.
     drop(storage);
     let catalog = read_catalog(dir).await?;
+    // `Storage::open` succeeded above, so the open-time `file_sources` check
+    // passed. Every committed source pair must still agree with its objects.
+    for (spans_path, traces_path) in &catalog.sources {
+        check_source_pair(dir, spans_path, traces_path)?;
+    }
+    anchor_days_are_singular(dir, &catalog)?;
     for (path, size) in &catalog.files {
         let file = dir.join("objects").join(path);
         let meta = std::fs::metadata(&file).map_err(|error| format!("{path}: {error}"))?;
@@ -383,6 +415,10 @@ struct CatalogView {
     spans_seq: u64,
     scores_seq: u64,
     staged_at: Vec<i64>,
+    /// `(spans path, traces path)` for every `file_sources` row.
+    sources: Vec<(String, String)>,
+    /// `(path, partition day)` of every active spans file.
+    spans_files: Vec<(String, String)>,
 }
 
 async fn read_catalog(dir: &Path) -> Result<CatalogView, String> {
@@ -428,12 +464,154 @@ async fn read_catalog(dir: &Path) -> Result<CatalogView, String> {
         .fetch_all(&mut connection)
         .await
         .map_err(|error| error.to_string())?;
+    let source_rows = sqlx::query(
+        "SELECT s.path AS spans_path, t.path AS traces_path
+         FROM file_sources fs
+         JOIN data_files s ON s.id = fs.spans_file_id
+         JOIN data_files t ON t.id = fs.traces_file_id",
+    )
+    .fetch_all(&mut connection)
+    .await
+    .map_err(|error| error.to_string())?;
+    let mut sources = Vec::new();
+    for row in source_rows {
+        let spans_path: String =
+            sqlx::Row::try_get(&row, "spans_path").map_err(|error| error.to_string())?;
+        let traces_path: String =
+            sqlx::Row::try_get(&row, "traces_path").map_err(|error| error.to_string())?;
+        sources.push((spans_path, traces_path));
+    }
+    let spans_rows = sqlx::query(
+        "SELECT path, day FROM data_files
+         WHERE table_name = 'spans' AND state = 'active'",
+    )
+    .fetch_all(&mut connection)
+    .await
+    .map_err(|error| error.to_string())?;
+    let mut spans_files = Vec::new();
+    for row in spans_rows {
+        let path: String = sqlx::Row::try_get(&row, "path").map_err(|error| error.to_string())?;
+        let day: String = sqlx::Row::try_get(&row, "day").map_err(|error| error.to_string())?;
+        spans_files.push((path, day));
+    }
     Ok(CatalogView {
         files,
         spans_seq,
         scores_seq,
         staged_at,
+        sources,
+        spans_files,
     })
+}
+
+/// Every trace's rows must live in exactly one partition day. All rows are
+/// near one midnight, so the anchor must hold for all of them (D86).
+fn anchor_days_are_singular(dir: &Path, catalog: &CatalogView) -> Result<(), String> {
+    let mut seen: BTreeMap<Vec<u8>, String> = BTreeMap::new();
+    for (path, day) in &catalog.spans_files {
+        let reader = projected_reader(dir, path, &["trace_id"])?;
+        for batch in reader {
+            let batch = batch.map_err(|error| format!("{path}: {error}"))?;
+            let ids = batch
+                .column_by_name("trace_id")
+                .and_then(|column| column.as_any().downcast_ref::<FixedSizeBinaryArray>())
+                .ok_or_else(|| format!("{path}: no trace_id column"))?;
+            for row in 0..batch.num_rows() {
+                let id = ids.value(row).to_vec();
+                match seen.get(&id) {
+                    Some(other) if other != day => {
+                        return Err(format!("trace appears in partition days {other} and {day}"));
+                    }
+                    _ => {
+                        seen.insert(id, day.clone());
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The sync Parquet reader over a local object, projected to `columns`.
+fn projected_reader(
+    dir: &Path,
+    path: &str,
+    columns: &[&str],
+) -> Result<ParquetRecordBatchReader, String> {
+    let file = std::fs::File::open(dir.join("objects").join(path))
+        .map_err(|error| format!("{path}: {error}"))?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+        .map_err(|error| format!("{path}: {error}"))?;
+    let mask = ProjectionMask::columns(builder.parquet_schema(), columns.iter().copied());
+    builder
+        .with_projection(mask)
+        .build()
+        .map_err(|error| format!("{path}: {error}"))
+}
+
+fn object_trace_ids(dir: &Path, path: &str) -> Result<(BTreeSet<Vec<u8>>, usize), String> {
+    let reader = projected_reader(dir, path, &["trace_id"])?;
+    let mut ids = BTreeSet::new();
+    let mut rows = 0;
+    for batch in reader {
+        let batch = batch.map_err(|error| format!("{path}: {error}"))?;
+        let column = batch
+            .column_by_name("trace_id")
+            .ok_or_else(|| format!("{path}: no trace_id column"))?;
+        let ids_column = column
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .ok_or_else(|| format!("{path}: trace_id is not fixed-size binary"))?;
+        for index in 0..batch.num_rows() {
+            ids.insert(ids_column.value(index).to_vec());
+        }
+        rows += batch.num_rows();
+    }
+    Ok((ids, rows))
+}
+
+fn object_partials(dir: &Path, path: &str) -> Result<(BTreeSet<Vec<u8>>, i64), String> {
+    let reader = projected_reader(dir, path, &["trace_id", "span_count"])?;
+    let mut ids = BTreeSet::new();
+    let mut total = 0_i64;
+    for batch in reader {
+        let batch = batch.map_err(|error| format!("{path}: {error}"))?;
+        let ids_column = batch
+            .column_by_name("trace_id")
+            .and_then(|column| column.as_any().downcast_ref::<FixedSizeBinaryArray>())
+            .ok_or_else(|| format!("{path}: no trace_id column"))?;
+        let counts = batch
+            .column_by_name("span_count")
+            .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
+            .ok_or_else(|| format!("{path}: no span_count column"))?;
+        for index in 0..batch.num_rows() {
+            ids.insert(ids_column.value(index).to_vec());
+            total = total.saturating_add(counts.value(index));
+        }
+    }
+    Ok((ids, total))
+}
+
+/// spec 03 §3: a traces file's `sum(span_count)` equals its spans file's row
+/// count, and both hold the same set of trace ids.
+fn check_source_pair(dir: &Path, spans_path: &str, traces_path: &str) -> Result<(), String> {
+    let (spans_ids, spans_rows) = object_trace_ids(dir, spans_path)?;
+    let (traces_ids, total) = object_partials(dir, traces_path)?;
+    let spans_rows = i64::try_from(spans_rows)
+        .map_err(|_| format!("{spans_path}: row count does not fit in i64"))?;
+    if total != spans_rows {
+        return Err(format!(
+            "{traces_path}: sum(span_count) {total} != {spans_rows} rows in {spans_path}"
+        ));
+    }
+    if spans_ids != traces_ids {
+        return Err(format!(
+            "{traces_path}: trace ids differ from {spans_path} ({:?} vs {:?})",
+            traces_ids.len(),
+            spans_ids.len()
+        ));
+    }
+    Ok(())
 }
 
 fn now_ns() -> i64 {

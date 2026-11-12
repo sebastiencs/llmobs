@@ -75,6 +75,7 @@ fn config(dir: &std::path::Path, bucket: &str, prefix: &str, endpoint: &str) -> 
             hard_limit: ByteSize::gib(1),
         },
         query: QueryConfig::default(),
+        anchor: Default::default(),
     }
 }
 
@@ -266,7 +267,7 @@ async fn round_trip(config: &StorageConfig) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let count = span_count(
         &storage
-            .query(project())
+            .query(project(), Default::default())
             .map_err(|error| error.to_string())?,
     )
     .await;
@@ -280,7 +281,7 @@ async fn round_trip(config: &StorageConfig) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let count = span_count(
         &storage
-            .query(project())
+            .query(project(), Default::default())
             .map_err(|error| error.to_string())?,
     )
     .await;
@@ -298,7 +299,7 @@ async fn round_trip(config: &StorageConfig) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let count = span_count(
         &storage
-            .query(project())
+            .query(project(), Default::default())
             .map_err(|error| error.to_string())?,
     )
     .await;

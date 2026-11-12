@@ -168,9 +168,9 @@ Rows of `spans` and `traces` are partitioned by the trace's **anchor day** (03 ย
 **Order.** Results never depend on the order in which spans were flushed.
 - **Inside a partial**, "first non-null", the earliest span and the choice among several root spans follow `(start_time, span_id)` ascending.
 - **When partials are merged**, the root partial is the one with `has_root`. Among several, it is the one with the smallest `(start_time, root_span_id)`. It comes first, and the other partials follow in `start_time` order.
-- **Ties.** Partials tied on `start_time` contribute their smallest value: the smallest string, and for `metadata`, per key not yet present, the smallest value.
+- **Ties.** Non-root partials tied on `start_time` contribute the smallest value: the smallest string, the smallest name, and for `metadata`, per absent key, the smallest value. The root partial always comes first, so a tie between it and another partial doesn't matter.
 
-With context fields set on every span of a trace (02 ยง Context fields), the merge equals the same rules applied to all of the trace's spans at once.
+A partial keeps its values but not the `(start_time, span_id)` of the span each value came from. Merging the partials of a split trace therefore equals applying these rules to all of the trace's spans at once for counts, tokens, `cost_total` (within floating-point tolerance), `tags`, `models`, `start_time`, `end_time`, `last_ingest_time` and `has_root`; for the context fields when each is set on every span of the trace or on none; and for `metadata` when every span that has a key has the same value for it. It differs for `name` when there is no root and spans in different partials tie on the earliest `start_time`, for the previews when the root's preview is null and `llm` spans are in different partials, for `metadata` and the context fields when values differ between spans, and for `root_span_id` and everything taken from the root when a trace has several root spans. Those results are still deterministic.
 
 **Root semantics.** The root is the span with null `parent_span_id`. If an application's root span is not exported (e.g. a parent span from an un-instrumented HTTP server), the trace has `has_root = false` and the UI shows the earliest span as the entry point.
 

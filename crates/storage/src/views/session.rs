@@ -12,6 +12,7 @@ use std::sync::Arc;
 use datafusion::common::config::ConfigNonZeroUsize;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::{SessionState, SessionStateBuilder, SessionStateDefaults};
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::prelude::SessionConfig;
 
 use super::hex::HexIdRule;
@@ -21,9 +22,13 @@ pub(crate) const PARSER_RECURSION_LIMIT: usize = 50;
 
 /// Builds a session state with the built-in scalar, aggregate, window and nested
 /// functions, and nothing that reads the filesystem or invents tables.
+///
+/// `rules` are physical optimizer rules appended after DataFusion's defaults
+/// (D153); the session does not look inside them.
 pub(crate) fn session_state(
     runtime: Arc<RuntimeEnv>,
     target_partitions: NonZeroUsize,
+    rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
 ) -> SessionState {
     let mut config = SessionConfig::new()
         .with_target_partitions(target_partitions.get())
@@ -39,15 +44,18 @@ pub(crate) fn session_state(
     }
     options.execution.enable_recursive_ctes = false;
 
-    SessionStateBuilder::new()
+    let mut builder = SessionStateBuilder::new()
         .with_config(config)
         .with_runtime_env(runtime)
         .with_scalar_functions(SessionStateDefaults::default_scalar_functions())
         .with_aggregate_functions(SessionStateDefaults::default_aggregate_functions())
         .with_window_functions(SessionStateDefaults::default_window_functions())
         .with_expr_planners(SessionStateDefaults::default_expr_planners())
-        .with_optimizer_rule(Arc::new(HexIdRule))
-        .build()
+        .with_optimizer_rule(Arc::new(HexIdRule));
+    for rule in rules {
+        builder = builder.with_physical_optimizer_rule(rule);
+    }
+    builder.build()
 }
 
 #[cfg(test)]

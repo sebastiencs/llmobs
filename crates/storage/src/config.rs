@@ -44,6 +44,9 @@ pub struct StorageConfig {
     /// Query execution settings.
     #[serde(default)]
     pub query: QueryConfig,
+    /// Trace anchor settings (D86).
+    #[serde(default)]
+    pub anchor: AnchorConfig,
 }
 
 impl StorageConfig {
@@ -117,6 +120,20 @@ impl StorageConfig {
             return Err(ConfigError::invalid(
                 "storage.query.target_partitions",
                 "must be at least 1",
+            ));
+        }
+        if !valid_window(self.query.trace_lookback) {
+            return Err(ConfigError::invalid(
+                "storage.query.trace_lookback",
+                "must be greater than 0 and at most 24h",
+            ));
+        }
+        if let Some(window) = self.anchor.window
+            && !valid_window(window)
+        {
+            return Err(ConfigError::invalid(
+                "storage.anchor.window",
+                "must be greater than 0 and at most 24h",
             ));
         }
         Ok(())
@@ -261,6 +278,9 @@ pub struct QueryConfig {
     /// Zero is allowed. [`ByteSize`] cannot represent a negative size.
     #[serde(default = "default_metadata_cache_bytes")]
     pub metadata_cache_bytes: ByteSize,
+    /// Look-back for trace lists, and the default anchor window (D90, D86).
+    #[serde(default = "default_trace_lookback", with = "humantime_serde")]
+    pub trace_lookback: Duration,
 }
 
 impl Default for QueryConfig {
@@ -268,6 +288,7 @@ impl Default for QueryConfig {
         Self {
             target_partitions: default_target_partitions(),
             metadata_cache_bytes: default_metadata_cache_bytes(),
+            trace_lookback: default_trace_lookback(),
         }
     }
 }
@@ -282,6 +303,26 @@ fn default_target_partitions() -> usize {
 
 fn default_metadata_cache_bytes() -> ByteSize {
     ByteSize::mib(512)
+}
+
+fn default_trace_lookback() -> Duration {
+    Duration::from_secs(60 * 60)
+}
+
+fn valid_window(window: Duration) -> bool {
+    !window.is_zero() && window <= Duration::from_secs(24 * 60 * 60)
+}
+
+/// `[storage.anchor]` (D86).
+///
+/// `None` means the anchor window is `query.trace_lookback`. The resolved
+/// value is checked by [`StorageConfig::validate`] and used at open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnchorConfig {
+    /// How close to a UTC midnight a row must start to need an anchor entry.
+    #[serde(default, with = "humantime_serde")]
+    pub window: Option<Duration>,
 }
 
 /// Where flushed Parquet files live.
@@ -458,6 +499,7 @@ mod tests {
             r#"{"data_dir":"/data","memtable":{"extra":1}}"#,
             r#"{"data_dir":"/data","query":{"extra":1}}"#,
             r#"{"data_dir":"/data","flush":{"extra":1}}"#,
+            r#"{"data_dir":"/data","anchor":{"extra":1}}"#,
             r#"{"data_dir":"/data","s3":{"extra":1}}"#,
         ];
         for json in samples {
@@ -517,6 +559,22 @@ mod tests {
                 r#"{"data_dir":"/data","flush":{"upload_concurrency":65}}"#,
                 "storage.flush.upload_concurrency: must be from 1 to 64",
             ),
+            (
+                r#"{"data_dir":"/data","query":{"trace_lookback":"0s"}}"#,
+                "storage.query.trace_lookback: must be greater than 0 and at most 24h",
+            ),
+            (
+                r#"{"data_dir":"/data","query":{"trace_lookback":"25h"}}"#,
+                "storage.query.trace_lookback: must be greater than 0 and at most 24h",
+            ),
+            (
+                r#"{"data_dir":"/data","anchor":{"window":"0s"}}"#,
+                "storage.anchor.window: must be greater than 0 and at most 24h",
+            ),
+            (
+                r#"{"data_dir":"/data","anchor":{"window":"25h"}}"#,
+                "storage.anchor.window: must be greater than 0 and at most 24h",
+            ),
         ];
         for (json, message) in cases {
             let config = parse(json).unwrap();
@@ -565,7 +623,8 @@ mod tests {
                 "data_dir": "/data",
                 "wal": { "sync": "5ms" },
                 "memtable": {},
-                "query": {}
+                "query": {},
+                "anchor": {}
             }"#,
         )
         .unwrap();
@@ -578,6 +637,27 @@ mod tests {
         assert_eq!(config.query, QueryConfig::default());
         assert_eq!(config.flush, FlushConfig::default());
         assert_eq!(config.s3, S3Config::default());
+        assert_eq!(config.anchor, AnchorConfig::default());
+    }
+
+    #[test]
+    fn anchor_window_defaults_to_trace_lookback_and_parses_durations() {
+        let default = parse(r#"{"data_dir":"/data"}"#).unwrap();
+        assert_eq!(default.query.trace_lookback, Duration::from_secs(3_600));
+        assert_eq!(default.anchor.window, None);
+
+        let lookback = parse(r#"{"data_dir":"/data","query":{"trace_lookback":"30m"}}"#).unwrap();
+        assert_eq!(lookback.query.trace_lookback, Duration::from_secs(1_800));
+        let override_window = parse(r#"{"data_dir":"/data","anchor":{"window":"2h"}}"#).unwrap();
+        assert_eq!(
+            override_window.anchor.window,
+            Some(Duration::from_secs(7_200))
+        );
+        assert_eq!(
+            override_window.query.trace_lookback,
+            Duration::from_secs(3_600)
+        );
+        override_window.validate().unwrap();
     }
 
     #[test]
@@ -589,6 +669,7 @@ mod tests {
         assert_eq!(config.query, QueryConfig::default());
         assert_eq!(config.flush, FlushConfig::default());
         assert_eq!(config.s3, S3Config::default());
+        assert_eq!(config.anchor, AnchorConfig::default());
         assert_eq!(
             config.object_store_url(),
             ObjectStoreUrl::Local(PathBuf::from("/data/objects"))

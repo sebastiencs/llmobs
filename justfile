@@ -19,6 +19,7 @@ lint:
 # Run all Rust tests
 test:
     cargo test --workspace --all-features
+    cargo test -p llmobs-storage --lib --all-features -- --ignored --exact crash_tests::every_flush_hook_aborts_safely
 
 # Opt-in live provider tests. Ignored by `just check` (D167).
 eval-live:

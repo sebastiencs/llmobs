@@ -7,6 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use arrow::error::ArrowError;
+use uuid::Uuid;
 
 /// A `[storage]` value failed a parse or a bound check.
 ///
@@ -69,6 +70,9 @@ pub enum OpenError {
     /// `catalog.db` could not be opened or migrated.
     #[error(transparent)]
     Catalog(#[from] CatalogError),
+    /// The trace anchor state could not be rebuilt.
+    #[error(transparent)]
+    Anchor(#[from] AnchorError),
     /// The object store could not be opened, or a startup cleanup failed.
     #[error(transparent)]
     Objects(#[from] ObjectError),
@@ -204,7 +208,8 @@ impl WalError {
 
 /// Opening or reading `catalog.db` failed.
 ///
-/// `what` is a static description. The message never includes a cell value.
+/// `Corrupt` uses a static description; `SourcesInvariant` names the offending
+/// file id. Neither carries row content, attribute values or secrets.
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
     /// The database file could not be opened.
@@ -235,6 +240,12 @@ pub enum CatalogError {
     Corrupt {
         /// Static description, for example `unknown table_name`.
         what: &'static str,
+    },
+    /// Spec 03 §3's `file_sources` invariant failed for one file.
+    #[error("catalog file_sources invariant: file {file}")]
+    SourcesInvariant {
+        /// The offending `data_files.id`.
+        file: Uuid,
     },
 }
 
@@ -415,6 +426,58 @@ pub enum ParquetWriteError {
     },
 }
 
+/// The trace anchor could not partition rows or rebuild its state.
+#[derive(Debug, thiserror::Error)]
+pub enum AnchorError {
+    /// A required column of a spans or traces batch is missing or mistyped.
+    #[error("anchor: missing or invalid column {name}")]
+    Column {
+        /// Column name. Never a row value.
+        name: &'static str,
+    },
+    /// Arrow rejected a batch operation.
+    #[error("anchor: {0}")]
+    Arrow(#[from] ArrowError),
+    /// An async Parquet read during the startup rebuild failed.
+    #[error("anchor rebuild: {0}")]
+    Parquet(#[source] Box<parquet::errors::ParquetError>),
+}
+
+impl AnchorError {
+    pub(crate) fn column(name: &'static str) -> Self {
+        Self::Column { name }
+    }
+
+    pub(crate) fn parquet(source: parquet::errors::ParquetError) -> Self {
+        Self::Parquet(Box::new(source))
+    }
+}
+
+/// Building or merging trace partials failed.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PartialsError {
+    /// A required column is missing, has the wrong type, or holds an invalid id.
+    #[error("partials column {name} is missing or invalid")]
+    Column {
+        /// The `traces` or `spans` column name. Never a row value.
+        name: String,
+    },
+    /// A `trace_id` value is not a valid id.
+    #[error("partials trace id is invalid")]
+    InvalidTraceId,
+    /// Arrow rejected the output batch.
+    #[error("partials: {0}")]
+    Arrow(#[from] ArrowError),
+}
+
+impl PartialsError {
+    pub(crate) fn column(name: &str) -> Self {
+        Self::Column {
+            name: name.to_owned(),
+        }
+    }
+}
+
 /// A memtable flush failed before the catalog commit.
 ///
 /// The frozen memtable stays. The task retries with new file names.
@@ -423,6 +486,12 @@ pub(crate) enum FlushError {
     /// Sorting or encoding the frozen batches failed.
     #[error("flush prepare: {0}")]
     Prepare(ParquetWriteError),
+    /// Anchor partitioning failed.
+    #[error("flush anchor: {0}")]
+    Anchor(#[from] AnchorError),
+    /// Computing the trace partials of a spans file failed.
+    #[error("flush partials: {0}")]
+    Partials(PartialsError),
     /// A span identity column was missing or null.
     #[error("flush dedup: {reason}")]
     Dedup {
@@ -453,6 +522,10 @@ impl FlushError {
 
     pub(crate) fn prepare(source: ParquetWriteError) -> Self {
         Self::Prepare(source)
+    }
+
+    pub(crate) fn partials(source: PartialsError) -> Self {
+        Self::Partials(source)
     }
 
     pub(crate) fn stage(source: CatalogError) -> Self {
