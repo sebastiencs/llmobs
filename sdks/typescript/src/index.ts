@@ -1,5 +1,7 @@
+export { type AiTelemetry, type AiTelemetryOptions, aiTelemetry } from "./ai.js";
 export { ConfigError, type LlmobsOptions } from "./config.js";
 export { type ContextOptions, withContext } from "./context.js";
+export type { Instrumentation } from "./instrument.js";
 export {
   type LlmSpanHandle,
   type LlmSpanOptions,

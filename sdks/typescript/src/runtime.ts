@@ -33,6 +33,7 @@ import {
 import { type Config, type LlmobsOptions, resolveConfig } from "./config.js";
 import { FetchTraceExporter } from "./exporter.js";
 import { VERSION } from "./index.js";
+import { disableInstrumentations, enableInstrumentations } from "./instrument.js";
 import { debug, resetWarningsForTests, warnOnce } from "./log.js";
 import { MaskingExporter } from "./mask.js";
 import { LlmobsSpanProcessor } from "./processor.js";
@@ -149,6 +150,7 @@ export class Runtime {
       return;
     }
     this.shutDown = true;
+    disableInstrumentations();
     try {
       await this.flush();
       await this.processor.shutdown();
@@ -181,7 +183,9 @@ export function init(options?: LlmobsOptions): void {
     return;
   }
   try {
-    installRuntime(Runtime.create(config));
+    const runtime = Runtime.create(config);
+    installRuntime(runtime);
+    enableInstrumentations(runtime);
   } catch (error) {
     debug(`llmobs: runtime startup failed: ${errorName(error)}`);
     return;
@@ -241,12 +245,12 @@ export function installRuntime(runtime: Runtime): void {
 /** Shut down and forget everything but the beforeExit listener; tests only. */
 export async function resetForTests(): Promise<void> {
   await shutdown();
+  disableInstrumentations();
   context.disable();
   trace.disable();
   propagation.disable();
   resetWarningsForTests();
   initCalled = false;
-  // No instrument list to clear yet (T11 adds it).
 }
 
 /**

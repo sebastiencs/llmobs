@@ -7,6 +7,7 @@
 
 import type { ReadableSpan } from "@opentelemetry/sdk-trace";
 
+import type { Instrumentation } from "./instrument.js";
 import { warnOnce } from "./log.js";
 import { runtimeGlobals } from "./web.js";
 
@@ -54,6 +55,8 @@ export interface Config {
   readonly useGlobalProvider: boolean;
   // D-F-5: replaces the export rule in both provider modes.
   readonly exportFilter: ((span: ReadableSpan) => boolean) | undefined;
+  // D-F-7: third-party instrumentations to bind to our provider.
+  readonly instrument: readonly Instrumentation[];
 }
 
 export interface LlmobsOptions {
@@ -66,6 +69,7 @@ export interface LlmobsOptions {
   mask?: (value: unknown) => unknown;
   useGlobalProvider?: boolean;
   exportFilter?: (span: ReadableSpan) => boolean;
+  instrument?: readonly Instrumentation[];
   enabled?: boolean;
 }
 
@@ -81,6 +85,7 @@ interface ResolvedFields {
   mask: ((value: unknown) => unknown) | undefined;
   useGlobalProvider: boolean;
   exportFilter: ((span: ReadableSpan) => boolean) | undefined;
+  instrument: readonly Instrumentation[];
 }
 
 /** Resolve SDK options. An explicit argument wins, then the env var, then the default. */
@@ -118,6 +123,7 @@ export function resolveConfig(options: LlmobsOptions = {}, env?: Env): Config {
     mask: resolveMask(raw.mask),
     useGlobalProvider: resolveUseGlobalProvider(raw.useGlobalProvider),
     exportFilter: resolveExportFilter(raw.exportFilter),
+    instrument: resolveInstrument(raw.instrument),
   });
 }
 
@@ -138,6 +144,7 @@ function disabled(): ResolvedFields {
     mask: undefined,
     useGlobalProvider: false,
     exportFilter: undefined,
+    instrument: [],
   };
 }
 
@@ -153,6 +160,7 @@ function finish(fields: ResolvedFields): Config {
     mask: fields.mask,
     useGlobalProvider: fields.useGlobalProvider,
     exportFilter: fields.exportFilter,
+    instrument: fields.instrument,
   };
   Object.defineProperty(config, "apiKey", {
     value: fields.apiKey,
@@ -344,4 +352,31 @@ function resolveExportFilter(value: unknown): ((span: ReadableSpan) => boolean) 
     throw new ConfigError("exportFilter", "must be callable");
   }
   return value as (span: ReadableSpan) => boolean;
+}
+
+/** No env var: instrumentations are wired in code (D-F-7). */
+function resolveInstrument(value: unknown): readonly Instrumentation[] {
+  if (value === undefined) {
+    return [];
+  }
+  const valid =
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        typeof item === "object" &&
+        item !== null &&
+        isInstrumentation(item as Record<string, unknown>),
+    );
+  if (!valid) {
+    throw new ConfigError("instrument", "must be a list of instrumentation objects");
+  }
+  return value as readonly Instrumentation[];
+}
+
+function isInstrumentation(item: Record<string, unknown>): boolean {
+  return (
+    typeof item.setTracerProvider === "function" &&
+    typeof item.enable === "function" &&
+    typeof item.disable === "function"
+  );
 }

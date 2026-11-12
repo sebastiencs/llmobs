@@ -12,6 +12,7 @@ import {
 } from "@opentelemetry/sdk-trace";
 
 import { type LlmobsOptions, resolveConfig } from "./config.js";
+import { enableInstrumentations } from "./instrument.js";
 import { flush, installRuntime, Runtime } from "./runtime.js";
 
 /**
@@ -53,6 +54,8 @@ export function startMemory(
     idGenerator: new SequentialIdGenerator(),
   });
   installRuntime(runtime);
+  // The production wiring path, so tests exercise what init() runs (T11).
+  enableInstrumentations(runtime);
   return { exporter, runtime };
 }
 

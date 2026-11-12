@@ -46,6 +46,7 @@ describe("defaults", () => {
       mask: undefined,
       useGlobalProvider: false,
       exportFilter: undefined,
+      instrument: [],
     });
     expect(config.apiKey).toBe(KEY);
   });
@@ -367,6 +368,43 @@ describe("exportFilter", () => {
     expect(config.enabled).toBe(false);
     expect(config.useGlobalProvider).toBe(false);
     expect(config.exportFilter).toBeUndefined();
+  });
+});
+
+describe("instrument", () => {
+  const instrumentation = {
+    setTracerProvider: () => {},
+    enable: () => {},
+    disable: () => {},
+  };
+
+  it("accepts a list of instrumentation objects", () => {
+    const config = resolve({ apiKey: KEY, instrument: [instrumentation] });
+    expect(config.instrument).toEqual([instrumentation]);
+  });
+
+  it("defaults to an empty list", () => {
+    expect(resolve({ apiKey: KEY }).instrument).toEqual([]);
+  });
+
+  it.each([
+    "openai",
+    1,
+    null,
+    [null],
+    [{ setTracerProvider: () => {}, enable: () => {} }],
+    [{ enable: () => {}, disable: () => {} }],
+    [instrumentation, "openai"],
+  ])("rejects %j", (instrument) => {
+    expect(message({ apiKey: KEY, instrument })).toBe(
+      "instrument: must be a list of instrumentation objects",
+    );
+  });
+
+  it("is empty when the config is disabled, however invalid", () => {
+    const config = resolve({ enabled: false, instrument: "openai" });
+    expect(config.enabled).toBe(false);
+    expect(config.instrument).toEqual([]);
   });
 });
 
