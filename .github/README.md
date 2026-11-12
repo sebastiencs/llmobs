@@ -8,34 +8,43 @@ bucket `llmobs-cache`. The S3 endpoint and bucket are configured in
 
 In Cloudflare, open **R2 Object Storage → Manage R2 API Tokens** and create
 one token with **Object Read & Write** permission, scoped only to `llmobs-cache`.
-Store its credentials in these GitHub repository secrets:
+Store its credentials in the GitHub environment `cloudflare-r2` using these
+secret names:
 
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
 
 Save the generated **Access Key ID** and **Secret Access Key**, not the
 Cloudflare API token value. Add them under the GitHub repository's
-**Settings → Secrets and variables → Actions → Repository secrets**.
+**Settings → Environments → cloudflare-r2 → Environment secrets**. Both Rust
+compilation jobs select this environment to receive its secrets.
 Alternatively, from an authenticated GitHub CLI, run these commands and enter
 each value at its hidden prompt:
 
 ```sh
-gh secret set R2_ACCESS_KEY_ID --repo sebastiencs/llmobs
-gh secret set R2_SECRET_ACCESS_KEY --repo sebastiencs/llmobs
+gh secret set R2_ACCESS_KEY_ID --repo sebastiencs/llmobs --env cloudflare-r2
+gh secret set R2_SECRET_ACCESS_KEY --repo sebastiencs/llmobs --env cloudflare-r2
 ```
 
 ## Trusted runs
 
 | Run | Cache access |
 | --- | --- |
-| Push or manual run on `main` | Read and save |
-| PR authored by `sebastiencs`, from this repository, triggered and re-run by `sebastiencs` | Read and save |
-| Other PRs, forks, Dependabot, or manual runs on other branches | None |
+| Push to protected `main` | Read and save under `kache-v2/` |
+| PR authored by `sebastiencs`, from this repository, triggered and re-run by `sebastiencs` | Read main/PR caches and save under `kache-pr-v2/` |
+| Other PRs, forks, Dependabot, or manual runs | None |
 
 `CI_CACHE_ALLOWED` checks GitHub's event metadata before the Rust jobs receive
 R2 credentials. The composite action skips kache when caching is disabled or
 credentials are missing. Whenever caching is enabled, kache saves its results.
 Jobs with `cache: "false"` do not install kache or access R2.
+
+Kache 2.0 enforces a separate CI write policy: only protected-branch pushes may
+publish to the main prefix. `save-cache: true` alone does not enable PR uploads.
+`KACHE_PULL_REQUEST_PREFIX=kache-pr-v2` enables its supported PR write path:
+owner PRs read `kache-v2/` first, then `kache-pr-v2/`, and write only to
+`kache-pr-v2/`. Protected `main` pushes ignore the PR prefix. Manual runs are
+read-only in kache and therefore do not enable caching here.
 
 Only the writer credential pair is used. A read-only R2 token is no longer
 needed. This policy assumes that repository writers and the code executed in
@@ -56,12 +65,14 @@ step.
 
 The kache setup step should report the configured S3 remote. Its job summary
 shows cache hits and misses. Lint and test jobs have separate prefetch manifests
-but share compiled artifacts under `kache-v2/`. Selective warming is enabled;
+within the appropriate main or PR prefix. Selective warming is enabled;
 the entire remote is not downloaded before each build.
 
 The remote bucket is not bounded by kache's local cache limit. If needed, add
-an R2 lifecycle rule to expire objects under `kache-v2/` after 30 days. Expired
+R2 lifecycle rules to expire objects under `kache-v2/` and `kache-pr-v2/`
+after 30 days. Expired
 entries are rebuilt on demand.
 
 References: [R2 credentials](https://developers.cloudflare.com/r2/api/tokens/),
-[kache action](https://github.com/kunobi-ninja/kache-action/tree/ad7317540dcdd71c904f7a60a87b620a0c0e67ed).
+[kache action](https://github.com/kunobi-ninja/kache-action/tree/ad7317540dcdd71c904f7a60a87b620a0c0e67ed),
+[kache CI write policy](https://ninja.kunobi.com/docs/kache/remote-cache/ci#who-may-write).
