@@ -2,8 +2,10 @@
  * The runtime: our own TracerProvider, its processor and the SDK lifecycle.
  *
  * `init()` resolves the config and installs one runtime per process (D-F-15);
- * the provider is never registered as the global one (an opt-in global mode
- * comes with T9). The OTel *context* is always the global one, so instrumentor
+ * by default the provider stays private. `useGlobalProvider` (D-F-4) registers
+ * it as the global one when no app provider is set; OTel JS providers cannot
+ * take processors after construction, so with an app provider we warn once and
+ * stay private. The OTel *context* is always the global one, so instrumentor
  * spans nest under ours: every `Runtime.create` tries to register an
  * `AsyncLocalStorageContextManager` and keeps whatever manager was already
  * registered (D-F-4).
@@ -32,6 +34,7 @@ import { type Config, type LlmobsOptions, resolveConfig } from "./config.js";
 import { FetchTraceExporter } from "./exporter.js";
 import { VERSION } from "./index.js";
 import { debug, resetWarningsForTests, warnOnce } from "./log.js";
+import { MaskingExporter } from "./mask.js";
 import { LlmobsSpanProcessor } from "./processor.js";
 import { type FetchLike, runtimeGlobals } from "./web.js";
 
@@ -46,7 +49,8 @@ export class Runtime {
   private constructor(config: Config, provider: TracerProvider, processor: LlmobsSpanProcessor) {
     this.config = config;
     this.provider = provider;
-    // Own mode only until T9 adds the opt-in global mode.
+    // Always true: OTel JS providers cannot take processors after
+    // construction, so even global mode builds a provider of our own (D-F-4).
     this.ownsProvider = true;
     this.processor = processor;
     this.tracer = provider.getTracer("llmobs", VERSION);
@@ -56,17 +60,38 @@ export class Runtime {
     config: Config,
     seams?: { exporter?: SpanExporter; idGenerator?: IdGenerator; fetch?: FetchLike },
   ): Runtime {
-    const exporter =
+    // D-F-4: in global mode we register our provider as the global one when no
+    // app provider is set; otherwise one warning and we stay private.
+    const registerGlobal =
+      config.useGlobalProvider && !appProviderRegistered(trace.getTracerProvider());
+    if (config.useGlobalProvider && !registerGlobal) {
+      warnOnce(
+        "global-provider-exists",
+        "llmobs: a global tracer provider is already registered; llmobs keeps its own provider. Add spanProcessor() to your provider to send its spans to llmobs",
+      );
+    }
+    const innerExporter =
       seams?.exporter ??
       new FetchTraceExporter({
         url: `${config.baseUrl}/v1/traces`,
         apiKey: requireApiKey(config),
         fetch: seams?.fetch,
       });
+    // The export-time masking pass exists only with a mask or capture off
+    // (D-F-6); otherwise spans reach the exporter untouched.
+    const exporter =
+      config.mask === undefined && config.captureContent
+        ? innerExporter
+        : new MaskingExporter(innerExporter, {
+            mask: config.mask,
+            captureContent: config.captureContent,
+          });
     const processor = new LlmobsSpanProcessor(exporter, {
       environment: config.environment,
       release: config.release,
-      defaultFilter: false,
+      exportFilter: config.exportFilter,
+      // The default rule applies only to a provider we registered globally.
+      defaultFilter: registerGlobal,
     });
     const provider = new TracerProvider({
       resource: defaultResource().merge(
@@ -82,6 +107,9 @@ export class Runtime {
       idGenerator: seams?.idGenerator,
       spanProcessors: [processor],
     });
+    if (registerGlobal) {
+      trace.setGlobalTracerProvider(provider);
+    }
     registerContextManager();
     return new Runtime(config, provider, processor);
   }
@@ -194,6 +222,20 @@ export async function resetForTests(): Promise<void> {
   resetWarningsForTests();
   initCalled = false;
   // No instrument list to clear yet (T11 adds it).
+}
+
+/**
+ * D-F-4: does the global provider hold an app provider? The API returns its
+ * singleton `ProxyTracerProvider` both before and after a registration, so the
+ * test is by identity on the delegate — the shared no-op provider means
+ * nothing is registered. Never compare constructor names: they break under
+ * minification.
+ */
+function appProviderRegistered(provider: ApiTracerProvider): boolean {
+  if (!(provider instanceof ProxyTracerProvider)) {
+    return true;
+  }
+  return provider.getDelegate() !== new ProxyTracerProvider().getDelegate();
 }
 
 function registerContextManager(): void {

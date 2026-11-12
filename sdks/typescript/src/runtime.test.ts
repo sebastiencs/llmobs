@@ -7,6 +7,7 @@ import {
   trace,
 } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { type ReadableSpan, TracerProvider } from "@opentelemetry/sdk-trace";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resolveConfig } from "./config.js";
@@ -30,6 +31,8 @@ const INIT_OPTIONS = { apiKey: "sk-llmobs-test", baseUrl: "http://127.0.0.1:9" }
 const MISSING_KEY_WARNING =
   "llmobs: no API key; set LLMOBS_API_KEY, or LLMOBS_ENABLED=false to silence this; tracing is disabled";
 const INIT_TWICE_WARNING = "llmobs: init() was already called; this call is ignored";
+const GLOBAL_EXISTS_WARNING =
+  "llmobs: a global tracer provider is already registered; llmobs keeps its own provider. Add spanProcessor() to your provider to send its spans to llmobs";
 
 interface RecordedCall {
   url: string;
@@ -240,5 +243,102 @@ describe("the lifecycle", () => {
     // The body really is a gzip stream.
     const restored = await gunzip(calls[0]?.body);
     expect(restored.length).toBeGreaterThan(0);
+  });
+});
+
+describe("global mode (D-F-4)", () => {
+  // beforeEach/afterEach resetForTests call trace.disable()/context.disable(),
+  // the public resets, so every test registers what it needs from scratch.
+
+  it("registers our provider when no app provider is set", async () => {
+    const { exporter, runtime } = startMemory({ useGlobalProvider: true });
+    const global = trace.getTracerProvider();
+    expect(global).toBeInstanceOf(ProxyTracerProvider);
+    // Identity is by delegation: the global slot holds the API's proxy.
+    expect((global as ProxyTracerProvider).getDelegate()).toBe(runtime.provider);
+    // Tracers from the global API are our provider's.
+    expect(trace.getTracer("any")).toBe(runtime.provider.getTracer("any"));
+    // The default rule applies: an HTTP-like span is dropped, ours is kept.
+    trace
+      .getTracer("http.client")
+      .startSpan("GET", {
+        attributes: { "http.request.method": "GET" },
+      })
+      .end();
+    runtime.tracer.startSpan("work").end();
+    const spans = await finished(exporter);
+    expect(spans.map((span) => span.name)).toEqual(["work"]);
+  });
+
+  it("init honors useGlobalProvider", () => {
+    init({ ...INIT_OPTIONS, useGlobalProvider: true });
+    const runtime = currentRuntime();
+    const global = trace.getTracerProvider();
+    expect((global as ProxyTracerProvider).getDelegate()).toBe(runtime?.provider);
+  });
+
+  it("warns and stays private when an app provider is registered", async () => {
+    trace.setGlobalTracerProvider(new TracerProvider());
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { exporter, runtime } = startMemory({ useGlobalProvider: true });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(GLOBAL_EXISTS_WARNING);
+      // The app provider keeps the global slot; ours stays private.
+      const global = trace.getTracerProvider();
+      expect((global as ProxyTracerProvider).getDelegate()).not.toBe(runtime.provider);
+      expect(tracerProvider()).toBe(runtime.provider);
+      // Own mode: the default rule is off, so foreign spans are exported.
+      runtime.provider
+        .getTracer("http.client")
+        .startSpan("GET", { attributes: { "http.request.method": "GET" } })
+        .end();
+      const spans = await finished(exporter);
+      expect(spans.map((span) => span.name)).toEqual(["GET"]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("counts a proxied app provider as an app provider (identity, not names)", () => {
+    const proxy = new ProxyTracerProvider();
+    proxy.setDelegate(new TracerProvider());
+    trace.setGlobalTracerProvider(proxy);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      startMemory({ useGlobalProvider: true });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(GLOBAL_EXISTS_WARNING);
+      const global = trace.getTracerProvider();
+      expect((global as ProxyTracerProvider).getDelegate()).toBe(proxy);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("exportFilter replaces the default rule in global mode", async () => {
+    const keepHttp = (span: ReadableSpan) => span.name === "GET";
+    const { exporter, runtime } = startMemory({ useGlobalProvider: true, exportFilter: keepHttp });
+    trace
+      .getTracer("http.client")
+      .startSpan("GET", {
+        attributes: { "http.request.method": "GET" },
+      })
+      .end();
+    runtime.tracer.startSpan("work").end();
+    const spans = await finished(exporter);
+    expect(spans.map((span) => span.name)).toEqual(["GET"]);
+  });
+
+  it("exportFilter applies in own mode too", async () => {
+    const keepHttp = (span: ReadableSpan) => span.name === "GET";
+    const { exporter, runtime } = startMemory({ exportFilter: keepHttp });
+    runtime.provider
+      .getTracer("http.client")
+      .startSpan("GET", { attributes: { "http.request.method": "GET" } })
+      .end();
+    runtime.tracer.startSpan("work").end();
+    const spans = await finished(exporter);
+    expect(spans.map((span) => span.name)).toEqual(["GET"]);
   });
 });

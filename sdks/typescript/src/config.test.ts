@@ -1,4 +1,5 @@
 import { inspect } from "node:util";
+import type { ReadableSpan } from "@opentelemetry/sdk-trace";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type Config, ConfigError, type LlmobsOptions, resolveConfig } from "./config.js";
@@ -43,6 +44,8 @@ describe("defaults", () => {
       captureContent: true,
       sampleRate: 1,
       mask: undefined,
+      useGlobalProvider: false,
+      exportFilter: undefined,
     });
     expect(config.apiKey).toBe(KEY);
   });
@@ -331,6 +334,39 @@ describe("mask", () => {
     const mask = (value: unknown) => value;
     expect(resolve({ apiKey: KEY, mask }).mask).toBe(mask);
     expect(message({ apiKey: KEY, mask: 1 })).toBe("mask: must be callable");
+  });
+});
+
+describe("useGlobalProvider", () => {
+  it("accepts both booleans", () => {
+    expect(resolve({ apiKey: KEY, useGlobalProvider: true }).useGlobalProvider).toBe(true);
+    expect(resolve({ apiKey: KEY, useGlobalProvider: false }).useGlobalProvider).toBe(false);
+  });
+
+  it.each([1, "true", null])("rejects %j", (useGlobalProvider) => {
+    expect(message({ apiKey: KEY, useGlobalProvider })).toBe(
+      "useGlobalProvider: must be a boolean",
+    );
+  });
+
+  it("reads no env var", () => {
+    const config = resolve({ apiKey: KEY }, { LLMOBS_USE_GLOBAL_PROVIDER: "true" });
+    expect(config.useGlobalProvider).toBe(false);
+  });
+});
+
+describe("exportFilter", () => {
+  it("accepts a function and rejects anything else", () => {
+    const exportFilter = (span: ReadableSpan) => span.name === "keep";
+    expect(resolve({ apiKey: KEY, exportFilter }).exportFilter).toBe(exportFilter);
+    expect(message({ apiKey: KEY, exportFilter: "keep" })).toBe("exportFilter: must be callable");
+  });
+
+  it("is ignored, however invalid, when the config is disabled", () => {
+    const config = resolve({ enabled: false, useGlobalProvider: "yes", exportFilter: 1 });
+    expect(config.enabled).toBe(false);
+    expect(config.useGlobalProvider).toBe(false);
+    expect(config.exportFilter).toBeUndefined();
   });
 });
 

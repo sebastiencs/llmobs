@@ -5,6 +5,8 @@
  * Never log a resolved config; `apiKey` is on the object.
  */
 
+import type { ReadableSpan } from "@opentelemetry/sdk-trace";
+
 import { warnOnce } from "./log.js";
 import { runtimeGlobals } from "./web.js";
 
@@ -48,6 +50,10 @@ export interface Config {
   readonly captureContent: boolean;
   readonly sampleRate: number;
   readonly mask: ((value: unknown) => unknown) | undefined;
+  // D-F-4: register our provider as the global one (opt-in).
+  readonly useGlobalProvider: boolean;
+  // D-F-5: replaces the export rule in both provider modes.
+  readonly exportFilter: ((span: ReadableSpan) => boolean) | undefined;
 }
 
 export interface LlmobsOptions {
@@ -58,6 +64,8 @@ export interface LlmobsOptions {
   captureContent?: boolean;
   sampleRate?: number;
   mask?: (value: unknown) => unknown;
+  useGlobalProvider?: boolean;
+  exportFilter?: (span: ReadableSpan) => boolean;
   enabled?: boolean;
 }
 
@@ -71,6 +79,8 @@ interface ResolvedFields {
   captureContent: boolean;
   sampleRate: number;
   mask: ((value: unknown) => unknown) | undefined;
+  useGlobalProvider: boolean;
+  exportFilter: ((span: ReadableSpan) => boolean) | undefined;
 }
 
 /** Resolve SDK options. An explicit argument wins, then the env var, then the default. */
@@ -106,6 +116,8 @@ export function resolveConfig(options: LlmobsOptions = {}, env?: Env): Config {
     ),
     sampleRate: resolveSampleRate(raw.sampleRate, source),
     mask: resolveMask(raw.mask),
+    useGlobalProvider: resolveUseGlobalProvider(raw.useGlobalProvider),
+    exportFilter: resolveExportFilter(raw.exportFilter),
   });
 }
 
@@ -124,6 +136,8 @@ function disabled(): ResolvedFields {
     captureContent: true,
     sampleRate: 1,
     mask: undefined,
+    useGlobalProvider: false,
+    exportFilter: undefined,
   };
 }
 
@@ -137,6 +151,8 @@ function finish(fields: ResolvedFields): Config {
     captureContent: fields.captureContent,
     sampleRate: fields.sampleRate,
     mask: fields.mask,
+    useGlobalProvider: fields.useGlobalProvider,
+    exportFilter: fields.exportFilter,
   };
   Object.defineProperty(config, "apiKey", {
     value: fields.apiKey,
@@ -307,4 +323,25 @@ function resolveMask(value: unknown): ((value: unknown) => unknown) | undefined 
     throw new ConfigError("mask", "must be callable");
   }
   return value as (value: unknown) => unknown;
+}
+
+/** No env var: a provider registration is a code decision, not a setting. */
+function resolveUseGlobalProvider(value: unknown): boolean {
+  if (value === undefined) {
+    return false;
+  }
+  if (typeof value !== "boolean") {
+    throw new ConfigError("useGlobalProvider", "must be a boolean");
+  }
+  return value;
+}
+
+function resolveExportFilter(value: unknown): ((span: ReadableSpan) => boolean) | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "function") {
+    throw new ConfigError("exportFilter", "must be callable");
+  }
+  return value as (span: ReadableSpan) => boolean;
 }

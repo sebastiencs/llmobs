@@ -3,10 +3,11 @@
  *
  * Owns an OTel `BatchSpanProcessor` (1 s scheduled delay, 45 s export
  * timeout — above the exporter's 30 s retry deadline, so `flush()` waits for
- * retries) and stamps the context values (D-F-12) plus
+ * retries), stamps the context values (D-F-12) plus
  * `llmobs.environment` / `llmobs.release` on every span our provider
- * starts, whatever tracer created it. Nothing here raises into the app:
- * every method catches and logs the error name at debug level.
+ * starts, whatever tracer created it, and decides each ended span's export
+ * fate (D-F-5). Nothing here raises into the app: every method catches and
+ * logs the error name at debug level.
  */
 
 import { type Context, propagation, ROOT_CONTEXT } from "@opentelemetry/api";
@@ -19,6 +20,7 @@ import {
 } from "@opentelemetry/sdk-trace";
 
 import { currentValues, metadataAttributeName } from "./context.js";
+import { defaultFilter } from "./filter.js";
 import { debug } from "./log.js";
 import { attributeValue } from "./serialize.js";
 
@@ -26,6 +28,9 @@ export class LlmobsSpanProcessor implements SpanProcessor {
   private readonly batch: BatchSpanProcessor;
   private readonly environment: string | undefined;
   private readonly release: string | undefined;
+  private readonly exportFilter: ((span: ReadableSpan) => boolean) | undefined;
+  /** Whether the D-F-5 default rule applies (global mode). */
+  private readonly defaultFilterMode: boolean;
 
   constructor(
     exporter: SpanExporter,
@@ -44,6 +49,8 @@ export class LlmobsSpanProcessor implements SpanProcessor {
     });
     this.environment = options.environment;
     this.release = options.release;
+    this.exportFilter = options.exportFilter;
+    this.defaultFilterMode = options.defaultFilter;
   }
 
   onStart(span: Span, parentContext: Context): void {
@@ -62,10 +69,29 @@ export class LlmobsSpanProcessor implements SpanProcessor {
 
   onEnd(span: ReadableSpan): void {
     try {
-      this.batch.onEnd(span);
+      if (this.exports(span)) {
+        this.batch.onEnd(span);
+      }
     } catch (error) {
       debug(`llmobs: span processor onEnd failed: ${errorName(error)}`);
     }
+  }
+
+  /**
+   * D-F-5: a configured `exportFilter` replaces the rule in both modes (a
+   * raising filter exports the span); without one, the default rule applies
+   * only in global mode; in own mode everything is exported.
+   */
+  private exports(span: ReadableSpan): boolean {
+    if (this.exportFilter !== undefined) {
+      try {
+        return this.exportFilter(span);
+      } catch (error) {
+        debug(`llmobs: exportFilter raised ${errorName(error)}; span exported`);
+        return true;
+      }
+    }
+    return this.defaultFilterMode ? defaultFilter(span) : true;
   }
 
   async forceFlush(): Promise<void> {
