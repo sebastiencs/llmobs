@@ -6,4 +6,5 @@
 // Wired into Storage in M4.6.
 
 pub(crate) mod merge;
+pub(crate) mod plan;
 pub(crate) mod slice;
