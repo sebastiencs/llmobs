@@ -1,7 +1,8 @@
 //! Deterministic flush crashes and the durability order.
 //!
 //! [`child`] is ignored. [`every_flush_hook_aborts_safely`] re-executes this
-//! test binary with one hook armed, then reopens the directory.
+//! test binary with one hook armed, then reopens the directory. It is ignored
+//! too, and `just test` runs it in a test process of its own.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -211,7 +212,11 @@ async fn child() {
     panic!("shutdown finished without reaching {name}");
 }
 
+/// Run alone by `just test`. A spawned child holds a copy of every open file
+/// descriptor until it execs, including other tests' `LOCK` files, so a
+/// concurrent test that reopens its directory in that window gets `Locked`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "spawns processes; `just test` runs it in its own test process"]
 async fn every_flush_hook_aborts_safely() {
     for (name, _) in POINTS {
         let dir = tempfile::tempdir().unwrap();
