@@ -1,4 +1,4 @@
-//! Configuration, check, mapping, template, judge, and egress errors.
+//! Configuration, check, mapping, template, judge, webhook, and egress errors.
 //!
 //! Messages name the evaluator kind, the field, the variable, the expression, the
 //! byte offset, the host, the provider status, or serde's error category with its
@@ -277,6 +277,58 @@ impl EgressError {
         match self {
             Self::Timeout | Self::Connect => ErrorClass::Retryable,
             Self::Scheme | Self::Denied { .. } | Self::Request | Self::TooLarge { .. } => {
+                ErrorClass::Permanent
+            }
+        }
+    }
+}
+
+/// A webhook call could not be turned into a score, or the HTTP call failed.
+///
+/// No variant stores the URL path or query, header values, the signing secret,
+/// or either body. [`Self::BadResponse`] uses a fixed reason.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum WebhookError {
+    /// A configured header name or value is not valid HTTP.
+    ///
+    /// The name and value are omitted.
+    #[error("invalid header")]
+    InvalidHeader,
+    /// The URL could not be parsed or the body could not be signed.
+    #[error("invalid request")]
+    InvalidRequest,
+    /// The webhook returned a status other than 200.
+    #[error("webhook status {status}")]
+    Status {
+        /// HTTP status code.
+        status: u16,
+        /// Class derived from the status.
+        class: ErrorClass,
+    },
+    /// A 200 body is not a score for this output definition.
+    ///
+    /// `reason` is a fixed phrase such as `not a JSON object`.
+    #[error("{reason}")]
+    BadResponse {
+        /// Why the body was rejected.
+        reason: &'static str,
+    },
+    /// The HTTP client failed before a status was available.
+    #[error(transparent)]
+    Transport(#[from] EgressError),
+}
+
+impl WebhookError {
+    /// Class for the eval queue.
+    ///
+    /// A bad body, an invalid header, and an invalid request are permanent.
+    /// [`Self::Status`] returns the class stored when the status was read.
+    #[must_use]
+    pub fn class(&self) -> ErrorClass {
+        match self {
+            Self::Status { class, .. } => *class,
+            Self::Transport(error) => error.class(),
+            Self::InvalidHeader | Self::InvalidRequest | Self::BadResponse { .. } => {
                 ErrorClass::Permanent
             }
         }

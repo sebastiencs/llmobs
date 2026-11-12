@@ -2657,6 +2657,8 @@ version = "0.0.0"
 dependencies = [
  "axum",
  "bytes",
+ "hex",
+ "hmac",
  "insta",
  "jsonschema",
  "llmobs-core",
@@ -2666,6 +2668,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_json_path",
+ "sha2 0.11.1",
  "strsim",
  "thiserror",
  "tokio",

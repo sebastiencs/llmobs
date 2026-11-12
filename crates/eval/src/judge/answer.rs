@@ -208,7 +208,7 @@ fn explanation_of(object: &Map<String, Value>) -> Option<String> {
     Some(cut_chars(&text, EXPLANATION_CHARS))
 }
 
-fn cut_chars(text: &str, max: usize) -> String {
+pub(crate) fn cut_chars(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         text.to_owned()
     } else {
@@ -303,7 +303,7 @@ fn as_bool(value: &Value) -> Option<bool> {
     }
 }
 
-fn normalize_label(label: &str) -> String {
+pub(crate) fn normalize_label(label: &str) -> String {
     let folded = label.trim().to_lowercase();
     folded.strip_suffix('.').unwrap_or(&folded).to_owned()
 }

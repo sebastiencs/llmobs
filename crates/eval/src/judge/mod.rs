@@ -14,6 +14,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 pub use answer::{Answer, RawAnswer, parse_answer};
+pub(crate) use answer::{cut_chars, normalize_label};
 use reqwest::Url;
 
 use crate::config::JudgeOutput;

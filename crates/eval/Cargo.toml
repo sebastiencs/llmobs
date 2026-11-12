@@ -11,8 +11,11 @@ workspace = true
 
 [dependencies]
 bytes.workspace = true
+hex.workspace = true
+hmac.workspace = true
 jsonschema.workspace = true
 llmobs-core.workspace = true
+sha2.workspace = true
 minijinja.workspace = true
 regex.workspace = true
 reqwest.workspace = true

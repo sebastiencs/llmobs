@@ -59,7 +59,7 @@ impl RecordedRequest {
 /// An axum server bound to `127.0.0.1:0`.
 pub(crate) struct Mock {
     port: u16,
-    queue: Arc<Mutex<VecDeque<MockReply>>>,
+    queue: Arc<Mutex<VecDeque<Scripted>>>,
     seen: Arc<Mutex<Vec<RecordedRequest>>>,
 }
 
@@ -108,7 +108,22 @@ impl Mock {
 
     /// Appends one scripted reply.
     pub(crate) fn enqueue(&self, reply: MockReply) {
-        self.queue.lock().expect("queue").push_back(reply);
+        self.queue
+            .lock()
+            .expect("queue")
+            .push_back(Scripted::Json(reply));
+    }
+
+    /// Appends a raw body. `location`, when set, is the `Location` header.
+    ///
+    /// The webhook tests send non-JSON bodies and a redirect. Adapter tests leave it unread.
+    #[allow(dead_code)]
+    pub(crate) fn enqueue_raw(&self, status: u16, body: Vec<u8>, location: Option<&'static str>) {
+        self.queue.lock().expect("queue").push_back(Scripted::Raw {
+            status,
+            body,
+            location,
+        });
     }
 
     /// Requests received so far, in arrival order.
@@ -118,9 +133,22 @@ impl Mock {
     }
 }
 
+enum Scripted {
+    Json(MockReply),
+    /// Non-JSON body, or a redirect with a `Location` header.
+    ///
+    /// Constructed by [`Mock::enqueue_raw`]. Adapter tests never build it.
+    #[allow(dead_code)]
+    Raw {
+        status: u16,
+        body: Vec<u8>,
+        location: Option<&'static str>,
+    },
+}
+
 #[derive(Clone)]
 struct App {
-    queue: Arc<Mutex<VecDeque<MockReply>>>,
+    queue: Arc<Mutex<VecDeque<Scripted>>>,
     seen: Arc<Mutex<Vec<RecordedRequest>>>,
 }
 
@@ -140,10 +168,31 @@ async fn handle(State(app): State<App>, uri: Uri, headers: HeaderMap, body: Byte
         )
             .into_response();
     };
-    if !reply.delay.is_zero() {
-        tokio::time::sleep(reply.delay).await;
+    let (status, bytes, location) = match reply {
+        Scripted::Json(reply) => {
+            if !reply.delay.is_zero() {
+                tokio::time::sleep(reply.delay).await;
+            }
+            let status =
+                StatusCode::from_u16(reply.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            let bytes = serde_json::to_vec(&reply.body).unwrap_or_default();
+            (status, bytes, None)
+        }
+        Scripted::Raw {
+            status,
+            body,
+            location,
+        } => {
+            let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            (status, body, location)
+        }
+    };
+    let mut response = (status, bytes).into_response();
+    if let Some(location) = location {
+        response.headers_mut().insert(
+            axum::http::header::LOCATION,
+            axum::http::HeaderValue::from_static(location),
+        );
     }
-    let status = StatusCode::from_u16(reply.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let bytes = serde_json::to_vec(&reply.body).unwrap_or_default();
-    (status, bytes).into_response()
+    response
 }
