@@ -17,6 +17,16 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   RUST_BACKTRACE: short
+  # Only main and owner-authored, owner-triggered same-repository PRs may use R2.
+  # Check the re-run actor too; re-running another author's PR does not grant access.
+  CI_CACHE_ALLOWED: >-
+    ${{
+      ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.user.login == 'sebastiencs' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.actor == 'sebastiencs' && github.triggering_actor == 'sebastiencs')
+    }}
 
 jobs:
   rust-lint:
@@ -27,6 +37,10 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/rust # zizmor: ignore[self-repository] actionlint 1.7.12 rejects the $/ form
+        with:
+          cache: ${{ env.CI_CACHE_ALLOWED }}
+          r2-access-key-id: ${{ env.CI_CACHE_ALLOWED == 'true' && secrets.R2_ACCESS_KEY_ID || '' }}
+          r2-secret-access-key: ${{ env.CI_CACHE_ALLOWED == 'true' && secrets.R2_SECRET_ACCESS_KEY || '' }}
       - run: just fmt-check lint
       - run: just assert-clean
 
@@ -38,6 +52,10 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/rust # zizmor: ignore[self-repository] actionlint 1.7.12 rejects the $/ form
+        with:
+          cache: ${{ env.CI_CACHE_ALLOWED }}
+          r2-access-key-id: ${{ env.CI_CACHE_ALLOWED == 'true' && secrets.R2_ACCESS_KEY_ID || '' }}
+          r2-secret-access-key: ${{ env.CI_CACHE_ALLOWED == 'true' && secrets.R2_SECRET_ACCESS_KEY || '' }}
       - run: just test
       - run: just assert-clean
 

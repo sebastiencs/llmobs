@@ -3,9 +3,15 @@ description: Install the repo toolchain, just, and cargo-deny
 
 inputs:
   cache:
-    description: Restore the cargo target cache. PRs restore but do not save.
+    description: Read and save the R2 compiler cache for a trusted CI run.
     required: false
     default: "true"
+  r2-access-key-id:
+    description: Bucket-scoped R2 access key ID with Object Read & Write permission.
+    required: false
+  r2-secret-access-key:
+    description: Secret access key paired with r2-access-key-id.
+    required: false
 
 runs:
   using: composite
@@ -15,14 +21,25 @@ runs:
       # No arguments: rustup installs the channel and components in rust-toolchain.toml.
       run: rustup toolchain install
 
-    - name: Cache cargo build artifacts
-      if: inputs.cache == 'true'
-      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+    - name: Cache Rust compilation with kache and R2
+      # The caller enables caching and supplies credentials only for trusted runs.
+      if: inputs.cache == 'true' && inputs.r2-access-key-id != '' && inputs.r2-secret-access-key != ''
+      uses: kunobi-ninja/kache-action@ad7317540dcdd71c904f7a60a87b620a0c0e67ed # v1
       with:
-        # Clippy and test builds produce different artifacts.
-        key: ${{ github.job }}
-        # PRs restore an existing cache and never save one.
-        save-if: ${{ github.ref == 'refs/heads/main' }}
+        version: "2.0.0"
+        s3-bucket: llmobs-cache
+        s3-endpoint: https://f575c8aba37f5d64c55d2e211037990f.r2.cloudflarestorage.com
+        s3-region: auto
+        s3-prefix: kache-v2
+        s3-access-key-id: ${{ inputs.r2-access-key-id }}
+        s3-secret-access-key: ${{ inputs.r2-secret-access-key }}
+        # Clippy and test jobs must not overwrite each other's prefetch manifests.
+        manifest-key: ${{ github.job }}
+        cache-executables: true
+        github-cache: false
+        save-cache: true
+        # Reports go in the job summary; the workflow token stays contents:read.
+        pr-comment: false
 
     - name: Install just and cargo-deny
       uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
