@@ -144,7 +144,7 @@ One function per SDK, `serialize(value) -> (text, format)`, used for every paylo
 - anything else → kept as is (the server records a conversion error, spec 02).
 Then the list goes through § Serialization (always JSON, so `json` format is irrelevant here; the attribute is the JSON text). With `capture_content=false`, none of `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions` is written.
 
-**Context managers and `withSpan`.** The value returned by the body of `span`/`with_span`/`withSpan`/`withLlmSpan` is never recorded; only `set_output`/`setOutput` writes the output.
+**Context managers and `withSpan`.** The value returned by the body of `span`/`llm_span`/`withSpan`/`withLlmSpan` is never recorded; only `set_output`/`setOutput` writes the output.
 
 ### Payload keys (export-time masking and `capture_content=false`)
 
