@@ -32,7 +32,7 @@ Do the sub-phases in order, one commit each. Don't start M4b before M4.4 is comm
   - `SortPreservingMergeExec::new(LexOrdering, input)` in `datafusion::physical_plan::sorts::sort_preserving_merge`;
   - `FileScanConfigBuilder::with_output_ordering(Vec<LexOrdering>)`;
   - `datafusion::physical_plan::execute_stream`.
-- **`StorageConfig` literals.** Adding a field to `StorageConfig` or a nested config struct breaks every struct literal of it, for example `config_in` in `lib.rs`, `gc.rs` and the query tests, and `anchor_config` in `flush.rs`. Run `grep -rn "StorageConfig {" crates/` and update every literal in the same commit, using `Default::default()` for the new section unless the test needs other values.
+- **`StorageConfig` literals.** Adding a field to `StorageConfig` or a nested config struct breaks every struct literal of it, for example `config_in` in `lib.rs`, `gc.rs` and the query tests, and `anchor_config` in `flush.rs`. Run `grep -rn "StorageConfig {" crates/` and update every literal in the same commit, using `Default::default()` for the new section unless the test needs other values. That includes the literals in `crates/server` (`serve.rs` tests, `test_support/mod.rs`): there, add only the new field, set to `Default::default()`.
 - **Hook points.** A new `HookPoint` variant also needs:
   - its arm in `HookPoint::index`;
   - `COUNT` raised by one per new variant (`hooks.rs`).
@@ -50,7 +50,7 @@ Do the sub-phases in order, one commit each. Don't start M4b before M4.4 is comm
   - what was done;
   - any deviation from this plan, and why;
   - anything left undone or unverified;
-  - files outside `crates/storage/` and `docs/` that you changed. The only one allowed is `justfile`, in M4.7.
+  - files outside `crates/storage/` and `docs/` that you changed. Only two kinds are allowed: the `StorageConfig` literals in `crates/server` (one added field each, in M4.1 and M4.6), and `justfile` in M4.7.
 
 ---
 

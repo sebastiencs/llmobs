@@ -59,6 +59,7 @@ fn child_config(dir: &Path) -> StorageConfig {
         },
         query: QueryConfig::default(),
         anchor: Default::default(),
+        gc: Default::default(),
     }
 }
 
@@ -253,6 +254,9 @@ fn crash_recovery() {
     runtime
         .block_on(collect_crash_orphans(dir.path()))
         .unwrap_or_else(|error| panic!("staged collection after the crash run: {error}"));
+    runtime
+        .block_on(collect_obsolete_files(dir.path()))
+        .unwrap_or_else(|error| panic!("obsolete collection after the crash run: {error}"));
 }
 
 fn xorshift(state: &mut u64) -> u64 {
@@ -337,14 +341,25 @@ async fn check_dir(dir: &Path, before: &[Ack], previous: (u64, u64)) -> Result<(
         check_source_pair(dir, spans_path, traces_path)?;
     }
     anchor_days_are_singular(dir, &catalog)?;
-    for (path, size) in &catalog.files {
+    // An active row must have its object with a matching size; an obsolete
+    // row's object is either absent or of matching size (spec 03 §5).
+    for (path, size, state) in &catalog.files {
         let file = dir.join("objects").join(path);
-        let meta = std::fs::metadata(&file).map_err(|error| format!("{path}: {error}"))?;
-        if meta.len() != *size {
-            return Err(format!(
-                "{path} is {} bytes, catalog says {size}",
-                meta.len()
-            ));
+        match std::fs::metadata(&file) {
+            Ok(meta) => {
+                if meta.len() != *size {
+                    return Err(format!(
+                        "{path} is {} bytes, catalog says {size}",
+                        meta.len()
+                    ));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if state != "obsolete" {
+                    return Err(format!("{path}: object missing for a {state} row"));
+                }
+            }
+            Err(error) => return Err(format!("{path}: {error}")),
         }
     }
     if catalog.spans_seq < previous.0 || catalog.scores_seq < previous.1 {
@@ -411,7 +426,8 @@ async fn check_dir(dir: &Path, before: &[Ack], previous: (u64, u64)) -> Result<(
 }
 
 struct CatalogView {
-    files: Vec<(String, u64)>,
+    /// `(path, size, state)` of every `data_files` row.
+    files: Vec<(String, u64, String)>,
     spans_seq: u64,
     scores_seq: u64,
     staged_at: Vec<i64>,
@@ -430,7 +446,7 @@ async fn read_catalog(dir: &Path) -> Result<CatalogView, String> {
         .connect()
         .await
         .map_err(|error| error.to_string())?;
-    let file_rows = sqlx::query("SELECT path, size_bytes FROM data_files")
+    let file_rows = sqlx::query("SELECT path, size_bytes, state FROM data_files")
         .fetch_all(&mut connection)
         .await
         .map_err(|error| error.to_string())?;
@@ -439,8 +455,9 @@ async fn read_catalog(dir: &Path) -> Result<CatalogView, String> {
         let path: String = sqlx::Row::try_get(&row, "path").map_err(|error| error.to_string())?;
         let size: i64 =
             sqlx::Row::try_get(&row, "size_bytes").map_err(|error| error.to_string())?;
+        let state: String = sqlx::Row::try_get(&row, "state").map_err(|error| error.to_string())?;
         let size = u64::try_from(size).map_err(|_| format!("{path} has a negative size"))?;
-        files.push((path, size));
+        files.push((path, size, state));
     }
     let seq_rows = sqlx::query("SELECT table_name, flushed_seq FROM table_state")
         .fetch_all(&mut connection)
@@ -651,6 +668,40 @@ async fn collect_crash_orphans(dir: &Path) -> Result<(), String> {
             "{} temp file(s) remain under objects/",
             temps.len()
         ));
+    }
+    Ok(())
+}
+
+/// Opens the directory once more, collects every obsolete file with no grace,
+/// then asserts that no obsolete row is left. Nothing produces obsolete files
+/// before M4.6, so this checks the plumbing now and the real thing then.
+async fn collect_obsolete_files(dir: &Path) -> Result<(), String> {
+    let storage = Storage::open(child_config(dir))
+        .await
+        .map_err(|error| error.to_string())?;
+    storage
+        .collect_obsolete(Duration::ZERO)
+        .await
+        .map_err(|error| error.to_string())?;
+    storage
+        .shutdown()
+        .await
+        .map_err(|error| error.to_string())?;
+    drop(storage);
+    let mut connection = SqliteConnectOptions::new()
+        .filename(dir.join("catalog.db"))
+        .read_only(true)
+        .busy_timeout(Duration::from_secs(5))
+        .connect()
+        .await
+        .map_err(|error| error.to_string())?;
+    let obsolete: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM data_files WHERE state = 'obsolete'")
+            .fetch_one(&mut connection)
+            .await
+            .map_err(|error| error.to_string())?;
+    if obsolete != 0 {
+        return Err(format!("{obsolete} obsolete row(s) left after collection"));
     }
     Ok(())
 }

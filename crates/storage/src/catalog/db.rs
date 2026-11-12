@@ -230,7 +230,7 @@ fn decode<T>(result: Result<T, sqlx::Error>) -> Result<T, CatalogError> {
     })
 }
 
-fn parse_file_id(text: &str) -> Result<FileId, CatalogError> {
+pub(super) fn parse_file_id(text: &str) -> Result<FileId, CatalogError> {
     if text.len() != 36 {
         return Err(CatalogError::corrupt("invalid file id"));
     }

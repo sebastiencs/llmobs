@@ -261,8 +261,8 @@ pub enum GcError {
     /// The object store rejected the delete.
     #[error(transparent)]
     Object(#[from] ObjectError),
-    /// A test fault armed at [`crate::hooks::HookPoint::GcBeforeDelete`].
-    #[error("staged collection was interrupted")]
+    /// A test fault armed at a GC hook point.
+    #[error("garbage collection was interrupted")]
     Fault,
 }
 

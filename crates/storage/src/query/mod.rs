@@ -1108,6 +1108,7 @@ mod tests {
                 sources: Vec::new(),
             })
             .unwrap()
+            .0
     }
 
     #[test]

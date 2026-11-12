@@ -198,6 +198,7 @@ fn default_config(data_dir: &std::path::Path) -> ServerConfig {
             memtable: MemtableConfig::default(),
             query: QueryConfig::default(),
             anchor: AnchorConfig::default(),
+            gc: Default::default(),
         },
         auth: AuthSettings::default(),
         smtp_url: None,

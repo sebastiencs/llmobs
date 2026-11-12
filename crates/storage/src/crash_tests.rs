@@ -53,6 +53,7 @@ fn quiet_config(dir: &Path) -> StorageConfig {
         memtable: MemtableConfig::default(),
         query: QueryConfig::default(),
         anchor: Default::default(),
+        gc: Default::default(),
     }
 }
 

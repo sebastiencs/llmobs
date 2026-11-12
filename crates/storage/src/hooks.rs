@@ -51,11 +51,17 @@ pub(crate) enum HookPoint {
     FlushAfterTruncate,
     /// Before GC deletes a staged object that is not in the catalog.
     GcBeforeDelete,
+    /// Before GC deletes an obsolete file's object.
+    GcObsoleteBeforeDelete,
+    /// After GC deleted an obsolete file's object, before its row is removed.
+    ///
+    /// A fault here leaves the row behind; the next collection removes it.
+    GcObsoleteAfterDelete,
 }
 
 #[cfg(test)]
 impl HookPoint {
-    const COUNT: usize = 16;
+    const COUNT: usize = 18;
 
     const fn index(self) -> usize {
         match self {
@@ -75,6 +81,8 @@ impl HookPoint {
             Self::FlushAfterCommit => 13,
             Self::FlushAfterTruncate => 14,
             Self::GcBeforeDelete => 15,
+            Self::GcObsoleteBeforeDelete => 16,
+            Self::GcObsoleteAfterDelete => 17,
         }
     }
 }

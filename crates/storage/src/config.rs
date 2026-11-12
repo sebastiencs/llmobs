@@ -47,6 +47,9 @@ pub struct StorageConfig {
     /// Trace anchor settings (D86).
     #[serde(default)]
     pub anchor: AnchorConfig,
+    /// Garbage collection settings.
+    #[serde(default)]
+    pub gc: GcConfig,
 }
 
 impl StorageConfig {
@@ -134,6 +137,14 @@ impl StorageConfig {
             return Err(ConfigError::invalid(
                 "storage.anchor.window",
                 "must be greater than 0 and at most 24h",
+            ));
+        }
+        if self.gc.grace < Duration::from_secs(1)
+            || self.gc.grace > Duration::from_secs(24 * 60 * 60)
+        {
+            return Err(ConfigError::invalid(
+                "storage.gc.grace",
+                "must be between 1s and 24h",
             ));
         }
         Ok(())
@@ -307,6 +318,29 @@ fn default_metadata_cache_bytes() -> ByteSize {
 
 fn default_trace_lookback() -> Duration {
     Duration::from_secs(60 * 60)
+}
+
+fn default_gc_grace() -> Duration {
+    Duration::from_secs(5 * 60)
+}
+
+/// `[storage.gc]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GcConfig {
+    /// How long an obsolete file stays after `obsoleted_at` before GC may
+    /// delete it (spec 03 §5). At least the longest query timeout, so a reader
+    /// that never pinned a `ReadState` still finishes.
+    #[serde(default = "default_gc_grace", with = "humantime_serde")]
+    pub grace: Duration,
+}
+
+impl Default for GcConfig {
+    fn default() -> Self {
+        Self {
+            grace: default_gc_grace(),
+        }
+    }
 }
 
 fn valid_window(window: Duration) -> bool {
@@ -500,6 +534,7 @@ mod tests {
             r#"{"data_dir":"/data","query":{"extra":1}}"#,
             r#"{"data_dir":"/data","flush":{"extra":1}}"#,
             r#"{"data_dir":"/data","anchor":{"extra":1}}"#,
+            r#"{"data_dir":"/data","gc":{"extra":1}}"#,
             r#"{"data_dir":"/data","s3":{"extra":1}}"#,
         ];
         for json in samples {
@@ -575,6 +610,14 @@ mod tests {
                 r#"{"data_dir":"/data","anchor":{"window":"25h"}}"#,
                 "storage.anchor.window: must be greater than 0 and at most 24h",
             ),
+            (
+                r#"{"data_dir":"/data","gc":{"grace":"0s"}}"#,
+                "storage.gc.grace: must be between 1s and 24h",
+            ),
+            (
+                r#"{"data_dir":"/data","gc":{"grace":"25h"}}"#,
+                "storage.gc.grace: must be between 1s and 24h",
+            ),
         ];
         for (json, message) in cases {
             let config = parse(json).unwrap();
@@ -638,6 +681,7 @@ mod tests {
         assert_eq!(config.flush, FlushConfig::default());
         assert_eq!(config.s3, S3Config::default());
         assert_eq!(config.anchor, AnchorConfig::default());
+        assert_eq!(config.gc, GcConfig::default());
     }
 
     #[test]
@@ -661,6 +705,16 @@ mod tests {
     }
 
     #[test]
+    fn gc_grace_defaults_to_five_minutes_and_parses() {
+        let default = parse(r#"{"data_dir":"/data"}"#).unwrap();
+        assert_eq!(default.gc.grace, Duration::from_secs(5 * 60));
+
+        let parsed = parse(r#"{"data_dir":"/data","gc":{"grace":"90s"}}"#).unwrap();
+        assert_eq!(parsed.gc.grace, Duration::from_secs(90));
+        parsed.validate().unwrap();
+    }
+
+    #[test]
     fn only_data_dir_uses_every_default() {
         let config = parse(r#"{"data_dir":"/data"}"#).unwrap();
         assert_eq!(config.data_dir, PathBuf::from("/data"));
@@ -670,6 +724,7 @@ mod tests {
         assert_eq!(config.flush, FlushConfig::default());
         assert_eq!(config.s3, S3Config::default());
         assert_eq!(config.anchor, AnchorConfig::default());
+        assert_eq!(config.gc, GcConfig::default());
         assert_eq!(
             config.object_store_url(),
             ObjectStoreUrl::Local(PathBuf::from("/data/objects"))

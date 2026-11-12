@@ -1353,6 +1353,7 @@ mod tests {
                 ..QueryConfig::default()
             },
             anchor: Default::default(),
+            gc: Default::default(),
         }
     }
 

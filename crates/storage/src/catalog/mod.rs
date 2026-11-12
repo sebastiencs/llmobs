@@ -8,7 +8,7 @@
 mod committer;
 mod db;
 
-pub(crate) use committer::{CatalogEdit, Committer, StagedRemoval, now_ns};
+pub(crate) use committer::{CatalogEdit, Committer, ObsoleteRemoval, StagedRemoval, now_ns};
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
@@ -76,9 +76,9 @@ impl std::fmt::Display for FileId {
 pub(crate) enum FileState {
     /// Readable. These rows are the in-memory catalog.
     Active,
-    /// Replaced. Kept until M4 collects it.
+    /// Replaced. GC deletes it after `gc.grace`.
     Obsolete,
-    /// Unreadable. M4 uses this; M2 only accepts it as an expected state.
+    /// Unreadable. Only accepted as an expected state.
     Quarantined,
 }
 
@@ -183,20 +183,31 @@ impl Catalog {
     }
 
     /// Clone the maps a remove or an add touches. Other projects stay the same `Arc`.
-    pub(super) fn apply(&self, edit: &CatalogEdit) -> Result<Self, CommitError> {
+    ///
+    /// Returns the next catalog and the [`FileMeta`] of every file an `Active`
+    /// remove took out. A remove with another expected state changes nothing in
+    /// memory and returns nothing for it.
+    pub(super) fn apply(
+        &self,
+        edit: &CatalogEdit,
+    ) -> Result<(Self, Vec<Arc<FileMeta>>), CommitError> {
         let mut tables = self.tables.clone();
+        let mut removed = Vec::new();
         for (id, state) in &edit.remove {
             if *state != FileState::Active {
                 continue;
             }
-            if !remove_active(&mut tables, *id) {
-                return Err(CommitError::conflict("file is not active in the catalog"));
+            match remove_active(&mut tables, *id) {
+                Some(file) => removed.push(file),
+                None => {
+                    return Err(CommitError::conflict("file is not active in the catalog"));
+                }
             }
         }
         for file in &edit.add {
             insert_sorted(&mut tables, file.clone());
         }
-        Ok(Self { tables })
+        Ok((Self { tables }, removed))
     }
 }
 
@@ -232,7 +243,7 @@ pub(super) fn insert_sorted(tables: &mut Tables, file: FileMeta) {
     files.insert(position, Arc::new(file));
 }
 
-fn remove_active(tables: &mut Tables, id: FileId) -> bool {
+fn remove_active(tables: &mut Tables, id: FileId) -> Option<Arc<FileMeta>> {
     for table in tables.iter_mut() {
         let Some((project, day)) = find_file(table, id) else {
             continue;
@@ -244,16 +255,18 @@ fn remove_active(tables: &mut Tables, id: FileId) -> bool {
         let Some(files) = map.get_mut(&day) else {
             continue;
         };
-        files.retain(|file| file.id != id);
+        let position = files.iter().position(|file| file.id == id)?;
+        let file = Arc::clone(&files[position]);
+        files.remove(position);
         if files.is_empty() {
             map.remove(&day);
         }
         if map.is_empty() {
             table.remove(&project);
         }
-        return true;
+        return Some(file);
     }
-    false
+    None
 }
 
 fn find_file(
@@ -309,7 +322,8 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
         };
-        let catalog = Catalog::empty().apply(&edit).unwrap();
+        let (catalog, removed) = Catalog::empty().apply(&edit).unwrap();
+        assert!(removed.is_empty());
         let ids: Vec<_> = catalog
             .files(FileTable::Spans, project(), day(2)..=day(2))
             .map(|file| file.min_time)

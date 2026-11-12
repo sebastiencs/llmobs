@@ -55,6 +55,7 @@ mod reads;
 mod sql;
 mod views;
 
+pub use crate::gc::ObsoleteReport;
 pub use query_error::{InvalidQuery, Position, RunError};
 pub use reads::{
     Bucket, BucketWidth, Kpi, KpiName, LATEST_SCORE_COLUMNS, ListScope, MAX_PAGE,
@@ -307,10 +308,24 @@ impl Storage {
             tracing::warn!("staged object collection failed");
             tracing::debug!(%error, "staged object collection error");
         }
+        if let Err(error) = gc::collect_obsolete(
+            &committer,
+            &objects,
+            &hooks,
+            catalog::now_ns(),
+            config.gc.grace,
+        )
+        .await
+        {
+            // The error names the object key. Keys contain project ids.
+            tracing::warn!("obsolete file collection failed");
+            tracing::debug!(%error, "obsolete file collection error");
+        }
         let gc = gc::spawn(gc::GcStart {
             committer: Arc::clone(&committer),
             objects: Arc::clone(&objects),
             hooks: share_hooks(&hooks),
+            grace: config.gc.grace,
         });
         Ok(Self {
             hard_limit,
@@ -419,6 +434,23 @@ impl Storage {
             &self.hooks,
             catalog::now_ns(),
             max_age,
+        )
+        .await
+    }
+
+    /// One obsolete-file collection with this grace. The background task uses
+    /// `gc.grace`.
+    #[doc(hidden)]
+    pub async fn collect_obsolete(
+        &self,
+        grace: std::time::Duration,
+    ) -> Result<ObsoleteReport, error::GcError> {
+        gc::collect_obsolete(
+            &self.committer,
+            &self.objects,
+            &self.hooks,
+            catalog::now_ns(),
+            grace,
         )
         .await
     }
@@ -942,6 +974,7 @@ mod tests {
             memtable: MemtableConfig::default(),
             query: QueryConfig::default(),
             anchor: Default::default(),
+            gc: Default::default(),
         }
     }
 
