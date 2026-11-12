@@ -6,6 +6,7 @@ Data model in 01; written through:
 
 | Path | `source` |
 |---|---|
+| `POST /api/v1/scores` (batch ≤ 1000) with `sk` key (`ingest` scope) | `sdk` (D171) |
 | `POST /api/v1/projects/{p}/scores` (batch ≤ 1000) with `sk` key or PAT | `api` (or `sdk` when the SDK sets it) |
 | UI annotation panel (human, with score definitions as controls) | `human`, `author_user_id` set |
 | `POST /api/public/feedback` with `pk` key | `end_user` |
@@ -13,7 +14,7 @@ Data model in 01; written through:
 
 Scores go through a WAL + memtable exactly like spans (03), so they are durable on `200` and visible in seconds. Update = write a new row with the same `score_id` and later `updated_at`; delete = row with `deleted = true`.
 
-**Deterministic score IDs** (one row per annotator, as Opik's `authored_feedback_scores`): when the client does not provide `score_id`, the server derives it as a UUIDv8 from `hash(project_id, target, trace_id, span_id|session_id, name, source, author)` where `author` = `author_user_id` for `human`, `rule_id` for online judges, `experiment_id + dataset_item_id` for experiments, the key id for `api`/`end_user`. Consequences: re-annotating replaces your own score instead of adding a duplicate; two reviewers scoring the same trace keep two rows; a backfill re-run overwrites instead of duplicating. Aggregations (`score()` in the DSL, dashboards) average across authors.
+**Deterministic score IDs** (one row per annotator, as Opik's `authored_feedback_scores`): when the client does not provide `score_id`, the server derives it as a UUIDv8 from `hash(project_id, target, trace_id, span_id|session_id, name, source, author)` where `author` = `author_user_id` for `human`, `rule_id` for online judges, `experiment_id + dataset_item_id` for experiments, the key id for `api`/`end_user`. The SDKs always send a `score_id` (a UUIDv7 per `score()` call, D172), so this applies to other clients that omit it. Consequences: re-annotating replaces your own score instead of adding a duplicate; two reviewers scoring the same trace keep two rows; a backfill re-run overwrites instead of duplicating. Aggregations (`score()` in the DSL, dashboards) average across authors.
 
 Validation: `data_type` ∈ {numeric, boolean, categorical, text}; numeric must be finite; boolean must be 0/1/true/false; categorical requires `value_str`; target must have the matching ID fields. If a score definition with the same name exists, values are validated against it (range, categories) — otherwise accepted as is.
 
