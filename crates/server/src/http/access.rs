@@ -133,8 +133,42 @@ pub(crate) fn build_router(state: &AppState, routes: Vec<RouteDef>) -> Router<Ap
 
 async fn enforce(state: AppState, access: Access, request: Request, next: Next) -> Response {
     match prepare(state, access, request).await {
-        Ok(request) => next.run(request).await,
-        Err(error) => error.into_response(),
+        Ok(request) => {
+            let mut response = next.run(request).await;
+            // The handler's own 404 or 400 must not look like a denial.
+            record_access(&mut response, "allowed");
+            response
+        }
+        Err(error) => {
+            let marker = denial_marker(&error);
+            let mut response = error.into_response();
+            record_access(&mut response, marker);
+            response
+        }
+    }
+}
+
+/// `x-test-access` is how the authorization suite separates [`enforce`] from the handler.
+fn record_access(response: &mut Response, marker: &'static str) {
+    #[cfg(test)]
+    {
+        let _ = response.headers_mut().insert(
+            axum::http::HeaderName::from_static("x-test-access"),
+            axum::http::HeaderValue::from_static(marker),
+        );
+    }
+    #[cfg(not(test))]
+    {
+        let _ = (response, marker);
+    }
+}
+
+fn denial_marker(error: &ApiError) -> &'static str {
+    match error {
+        ApiError::Unauthorized => "denied-401",
+        ApiError::Forbidden { .. } => "denied-403",
+        ApiError::NotFound => "denied-404",
+        _ => "denied-other",
     }
 }
 
@@ -151,9 +185,8 @@ async fn prepare(state: AppState, access: Access, request: Request) -> Result<Re
     let Some(principal) = principal else {
         return Err(ApiError::Unauthorized);
     };
-    if session_only(access) && !matches!(principal, Principal::Session { .. }) {
-        return Err(forbidden());
-    }
+    // A read PAT cannot call a write method. That is the token's scope, so it
+    // is 403 even when the resource would be 404.
     if let Principal::Pat { write: false, .. } = &principal
         && !matches!(
             parts.method,
@@ -164,7 +197,10 @@ async fn prepare(state: AppState, access: Access, request: Request) -> Result<Re
     }
     match access {
         Access::Public => {}
-        Access::User { .. } => {
+        Access::User { session_only } => {
+            if session_only && !matches!(principal, Principal::Session { .. }) {
+                return Err(forbidden());
+            }
             if matches!(principal, Principal::ApiKey { .. }) {
                 return Err(forbidden());
             }
@@ -173,30 +209,25 @@ async fn prepare(state: AppState, access: Access, request: Request) -> Result<Re
             Principal::Session { user, .. } if user.is_instance_admin => {}
             _ => return Err(forbidden()),
         },
-        Access::Org { perm, .. } => {
+        Access::Org { perm, session_only } => {
+            // A key is not a member of any org. 404 does not depend on whether
+            // the route is session-only, so a foreign key cannot probe orgs.
             if matches!(principal, Principal::ApiKey { .. }) {
+                return Err(ApiError::NotFound);
+            }
+            if session_only && !matches!(principal, Principal::Session { .. }) {
                 return Err(forbidden());
             }
             let key = path_value(&mut parts, &state, "org").await?;
             grant_org(&state, &mut parts, &principal, &key, perm).await?;
         }
-        Access::Project { perm, .. } => {
+        Access::Project { perm, session_only } => {
             let key = path_value(&mut parts, &state, "project").await?;
-            grant_project(&state, &mut parts, &principal, &key, perm).await?;
+            grant_project(&state, &mut parts, &principal, &key, perm, session_only).await?;
         }
     }
     parts.extensions.insert(principal);
     Ok(Request::from_parts(parts, body))
-}
-
-fn session_only(access: Access) -> bool {
-    match access {
-        Access::Public => false,
-        Access::User { session_only }
-        | Access::Org { session_only, .. }
-        | Access::Project { session_only, .. } => session_only,
-        Access::InstanceAdmin => true,
-    }
 }
 
 fn forbidden() -> ApiError {
@@ -228,7 +259,7 @@ async fn grant_org(
 ) -> Result<(), ApiError> {
     let user = match principal {
         Principal::Session { user, .. } | Principal::Pat { user, .. } => user,
-        Principal::ApiKey { .. } => return Err(forbidden()),
+        Principal::ApiKey { .. } => return Err(ApiError::NotFound),
     };
     let org = load_org(state, key).await?;
     let Some(org) = org else {
@@ -261,14 +292,51 @@ async fn grant_project(
     principal: &Principal,
     key: &str,
     perm: ProjectPerm,
+    session_only: bool,
 ) -> Result<(), ApiError> {
     match principal {
         Principal::Session { user, .. } | Principal::Pat { user, .. } => {
+            if session_only && !matches!(principal, Principal::Session { .. }) {
+                return Err(forbidden());
+            }
             grant_session_project(state, parts, user, key, perm).await
         }
         Principal::ApiKey {
             project_id, scopes, ..
-        } => grant_key_project(state, parts, *project_id, *scopes, key, perm).await,
+        } => {
+            // A project this key does not own is outside its reach (D138).
+            // Scope and session-only stay 403, and only on its own project.
+            if !key_owns_project(state, key, *project_id).await? {
+                return Err(ApiError::NotFound);
+            }
+            if session_only {
+                return Err(forbidden());
+            }
+            grant_key_project(state, parts, *project_id, *scopes, key, perm).await
+        }
+    }
+}
+
+/// Whether `key` is this API key's active project. `current` means that project.
+async fn key_owns_project(
+    state: &AppState,
+    key: &str,
+    project_id: ProjectId,
+) -> Result<bool, ApiError> {
+    let project = if key == "current" {
+        project_by_id(state.meta.reader(), project_id).await?
+    } else {
+        load_project(state, key).await?
+    };
+    let Some(project) = project else {
+        return Ok(false);
+    };
+    if project.id != project_id || project.state != "active" {
+        return Ok(false);
+    }
+    match org_by_id(state.meta.reader(), project.org_id).await? {
+        Some(org) if org.state == "active" => Ok(true),
+        _ => Ok(false),
     }
 }
 
@@ -379,6 +447,10 @@ impl fmt::Display for MissingPathParam {
 }
 
 impl std::error::Error for MissingPathParam {}
+
+#[cfg(test)]
+#[path = "access_suite.rs"]
+mod access_suite;
 
 #[cfg(test)]
 mod tests {

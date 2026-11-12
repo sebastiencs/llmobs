@@ -255,6 +255,11 @@ impl TestResponse {
     pub(crate) fn problem(&self) -> Problem {
         self.json()
     }
+
+    /// The header value, when it is a single valid string.
+    pub(crate) fn header(&self, name: &str) -> Option<&str> {
+        self.headers.get(name).and_then(|value| value.to_str().ok())
+    }
 }
 
 /// Runs `future` with a capturing subscriber and fails if any needle appears.
