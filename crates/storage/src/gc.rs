@@ -293,8 +293,9 @@ mod tests {
             );
             tokio::task::yield_now().await;
         }
+        // One partition now stages a spans file and its derived traces file.
         let fresh = storage.staged_paths().await.unwrap();
-        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh.len(), 2);
 
         let now = now_ns();
         let old = "tables/spans/leftover.parquet";

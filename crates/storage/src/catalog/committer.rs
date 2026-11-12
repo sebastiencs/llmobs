@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use sqlx::{Connection, SqliteConnection};
 use tokio::sync::Mutex;
 
-use super::db::{TableState, load, open_catalog_db};
+use super::db::{TableState, check_file_sources, load, open_catalog_db};
 use super::{Catalog, FileId, FileMeta, FileState, FileTable, table_index};
 use crate::error::{CatalogError, CommitError, GcError};
 use crate::hooks::{HookPoint, Hooks};
@@ -59,6 +59,7 @@ impl Committer {
     pub(crate) async fn open(data_dir: &Path, hooks: Hooks) -> Result<Self, CatalogError> {
         let mut connection = open_catalog_db(data_dir).await?;
         let (catalog, state) = load(&mut connection).await?;
+        check_file_sources(&mut connection).await?;
         Ok(Self {
             inner: Mutex::new(CommitterInner {
                 connection,
@@ -476,6 +477,34 @@ mod tests {
             .flat_map(|days| days.values())
             .flat_map(|files| files.iter().map(|file| file.id))
             .collect()
+    }
+
+    #[tokio::test]
+    async fn open_rejects_a_catalog_without_a_traces_file() {
+        // M3.3 wires the spec 03 §3 check into open. An M2-style catalog with
+        // spans files but no derived traces files must fail to open.
+        let dir = tempfile::tempdir().unwrap();
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        sqlx::query(
+            "INSERT INTO data_files (
+                id, table_name, project_id, day, level, path, size_bytes, footer_size,
+                row_count, min_time, max_time, min_ingest_time, max_ingest_time,
+                fully_merged, created_at
+             ) VALUES (?, 'spans', ?, '2024-06-01', 0, 'spans/one', 1, 1, 1, 0, 0, 0, 0, 0, 1)",
+        )
+        .bind("018f6b4e-7c1a-7c1a-8c1a-000000000091")
+        .bind("018f6b4e-7c1a-7c1a-8c1a-000000000001")
+        .execute(&mut connection)
+        .await
+        .unwrap();
+        drop(connection);
+        let error = Committer::open(dir.path(), Hooks::default())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, CatalogError::SourcesInvariant { .. }),
+            "{error}"
+        );
     }
 
     #[tokio::test]

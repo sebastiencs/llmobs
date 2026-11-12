@@ -256,9 +256,10 @@ async fn every_flush_hook_aborts_safely() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_flush_syncs_the_file_before_the_catalog_commit() {
     let dir = tempfile::tempdir().unwrap();
-    let storage = crate::Storage::open(quiet_config(dir.path()))
-        .await
-        .unwrap();
+    let mut config = quiet_config(dir.path());
+    // Serial uploads make the two objects' hook order deterministic.
+    config.flush.upload_concurrency = 1;
+    let storage = crate::Storage::open(config).await.unwrap();
     storage
         .append_spans(project(), spans_at(&[1]))
         .await
@@ -283,6 +284,11 @@ async fn a_flush_syncs_the_file_before_the_catalog_commit() {
     assert_eq!(
         steps,
         vec![
+            // The spans file, then the traces file derived from it.
+            HookPoint::ObjectWrite,
+            HookPoint::ObjectSync,
+            HookPoint::ObjectRename,
+            HookPoint::ObjectDirSync,
             HookPoint::ObjectWrite,
             HookPoint::ObjectSync,
             HookPoint::ObjectRename,

@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use arrow::array::{Array, FixedSizeBinaryArray, StringArray};
+use arrow::array::{Array, FixedSizeBinaryArray, Int64Array, StringArray};
 use bytesize::ByteSize;
 use datafusion::execution::context::{SessionConfig, SessionContext};
 use llmobs_core::batch::spans_to_record_batch;
@@ -27,6 +27,8 @@ use llmobs_storage::config::{
     FlushConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig, WalConfig, WalSync,
 };
 use llmobs_storage::{ProjectQuery, Storage};
+use parquet::arrow::ProjectionMask;
+use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use sqlx::ConnectOptions;
 use sqlx::sqlite::SqliteConnectOptions;
 
@@ -305,6 +307,11 @@ async fn check_dir(dir: &Path, before: &[Ack], previous: (u64, u64)) -> Result<(
     // iteration of this directory would not see them in the memtable.
     drop(storage);
     let catalog = read_catalog(dir).await?;
+    // `Storage::open` succeeded above, so the open-time `file_sources` check
+    // passed. Every committed source pair must still agree with its objects.
+    for (spans_path, traces_path) in &catalog.sources {
+        check_source_pair(dir, spans_path, traces_path)?;
+    }
     for (path, size) in &catalog.files {
         let file = dir.join("objects").join(path);
         let meta = std::fs::metadata(&file).map_err(|error| format!("{path}: {error}"))?;
@@ -383,6 +390,8 @@ struct CatalogView {
     spans_seq: u64,
     scores_seq: u64,
     staged_at: Vec<i64>,
+    /// `(spans path, traces path)` for every `file_sources` row.
+    sources: Vec<(String, String)>,
 }
 
 async fn read_catalog(dir: &Path) -> Result<CatalogView, String> {
@@ -428,12 +437,112 @@ async fn read_catalog(dir: &Path) -> Result<CatalogView, String> {
         .fetch_all(&mut connection)
         .await
         .map_err(|error| error.to_string())?;
+    let source_rows = sqlx::query(
+        "SELECT s.path AS spans_path, t.path AS traces_path
+         FROM file_sources fs
+         JOIN data_files s ON s.id = fs.spans_file_id
+         JOIN data_files t ON t.id = fs.traces_file_id",
+    )
+    .fetch_all(&mut connection)
+    .await
+    .map_err(|error| error.to_string())?;
+    let mut sources = Vec::new();
+    for row in source_rows {
+        let spans_path: String =
+            sqlx::Row::try_get(&row, "spans_path").map_err(|error| error.to_string())?;
+        let traces_path: String =
+            sqlx::Row::try_get(&row, "traces_path").map_err(|error| error.to_string())?;
+        sources.push((spans_path, traces_path));
+    }
     Ok(CatalogView {
         files,
         spans_seq,
         scores_seq,
         staged_at,
+        sources,
     })
+}
+
+/// The sync Parquet reader over a local object, projected to `columns`.
+fn projected_reader(
+    dir: &Path,
+    path: &str,
+    columns: &[&str],
+) -> Result<ParquetRecordBatchReader, String> {
+    let file = std::fs::File::open(dir.join("objects").join(path))
+        .map_err(|error| format!("{path}: {error}"))?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+        .map_err(|error| format!("{path}: {error}"))?;
+    let mask = ProjectionMask::columns(builder.parquet_schema(), columns.iter().copied());
+    builder
+        .with_projection(mask)
+        .build()
+        .map_err(|error| format!("{path}: {error}"))
+}
+
+fn object_trace_ids(dir: &Path, path: &str) -> Result<(BTreeSet<Vec<u8>>, usize), String> {
+    let reader = projected_reader(dir, path, &["trace_id"])?;
+    let mut ids = BTreeSet::new();
+    let mut rows = 0;
+    for batch in reader {
+        let batch = batch.map_err(|error| format!("{path}: {error}"))?;
+        let column = batch
+            .column_by_name("trace_id")
+            .ok_or_else(|| format!("{path}: no trace_id column"))?;
+        let ids_column = column
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .ok_or_else(|| format!("{path}: trace_id is not fixed-size binary"))?;
+        for index in 0..batch.num_rows() {
+            ids.insert(ids_column.value(index).to_vec());
+        }
+        rows += batch.num_rows();
+    }
+    Ok((ids, rows))
+}
+
+fn object_partials(dir: &Path, path: &str) -> Result<(BTreeSet<Vec<u8>>, i64), String> {
+    let reader = projected_reader(dir, path, &["trace_id", "span_count"])?;
+    let mut ids = BTreeSet::new();
+    let mut total = 0_i64;
+    for batch in reader {
+        let batch = batch.map_err(|error| format!("{path}: {error}"))?;
+        let ids_column = batch
+            .column_by_name("trace_id")
+            .and_then(|column| column.as_any().downcast_ref::<FixedSizeBinaryArray>())
+            .ok_or_else(|| format!("{path}: no trace_id column"))?;
+        let counts = batch
+            .column_by_name("span_count")
+            .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
+            .ok_or_else(|| format!("{path}: no span_count column"))?;
+        for index in 0..batch.num_rows() {
+            ids.insert(ids_column.value(index).to_vec());
+            total = total.saturating_add(counts.value(index));
+        }
+    }
+    Ok((ids, total))
+}
+
+/// spec 03 §3: a traces file's `sum(span_count)` equals its spans file's row
+/// count, and both hold the same set of trace ids.
+fn check_source_pair(dir: &Path, spans_path: &str, traces_path: &str) -> Result<(), String> {
+    let (spans_ids, spans_rows) = object_trace_ids(dir, spans_path)?;
+    let (traces_ids, total) = object_partials(dir, traces_path)?;
+    let spans_rows = i64::try_from(spans_rows)
+        .map_err(|_| format!("{spans_path}: row count does not fit in i64"))?;
+    if total != spans_rows {
+        return Err(format!(
+            "{traces_path}: sum(span_count) {total} != {spans_rows} rows in {spans_path}"
+        ));
+    }
+    if spans_ids != traces_ids {
+        return Err(format!(
+            "{traces_path}: trace ids differ from {spans_path} ({:?} vs {:?})",
+            traces_ids.len(),
+            spans_ids.len()
+        ));
+    }
+    Ok(())
 }
 
 fn now_ns() -> i64 {

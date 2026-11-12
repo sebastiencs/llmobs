@@ -19,12 +19,13 @@ use bytes::Bytes;
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
 
-use crate::catalog::{Catalog, CatalogEdit, Committer, FileMeta, FileTable};
+use crate::catalog::{Catalog, CatalogEdit, Committer, FileId, FileMeta, FileTable};
 use crate::error::FlushError;
 use crate::hooks::{HookPoint, Hooks};
-use crate::memtable::{FrozenView, MemBatch, Memtable};
+use crate::memtable::{FrozenView, MemBatch, Memtable, PartitionKey};
 use crate::objects::Objects;
-use crate::parquet::write_file;
+use crate::parquet::{WrittenFile, write_file};
+use crate::partials::partials_from_spans;
 use crate::read_state::{Published, ReadState};
 use crate::wal::writer::WriterShared;
 use crate::wal::{Table, truncate_segments};
@@ -40,6 +41,15 @@ const IDLE_POLL: Duration = Duration::from_millis(50);
 struct PreparedFile {
     meta: FileMeta,
     bytes: Bytes,
+}
+
+/// Files to stage and write, plus the `(traces, spans)` pairs for the commit.
+///
+/// `files` is in partition order; each spans file is immediately followed by
+/// its traces file.
+struct Prepared {
+    files: Vec<PreparedFile>,
+    sources: Vec<(FileId, FileId)>,
 }
 
 struct FlushParams {
@@ -288,7 +298,8 @@ async fn flush_once(params: &FlushParams) -> Result<Option<u64>, FlushError> {
         Ok(Err(error)) => return Err(log_retry(table, partitions, error)),
         Err(_) => return Err(log_retry(table, partitions, FlushError::Task)),
     };
-    let paths: Vec<String> = prepared.iter().map(|file| file.meta.path.clone()).collect();
+    let Prepared { files, sources } = prepared;
+    let paths: Vec<String> = files.iter().map(|file| file.meta.path.clone()).collect();
     if let Err(error) = params.committer.stage(&paths).await {
         return Err(log_retry(
             params.table,
@@ -300,7 +311,7 @@ async fn flush_once(params: &FlushParams) -> Result<Option<u64>, FlushError> {
     if params.hooks.fail(HookPoint::FlushAfterStage).is_some() {
         return Err(log_retry(params.table, partitions, FlushError::Fault));
     }
-    if let Err(error) = put_all(&params.objects, &prepared, params.upload_concurrency).await {
+    if let Err(error) = put_all(&params.objects, &files, params.upload_concurrency).await {
         return Err(log_retry(params.table, partitions, error));
     }
     params.hooks.pause(HookPoint::FlushAfterWrite);
@@ -308,10 +319,10 @@ async fn flush_once(params: &FlushParams) -> Result<Option<u64>, FlushError> {
         return Err(log_retry(params.table, partitions, FlushError::Fault));
     }
     let edit = CatalogEdit {
-        add: prepared.into_iter().map(|file| file.meta).collect(),
+        add: files.into_iter().map(|file| file.meta).collect(),
         remove: Vec::new(),
         flushed_seq: Some((params.table, max_seq)),
-        sources: Vec::new(),
+        sources,
     };
     let published = Arc::clone(&params.published);
     let shared = Arc::clone(&params.shared);
@@ -376,52 +387,82 @@ fn publish_flush(
     shared.set_memtable_bytes(bytes);
 }
 
-fn prepare(table: Table, view: &FrozenView) -> Result<Vec<PreparedFile>, FlushError> {
+fn prepare(table: Table, view: &FrozenView) -> Result<Prepared, FlushError> {
     let file_table = FileTable::from(table);
     let mut files = Vec::new();
+    let mut sources = Vec::new();
     for (key, batches) in view.partitions.iter() {
         if batches.is_empty() {
             continue;
         }
-        let written = match table {
+        let (spans_batch, written) = match table {
             Table::Spans => {
                 let batch = dedup_spans(batches)?;
-                write_file(file_table, 0, &[Arc::new(batch)]).map_err(FlushError::prepare)?
+                let written = write_file(file_table, 0, &[Arc::new(batch.clone())])
+                    .map_err(FlushError::prepare)?;
+                (Some(batch), written)
             }
             Table::Scores => {
                 let refs: Vec<Arc<RecordBatch>> = batches
                     .iter()
                     .map(|batch| Arc::clone(&batch.batch))
                     .collect();
-                write_file(file_table, 0, &refs).map_err(FlushError::prepare)?
+                let written = write_file(file_table, 0, &refs).map_err(FlushError::prepare)?;
+                (None, written)
             }
         };
         let (path, id) = Objects::table_file_path(file_table, key.project, key.day, 0);
-        let size = u64::try_from(written.bytes.len()).unwrap_or(u64::MAX);
-        files.push(PreparedFile {
-            meta: FileMeta {
-                id,
-                table: file_table,
-                project: key.project,
-                day: key.day,
-                level: 0,
-                path,
-                size,
-                footer_size: written.footer_size,
-                rows: written.rows,
-                min_time: written.min_time,
-                max_time: written.max_time,
-                min_ingest_time: written.min_ingest_time,
-                max_ingest_time: written.max_ingest_time,
-                fully_merged: false,
-            },
-            bytes: written.bytes,
-        });
+        files.push(prepared_file(id, file_table, key, path, written));
+
+        if let Some(batch) = spans_batch {
+            let partials = partials_from_spans(&batch).map_err(FlushError::partials)?;
+            let traces_written = write_file(FileTable::Traces, 0, &[Arc::new(partials)])
+                .map_err(FlushError::prepare)?;
+            let (traces_path, traces_id) =
+                Objects::table_file_path(FileTable::Traces, key.project, key.day, 0);
+            files.push(prepared_file(
+                traces_id,
+                FileTable::Traces,
+                key,
+                traces_path,
+                traces_written,
+            ));
+            sources.push((traces_id, id));
+        }
     }
     if files.is_empty() {
         return Err(FlushError::dedup("empty flush"));
     }
-    Ok(files)
+    Ok(Prepared { files, sources })
+}
+
+fn prepared_file(
+    id: FileId,
+    table: FileTable,
+    key: &PartitionKey,
+    path: String,
+    written: WrittenFile,
+) -> PreparedFile {
+    let size = u64::try_from(written.bytes.len()).unwrap_or(u64::MAX);
+    PreparedFile {
+        meta: FileMeta {
+            id,
+            table,
+            project: key.project,
+            day: key.day,
+            level: 0,
+            path,
+            size,
+            footer_size: written.footer_size,
+            rows: written.rows,
+            min_time: written.min_time,
+            max_time: written.max_time,
+            min_ingest_time: written.min_ingest_time,
+            max_ingest_time: written.max_ingest_time,
+            fully_merged: false,
+        },
+        bytes: written.bytes,
+    }
 }
 
 /// Keeps the greatest `ingest_time` for each `(trace_id, span_id)`.

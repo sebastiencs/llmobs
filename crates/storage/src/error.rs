@@ -456,6 +456,9 @@ pub(crate) enum FlushError {
     /// Sorting or encoding the frozen batches failed.
     #[error("flush prepare: {0}")]
     Prepare(ParquetWriteError),
+    /// Computing the trace partials of a spans file failed.
+    #[error("flush partials: {0}")]
+    Partials(PartialsError),
     /// A span identity column was missing or null.
     #[error("flush dedup: {reason}")]
     Dedup {
@@ -486,6 +489,10 @@ impl FlushError {
 
     pub(crate) fn prepare(source: ParquetWriteError) -> Self {
         Self::Prepare(source)
+    }
+
+    pub(crate) fn partials(source: PartialsError) -> Self {
+        Self::Partials(source)
     }
 
     pub(crate) fn stage(source: CatalogError) -> Self {
