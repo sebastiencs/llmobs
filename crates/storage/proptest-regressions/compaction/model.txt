@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b13095b258f2618e3b59e763983c222e96869f193200a83f5a66c76219e7f835 # shrinks to ops = [Append { trace: 1, span: 0 }, Restart, Compact { hours: 41 }, Compact { hours: 66 }, Compact { hours: 34 }, Append { trace: 1, span: 0 }]
+cc ecdccb2dfed3e0796576cfc9cd61bd29ffd2b8d491e264cca63c541da8472fbc # shrinks to ops = [Append { trace: 4, span: 1 }, Append { trace: 3, span: 3 }, Compact { hours: 9 }, Compact { hours: 66 }, Compact { hours: 63 }, Append { trace: 3, span: 1 }, Restart, Compact { hours: 49 }, Restart, Append { trace: 1, span: 6 }, Append { trace: 5, span: 5 }, Append { trace: 1, span: 1 }, Append { trace: 0, span: 0 }, Compact { hours: 62 }, Compact { hours: 32 }, Restart, Gc, Restart, Gc, Append { trace: 2, span: 7 }, Restart, Append { trace: 3, span: 7 }, Compact { hours: 38 }, Append { trace: 1, span: 7 }, Restart, Append { trace: 2, span: 6 }, Append { trace: 2, span: 7 }, Compact { hours: 17 }, Compact { hours: 39 }]

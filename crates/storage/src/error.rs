@@ -261,8 +261,8 @@ pub enum GcError {
     /// The object store rejected the delete.
     #[error(transparent)]
     Object(#[from] ObjectError),
-    /// A test fault armed at [`crate::hooks::HookPoint::GcBeforeDelete`].
-    #[error("staged collection was interrupted")]
+    /// A test fault armed at a GC hook point.
+    #[error("garbage collection was interrupted")]
     Fault,
 }
 
@@ -455,7 +455,7 @@ impl AnchorError {
 
 /// Building or merging trace partials failed.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum PartialsError {
+pub enum PartialsError {
     /// A required column is missing, has the wrong type, or holds an invalid id.
     #[error("partials column {name} is missing or invalid")]
     Column {
@@ -475,6 +475,69 @@ impl PartialsError {
         Self::Column {
             name: name.to_owned(),
         }
+    }
+}
+
+/// A compaction job or pass failed. No variant carries row content.
+#[derive(Debug, thiserror::Error)]
+pub enum CompactionError {
+    /// Reading or merging the input files failed.
+    #[error("reading compaction inputs failed")]
+    Read {
+        /// The DataFusion error. Names files and columns, never values.
+        #[source]
+        source: datafusion::error::DataFusionError,
+    },
+    /// Encoding an output failed.
+    #[error(transparent)]
+    Write(#[from] ParquetWriteError),
+    /// Writing, publishing or deleting an object failed.
+    #[error(transparent)]
+    Object(#[from] ObjectError),
+    /// The catalog refused or failed the edit, or a catalog read failed.
+    #[error(transparent)]
+    Commit(#[from] CommitError),
+    /// Recording the output paths in `staged_objects` failed (`Committer::stage`).
+    #[error(transparent)]
+    Stage(#[from] CatalogError),
+    /// Duplicate collapsing failed on corrupt input.
+    #[error(transparent)]
+    Dedup(#[from] DedupError),
+    /// Computing trace partials failed.
+    #[error(transparent)]
+    Partials(#[from] PartialsError),
+    /// The job's inputs break an invariant it relies on.
+    #[error("compaction input: {reason}")]
+    Input {
+        /// Static reason. Never a cell value.
+        reason: &'static str,
+    },
+    /// A blocking task panicked or was cancelled.
+    #[error("compaction task failed")]
+    Task,
+    /// A test hook failed the job.
+    #[error("compaction stopped by a test hook")]
+    Fault,
+    /// The storage is shutting down; the job gave up before committing.
+    #[error("compaction stopped for shutdown")]
+    Stopped,
+}
+
+/// A batch could not be deduplicated. `reason` is a static description, never row content.
+#[derive(Debug, thiserror::Error)]
+#[error("dedup failed: {reason}")]
+pub struct DedupError {
+    /// Static reason. Never a cell value.
+    reason: &'static str,
+}
+
+impl DedupError {
+    pub(crate) fn new(reason: &'static str) -> Self {
+        Self { reason }
+    }
+
+    pub(crate) fn reason(&self) -> &'static str {
+        self.reason
     }
 }
 

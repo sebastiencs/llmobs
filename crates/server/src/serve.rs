@@ -649,6 +649,8 @@ mod tests {
                 memtable: MemtableConfig::default(),
                 query: QueryConfig::default(),
                 anchor: AnchorConfig::default(),
+                gc: Default::default(),
+                compaction: Default::default(),
             },
             auth: AuthSettings::default(),
             smtp_url: None,

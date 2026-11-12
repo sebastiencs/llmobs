@@ -6,6 +6,7 @@
 //!
 //! `Storage` owns one committer. Flush, and later compaction, are its callers.
 
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
@@ -14,7 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use sqlx::{Connection, SqliteConnection};
 use tokio::sync::Mutex;
 
-use super::db::{TableState, check_file_sources, load, open_catalog_db};
+use super::db::{TableState, check_file_sources, load, open_catalog_db, parse_file_id};
 use super::{Catalog, FileId, FileMeta, FileState, FileTable, table_index};
 use crate::error::{CatalogError, CommitError, GcError};
 use crate::hooks::{HookPoint, Hooks};
@@ -41,6 +42,12 @@ struct CommitterInner {
     catalog: Arc<Catalog>,
     flushed: [u64; 2],
     hooks: Hooks,
+    /// Files a commit removed, held until GC collects them.
+    ///
+    /// The `Arc` count is the reference count of [`crate::gc`]'s in-use check:
+    /// a count above one means an older catalog, a provider or a plan still
+    /// names the file, and the object must stay.
+    retired: HashMap<FileId, Arc<FileMeta>>,
 }
 
 /// The single writer of `catalog.db`.
@@ -66,6 +73,7 @@ impl Committer {
                 catalog: Arc::new(catalog),
                 flushed: flushed_of(state),
                 hooks,
+                retired: HashMap::new(),
             }),
         })
     }
@@ -88,6 +96,41 @@ impl Committer {
             .fetch_all(&mut inner.connection)
             .await
             .map_err(CatalogError::db)
+    }
+
+    /// For every active traces file with a source among `spans`, all of its
+    /// source pairs, deduplicated and in `(traces, spans)` order.
+    pub(crate) async fn derived_traces(
+        &self,
+        spans: &[FileId],
+    ) -> Result<Vec<(FileId, FileId)>, CommitError> {
+        let mut inner = self.inner.lock().await;
+        let mut pairs: BTreeSet<(FileId, FileId)> = BTreeSet::new();
+        for chunk in spans.chunks(500) {
+            let mut builder = sqlx::QueryBuilder::new(
+                "SELECT fs.traces_file_id, fs.spans_file_id FROM file_sources AS fs
+                 JOIN data_files AS t ON t.id = fs.traces_file_id
+                 WHERE t.state = 'active' AND fs.traces_file_id IN (
+                   SELECT traces_file_id FROM file_sources WHERE spans_file_id IN (",
+            );
+            let mut separated = builder.separated(", ");
+            for id in chunk {
+                separated.push_bind(id.to_string());
+            }
+            builder.push("))");
+            let rows = builder
+                .build_query_as::<(String, String)>()
+                .fetch_all(&mut inner.connection)
+                .await
+                .map_err(CommitError::db)?;
+            for (traces, spans) in rows {
+                pairs.insert((
+                    parse_file_id(&traces).map_err(|_| CommitError::conflict("invalid file id"))?,
+                    parse_file_id(&spans).map_err(|_| CommitError::conflict("invalid file id"))?,
+                ));
+            }
+        }
+        Ok(pairs.into_iter().collect())
     }
 
     /// Record `paths` in `staged_objects`. No precondition.
@@ -152,8 +195,8 @@ impl Committer {
             let _ = transaction.rollback().await;
             return Err(error);
         }
-        let next = match current.apply(edit) {
-            Ok(catalog) => Arc::new(catalog),
+        let (next, removed) = match current.apply(edit) {
+            Ok((catalog, removed)) => (Arc::new(catalog), removed),
             Err(error) => {
                 let _ = transaction.rollback().await;
                 return Err(error);
@@ -167,6 +210,9 @@ impl Committer {
             });
         }
         transaction.commit().await.map_err(CommitError::db)?;
+        for file in removed {
+            inner.retired.insert(file.id, file);
+        }
         if let Some((table, sequence)) = edit.flushed_seq {
             inner.flushed[table_index(table)] = sequence;
         }
@@ -230,6 +276,128 @@ impl Committer {
             .map_err(CatalogError::db)?;
         Ok(StagedRemoval::Deleted { bytes })
     }
+
+    /// Obsolete files whose `obsoleted_at` is at or before `cutoff`, in
+    /// `(obsoleted_at, id)` order, starting after `after` (keyset paging).
+    pub(crate) async fn obsolete_before(
+        &self,
+        cutoff: i64,
+        after: Option<(i64, FileId)>,
+        limit: u32,
+    ) -> Result<Vec<ObsoleteFile>, GcError> {
+        let mut inner = self.inner.lock().await;
+        let rows = match after {
+            Some((time, id)) => {
+                sqlx::query_as::<_, (String, String, i64)>(
+                    "SELECT id, path, obsoleted_at FROM data_files
+                     WHERE state = 'obsolete' AND obsoleted_at <= ?
+                       AND (obsoleted_at, id) > (?, ?)
+                     ORDER BY obsoleted_at, id LIMIT ?",
+                )
+                .bind(cutoff)
+                .bind(time)
+                .bind(id.to_string())
+                .bind(i64::from(limit))
+                .fetch_all(&mut inner.connection)
+                .await
+            }
+            None => {
+                sqlx::query_as::<_, (String, String, i64)>(
+                    "SELECT id, path, obsoleted_at FROM data_files
+                     WHERE state = 'obsolete' AND obsoleted_at <= ?
+                     ORDER BY obsoleted_at, id LIMIT ?",
+                )
+                .bind(cutoff)
+                .bind(i64::from(limit))
+                .fetch_all(&mut inner.connection)
+                .await
+            }
+        };
+        let rows = rows.map_err(|source| GcError::Catalog(CatalogError::db(source)))?;
+        let mut files = Vec::with_capacity(rows.len());
+        for (id, path, obsoleted_at) in rows {
+            files.push(ObsoleteFile {
+                id: parse_file_id(&id).map_err(GcError::Catalog)?,
+                path,
+                obsoleted_at,
+            });
+        }
+        Ok(files)
+    }
+
+    /// Deletes one obsolete file's object, then its row, unless a reader still
+    /// holds it.
+    ///
+    /// Holds the committer mutex throughout, like [`Self::collect_staged_path`].
+    pub(crate) async fn collect_obsolete_file<F, Fut>(
+        &self,
+        file: &ObsoleteFile,
+        hooks: &Hooks,
+        delete: F,
+    ) -> Result<ObsoleteRemoval, GcError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<u64, crate::error::ObjectError>>,
+    {
+        let mut inner = self.inner.lock().await;
+        if let Some(retired) = inner.retired.get(&file.id)
+            && Arc::strong_count(retired) > 1
+        {
+            return Ok(ObsoleteRemoval::InUse);
+        }
+        let state: Option<String> = sqlx::query_scalar("SELECT state FROM data_files WHERE id = ?")
+            .bind(file.id.to_string())
+            .fetch_optional(&mut inner.connection)
+            .await
+            .map_err(|source| GcError::Catalog(CatalogError::db(source)))?;
+        if state.as_deref() != Some("obsolete") {
+            inner.retired.remove(&file.id);
+            return Ok(ObsoleteRemoval::Gone);
+        }
+        hooks.pause(HookPoint::GcObsoleteBeforeDelete);
+        if hooks.fail(HookPoint::GcObsoleteBeforeDelete).is_some() {
+            return Err(GcError::Fault);
+        }
+        let bytes = delete().await?;
+        hooks.pause(HookPoint::GcObsoleteAfterDelete);
+        if hooks.fail(HookPoint::GcObsoleteAfterDelete).is_some() {
+            // The object is gone and the row stays; the next collection
+            // deletes the row (`delete_len` of a missing object is `Ok(0)`).
+            return Err(GcError::Fault);
+        }
+        sqlx::query("DELETE FROM data_files WHERE id = ?")
+            .bind(file.id.to_string())
+            .execute(&mut inner.connection)
+            .await
+            .map_err(|source| GcError::Catalog(CatalogError::db(source)))?;
+        inner.retired.remove(&file.id);
+        Ok(ObsoleteRemoval::Deleted { bytes })
+    }
+}
+
+/// One `obsolete` row of `data_files`, named by [`Committer::obsolete_before`].
+pub(crate) struct ObsoleteFile {
+    /// Primary key.
+    pub(crate) id: FileId,
+    /// Object key relative to the store root.
+    pub(crate) path: String,
+    /// When the commit that replaced the file marked it obsolete, ns.
+    pub(crate) obsoleted_at: i64,
+}
+
+/// What [`Committer::collect_obsolete_file`] did with one obsolete file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ObsoleteRemoval {
+    /// The object and the row are gone. `bytes` is zero when the object was
+    /// already missing.
+    Deleted {
+        /// Object size before the delete.
+        bytes: u64,
+    },
+    /// An older catalog or a plan still references the file. Nothing was deleted.
+    InUse,
+    /// The row was gone or no longer obsolete. Nothing was deleted.
+    Gone,
 }
 
 /// What [`Committer::collect_staged_path`] did with one staged row.
@@ -334,6 +502,51 @@ async fn write_edit(
                     "source spans file is not an active spans file",
                 ));
             }
+        }
+    }
+    // A removed file leaves with its dependants (spec 03 §5): a `spans` file
+    // with the active `traces` files derived from it, a `traces` file with all
+    // of its sources.
+    let removed: HashSet<String> = edit.remove.iter().map(|(id, _)| id.to_string()).collect();
+    for (id, _) in &edit.remove {
+        let table: Option<String> =
+            sqlx::query_scalar("SELECT table_name FROM data_files WHERE id = ?")
+                .bind(id.to_string())
+                .fetch_optional(&mut *connection)
+                .await
+                .map_err(CommitError::db)?;
+        match table.as_deref() {
+            Some("spans") => {
+                let traces: Vec<String> = sqlx::query_scalar(
+                    "SELECT fs.traces_file_id FROM file_sources AS fs
+                     JOIN data_files AS t ON t.id = fs.traces_file_id
+                     WHERE fs.spans_file_id = ? AND t.state = 'active'",
+                )
+                .bind(id.to_string())
+                .fetch_all(&mut *connection)
+                .await
+                .map_err(CommitError::db)?;
+                if traces.iter().any(|traces| !removed.contains(traces)) {
+                    return Err(CommitError::conflict(
+                        "a removed spans file keeps its traces file",
+                    ));
+                }
+            }
+            Some("traces") => {
+                let spans: Vec<String> = sqlx::query_scalar(
+                    "SELECT spans_file_id FROM file_sources WHERE traces_file_id = ?",
+                )
+                .bind(id.to_string())
+                .fetch_all(&mut *connection)
+                .await
+                .map_err(CommitError::db)?;
+                if spans.iter().any(|spans| !removed.contains(spans)) {
+                    return Err(CommitError::conflict(
+                        "a removed traces file keeps a source",
+                    ));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -980,6 +1193,160 @@ mod tests {
         assert_eq!(
             sources(&mut connection).await,
             vec![(traces_id.to_string(), spans_id.to_string())]
+        );
+    }
+
+    /// Two active `(spans, traces)` pairs of one project and day:
+    /// `(S1, T1 (←S1), S2, T2 (←S2))`.
+    async fn two_pairs() -> (tempfile::TempDir, Committer, [FileId; 4]) {
+        let (dir, committer) = opened().await;
+        let spans_project = project("018f6b4e-7c1a-7c1a-8c1a-000000000074");
+        let mut staged = Vec::new();
+        let mut add = Vec::new();
+        let mut sources = Vec::new();
+        let mut ids = [FileId::new_v7(); 4];
+        for index in 0..2 {
+            let spans = file(
+                FileTable::Spans,
+                spans_project,
+                day(1),
+                i64::try_from(index).unwrap_or(0) + 1,
+                &format!("spans/input-{index}"),
+            );
+            let traces = file(
+                FileTable::Traces,
+                spans_project,
+                day(1),
+                i64::try_from(index).unwrap_or(0) + 1,
+                &format!("traces/input-{index}"),
+            );
+            ids[index * 2] = spans.id;
+            ids[index * 2 + 1] = traces.id;
+            sources.push((traces.id, spans.id));
+            staged.push(spans.path.clone());
+            staged.push(traces.path.clone());
+            add.push(spans);
+            add.push(traces);
+        }
+        committer.stage(&staged).await.unwrap();
+        committer
+            .commit(
+                &CatalogEdit {
+                    add,
+                    remove: Vec::new(),
+                    flushed_seq: None,
+                    sources,
+                },
+                |_| {},
+            )
+            .await
+            .unwrap();
+        (dir, committer, ids)
+    }
+
+    #[tokio::test]
+    async fn a_compaction_shaped_edit_commits() {
+        let (dir, committer, ids) = two_pairs().await;
+        let spans_project = project("018f6b4e-7c1a-7c1a-8c1a-000000000074");
+        let spans_out = file(FileTable::Spans, spans_project, day(1), 3, "spans/output");
+        let traces_out = file(FileTable::Traces, spans_project, day(1), 3, "traces/output");
+        let spans_id = spans_out.id;
+        let traces_id = traces_out.id;
+        committer
+            .stage(&["spans/output".to_owned(), "traces/output".to_owned()])
+            .await
+            .unwrap();
+        let edit = CatalogEdit {
+            add: vec![spans_out, traces_out],
+            remove: ids.iter().map(|id| (*id, FileState::Active)).collect(),
+            flushed_seq: None,
+            sources: vec![(traces_id, spans_id)],
+        };
+        committer.commit(&edit, |_| {}).await.unwrap();
+
+        // The open-time spec 03 §3 check passes over the committed result.
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        check_file_sources(&mut connection).await.unwrap();
+        let active: Vec<(String, String)> = sqlx::query_as(
+            "SELECT table_name, path FROM data_files WHERE state = 'active' ORDER BY path",
+        )
+        .fetch_all(&mut connection)
+        .await
+        .unwrap();
+        assert_eq!(
+            active,
+            vec![
+                ("spans".to_owned(), "spans/output".to_owned()),
+                ("traces".to_owned(), "traces/output".to_owned()),
+            ]
+        );
+        let obsolete: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM data_files WHERE state = 'obsolete'")
+                .fetch_one(&mut connection)
+                .await
+                .unwrap();
+        assert_eq!(obsolete, 4);
+        // The input pairs' `file_sources` rows stay until GC deletes the rows.
+        assert_eq!(sources(&mut connection).await.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn removing_a_spans_file_without_its_traces_file_is_a_conflict() {
+        let (dir, committer, ids) = two_pairs().await;
+        let [spans_one, traces_one, _spans_two, _traces_two] = ids;
+        let before = committer.catalog().await;
+
+        let edit = CatalogEdit {
+            add: Vec::new(),
+            remove: vec![(spans_one, FileState::Active)],
+            flushed_seq: None,
+            sources: Vec::new(),
+        };
+        let error = committer.commit(&edit, |_| {}).await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                CommitError::Conflict {
+                    reason: "a removed spans file keeps its traces file"
+                }
+            ),
+            "{error}"
+        );
+
+        // Nothing changed: rows and states are as before, and the in-memory
+        // catalog is the same.
+        assert!(Arc::ptr_eq(&before, &committer.catalog().await));
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let states: Vec<(String, String)> =
+            sqlx::query_as("SELECT path, state FROM data_files ORDER BY path")
+                .fetch_all(&mut connection)
+                .await
+                .unwrap();
+        assert_eq!(states.len(), 4);
+        assert!(states.iter().all(|(_, state)| state == "active"));
+        assert_eq!(sources(&mut connection).await.len(), 2);
+        let _ = traces_one;
+    }
+
+    #[tokio::test]
+    async fn removing_a_traces_file_without_its_source_is_a_conflict() {
+        let (_dir, committer, ids) = two_pairs().await;
+        let [_spans_one, traces_one, _spans_two, _traces_two] = ids;
+        let edit = CatalogEdit {
+            add: Vec::new(),
+            remove: vec![(traces_one, FileState::Active)],
+            flushed_seq: None,
+            sources: Vec::new(),
+        };
+        let error = committer.commit(&edit, |_| {}).await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                CommitError::Conflict {
+                    reason: "a removed traces file keeps a source"
+                }
+            ),
+            "{error}"
         );
     }
 

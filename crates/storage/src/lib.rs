@@ -6,7 +6,6 @@
 //!
 //! # What this crate does not do yet
 //!
-//! - compaction does not run, so level-0 files accumulate;
 //! - deletion and retention are absent;
 //! - the query runtime uses DataFusion's default memory pool.
 //!   Parquet footers and page indexes use DataFusion's built-in metadata cache.
@@ -40,7 +39,9 @@ use crate::wal::{SegmentWriter, replay};
 
 pub(crate) mod anchor;
 pub(crate) mod catalog;
+mod compaction;
 pub mod config;
+pub(crate) mod dedup;
 pub mod error;
 mod filter;
 pub(crate) mod flush;
@@ -55,6 +56,9 @@ mod reads;
 mod sql;
 mod views;
 
+pub use crate::compaction::job::CompactionReport;
+pub use crate::error::CompactionError;
+pub use crate::gc::ObsoleteReport;
 pub use query_error::{InvalidQuery, Position, RunError};
 pub use reads::{
     Bucket, BucketWidth, Kpi, KpiName, LATEST_SCORE_COLUMNS, ListScope, MAX_PAGE,
@@ -126,6 +130,9 @@ pub struct Storage {
     spans_flush: FlushHandle,
     scores_flush: FlushHandle,
     gc: gc::GcHandle,
+    /// Shared by the background task and [`Self::compact`].
+    compactor: Arc<compaction::job::Compactor>,
+    compaction: compaction::task::CompactionHandle,
     /// Shared with the flush tasks and staged-object collection.
     #[cfg_attr(not(test), allow(dead_code))]
     objects: Arc<Objects>,
@@ -210,16 +217,15 @@ impl Storage {
         let committer = Arc::new(Committer::open(&data_dir, share_hooks(&hooks)).await?);
         let objects = open_objects(&config, &hooks, remote).await?;
         let objects_for_cleanup = Arc::clone(&objects);
-        let removed =
-            tokio::task::spawn_blocking(move || objects_for_cleanup.remove_local_temp_files())
-                .await
-                .map_err(|_| {
-                    open_io(
-                        "removing temporary object files",
-                        &data_dir,
-                        io::Error::other("cleanup task panicked"),
-                    )
-                })??;
+        let removed = tokio::task::spawn_blocking(move || objects_for_cleanup.remove_temp_files())
+            .await
+            .map_err(|_| {
+                open_io(
+                    "removing temporary object files",
+                    &data_dir,
+                    io::Error::other("cleanup task panicked"),
+                )
+            })??;
         if removed > 0 {
             tracing::info!(removed, "removed leftover object temp files");
         }
@@ -258,6 +264,33 @@ impl Storage {
             scores: recovered.scores.memtable.snapshot(),
             catalog,
         }));
+        // Compaction gets a runtime of its own, so its memory pool is
+        // independent of the query runtime's.
+        let compactor = {
+            let memory = usize::try_from(config.compaction.max_memory.0).unwrap_or(usize::MAX);
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_pool(Arc::new(
+                    datafusion::execution::memory_pool::GreedyMemoryPool::new(memory),
+                ))
+                .build_arc()
+                .map_err(|error| {
+                    tracing::error!(%error, "building the compaction runtime");
+                    OpenError::Runtime
+                })?;
+            objects.register(&runtime);
+            Arc::new(compaction::job::Compactor::new(
+                Arc::clone(&committer),
+                Arc::clone(&objects),
+                Arc::clone(&published),
+                compaction::merge::MergeContext {
+                    runtime,
+                    batch_size: 8192,
+                },
+                compaction::plan::Policy::from(&config.compaction),
+                config.compaction.threads,
+                share_hooks(&hooks),
+            ))
+        };
         let spans = spawn_writer(
             Table::Spans,
             &data_dir,
@@ -307,11 +340,27 @@ impl Storage {
             tracing::warn!("staged object collection failed");
             tracing::debug!(%error, "staged object collection error");
         }
+        if let Err(error) = gc::collect_obsolete(
+            &committer,
+            &objects,
+            &hooks,
+            catalog::now_ns(),
+            config.gc.grace,
+        )
+        .await
+        {
+            // The error names the object key. Keys contain project ids.
+            tracing::warn!("obsolete file collection failed");
+            tracing::debug!(%error, "obsolete file collection error");
+        }
         let gc = gc::spawn(gc::GcStart {
             committer: Arc::clone(&committer),
             objects: Arc::clone(&objects),
             hooks: share_hooks(&hooks),
+            grace: config.gc.grace,
         });
+        let compaction =
+            compaction::task::spawn(Arc::clone(&compactor), config.compaction.interval);
         Ok(Self {
             hard_limit,
             target_partitions,
@@ -324,6 +373,8 @@ impl Storage {
             spans_flush,
             scores_flush,
             gc,
+            compactor,
+            compaction,
             objects,
             committer,
             runtime,
@@ -423,6 +474,56 @@ impl Storage {
         .await
     }
 
+    /// One obsolete-file collection with this grace. The background task uses
+    /// `gc.grace`.
+    #[doc(hidden)]
+    pub async fn collect_obsolete(
+        &self,
+        grace: std::time::Duration,
+    ) -> Result<ObsoleteReport, error::GcError> {
+        gc::collect_obsolete(
+            &self.committer,
+            &self.objects,
+            &self.hooks,
+            catalog::now_ns(),
+            grace,
+        )
+        .await
+    }
+
+    /// One compaction pass at `now` (ns), run to completion. The background
+    /// task passes the wall clock every `compaction.interval`.
+    #[doc(hidden)]
+    pub async fn compact(&self, now: i64) -> Result<CompactionReport, CompactionError> {
+        self.compactor.pass(now).await
+    }
+
+    /// Replaces the compaction policy read at the start of each pass.
+    #[cfg(test)]
+    pub(crate) fn set_policy(&self, policy: compaction::plan::Policy) {
+        self.compactor.set_policy(policy);
+    }
+
+    /// Files currently claimed by a compaction job.
+    #[cfg(test)]
+    pub(crate) fn compaction_claims(&self) -> usize {
+        self.compactor.claimed()
+    }
+
+    /// Commits `edit` and publishes the catalog, for tests that race a job.
+    #[cfg(test)]
+    pub(crate) async fn commit_test_edit(
+        &self,
+        edit: &catalog::CatalogEdit,
+    ) -> Result<Arc<catalog::Catalog>, error::CommitError> {
+        let published = Arc::clone(&self.published);
+        self.committer
+            .commit(edit, move |next| {
+                read_state::publish_catalog(&published, next);
+            })
+            .await
+    }
+
     /// Stops writers, flushes both memtables, and releases the data directory lock.
     ///
     /// Other tasks may still hold this value and be inside `append`. An append
@@ -435,6 +536,14 @@ impl Storage {
     /// on the next [`Self::open`].
     pub async fn shutdown(&self) -> Result<(), StorageError> {
         self.shutting_down.store(true, Ordering::Release);
+        // Compaction stops first, so a job never commits against a catalog
+        // another shutdown step is closing. Jobs see `stopping` before their
+        // next slice or their commit and give up; staged outputs and temp
+        // files are GC's and startup cleanup's problem.
+        self.compactor.stop();
+        self.compaction
+            .stop_and_wait(std::time::Duration::from_secs(30))
+            .await;
         self.gc.abort();
         let spans = self.spans.shutdown().await;
         let scores = self.scores.shutdown().await;
@@ -534,13 +643,13 @@ impl Storage {
             .sum()
     }
 
-    /// Active catalog files for `table`.
+    /// Active catalog files for `table`, including `traces`.
     #[cfg(test)]
-    pub(crate) fn catalog_files(&self, table: Table) -> Vec<Arc<catalog::FileMeta>> {
-        self.published
-            .load()
-            .catalog
-            .test_files(catalog::FileTable::from(table))
+    pub(crate) fn catalog_files(
+        &self,
+        table: impl Into<catalog::FileTable>,
+    ) -> Vec<Arc<catalog::FileMeta>> {
+        self.published.load().catalog.test_files(table.into())
     }
 
     /// Paths of the active files of a file table, including `traces`.
@@ -586,6 +695,8 @@ impl Drop for Storage {
         self.scores.abort();
         self.spans_flush.abort();
         self.scores_flush.abort();
+        self.compactor.stop();
+        self.compaction.abort();
         self.gc.abort();
     }
 }
@@ -698,6 +809,7 @@ async fn open_objects(
     if let Some(store) = remote {
         return Ok(Arc::new(Objects::remote_for_test(
             store,
+            &config.data_dir,
             share_hooks(hooks),
         )?));
     }
@@ -942,6 +1054,8 @@ mod tests {
             memtable: MemtableConfig::default(),
             query: QueryConfig::default(),
             anchor: Default::default(),
+            gc: Default::default(),
+            compaction: Default::default(),
         }
     }
 

@@ -605,6 +605,8 @@ fn file_plan(
         .map_err(|error| DataFusionError::Internal(error.to_string()))?;
     let builder = FileScanConfigBuilder::new(url, Arc::new(source))
         .with_file_groups(file_groups(files, partitions))
+        // No work stealing: each partition reads only its own files.
+        .with_preserve_order(true)
         .with_projection_indices(Some(input_indices.to_vec()))?;
     Ok(DataSourceExec::from_data_source(builder.build()))
 }
@@ -1353,6 +1355,8 @@ mod tests {
                 ..QueryConfig::default()
             },
             anchor: Default::default(),
+            gc: Default::default(),
+            compaction: Default::default(),
         }
     }
 

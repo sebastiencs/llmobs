@@ -432,7 +432,7 @@ Mirror `gc.rs`:
 **The parent,** `every_compaction_hook_aborts_safely`:
 - **It is `#[ignore]`d**, like `every_flush_hook_aborts_safely`. The flush parent runs alone because forked children must not inherit other tests' `LOCK` file descriptors, and the same applies here.
   - Add it to the `test` recipe of `justfile` as a third line: `cargo test -p llmobs-storage --lib --all-features -- --ignored --exact crash_tests::every_compaction_hook_aborts_safely`.
-  - This is the one change outside `crates/storage/` and `docs/` that M4 makes.
+  - Besides the `crates/server` `StorageConfig` literals (one added field each, see `07` § Conventions), this is the only change outside `crates/storage/` and `docs/` that M4 makes.
 - **The parent's own opens** use `quiet_config` plus `compaction.interval = 1h` and `compaction.l0_files = 2`, the child's config, so the background task never races its checks.
 - It runs the child for each point of:
 
