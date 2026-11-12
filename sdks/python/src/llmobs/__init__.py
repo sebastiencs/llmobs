@@ -5,7 +5,18 @@ Tracing, scores and configuration follow ``docs/spec/10-sdk.md``.
 
 import importlib.metadata
 
-from llmobs._config import ConfigError
-
+# __version__ is set before the submodule imports: _runtime imports it from here.
 __version__ = importlib.metadata.version("llmobs")
-__all__ = ["ConfigError", "__version__"]
+
+from llmobs._config import ConfigError
+from llmobs._runtime import flush, init, shutdown, span_processor, tracer_provider
+
+__all__ = [
+    "ConfigError",
+    "__version__",
+    "flush",
+    "init",
+    "shutdown",
+    "span_processor",
+    "tracer_provider",
+]
