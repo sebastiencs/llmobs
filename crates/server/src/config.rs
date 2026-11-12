@@ -18,6 +18,7 @@ use figment::providers::{Format, Serialized, Toml};
 use figment::value::{Dict, Map, Value};
 use figment::{Figment, Metadata, Profile, Provider};
 use ipnet::IpNet;
+use lettre::message::Mailbox;
 use llmobs_storage::config::StorageConfig;
 use serde::Deserialize;
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
@@ -293,6 +294,30 @@ impl Default for LogConfig {
     }
 }
 
+/// How an SMTP connection is encrypted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tls {
+    /// `smtp://` — STARTTLS is required.
+    Required,
+    /// `smtps://` — TLS from the first byte.
+    Wrapper,
+    /// `smtp://…?tls=none` — a local relay.
+    None,
+}
+
+/// A parsed `smtp_url`. The password stays inside [`Secret`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmtpUrl {
+    /// Encryption for this host.
+    pub tls: Tls,
+    /// SMTP host, without brackets on an IPv6 address.
+    pub host: String,
+    /// Explicit port, or 587 / 465 / 25 when the URL omits one.
+    pub port: u16,
+    /// Username and password. Both are percent-decoded.
+    pub credentials: Option<(String, Secret<String>)>,
+}
+
 /// Everything `llmobs serve` reads from the environment and `llmobs.toml`.
 ///
 /// Keys that spec 12 lists for later work (gRPC listen address, encryption key,
@@ -326,9 +351,9 @@ pub struct ServerConfig {
     #[serde(default)]
     pub auth: AuthSettings,
     /// SMTP URL, including any credentials. Empty does not count as configured.
-    #[serde(default)]
-    pub smtp_url: Option<Secret<String>>,
-    /// `From` address for outgoing mail.
+    #[serde(default, deserialize_with = "deserialize_smtp_url")]
+    pub smtp_url: Option<SmtpUrl>,
+    /// `From` mailbox. Required when `smtp_url` is set.
     #[serde(default)]
     pub email_from: Option<String>,
     /// First-run admin, org, and project.
@@ -472,9 +497,16 @@ fn path_string(path: &Path) -> Result<String, ConfigError> {
 fn map_figment(error: figment::Error) -> ConfigError {
     for part in error.clone() {
         if let Some(key) = secret_key(&part.path) {
+            // Figment's own text can quote the rejected URL, password included.
+            // Only the static reason is kept.
+            let invalid_url = part.to_string().contains("invalid URL");
             return ConfigError::Invalid {
                 key,
-                reason: "expected a string",
+                reason: if invalid_url {
+                    "invalid URL"
+                } else {
+                    "expected a string"
+                },
             };
         }
     }
@@ -496,7 +528,8 @@ fn validate(config: &mut ServerConfig) -> Result<(), ConfigError> {
         "auth.enforce_sso_domains",
         &mut config.auth.enforce_sso_domains,
     )?;
-    if config.auth.require_email_verification && !smtp_configured(&config.smtp_url) {
+    validate_email(config)?;
+    if config.auth.require_email_verification && config.smtp_url.is_none() {
         return Err(ConfigError::Invalid {
             key: "auth.require_email_verification",
             reason: "email verification needs `smtp_url`",
@@ -532,10 +565,121 @@ fn domain_ok(domain: &str) -> bool {
         && domain.split('.').all(|label| !label.is_empty())
 }
 
-fn smtp_configured(smtp_url: &Option<Secret<String>>) -> bool {
-    smtp_url
-        .as_ref()
-        .is_some_and(|url| !url.expose().trim().is_empty())
+fn validate_email(config: &mut ServerConfig) -> Result<(), ConfigError> {
+    let trimmed = config
+        .email_from
+        .as_deref()
+        .map(str::trim)
+        .filter(|from| !from.is_empty())
+        .map(str::to_owned);
+    config.email_from = trimmed;
+    if config
+        .email_from
+        .as_deref()
+        .is_some_and(|from| from.parse::<Mailbox>().is_err())
+    {
+        return Err(ConfigError::Invalid {
+            key: "email_from",
+            reason: "invalid mailbox",
+        });
+    }
+    if config.smtp_url.is_some() && config.email_from.is_none() {
+        return Err(ConfigError::Invalid {
+            key: "email_from",
+            reason: "required when smtp_url is set",
+        });
+    }
+    Ok(())
+}
+
+fn deserialize_smtp_url<'de, D>(deserializer: D) -> Result<Option<SmtpUrl>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(secret) = Option::<Secret<String>>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    let raw = secret.expose().trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    parse_smtp_url(raw)
+        .map(Some)
+        .map_err(|()| de::Error::custom("invalid URL"))
+}
+
+fn parse_smtp_url(raw: &str) -> Result<SmtpUrl, ()> {
+    let url = url::Url::parse(raw).map_err(|_| ())?;
+    if url.fragment().is_some() {
+        return Err(());
+    }
+    let path = url.path();
+    if !path.is_empty() && path != "/" {
+        return Err(());
+    }
+    let host = url.host_str().filter(|host| !host.is_empty()).ok_or(())?;
+    let tls = match url.scheme() {
+        "smtp" => match url.query() {
+            None => Tls::Required,
+            Some("tls=none") => Tls::None,
+            Some(_) => return Err(()),
+        },
+        "smtps" if url.query().is_none() => Tls::Wrapper,
+        _ => return Err(()),
+    };
+    let port = url.port().unwrap_or(match tls {
+        Tls::Required => 587,
+        Tls::Wrapper => 465,
+        Tls::None => 25,
+    });
+    let credentials = if url.username().is_empty() {
+        if url.password().is_some() {
+            return Err(());
+        }
+        None
+    } else {
+        Some((
+            percent_decode(url.username())?,
+            Secret(percent_decode(url.password().unwrap_or(""))?),
+        ))
+    };
+    Ok(SmtpUrl {
+        tls,
+        host: host.to_owned(),
+        port,
+        credentials,
+    })
+}
+
+/// `username()` and `password()` keep `%HH` sequences. Userinfo uses `%20`, not `+`.
+fn percent_decode(raw: &str) -> Result<String, ()> {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len() {
+                return Err(());
+            }
+            let high = hex_digit(bytes[index + 1])?;
+            let low = hex_digit(bytes[index + 2])?;
+            out.push((high << 4) | low);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| ())
+}
+
+fn hex_digit(byte: u8) -> Result<u8, ()> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(()),
+    }
 }
 
 fn validate_init(init: &InitConfig) -> Result<(), ConfigError> {
@@ -793,7 +937,7 @@ mod tests {
     use bytesize::ByteSize;
     use llmobs_storage::config::{ObjectStoreUrl, WalSync};
 
-    use super::{LogFormat, ServerConfig, load_from};
+    use super::{ConfigError, LogFormat, ServerConfig, SmtpUrl, Tls, load_from};
     use crate::api::account::SignupPolicy;
 
     fn socket(raw: &str) -> SocketAddr {
@@ -1012,11 +1156,18 @@ mod tests {
         assert!(blank.to_string().contains("smtp_url"), "{blank}");
 
         let config = load_from(
-            Some("smtp_url = \"smtp://localhost\"\nauth.require_email_verification = true\n"),
+            Some(
+                "smtp_url = \"smtp://localhost\"\nemail_from = \"noreply@example.com\"\nauth.require_email_verification = true\n",
+            ),
             &[],
         )
         .unwrap();
         assert!(config.auth.require_email_verification);
+        let smtp = config.smtp_url.expect("smtp");
+        assert_eq!(smtp.tls, Tls::Required);
+        assert_eq!(smtp.host, "localhost");
+        assert_eq!(smtp.port, 587);
+        assert!(smtp.credentials.is_none());
     }
 
     #[test]
@@ -1087,6 +1238,7 @@ mod tests {
             Some(
                 r#"
                 smtp_url = "smtp://user:s3cret-token@localhost:587"
+                email_from = "llmobs <noreply@example.com>"
                 [init]
                 admin_email = "ada@example.com"
                 admin_password = "hunter2hunter2"
@@ -1110,6 +1262,147 @@ mod tests {
             config.init.admin_password.unwrap().expose(),
             "hunter2hunter2"
         );
+        let (user, password) = config.smtp_url.unwrap().credentials.unwrap();
+        assert_eq!(user, "user");
+        assert_eq!(password.expose(), "s3cret-token");
+    }
+
+    #[test]
+    fn smtp_url_parses_the_three_forms() {
+        let starttls = load_smtp("smtp://user:pass@localhost");
+        assert_eq!(starttls.tls, Tls::Required);
+        assert_eq!(starttls.host, "localhost");
+        assert_eq!(starttls.port, 587);
+        let (user, password) = starttls.credentials.unwrap();
+        assert_eq!(user, "user");
+        assert_eq!(password.expose(), "pass");
+
+        let explicit = load_smtp("smtp://user:pass@mail.example:2525");
+        assert_eq!(explicit.tls, Tls::Required);
+        assert_eq!(explicit.port, 2525);
+
+        let wrapper = load_smtp("smtps://user:pass@localhost");
+        assert_eq!(wrapper.tls, Tls::Wrapper);
+        assert_eq!(wrapper.port, 465);
+        let submissions = load_smtp("smtps://user:pass@localhost:465");
+        assert_eq!(submissions.port, 465);
+
+        let plain = load_smtp("smtp://localhost?tls=none");
+        assert_eq!(plain.tls, Tls::None);
+        assert_eq!(plain.host, "localhost");
+        assert_eq!(plain.port, 25);
+        assert!(plain.credentials.is_none());
+        let relay = load_smtp("smtp://localhost:25?tls=none");
+        assert_eq!(relay.tls, Tls::None);
+        assert_eq!(relay.port, 25);
+    }
+
+    #[test]
+    fn smtp_url_percent_decodes_credentials() {
+        let smtp = load_smtp("smtp://us%65r:s%3Acret-token@localhost");
+        let (user, password) = smtp.credentials.unwrap();
+        assert_eq!(user, "user");
+        assert_eq!(password.expose(), "s:cret-token");
+    }
+
+    #[test]
+    fn smtp_url_rejects_other_schemes_without_the_password() {
+        let error = load_from(
+            Some("smtp_url = \"http://user:s3cret-token@localhost\"\n"),
+            &[],
+        )
+        .unwrap_err();
+        let display = error.to_string();
+        let debug = format!("{error:?}");
+        assert!(display.contains("smtp_url"), "{display}");
+        assert!(display.contains("invalid URL"), "{display}");
+        assert!(!display.contains("s3cret-token"), "{display}");
+        assert!(!debug.contains("s3cret-token"), "{debug}");
+
+        for bad in [
+            "smtp://localhost?tls=require",
+            "smtp://localhost?tls=none&x=1",
+            "smtps://localhost?tls=none",
+            "ftp://localhost",
+        ] {
+            let error = load_smtp_error(bad);
+            assert!(error.to_string().contains("smtp_url"), "{bad}: {error}");
+            assert!(error.to_string().contains("invalid URL"), "{bad}: {error}");
+        }
+    }
+
+    #[test]
+    fn email_from_is_required_with_smtp_and_must_be_a_mailbox() {
+        let missing = load_from(Some("smtp_url = \"smtp://localhost\"\n"), &[]).unwrap_err();
+        let missing_text = missing.to_string();
+        assert!(missing_text.contains("email_from"), "{missing_text}");
+        assert!(
+            missing_text.contains("required when smtp_url is set"),
+            "{missing_text}"
+        );
+        assert!(!missing_text.contains("localhost"), "{missing_text}");
+
+        let invalid = load_from(
+            Some("smtp_url = \"smtp://localhost\"\nemail_from = \"not-a-mailbox\"\n"),
+            &[],
+        )
+        .unwrap_err();
+        let invalid_text = invalid.to_string();
+        assert!(invalid_text.contains("email_from"), "{invalid_text}");
+        assert!(invalid_text.contains("invalid mailbox"), "{invalid_text}");
+        assert!(!invalid_text.contains("not-a-mailbox"), "{invalid_text}");
+        assert!(!format!("{invalid:?}").contains("not-a-mailbox"));
+
+        let named = load_from(
+            Some("smtp_url = \"smtp://localhost\"\nemail_from = \"llmobs <noreply@acme.com>\"\n"),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            named.email_from.as_deref(),
+            Some("llmobs <noreply@acme.com>")
+        );
+
+        let bare = load_from(
+            Some("smtp_url = \"smtp://localhost\"\nemail_from = \"  noreply@acme.com  \"\n"),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(bare.email_from.as_deref(), Some("noreply@acme.com"));
+    }
+
+    #[test]
+    fn mailer_follows_smtp_url() {
+        let absent = load_from(None, &[]).unwrap();
+        assert!(
+            crate::email::Mailer::from_config(&absent)
+                .unwrap()
+                .is_none()
+        );
+
+        let present = load_from(
+            Some("smtp_url = \"smtp://localhost:2525\"\nemail_from = \"noreply@example.com\"\n"),
+            &[],
+        )
+        .unwrap();
+        assert!(
+            crate::email::Mailer::from_config(&present)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    fn load_smtp(url: &str) -> SmtpUrl {
+        let toml = format!("smtp_url = {url:?}\nemail_from = \"noreply@example.com\"\n");
+        load_from(Some(&toml), &[])
+            .unwrap_or_else(|error| panic!("parse {url}: {error}"))
+            .smtp_url
+            .unwrap()
+    }
+
+    fn load_smtp_error(url: &str) -> ConfigError {
+        let toml = format!("smtp_url = {url:?}\nemail_from = \"noreply@example.com\"\n");
+        load_from(Some(&toml), &[]).unwrap_err()
     }
 
     #[test]

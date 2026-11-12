@@ -13,6 +13,7 @@ use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
+use llmobs_core::names::PRODUCT;
 use llmobs_storage::Storage;
 use llmobs_storage::config::{
     FlushConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig, WalConfig,
@@ -44,19 +45,19 @@ pub(crate) struct TestApp {
 impl TestApp {
     /// Defaults, `data_dir` in a temp directory, `public_url` `http://localhost:8080`.
     pub(crate) async fn new() -> Self {
-        Self::open(|_| {}, None, None).await
+        Self::open(|_| {}, None, None, false).await
     }
 
     /// `tweak` runs before storage and `meta.db` open.
     ///
     /// `storage.data_dir` is then copied from the top-level `data_dir`.
     pub(crate) async fn with_config(tweak: impl FnOnce(&mut ServerConfig)) -> Self {
-        Self::open(tweak, None, None).await
+        Self::open(tweak, None, None, false).await
     }
 
     /// Same as [`Self::new`] with extra routes inside the shared layers.
     pub(crate) async fn with_routes(routes: Router<AppState>) -> Self {
-        Self::open(|_| {}, Some(routes), None).await
+        Self::open(|_| {}, Some(routes), None, false).await
     }
 
     /// [`Self::with_config`] and [`Self::with_routes`] together.
@@ -64,18 +65,33 @@ impl TestApp {
         tweak: impl FnOnce(&mut ServerConfig),
         routes: Router<AppState>,
     ) -> Self {
-        Self::open(tweak, Some(routes), None).await
+        Self::open(tweak, Some(routes), None, false).await
     }
 
     /// The given route table instead of the server's, with the same layers.
     pub(crate) async fn with_route_table(routes: Vec<RouteDef>) -> Self {
-        Self::open(|_| {}, None, Some(routes)).await
+        Self::open(|_| {}, None, Some(routes), false).await
+    }
+
+    /// The stub mailer. [`Self::sent`] reads what it accepted.
+    pub(crate) async fn with_mailer() -> Self {
+        Self::open(|_| {}, None, None, true).await
+    }
+
+    /// Messages the stub mailer accepted. Empty when the stub is not installed.
+    pub(crate) fn sent(&self) -> Vec<crate::email::SentMail> {
+        self.state
+            .mailer
+            .as_ref()
+            .map(|mailer| mailer.sent())
+            .unwrap_or_default()
     }
 
     async fn open(
         tweak: impl FnOnce(&mut ServerConfig),
         routes: Option<Router<AppState>>,
         table: Option<Vec<RouteDef>>,
+        stub_mailer: bool,
     ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let mut config = default_config(dir.path());
@@ -85,6 +101,14 @@ impl TestApp {
             .await
             .expect("storage opens");
         let meta = MetaDb::open(&config.data_dir).await.expect("meta.db opens");
+        let mailer = if stub_mailer {
+            let from = format!("{PRODUCT} <noreply@example.com>");
+            Some(Arc::new(crate::email::Mailer::stub(&from)))
+        } else {
+            crate::email::Mailer::from_config(&config)
+                .expect("smtp settings build a mailer")
+                .map(Arc::new)
+        };
         let state = AppState::new(AppInner {
             config,
             meta,
@@ -97,6 +121,7 @@ impl TestApp {
             token_last_used: crate::auth::last_used::LastUsed::tokens(),
             setup: crate::bootstrap::SetupState::new(),
             password_hasher: tokio::sync::OnceCell::new(),
+            mailer,
         });
         let router = if let Some(table) = table {
             serve_router(state.clone(), table)
@@ -264,8 +289,9 @@ impl TestResponse {
 
 /// Runs `future` with a capturing subscriber and fails if any needle appears.
 ///
-/// The subscriber is the default only while `future` is polled, on this
-/// thread. HTTP tests use the current-thread runtime so the router does too.
+/// The subscriber stays the thread default until `future` finishes, so a task
+/// spawned on this thread is captured too. HTTP tests use the current-thread
+/// runtime.
 pub(crate) async fn assert_logs_clean<T>(needles: &[&str], future: impl Future<Output = T>) -> T {
     let (value, logs) = capture_logs(future).await;
     for needle in needles {
@@ -283,11 +309,11 @@ pub(crate) async fn capture_logs<T>(future: impl Future<Output = T>) -> (T, Stri
         .with_ansi(false)
         .with_target(true);
     let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(layer));
-    let mut future = std::pin::pin!(future);
-    let value = std::future::poll_fn(|cx| {
-        tracing::dispatcher::with_default(&dispatch, || future.as_mut().poll(cx))
-    })
-    .await;
+    let value = {
+        let _guard = tracing::dispatcher::set_default(&dispatch);
+        future.await
+    };
+    drop(dispatch);
     let bytes = buffer.lock().expect("log buffer").clone();
     let logs = String::from_utf8_lossy(&bytes).into_owned();
     (value, logs)

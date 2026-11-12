@@ -1,0 +1,32 @@
+---
+source: crates/server/src/email/mod.rs
+expression: "rendered(&mailer, &Email::Invite\n{\n    org_name: \"Acme\".to_owned(), inviter_name: Some(\"Ada\".to_owned()), role:\n    OrgRole::Member, url: \"https://example.com/invite/tok\".to_owned(),\n},)"
+---
+Subject: You're invited to Acme on llmobs
+
+Ada invited you to join Acme on llmobs as member.
+Accept the invitation:
+https://example.com/invite/tok
+---
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>llmobs</title>
+  </head>
+  <body style="margin:0;padding:0;background-color:#f4f4f5;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f5;">
+      <tr>
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background-color:#ffffff;border-radius:8px;">
+            <tr>
+              <td style="padding:32px;font-family:sans-serif;font-size:16px;line-height:1.5;color:#18181b;"><p style="margin:0 0 16px;">Ada invited you to join Acme on llmobs as member.</p>
+                <p style="margin:0;"><a href="https:&#x2f;&#x2f;example.com&#x2f;invite&#x2f;tok" style="color:#1d4ed8;text-decoration:underline;">https:&#x2f;&#x2f;example.com&#x2f;invite&#x2f;tok</a></p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

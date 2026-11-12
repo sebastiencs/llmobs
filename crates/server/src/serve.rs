@@ -173,6 +173,17 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
             return Err(error.into());
         }
     };
+    let mailer = match crate::email::Mailer::from_config(&config) {
+        Ok(mailer) => mailer.map(Arc::new),
+        Err(_error) => {
+            release_storage(storage).await;
+            meta.close().await;
+            return Err(ServeError::Config(ConfigError::Invalid {
+                key: "smtp_url",
+                reason: "could not build the mailer",
+            }));
+        }
+    };
     let storage = Arc::new(storage);
     let state = AppState::new(AppInner {
         config,
@@ -186,6 +197,7 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         token_last_used: crate::auth::last_used::LastUsed::tokens(),
         setup: crate::bootstrap::SetupState::new(),
         password_hasher: tokio::sync::OnceCell::new(),
+        mailer,
     });
     if let Err(error) = crate::bootstrap::prepare(&state).await {
         release_state(state).await;

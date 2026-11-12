@@ -95,6 +95,16 @@ figment = { version = "0.10.19", features = ["toml", "env"] }
 ipnet = { version = "2.12.2", features = ["serde"] }
 # `public_url` parsing. Already in `Cargo.lock` (2.5.8).
 url = "2.5.8"
+# SMTP (spec 08). Default features include `native-tls`; rustls only.
+# `hostname` is the EHLO and generated `Message-ID` domain.
+lettre = { version = "0.11.23", default-features = false, features = [
+    "builder",
+    "hostname",
+    "smtp-transport",
+    "tokio1-rustls-tls",
+] }
+# Email templates (spec 08). `.html` names auto-escape.
+minijinja = "3.1.0"
 # HTTP router (P4). No `tracing` feature: axum's span would record the URI (D150).
 # `matched-path` is the route template request logs use.
 axum = { version = "0.8.9", default-features = false, features = [

@@ -1,0 +1,32 @@
+---
+source: crates/server/src/email/mod.rs
+expression: "rendered(&mailer, &Email::VerifyEmail\n{ url: \"https://example.com/verify?token=tok\".to_owned(), },)"
+---
+Subject: Verify your email for llmobs
+
+Verify your email address for llmobs:
+https://example.com/verify?token=tok
+---
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>llmobs</title>
+  </head>
+  <body style="margin:0;padding:0;background-color:#f4f4f5;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f5;">
+      <tr>
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background-color:#ffffff;border-radius:8px;">
+            <tr>
+              <td style="padding:32px;font-family:sans-serif;font-size:16px;line-height:1.5;color:#18181b;">
+                <p style="margin:0 0 16px;">Verify your email address for llmobs.</p>
+                <p style="margin:0;"><a href="https:&#x2f;&#x2f;example.com&#x2f;verify?token=tok" style="color:#1d4ed8;text-decoration:underline;">https:&#x2f;&#x2f;example.com&#x2f;verify?token=tok</a></p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

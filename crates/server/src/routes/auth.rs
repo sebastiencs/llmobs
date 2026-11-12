@@ -90,7 +90,7 @@ async fn config(State(state): State<AppState>) -> Result<error::Json<AuthConfig>
         password_enabled: !state.config.auth.disable_password,
         signup: state.config.auth.signup,
         providers: Vec::new(),
-        smtp_enabled: state.config.smtp_url.is_some(),
+        smtp_enabled: state.mailer.is_some(),
         email_verification_required: state.config.auth.require_email_verification,
     }))
 }

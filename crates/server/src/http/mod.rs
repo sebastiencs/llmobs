@@ -36,7 +36,6 @@ const BODY_LIMIT: usize = 1024 * 1024;
 #[derive(Clone)]
 pub(crate) struct AppState(Arc<AppInner>);
 
-/// Fields later sub-phases add to: mailer.
 pub(crate) struct AppInner {
     pub(crate) config: ServerConfig,
     pub(crate) meta: MetaDb,
@@ -54,6 +53,8 @@ pub(crate) struct AppInner {
     pub(crate) setup: crate::bootstrap::SetupState,
     /// Built on the first password check, so tests that never log in skip argon2.
     pub(crate) password_hasher: OnceCell<crate::auth::password::Hasher>,
+    /// `None` when `smtp_url` is unset. Shared so a send can outlive the request.
+    pub(crate) mailer: Option<Arc<crate::email::Mailer>>,
 }
 
 impl AppState {
