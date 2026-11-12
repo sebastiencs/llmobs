@@ -34,6 +34,18 @@ const POINTS: &[(&str, HookPoint)] = &[
     ("FlushAfterTruncate", HookPoint::FlushAfterTruncate),
 ];
 
+const COMPACTION_POINTS: &[(&str, HookPoint)] = &[
+    ("CompactionAfterStage", HookPoint::CompactionAfterStage),
+    ("ObjectSync", HookPoint::ObjectSync),
+    ("ObjectRename", HookPoint::ObjectRename),
+    ("ObjectDirSync", HookPoint::ObjectDirSync),
+    ("CompactionAfterWrite", HookPoint::CompactionAfterWrite),
+    ("CatalogCommit", HookPoint::CatalogCommit),
+    ("CompactionAfterCommit", HookPoint::CompactionAfterCommit),
+    ("GcObsoleteBeforeDelete", HookPoint::GcObsoleteBeforeDelete),
+    ("GcObsoleteAfterDelete", HookPoint::GcObsoleteAfterDelete),
+];
+
 fn project() -> ProjectId {
     "018f6b4e-7c1a-7c1a-8c1a-000000000001".parse().unwrap()
 }
@@ -63,6 +75,12 @@ fn parse_point(name: &str) -> Option<HookPoint> {
         .iter()
         .find(|(label, _)| *label == name)
         .map(|(_, point)| *point)
+        .or_else(|| {
+            COMPACTION_POINTS
+                .iter()
+                .find(|(label, _)| *label == name)
+                .map(|(_, point)| *point)
+        })
 }
 
 /// Two batches, four rows, distinct span ids.
@@ -259,6 +277,179 @@ async fn every_flush_hook_aborts_safely() {
         objects_match_catalog(&storage, dir.path());
         drop(storage);
     }
+}
+
+/// `quiet_config` with hand-run compaction passes: interval 1 h, two L0 files.
+fn compaction_config(dir: &Path) -> StorageConfig {
+    let mut config = quiet_config(dir);
+    config.compaction.interval = Duration::from_secs(3_600);
+    config.compaction.l0_files = 2;
+    config
+}
+
+/// Day D at `hour:minute`, in ns.
+fn crash_at(hour: i64, minute: i64) -> i64 {
+    use chrono::Datelike;
+    let day = chrono::NaiveDate::from_ymd_opt(2026, 3, 5).unwrap();
+    (i64::from(day.num_days_from_ce()) - 719_163) * 86_400_000_000_000
+        + (hour * 3_600 + minute * 60) * 1_000_000_000
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "run by every_compaction_hook_aborts_safely"]
+async fn compaction_child() {
+    let Ok(dir) = std::env::var("LLMOBS_COMPACTION_CRASH_DIR") else {
+        return;
+    };
+    let name = std::env::var("LLMOBS_COMPACTION_CRASH_POINT").unwrap();
+    let point = parse_point(&name).unwrap_or_else(|| panic!("unknown crash point {name}"));
+
+    // Three L0 spans files and three traces files of one trace.
+    for index in 0..3_u8 {
+        let storage = crate::Storage::open(compaction_config(Path::new(&dir)))
+            .await
+            .unwrap();
+        let start = crash_at(10, 0) + i64::from(index) * 60 * 1_000_000_000;
+        let spans = vec![
+            crate::test_support::span_row(0, index * 2, start, start + 1_000_000_000),
+            crate::test_support::span_row(
+                0,
+                index * 2 + 1,
+                start + 1_000_000_000,
+                start + 2_000_000_000,
+            ),
+        ];
+        storage
+            .append_spans(project(), crate::test_support::span_rows(&spans))
+            .await
+            .unwrap();
+        storage.shutdown().await.unwrap();
+    }
+
+    let storage = crate::Storage::open(compaction_config(Path::new(&dir)))
+        .await
+        .unwrap();
+    storage.hooks().abort_at(point);
+    storage.compact(crash_at(12, 0)).await.unwrap();
+    storage.collect_obsolete(Duration::ZERO).await.unwrap();
+    panic!("compaction finished without reaching {name}");
+}
+
+/// Run alone by `just test`, like [`every_flush_hook_aborts_safely`]: a spawned
+/// child holds a copy of every open file descriptor until it execs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "spawns processes; `just test` runs it in its own test process"]
+async fn every_compaction_hook_aborts_safely() {
+    for (name, _) in COMPACTION_POINTS {
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("crash_tests::compaction_child")
+            .arg("--ignored")
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env("LLMOBS_COMPACTION_CRASH_DIR", dir.path())
+            .env("LLMOBS_COMPACTION_CRASH_POINT", name)
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let started = std::time::Instant::now();
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if started.elapsed() > Duration::from_secs(60) => {
+                    let _ = child.kill();
+                    panic!("{name} did not abort within 60s");
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+                Err(error) => panic!("waiting for {name}: {error}"),
+            }
+        };
+        assert!(
+            status.code().is_none(),
+            "{name} exited {status} instead of aborting (point not reached?)"
+        );
+
+        // The reopen runs the open-time `file_sources` check and the startup
+        // temp-file cleanup.
+        let storage = crate::Storage::open(compaction_config(dir.path()))
+            .await
+            .unwrap_or_else(|error| panic!("{name}: reopen failed: {error}"));
+        let ids = stored_ids(&storage).await;
+        assert_eq!(ids.len(), 6, "{name}: acknowledged rows");
+        objects_match_catalog(&storage, dir.path());
+
+        // Redo the interrupted work, then collect everything it left.
+        for _ in 0..5 {
+            if storage.compact(crash_at(12, 0)).await.unwrap().jobs == 0 {
+                break;
+            }
+        }
+        storage.collect_obsolete(Duration::ZERO).await.unwrap();
+        storage.collect_staged(Duration::ZERO).await.unwrap();
+
+        let ids = stored_ids(&storage).await;
+        assert_eq!(ids.len(), 6, "{name}: rows after the redo");
+        let spans_files = storage.catalog_files(Table::Spans);
+        assert_eq!(spans_files.len(), 1, "{name}: one spans file");
+        assert_eq!(spans_files[0].level, 1, "{name}: the spans file is level 1");
+        let traces_files = storage.catalog_paths(crate::catalog::FileTable::Traces);
+        assert_eq!(traces_files.len(), 1, "{name}: one traces file");
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let (obsolete, staged) = catalog_counts(dir.path()).await;
+        assert_eq!(obsolete, 0, "{name}: obsolete rows remain");
+        assert_eq!(staged, 0, "{name}: staged rows remain");
+        let temps = temp_files(&dir.path().join("objects"));
+        assert!(
+            temps.is_empty(),
+            "{name}: {} temp files remain",
+            temps.len()
+        );
+    }
+}
+
+/// `obsolete` and `staged_objects` row counts of `catalog.db`.
+async fn catalog_counts(dir: &Path) -> (i64, i64) {
+    use sqlx::ConnectOptions;
+    let mut connection = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(dir.join("catalog.db"))
+        .read_only(true)
+        .connect()
+        .await
+        .unwrap();
+    let obsolete = sqlx::query_scalar("SELECT COUNT(*) FROM data_files WHERE state = 'obsolete'")
+        .fetch_one(&mut connection)
+        .await
+        .unwrap();
+    let staged = sqlx::query_scalar("SELECT COUNT(*) FROM staged_objects")
+        .fetch_one(&mut connection)
+        .await
+        .unwrap();
+    (obsolete, staged)
+}
+
+/// Every file under `dir` whose name marks a leftover temp file.
+fn temp_files(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(temp_files(&path));
+        } else {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if name.starts_with('.') && name.contains(".tmp-") {
+                found.push(path);
+            }
+        }
+    }
+    found
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
