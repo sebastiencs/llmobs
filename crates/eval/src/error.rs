@@ -1,4 +1,4 @@
-//! Configuration, check, mapping, template, judge, webhook, and egress errors.
+//! Configuration, check, mapping, template, judge, webhook, egress, and run errors.
 //!
 //! Messages name the evaluator kind, the field, the variable, the expression, the
 //! byte offset, the host, the provider status, or serde's error category with its
@@ -333,6 +333,35 @@ impl WebhookError {
             }
         }
     }
+}
+
+/// One evaluator run failed before a score was produced.
+///
+/// [`Display`](std::fmt::Display) is the inner error's text, which names an id,
+/// a status, or a fixed reason and does not quote a payload.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum EvalError {
+    /// The evaluator or its connection is not usable.
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+    /// A check could not produce a score.
+    #[error(transparent)]
+    Check(#[from] CheckError),
+    /// A variable could not be resolved.
+    #[error(transparent)]
+    Mapping(#[from] MappingError),
+    /// The judge prompt could not be rendered.
+    #[error(transparent)]
+    Template(#[from] TemplateError),
+    /// The judge call failed or its answer was rejected.
+    #[error(transparent)]
+    Judge(#[from] JudgeError),
+    /// The webhook call failed or its body was rejected.
+    #[error(transparent)]
+    Webhook(#[from] WebhookError),
+    /// The HTTP client failed before a status was available.
+    #[error(transparent)]
+    Egress(#[from] EgressError),
 }
 
 impl JudgeError {

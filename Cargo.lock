@@ -2662,7 +2662,9 @@ dependencies = [
  "insta",
  "jsonschema",
  "llmobs-core",
+ "llmobs-otel",
  "minijinja",
+ "opentelemetry-proto",
  "regex",
  "reqwest",
  "serde",
@@ -2672,6 +2674,7 @@ dependencies = [
  "strsim",
  "thiserror",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

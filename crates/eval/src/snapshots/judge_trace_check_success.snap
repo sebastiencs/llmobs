@@ -1,0 +1,45 @@
+---
+source: crates/eval/src/trace.rs
+expression: "&normalized.spans"
+---
+[
+  {
+    "project_id": "01900000-0000-7000-8000-000000000001",
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "span_id": "3bfc48d12c72d4a9",
+    "name": "grader",
+    "span_kind": "evaluator",
+    "start_time": "2025-12-31T23:59:58.500000000Z",
+    "end_time": "2026-01-01T00:00:00.000000000Z",
+    "status": "unset",
+    "service_name": "llmobs-eval",
+    "environment": "llmobs-eval",
+    "metadata": {
+      "llmobs.eval.evaluator_id": "01900000-0000-7000-8000-000000000010",
+      "llmobs.eval.rule_id": "01900000-0000-7000-8000-000000000020",
+      "llmobs.eval.target_span_id": "00f067aa0ba902b7",
+      "llmobs.eval.target_trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"
+    },
+    "input": "{\"output\":\"hello\"}",
+    "input_format": "json",
+    "output": "{\"value\":true}",
+    "output_format": "json",
+    "input_preview": "{\"output\":\"hello\"}",
+    "output_preview": "{\"value\":true}",
+    "attributes": {
+      "llmobs.environment": "llmobs-eval",
+      "llmobs.metadata.llmobs.eval.evaluator_id": "01900000-0000-7000-8000-000000000010",
+      "llmobs.metadata.llmobs.eval.rule_id": "01900000-0000-7000-8000-000000000020",
+      "llmobs.metadata.llmobs.eval.target_span_id": "00f067aa0ba902b7",
+      "llmobs.metadata.llmobs.eval.target_trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+      "llmobs.span.kind": "evaluator"
+    },
+    "scope_name": "llmobs-eval",
+    "scope_version": "0.0.0",
+    "conventions": [
+      "llmobs"
+    ],
+    "ingest_time": "2026-01-01T00:00:00.000000000Z",
+    "schema_version": 1
+  }
+]

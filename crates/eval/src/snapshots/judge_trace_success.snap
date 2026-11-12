@@ -1,0 +1,99 @@
+---
+source: crates/eval/src/trace.rs
+expression: "&normalized.spans"
+---
+[
+  {
+    "project_id": "01900000-0000-7000-8000-000000000001",
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "span_id": "3bfc48d12c72d4a9",
+    "name": "grader",
+    "span_kind": "evaluator",
+    "start_time": "2025-12-31T23:59:58.500000000Z",
+    "end_time": "2026-01-01T00:00:00.000000000Z",
+    "status": "unset",
+    "service_name": "llmobs-eval",
+    "environment": "llmobs-eval",
+    "metadata": {
+      "llmobs.eval.evaluator_id": "01900000-0000-7000-8000-000000000010",
+      "llmobs.eval.rule_id": "01900000-0000-7000-8000-000000000020",
+      "llmobs.eval.target_span_id": "00f067aa0ba902b7",
+      "llmobs.eval.target_trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"
+    },
+    "input": "{\"output\":\"hello\"}",
+    "input_format": "json",
+    "output": "{\"value\":0.8,\"reason\":\"clear\"}",
+    "output_format": "json",
+    "input_preview": "{\"output\":\"hello\"}",
+    "output_preview": "{\"value\":0.8,\"reason\":\"clear\"}",
+    "attributes": {
+      "llmobs.environment": "llmobs-eval",
+      "llmobs.metadata.llmobs.eval.evaluator_id": "01900000-0000-7000-8000-000000000010",
+      "llmobs.metadata.llmobs.eval.rule_id": "01900000-0000-7000-8000-000000000020",
+      "llmobs.metadata.llmobs.eval.target_span_id": "00f067aa0ba902b7",
+      "llmobs.metadata.llmobs.eval.target_trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+      "llmobs.span.kind": "evaluator"
+    },
+    "scope_name": "llmobs-eval",
+    "scope_version": "0.0.0",
+    "conventions": [
+      "llmobs"
+    ],
+    "ingest_time": "2026-01-01T00:00:00.000000000Z",
+    "schema_version": 1
+  },
+  {
+    "project_id": "01900000-0000-7000-8000-000000000001",
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "span_id": "b2c00e782784cf86",
+    "parent_span_id": "3bfc48d12c72d4a9",
+    "name": "chat gpt-4o",
+    "span_kind": "llm",
+    "start_time": "2025-12-31T23:59:58.500000000Z",
+    "end_time": "2026-01-01T00:00:00.000000000Z",
+    "status": "unset",
+    "service_name": "llmobs-eval",
+    "environment": "llmobs-eval",
+    "provider": "openai",
+    "request_model": "gpt-4o",
+    "response_model": "gpt-4o",
+    "operation": "chat",
+    "input_tokens": 1000,
+    "output_tokens": 100,
+    "cache_read_tokens": 200,
+    "cache_write_tokens": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1100,
+    "cost_input": 0.00225,
+    "cost_output": 0.001,
+    "cost_total": 0.00325,
+    "cost_source": "computed",
+    "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Grade the answer.\"}]}]",
+    "input_format": "messages",
+    "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"0.8\"}]}]",
+    "output_format": "messages",
+    "input_preview": "Grade the answer.",
+    "output_preview": "0.8",
+    "attributes": {
+      "gen_ai.operation.name": "chat",
+      "gen_ai.provider.name": "openai",
+      "gen_ai.request.model": "gpt-4o",
+      "gen_ai.response.model": "gpt-4o",
+      "gen_ai.usage.cache_read.input_tokens": "200",
+      "gen_ai.usage.cache_write.input_tokens": "0",
+      "gen_ai.usage.input_tokens": "1000",
+      "gen_ai.usage.output_tokens": "100",
+      "gen_ai.usage.reasoning.output_tokens": "0",
+      "llmobs.environment": "llmobs-eval",
+      "llmobs.span.kind": "llm"
+    },
+    "scope_name": "llmobs-eval",
+    "scope_version": "0.0.0",
+    "conventions": [
+      "llmobs",
+      "genai"
+    ],
+    "ingest_time": "2026-01-01T00:00:00.000000000Z",
+    "schema_version": 1
+  }
+]
