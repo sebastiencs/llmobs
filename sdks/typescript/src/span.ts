@@ -9,6 +9,9 @@
  * untouched: `withSpan` with a no-op handle, `observe`'s wrapper straight
  * through. The check happens at call time, so functions wrapped before
  * `init()` are traced after it.
+ *
+ * Generator functions take another path (T7): `observe` detects them at wrap
+ * time and traces the *generator*, not the call, through `./generators.js`.
  */
 
 import {
@@ -21,6 +24,7 @@ import {
 } from "@opentelemetry/api";
 
 import { metadataAttributeName } from "./context.js";
+import { type GeneratorPlan, traceAsyncGenerator, traceGenerator } from "./generators.js";
 import { debug } from "./log.js";
 import { applyMask } from "./mask.js";
 import { currentRuntime, type Runtime } from "./runtime.js";
@@ -87,15 +91,21 @@ export interface ObserveOptions {
   kind?: SpanKind;
   captureInput?: boolean;
   captureOutput?: boolean;
+  /** Generator functions only: record `fn(items)` instead of the default output rule. */
+  reduceOutput?: (items: unknown[]) => unknown;
 }
 
-/** What one traced call knows before it starts. Internal. */
-interface TracedPlan {
+/** What starting a traced span needs. Internal, shared with the generator wrapper (T7). */
+export interface SpanStart {
   readonly name: string;
   readonly kind: SpanKind;
   readonly hasInput: boolean;
   readonly inputValue: unknown;
   readonly metadata: Readonly<Record<string, unknown>> | undefined;
+}
+
+/** What one traced call knows before it starts. Internal. */
+interface TracedPlan extends SpanStart {
   /** `observe`: record the settled result as `llmobs.output` (D-F-11). */
   readonly captureResultAsOutput: boolean;
 }
@@ -143,7 +153,7 @@ function traced<T>(plan: TracedPlan, body: (span: SpanHandle) => T): T {
 }
 
 /** Start the span on our tracer, stamp kind, input and metadata. Never throws. */
-function startTracedSpan(runtime: Runtime, plan: TracedPlan): Span | undefined {
+export function startTracedSpan(runtime: Runtime, plan: SpanStart): Span | undefined {
   try {
     const span = runtime.tracer.startSpan(plan.name, undefined, context.active());
     span.setAttribute("llmobs.span.kind", plan.kind);
@@ -170,7 +180,7 @@ function captureResult(plan: TracedPlan, span: Span, runtime: Runtime, value: un
 }
 
 /** § Span attributes "Errors": the event ourselves (not `recordException`), the error status, then re-raise. */
-function recordError(span: Span, error: unknown): void {
+export function recordError(span: Span, error: unknown): void {
   try {
     const isError = error instanceof Error;
     const type = isError ? error.name : "Error";
@@ -187,7 +197,7 @@ function recordError(span: Span, error: unknown): void {
 }
 
 /** The masked, serialized payload under `key` plus its format, when content capture is on. Never throws. */
-function setPayload(
+export function setPayload(
   span: Span,
   key: "llmobs.input" | "llmobs.output",
   value: unknown,
@@ -316,9 +326,14 @@ export function withSpan<T>(
  * Wrap `fn` so each call runs inside one of our spans. `this` is preserved;
  * the input follows D-F-11 (no arguments → none, one → that value, more → the
  * array of them) and the output is the return value or resolved value
- * (`undefined` and generator objects are not recorded). The kind is checked
- * at wrap time; the runtime at call time, so a function wrapped before
- * `init()` is traced after it.
+ * (`undefined` and generator objects are not recorded).
+ *
+ * Generator and async generator functions (detected at wrap time) are traced
+ * as generators instead: no span at call time, the span starts at the first
+ * `next()`, the output is the yielded items (or `reduceOutput(items)`), an
+ * early `return()` ends with status ok. See `./generators.js`. The kind is
+ * checked at wrap time; the runtime at call time, so a function wrapped
+ * before `init()` is traced after it.
  */
 export function observe<A extends unknown[], R>(
   fn: (...args: A) => R,
@@ -329,18 +344,44 @@ export function observe<A extends unknown[], R>(
   const name = raw.name ?? (fn.name || "anonymous");
   const captureInput = raw.captureInput ?? true;
   const captureOutput = raw.captureOutput ?? true;
+  const tag = Object.prototype.toString.call(fn);
+  const generatorTag =
+    tag === "[object GeneratorFunction]" || tag === "[object AsyncGeneratorFunction]";
   return function (this: unknown, ...args: A): R {
-    return traced(
-      {
-        name,
-        kind,
-        hasInput: captureInput && args.length > 0,
-        inputValue: args.length === 1 ? args[0] : args,
-        metadata: undefined,
-        captureResultAsOutput: captureOutput,
-      },
-      () => fn.apply(this, args),
-    );
+    if (!generatorTag) {
+      return traced(
+        {
+          name,
+          kind,
+          hasInput: captureInput && args.length > 0,
+          inputValue: args.length === 1 ? args[0] : args,
+          metadata: undefined,
+          captureResultAsOutput: captureOutput,
+        },
+        () => fn.apply(this, args),
+      );
+    }
+    // Generator mode (D-F-11): no span at call time, and fn.apply runs none
+    // of the body. The wrap-time tag check guarantees the return value is a
+    // generator, so the casts are sound; with no runtime it goes back unwrapped.
+    const runtime = currentRuntime();
+    const gen = fn.apply(this, args);
+    if (runtime === undefined) {
+      return gen;
+    }
+    const plan: GeneratorPlan = {
+      name,
+      kind,
+      hasInput: captureInput && args.length > 0,
+      inputValue: args.length === 1 ? args[0] : args,
+      metadata: undefined,
+      runtime,
+      captureOutput,
+      reduceOutput: raw.reduceOutput,
+    };
+    return tag === "[object GeneratorFunction]"
+      ? (traceGenerator(gen as Generator<unknown, unknown, unknown>, plan) as R)
+      : (traceAsyncGenerator(gen as AsyncGenerator<unknown, unknown, unknown>, plan) as R);
   };
 }
 
