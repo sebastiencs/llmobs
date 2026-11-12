@@ -218,6 +218,22 @@ D1–D168 below are numbered in one sequence. From now on a track's decisions ar
 | D167 | Live provider tests | CI never calls a real provider. Integration tests use an in-process mock; live tests are ignored and run only through `just eval-live` (E19). |
 | D168 | QueryContext session | **`QueryContext::session()` is `pub`.** It returns `&SessionContext` so the `#[ignore]` benchmark `crates/storage/tests/trace_bench.rs` can run raw SQL (Q5) and `EXPLAIN ANALYZE` from an integration test, which the `sql_json` sandbox (D96) rejects. It is a trusted in-process capability only: the SQL console and read endpoints keep going through `sql_json`/`sql_export`, which apply the D96 sandbox, and callers of `session()` must not expose it to untrusted SQL. Deviation recorded for the M3 review, with no behaviour change to the product (spec 05). |
 
+## Track B1 — Normalization
+
+Decisions from blessing and reviewing the 51 captured fixtures (`fixtures/otlp`, D118) against spec 02.
+
+| # | Topic | Decision |
+|---|---|---|
+| D-B1-1 | Langfuse OpenAI usage | **`langfuse.observation.usage_details` may hold the OpenAI usage object.** The Langfuse SDK's OpenAI wrapper copies it as is. Each OpenAI key is read when its Langfuse key is absent: `prompt_tokens` (input, includes cache), `completion_tokens`, `total_tokens`, `prompt_tokens_details.cached_tokens`, `completion_tokens_details.reasoning_tokens`. Langfuse's own server maps the same keys (`langfuse/observe-nested`, `langfuse/openai-wrapper-chat`). |
+| D-B1-2 | Vercel cache read | **Vercel ≤ v5 + Anthropic cache read comes from `ai.response.providerMetadata` too.** Like cache write, `anthropic.cacheReadInputTokens`, else `anthropic.usage.cache_read_input_tokens`, fills cache read when no attribute does, so the exclusive input is added back in full (`vercel/v5-anthropic-cache`: input 2100, not 300). Langfuse reads the same field. |
+| D-B1-3 | OpenAI-shaped GenAI messages | **`gen_ai.input.messages` / `gen_ai.output.messages` in OpenAI chat format are converted.** An array where no element has `parts` and each has a `role` (or a `message`) goes through the OpenAI converter; a `choices` element is its `message`, null fields dropped, with its `finish_reason`. Laminar 0.8 writes these shapes (`laminar/*`). |
+| D-B1-4 | TTFT sources | **Resolves D113's event-based TTFT.** `gen_ai.client.operation.time_to_first_chunk` (seconds, Vercel v7) is an attribute source after `gen_ai.response.time_to_first_chunk`. When no attribute gives TTFT, the OpenInference `First Token Stream Event`, else the earliest `gen_ai.content.completion.chunk` / `llm.content.completion.chunk` event (OpenLLMetry, Laminar), gives it. Events are not consumed. |
+| D-B1-5 | Vercel v7 context | **`ai.settings.context.*` is context, not request parameters.** `sessionId` and `userId` fill `session_id` and `user_id`; every other key goes to `metadata`; none reaches `request_params` (`vercel/v7-generate-text-tool`). |
+| D-B1-6 | Vercel embeddings | **Only `*.doEmbed` is `embedding`; the outer `ai.embed` / `ai.embedMany` are `chain`**, as `ai.generateText` is against `doGenerate`, so usage and cost are not counted twice. On `embedding` spans `ai.usage.tokens` fills `input_tokens` (and still the total), so the embedding is priced (`vercel/v5-embed-many`). |
+| D-B1-7 | Cost without tokens | **A priced `llm`/`embedding` span with neither input nor output tokens has null cost and `cost_source = none`**, not a computed $0. The matched row still infers the provider. |
+| D-B1-8 | Google ADK call_llm | **ADK 2.x `call_llm` (no `gen_ai.operation.name`, `gcp.vertex.agent.llm_request` present) is `chain`:** its `generate_content` child carries the same usage. `gen_ai.system = gcp.vertex.agent` is not a provider (skipped, left unread), and `gcp.vertex.agent.session_id` is a `session_id` source (`google_adk/*`). |
+| D-B1-9 | OpenInference response model | **`llm.response.model_name` fills `response_model`**, after the GenAI and Vercel keys, as MLflow reads it. |
+
 ## Track A1 — Storage engine
 
 | # | Topic | Decision |
