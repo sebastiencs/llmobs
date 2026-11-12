@@ -3,12 +3,13 @@
  *
  * Owns an OTel `BatchSpanProcessor` (1 s scheduled delay, 45 s export
  * timeout — above the exporter's 30 s retry deadline, so `flush()` waits for
- * retries) and stamps `llmobs.environment` / `llmobs.release` on every span
- * it starts. Nothing here raises into the app: every method catches and logs
- * the error name at debug level.
+ * retries) and stamps the context values (D-F-12) plus
+ * `llmobs.environment` / `llmobs.release` on every span our provider
+ * starts, whatever tracer created it. Nothing here raises into the app:
+ * every method catches and logs the error name at debug level.
  */
 
-import type { Context } from "@opentelemetry/api";
+import { type Context, propagation, ROOT_CONTEXT } from "@opentelemetry/api";
 import {
   BatchSpanProcessor,
   type ReadableSpan,
@@ -17,7 +18,9 @@ import {
   type SpanProcessor,
 } from "@opentelemetry/sdk-trace";
 
+import { currentValues, metadataAttributeName } from "./context.js";
 import { debug } from "./log.js";
+import { attributeValue } from "./serialize.js";
 
 export class LlmobsSpanProcessor implements SpanProcessor {
   private readonly batch: BatchSpanProcessor;
@@ -43,8 +46,9 @@ export class LlmobsSpanProcessor implements SpanProcessor {
     this.release = options.release;
   }
 
-  onStart(span: Span, _parentContext: Context): void {
+  onStart(span: Span, parentContext: Context): void {
     try {
+      stampContext(span, parentContext);
       if (this.environment !== undefined) {
         span.setAttribute("llmobs.environment", this.environment);
       }
@@ -78,6 +82,42 @@ export class LlmobsSpanProcessor implements SpanProcessor {
     } catch (error) {
       debug(`llmobs: span processor shutdown failed: ${errorName(error)}`);
     }
+  }
+}
+
+/**
+ * § Span attributes: session/user from the context values, else from baggage;
+ * tags when non-empty; each metadata entry under its own key. Runs for every
+ * span of our provider, instrumentor spans included.
+ */
+function stampContext(span: Span, parentContext: Context | undefined): void {
+  const values = currentValues(parentContext);
+  stampSessionOrUser(span, "llmobs.session.id", values.sessionId, parentContext);
+  stampSessionOrUser(span, "llmobs.user.id", values.userId, parentContext);
+  if (values.tags.length > 0) {
+    span.setAttribute("llmobs.tags", [...values.tags]);
+  }
+  for (const [key, value] of Object.entries(values.metadata)) {
+    const name = metadataAttributeName(key);
+    if (name !== undefined) {
+      span.setAttribute(name, attributeValue(value));
+    }
+  }
+}
+
+function stampSessionOrUser(
+  span: Span,
+  name: string,
+  fromContext: string | undefined,
+  parentContext: Context | undefined,
+): void {
+  if (fromContext !== undefined) {
+    span.setAttribute(name, fromContext);
+    return;
+  }
+  const entry = propagation.getBaggage(parentContext ?? ROOT_CONTEXT)?.getEntry(name)?.value;
+  if (typeof entry === "string") {
+    span.setAttribute(name, entry);
   }
 }
 
