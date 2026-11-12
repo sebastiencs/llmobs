@@ -5,6 +5,7 @@
 
 #![allow(dead_code)]
 
+use std::io::Write;
 use std::sync::Arc;
 
 use arrow::array::{Array, AsArray, RecordBatch};
@@ -132,32 +133,161 @@ pub(crate) fn write_file(
     level: u8,
     batches: &[Arc<RecordBatch>],
 ) -> Result<WrittenFile, ParquetWriteError> {
-    if level > 1 {
-        return Err(ParquetWriteError::invalid("level must be 0 or 1"));
-    }
     let sorted = sort_batches(table, batches)?;
     let rows =
         u64::try_from(sorted.num_rows()).map_err(|_| ParquetWriteError::invalid("row count"))?;
-    let (min_time, max_time) = i64_bounds(&sorted, time_column(table))?;
-    let (min_ingest_time, max_ingest_time) = i64_bounds(&sorted, ingest_column(table))?;
-    let bounds = Bounds {
-        min_time,
-        max_time,
-        min_ingest_time,
-        max_ingest_time,
-    };
-    let properties = writer_properties(table, level, rows, &bounds, sorted.schema().as_ref())?;
-    let bytes = encode(&sorted, properties)?;
+    let mut writer = FileWriter::new(table, level, Vec::new(), rows)?;
+    writer.write(&sorted)?;
+    let (buffer, summary) = writer.finish()?;
+    let bytes = Bytes::from(buffer);
     let footer_size = footer_size(&bytes)?;
     Ok(WrittenFile {
         bytes,
-        rows,
+        rows: summary.rows,
         footer_size,
-        min_time,
-        max_time,
-        min_ingest_time,
-        max_ingest_time,
+        min_time: summary.min_time,
+        max_time: summary.max_time,
+        min_ingest_time: summary.min_ingest_time,
+        max_ingest_time: summary.max_ingest_time,
     })
+}
+
+/// Encodes one Parquet file from batches already in the table's sort order.
+///
+/// CPU-bound and blocking: call from `spawn_blocking`. `write` does not check
+/// the sort order; the caller guarantees it, and `sorting_columns` is still
+/// declared.
+pub(crate) struct FileWriter<W: Write + Send> {
+    table: FileTable,
+    level: u8,
+    writer: ArrowWriter<W>,
+    bounds: Option<Bounds>,
+    rows: u64,
+}
+
+/// What [`FileWriter::finish`] measured. The footer size is computed by the
+/// caller from the file's last 8 bytes ([`footer_size_from_tail`]), because
+/// only the caller can read `W` back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileSummary {
+    /// Rows written.
+    pub(crate) rows: u64,
+    /// Smallest event time, nanoseconds.
+    pub(crate) min_time: i64,
+    /// Largest event time, nanoseconds.
+    pub(crate) max_time: i64,
+    /// Smallest `ingest_time`, nanoseconds.
+    pub(crate) min_ingest_time: i64,
+    /// Largest `ingest_time`, nanoseconds.
+    pub(crate) max_ingest_time: i64,
+}
+
+impl<W: Write + Send> FileWriter<W> {
+    /// `expected_rows` sizes the bloom filters and is only a hint.
+    pub(crate) fn new(
+        table: FileTable,
+        level: u8,
+        sink: W,
+        expected_rows: u64,
+    ) -> Result<Self, ParquetWriteError> {
+        if level > 1 {
+            return Err(ParquetWriteError::invalid("level must be 0 or 1"));
+        }
+        let schema = table_schema(table);
+        let properties = writer_properties(table, level, expected_rows, schema.as_ref())?;
+        let writer = ArrowWriter::try_new(sink, schema, Some(properties))
+            .map_err(ParquetWriteError::parquet)?;
+        Ok(Self {
+            table,
+            level,
+            writer,
+            bounds: None,
+            rows: 0,
+        })
+    }
+
+    /// Appends one batch. An empty batch is ignored.
+    pub(crate) fn write(&mut self, batch: &RecordBatch) -> Result<(), ParquetWriteError> {
+        let schema = table_schema(self.table);
+        // Fields only: batches from DataFusion carry their own metadata.
+        if batch.schema().fields() != schema.fields() {
+            return Err(ParquetWriteError::invalid("batch schema"));
+        }
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+        let mut offset = 0;
+        while offset < batch.num_rows() {
+            let room = ROW_GROUP_ROWS.saturating_sub(self.writer.in_progress_rows());
+            let len = WRITE_SLICE_ROWS
+                .min(room.max(1))
+                .min(batch.num_rows() - offset);
+            self.writer
+                .write(&batch.slice(offset, len))
+                .map_err(ParquetWriteError::parquet)?;
+            offset += len;
+            if self.writer.in_progress_rows() >= ROW_GROUP_ROWS
+                || self.writer.in_progress_size() >= ROW_GROUP_BYTES
+            {
+                self.writer.flush().map_err(ParquetWriteError::parquet)?;
+            }
+        }
+        self.widen_bounds(batch)?;
+        self.rows = self
+            .rows
+            .checked_add(
+                u64::try_from(batch.num_rows())
+                    .map_err(|_| ParquetWriteError::invalid("row count"))?,
+            )
+            .ok_or_else(|| ParquetWriteError::invalid("row count"))?;
+        Ok(())
+    }
+
+    /// Rows written so far.
+    pub(crate) fn rows(&self) -> u64 {
+        self.rows
+    }
+
+    /// Writes the footer and returns the sink and the measured file.
+    ///
+    /// A file with no rows is an error.
+    pub(crate) fn finish(mut self) -> Result<(W, FileSummary), ParquetWriteError> {
+        let bounds = match self.bounds {
+            Some(bounds) => bounds,
+            None => return Err(ParquetWriteError::invalid("empty file")),
+        };
+        for pair in file_metadata(self.table, self.level, &bounds) {
+            self.writer.append_key_value_metadata(pair);
+        }
+        let summary = FileSummary {
+            rows: self.rows,
+            min_time: bounds.min_time,
+            max_time: bounds.max_time,
+            min_ingest_time: bounds.min_ingest_time,
+            max_ingest_time: bounds.max_ingest_time,
+        };
+        let sink = self
+            .writer
+            .into_inner()
+            .map_err(ParquetWriteError::parquet)?;
+        Ok((sink, summary))
+    }
+
+    fn widen_bounds(&mut self, batch: &RecordBatch) -> Result<(), ParquetWriteError> {
+        let (min_time, max_time) = i64_bounds(batch, time_column(self.table))?;
+        let (min_ingest_time, max_ingest_time) = i64_bounds(batch, ingest_column(self.table))?;
+        let bounds = self.bounds.get_or_insert(Bounds {
+            min_time,
+            max_time,
+            min_ingest_time,
+            max_ingest_time,
+        });
+        bounds.min_time = bounds.min_time.min(min_time);
+        bounds.max_time = bounds.max_time.max(max_time);
+        bounds.min_ingest_time = bounds.min_ingest_time.min(min_ingest_time);
+        bounds.max_ingest_time = bounds.max_ingest_time.max(max_ingest_time);
+        Ok(())
+    }
 }
 
 fn sort_batches(
@@ -167,7 +297,8 @@ fn sort_batches(
     let schema = table_schema(table);
     let mut rows = Vec::new();
     for batch in batches {
-        if batch.schema().as_ref() != schema.as_ref() {
+        // Fields only: batches from DataFusion carry their own metadata.
+        if batch.schema().fields() != schema.fields() {
             return Err(ParquetWriteError::invalid("batch schema"));
         }
         if batch.num_rows() > 0 {
@@ -206,7 +337,7 @@ fn table_schema(table: FileTable) -> SchemaRef {
     }
 }
 
-fn sort_columns(table: FileTable) -> &'static [&'static str] {
+pub(crate) fn sort_columns(table: FileTable) -> &'static [&'static str] {
     match table {
         FileTable::Spans => &[spans::TRACE_ID, spans::START_TIME],
         FileTable::Traces => &[traces::START_TIME, traces::TRACE_ID],
@@ -214,7 +345,7 @@ fn sort_columns(table: FileTable) -> &'static [&'static str] {
     }
 }
 
-fn time_column(table: FileTable) -> &'static str {
+pub(crate) fn time_column(table: FileTable) -> &'static str {
     match table {
         FileTable::Spans => spans::START_TIME,
         FileTable::Traces => traces::START_TIME,
@@ -222,7 +353,7 @@ fn time_column(table: FileTable) -> &'static str {
     }
 }
 
-fn ingest_column(table: FileTable) -> &'static str {
+pub(crate) fn ingest_column(table: FileTable) -> &'static str {
     match table {
         FileTable::Spans => spans::INGEST_TIME,
         FileTable::Traces => traces::LAST_INGEST_TIME,
@@ -248,9 +379,8 @@ fn bloom_columns(table: FileTable) -> &'static [&'static str] {
 
 fn writer_properties(
     table: FileTable,
-    level: u8,
-    rows: u64,
-    bounds: &Bounds,
+    _level: u8,
+    expected_rows: u64,
     schema: &arrow::datatypes::Schema,
 ) -> Result<WriterProperties, ParquetWriteError> {
     let zstd = ZstdLevel::try_new(ZSTD_LEVEL).map_err(ParquetWriteError::parquet)?;
@@ -265,8 +395,7 @@ fn writer_properties(
         .set_statistics_enabled(EnabledStatistics::Page)
         .set_offset_index_disabled(false)
         .set_max_row_group_row_count(None)
-        .set_sorting_columns(Some(sorting_columns(table, &descriptor)?))
-        .set_key_value_metadata(Some(file_metadata(table, level, bounds)));
+        .set_sorting_columns(Some(sorting_columns(table, &descriptor)?));
     for name in dictionary_columns(table) {
         let mut matched = false;
         for column in descriptor.columns() {
@@ -279,12 +408,15 @@ fn writer_properties(
             return Err(ParquetWriteError::invalid("dictionary column"));
         }
     }
+    // One row group holds at most `ROW_GROUP_ROWS` rows, so a filter sized for
+    // more is wasted once a file has several row groups.
+    let max_ndv = expected_rows.clamp(1, ROW_GROUP_ROWS as u64);
     for name in bloom_columns(table) {
         let path = leaf_path(&descriptor, name)?;
         builder = builder
             .set_column_bloom_filter_enabled(path.clone(), true)
             .set_column_bloom_filter_fpp(path.clone(), BLOOM_FPP)
-            .set_column_bloom_filter_max_ndv(path, rows.max(1));
+            .set_column_bloom_filter_max_ndv(path, max_ndv);
     }
     Ok(builder.build())
 }
@@ -345,44 +477,31 @@ fn file_metadata(table: FileTable, level: u8, bounds: &Bounds) -> Vec<KeyValue> 
         .collect()
 }
 
-fn encode(batch: &RecordBatch, properties: WriterProperties) -> Result<Bytes, ParquetWriteError> {
-    let mut buffer = Vec::new();
-    {
-        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(properties))
-            .map_err(ParquetWriteError::parquet)?;
-        let mut offset = 0;
-        while offset < batch.num_rows() {
-            let room = ROW_GROUP_ROWS.saturating_sub(writer.in_progress_rows());
-            let len = WRITE_SLICE_ROWS
-                .min(room.max(1))
-                .min(batch.num_rows() - offset);
-            writer
-                .write(&batch.slice(offset, len))
-                .map_err(ParquetWriteError::parquet)?;
-            offset += len;
-            if writer.in_progress_rows() >= ROW_GROUP_ROWS
-                || writer.in_progress_size() >= ROW_GROUP_BYTES
-            {
-                writer.flush().map_err(ParquetWriteError::parquet)?;
-            }
-        }
-        writer.finish().map_err(ParquetWriteError::parquet)?;
-    }
-    Ok(Bytes::from(buffer))
-}
-
 fn footer_size(bytes: &[u8]) -> Result<u64, ParquetWriteError> {
+    let file_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     let Some(tail) = bytes.get(bytes.len().saturating_sub(8)..) else {
         return Err(ParquetWriteError::invalid("parquet footer"));
     };
-    if tail.len() != 8 || &tail[4..] != b"PAR1" {
+    let tail: &[u8; 8] = tail
+        .try_into()
+        .map_err(|_| ParquetWriteError::invalid("parquet footer"))?;
+    footer_size_from_tail(tail, file_len)
+}
+
+/// Footer size (metadata length + 8) from a file's last 8 bytes and its length.
+/// Errors unless the bytes end in `PAR1` and the footer fits in the file.
+pub(crate) fn footer_size_from_tail(
+    tail: &[u8; 8],
+    file_len: u64,
+) -> Result<u64, ParquetWriteError> {
+    if &tail[4..] != b"PAR1" {
         return Err(ParquetWriteError::invalid("parquet footer"));
     }
     let mut length = [0_u8; 4];
     length.copy_from_slice(&tail[..4]);
     let metadata = u64::from(u32::from_le_bytes(length));
     let total = metadata + 8;
-    if total > bytes.len() as u64 {
+    if total > file_len {
         return Err(ParquetWriteError::invalid("parquet footer"));
     }
     Ok(total)
@@ -406,7 +525,10 @@ fn column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a Arc<dyn Array>, 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::io::{Read, Seek, SeekFrom};
     use std::sync::Arc;
+
+    use bytes::Bytes;
 
     use arrow::array::{
         ArrayRef, AsArray, BooleanArray, FixedSizeBinaryBuilder, Float64Array, Int32Array,
@@ -432,8 +554,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        SCHEMA_VERSION, SCORES_DICTIONARY_COLUMNS, SPANS_DICTIONARY_COLUMNS,
-        TRACES_DICTIONARY_COLUMNS, write_file,
+        FileWriter, SCHEMA_VERSION, SCORES_DICTIONARY_COLUMNS, SPANS_DICTIONARY_COLUMNS,
+        TRACES_DICTIONARY_COLUMNS, footer_size, footer_size_from_tail, write_file,
     };
     use crate::catalog::FileTable;
     use crate::error::ParquetWriteError;
@@ -555,7 +677,7 @@ mod tests {
         }
     }
 
-    fn read_rows(bytes: &bytes::Bytes, schema: &arrow::datatypes::SchemaRef) -> RecordBatch {
+    fn read_rows(bytes: &Bytes, schema: &arrow::datatypes::SchemaRef) -> RecordBatch {
         let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(bytes.clone(), options)
             .unwrap()
@@ -565,7 +687,7 @@ mod tests {
         concat_batches(schema, &batches).unwrap()
     }
 
-    fn metadata(bytes: &bytes::Bytes) -> parquet::file::metadata::ParquetMetaData {
+    fn metadata(bytes: &Bytes) -> parquet::file::metadata::ParquetMetaData {
         let mut reader =
             ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Required);
         reader.try_parse(&bytes.clone()).unwrap();
@@ -828,6 +950,147 @@ mod tests {
         assert_eq!(metadata(&written.bytes).num_row_groups(), 3);
     }
 
+    /// The same sorted rows through `write_file` and `FileWriter` on a file.
+    #[test]
+    fn both_writers_encode_the_same_file() {
+        let starts: Vec<i64> = (0..3_000).collect();
+        let source = spans_named(&starts, "row");
+        let batches: Vec<Arc<RecordBatch>> = (0..3)
+            .map(|index| Arc::new(source.slice(index * 1_000, 1_000)))
+            .collect();
+        let written = write_file(FileTable::Spans, 0, &batches).unwrap();
+
+        let sink = tempfile::tempfile().unwrap();
+        let mut writer = FileWriter::new(FileTable::Spans, 0, sink, 3_000).unwrap();
+        for batch in &batches {
+            writer.write(batch).unwrap();
+        }
+        assert_eq!(writer.rows(), 3_000);
+        let (mut sink, summary) = writer.finish().unwrap();
+        sink.seek(SeekFrom::Start(0)).unwrap();
+        let mut buffer = Vec::new();
+        sink.read_to_end(&mut buffer).unwrap();
+        let streamed = Bytes::from(buffer);
+
+        let expected = read_rows(&written.bytes, &spans_schema());
+        let actual = read_rows(&streamed, &spans_schema());
+        assert_eq!(actual.num_rows(), 3_000);
+        assert_columns_equal(&actual, &expected);
+        assert_eq!(summary.rows, written.rows);
+        assert_eq!(summary.min_time, written.min_time);
+        assert_eq!(summary.max_time, written.max_time);
+        assert_eq!(summary.min_ingest_time, written.min_ingest_time);
+        assert_eq!(summary.max_ingest_time, written.max_ingest_time);
+
+        let kv_map = |bytes: &Bytes| {
+            metadata(bytes)
+                .file_metadata()
+                .key_value_metadata()
+                .unwrap()
+                .iter()
+                .map(|pair| (pair.key.clone(), pair.value.clone().unwrap()))
+                .collect::<BTreeMap<String, String>>()
+        };
+        assert_eq!(kv_map(&written.bytes), kv_map(&streamed));
+
+        let sorting = |bytes: &Bytes| {
+            let file = metadata(bytes);
+            (0..file.num_row_groups())
+                .map(|group_index| {
+                    let group = file.row_group(group_index);
+                    group
+                        .sorting_columns()
+                        .unwrap()
+                        .iter()
+                        .map(|column| {
+                            group
+                                .schema_descr()
+                                .column(usize::try_from(column.column_idx).unwrap())
+                                .name()
+                                .to_owned()
+                        })
+                        .collect::<Vec<String>>()
+                })
+                .collect::<Vec<Vec<String>>>()
+        };
+        assert_eq!(sorting(&written.bytes), sorting(&streamed));
+
+        let bloom_columns = |bytes: &Bytes| {
+            let file = metadata(bytes);
+            let mut found = std::collections::BTreeSet::new();
+            for group_index in 0..file.num_row_groups() {
+                let group = file.row_group(group_index);
+                for column_index in 0..group.num_columns() {
+                    let column = group.column(column_index);
+                    if column.bloom_filter_offset().is_some() {
+                        found.insert(column.column_path().parts()[0].clone());
+                    }
+                }
+            }
+            found
+        };
+        assert_eq!(bloom_columns(&written.bytes), bloom_columns(&streamed));
+
+        for bytes in [&written.bytes, &streamed] {
+            let tail: [u8; 8] = bytes[bytes.len() - 8..].try_into().unwrap();
+            let from_tail = footer_size_from_tail(&tail, u64::try_from(bytes.len()).unwrap())
+                .expect("footer size from tail");
+            assert_eq!(footer_size(bytes).unwrap(), from_tail);
+        }
+    }
+
+    #[test]
+    fn a_streamed_file_splits_three_row_groups() {
+        let starts: Vec<i64> = (0..250_000).collect();
+        let source = spans_named(&starts, "row");
+        let mut writer = FileWriter::new(FileTable::Spans, 0, Vec::new(), 250_000).unwrap();
+        let per_batch = 250_000 / 30 + 1;
+        let mut offset = 0;
+        let mut batches = 0;
+        while offset < 250_000 {
+            let len = per_batch.min(250_000 - offset);
+            writer.write(&source.slice(offset, len)).unwrap();
+            offset += len;
+            batches += 1;
+        }
+        assert_eq!(batches, 30);
+        let (buffer, summary) = writer.finish().unwrap();
+        assert_eq!(summary.rows, 250_000);
+        assert_eq!(metadata(&Bytes::from(buffer)).num_row_groups(), 3);
+    }
+
+    #[test]
+    fn a_file_writer_rejects_empty_files_and_foreign_batches() {
+        let writer = FileWriter::new(FileTable::Spans, 0, Vec::new(), 0).unwrap();
+        let error = writer.finish().unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ParquetWriteError::Invalid {
+                    reason: "empty file"
+                }
+            ),
+            "{error}"
+        );
+
+        let scores = scores_to_record_batch(&[score(1, "accuracy")]).unwrap();
+        let mut writer = FileWriter::new(FileTable::Spans, 0, Vec::new(), 1).unwrap();
+        let error = writer.write(&scores).unwrap_err();
+        assert!(
+            matches!(error, ParquetWriteError::Invalid { .. }),
+            "{error}"
+        );
+
+        let error = match FileWriter::new(FileTable::Spans, 2, Vec::new(), 1) {
+            Err(error) => error,
+            Ok(_) => panic!("level 2 was accepted"),
+        };
+        assert!(
+            matches!(error, ParquetWriteError::Invalid { .. }),
+            "{error}"
+        );
+    }
+
     #[test]
     fn empty_and_foreign_batches_are_rejected() {
         let spans = spans_to_record_batch(&[span(1, 1, 1)]).unwrap();
@@ -853,7 +1116,7 @@ mod tests {
     }
 
     fn assert_file_settings(
-        bytes: &bytes::Bytes,
+        bytes: &Bytes,
         table: &str,
         level: &str,
         written: &super::WrittenFile,
@@ -939,7 +1202,7 @@ mod tests {
         }
     }
 
-    fn bloom_contains(bytes: &bytes::Bytes, column: &str, value: &[u8]) -> bool {
+    fn bloom_contains(bytes: &Bytes, column: &str, value: &[u8]) -> bool {
         let file = metadata(bytes);
         let cursor = bytes.clone();
         for group_index in 0..file.num_row_groups() {

@@ -211,16 +211,15 @@ impl Storage {
         let committer = Arc::new(Committer::open(&data_dir, share_hooks(&hooks)).await?);
         let objects = open_objects(&config, &hooks, remote).await?;
         let objects_for_cleanup = Arc::clone(&objects);
-        let removed =
-            tokio::task::spawn_blocking(move || objects_for_cleanup.remove_local_temp_files())
-                .await
-                .map_err(|_| {
-                    open_io(
-                        "removing temporary object files",
-                        &data_dir,
-                        io::Error::other("cleanup task panicked"),
-                    )
-                })??;
+        let removed = tokio::task::spawn_blocking(move || objects_for_cleanup.remove_temp_files())
+            .await
+            .map_err(|_| {
+                open_io(
+                    "removing temporary object files",
+                    &data_dir,
+                    io::Error::other("cleanup task panicked"),
+                )
+            })??;
         if removed > 0 {
             tracing::info!(removed, "removed leftover object temp files");
         }
@@ -730,6 +729,7 @@ async fn open_objects(
     if let Some(store) = remote {
         return Ok(Arc::new(Objects::remote_for_test(
             store,
+            &config.data_dir,
             share_hooks(hooks),
         )?));
     }

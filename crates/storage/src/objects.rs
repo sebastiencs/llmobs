@@ -11,7 +11,8 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::future::Future;
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -32,6 +33,7 @@ use crate::config::{ObjectStoreUrl, S3Config, StorageConfig};
 use crate::error::ObjectError;
 use crate::hooks::{HookPoint, Hooks};
 use crate::wal;
+use tokio::io::AsyncReadExt;
 
 /// DataFusion keys a registered store by scheme, host, and port. The path is
 /// not part of that key, and [`RegisteredUrl::parse`] rejects any path other
@@ -52,6 +54,8 @@ pub(crate) struct Objects {
     kind: Kind,
     store: Arc<dyn ObjectStore>,
     url: RegisteredUrl,
+    /// `<data_dir>/tmp/compaction`, where remote outputs spill before upload.
+    spill_dir: PathBuf,
     hooks: Hooks,
 }
 
@@ -70,6 +74,7 @@ impl Objects {
     /// directory's parent is fsynced. Blocking work runs on `spawn_blocking`.
     pub(crate) async fn new(config: &StorageConfig, hooks: Hooks) -> Result<Self, ObjectError> {
         let url = registered_url()?;
+        let spill_dir = config.data_dir.join("tmp").join("compaction");
         match config.object_store_url() {
             ObjectStoreUrl::Local(root) => {
                 let error_path = root.clone();
@@ -85,6 +90,7 @@ impl Objects {
                     kind: Kind::Local { root },
                     store: Arc::new(store),
                     url,
+                    spill_dir,
                     hooks,
                 })
             }
@@ -92,6 +98,7 @@ impl Objects {
                 kind: Kind::Remote,
                 store: build_s3(&bucket, &prefix, &config.s3)?,
                 url,
+                spill_dir,
                 hooks,
             }),
         }
@@ -101,12 +108,14 @@ impl Objects {
     #[cfg(test)]
     pub(crate) fn remote_for_test(
         store: Arc<dyn ObjectStore>,
+        data_dir: &Path,
         hooks: Hooks,
     ) -> Result<Self, ObjectError> {
         Ok(Self {
             kind: Kind::Remote,
             store,
             url: registered_url()?,
+            spill_dir: data_dir.join("tmp").join("compaction"),
             hooks,
         })
     }
@@ -190,18 +199,250 @@ impl Objects {
         Ok(bytes)
     }
 
-    /// Deletes leftover local temp files under `tables/`.
-    ///
-    /// Remote stores return `0`. This walks the filesystem on the calling
-    /// thread; M2.6 calls it from `spawn_blocking` at open.
-    pub(crate) fn remove_local_temp_files(&self) -> Result<u64, ObjectError> {
-        let Kind::Local { root } = &self.kind else {
-            return Ok(0);
-        };
-        let mut removed = 0;
-        remove_temps(&root.join("tables"), &mut removed)?;
-        Ok(removed)
+    /// Creates the temp file for the object `key` and returns it opened for
+    /// reading and writing. The caller streams the object into it, then passes
+    /// it to [`Self::publish_output`].
+    pub(crate) async fn create_output(
+        &self,
+        key: &str,
+    ) -> Result<(OutputTarget, fs::File), ObjectError> {
+        match &self.kind {
+            Kind::Local { root } => {
+                validate_key(key)?;
+                let root = root.clone();
+                let key = key.to_owned();
+                let key_for_error = key.clone();
+                let opened = tokio::task::spawn_blocking(move || {
+                    let final_path = root.join(&key);
+                    let Some(directory) = final_path.parent() else {
+                        return Err(ObjectError::InvalidPath);
+                    };
+                    let Ok(relative_dir) = directory.strip_prefix(root.as_path()) else {
+                        return Err(ObjectError::InvalidPath);
+                    };
+                    create_dir_chain_from(&root, relative_dir)?;
+                    let Some(file_name) = final_path.file_name() else {
+                        return Err(ObjectError::InvalidPath);
+                    };
+                    let temp_path = directory.join(temp_name(file_name));
+                    let file = OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .create_new(true)
+                        .open(&temp_path)
+                        .map_err(|source| {
+                            ObjectError::io("creating output temp file", &temp_path, source)
+                        })?;
+                    Ok((temp_path, file))
+                })
+                .await
+                .map_err(|source| {
+                    ObjectError::io(
+                        "creating output temp file",
+                        Path::new(&key_for_error),
+                        io::Error::other(source),
+                    )
+                })??;
+                Ok((
+                    OutputTarget {
+                        key: key_for_error,
+                        temp: opened.0,
+                    },
+                    opened.1,
+                ))
+            }
+            Kind::Remote => {
+                // Scratch files: no fsync of the spill directory is needed.
+                tokio::fs::create_dir_all(&self.spill_dir)
+                    .await
+                    .map_err(|source| {
+                        ObjectError::io("creating spill directory", &self.spill_dir, source)
+                    })?;
+                let temp = self.spill_dir.join(format!("{}.parquet", Uuid::now_v7()));
+                let opened = tokio::task::spawn_blocking({
+                    let temp = temp.clone();
+                    move || {
+                        OpenOptions::new()
+                            .read(true)
+                            .write(true)
+                            .create_new(true)
+                            .open(&temp)
+                            .map_err(|source| {
+                                ObjectError::io("creating output temp file", &temp, source)
+                            })
+                    }
+                })
+                .await
+                .map_err(|source| {
+                    ObjectError::io("creating output temp file", &temp, io::Error::other(source))
+                })??;
+                Ok((
+                    OutputTarget {
+                        key: key.to_owned(),
+                        temp,
+                    },
+                    opened,
+                ))
+            }
+        }
     }
+
+    /// Makes the finished temp file the object `key`, durably. Returns its size
+    /// in bytes.
+    pub(crate) async fn publish_output(
+        &self,
+        target: OutputTarget,
+        file: fs::File,
+    ) -> Result<u64, ObjectError> {
+        match &self.kind {
+            Kind::Local { root } => {
+                let root = root.clone();
+                let key = target.key.clone();
+                let temp = target.temp.clone();
+                let hooks = clone_hooks(&self.hooks);
+                tokio::task::spawn_blocking(move || {
+                    let size = file
+                        .metadata()
+                        .map_err(|source| ObjectError::io("reading output size", &temp, source))?
+                        .len();
+                    publish_local(&root, &key, &temp, file, &hooks)?;
+                    Ok(size)
+                })
+                .await
+                .map_err(|source| {
+                    ObjectError::io(
+                        "publishing output",
+                        Path::new(&target.key),
+                        io::Error::other(source),
+                    )
+                })?
+            }
+            Kind::Remote => {
+                let key = target.key;
+                let temp = target.temp.clone();
+                let temp_for_cleanup = target.temp.clone();
+                let store = Arc::clone(&self.store);
+                let upload = async move {
+                    let size = file
+                        .metadata()
+                        .map_err(|source| ObjectError::io("reading output size", &temp, source))?
+                        .len();
+                    let mut file = file;
+                    file.seek(SeekFrom::Start(0))
+                        .map_err(|source| ObjectError::io("rewinding output", &temp, source))?;
+                    if usize::try_from(size).is_ok_and(|size| size <= SINGLE_PUT_MAX) {
+                        let mut buffer = vec![0_u8; usize::try_from(size).unwrap_or(usize::MAX)];
+                        file.read_exact(&mut buffer)
+                            .map_err(|source| ObjectError::io("reading output", &temp, source))?;
+                        let location = object_key(&key)?;
+                        store
+                            .put(&location, PutPayload::from(Bytes::from(buffer)))
+                            .await
+                            .map_or_else(
+                                |source| Err(ObjectError::upload(&key, source)),
+                                |_| Ok(()),
+                            )?;
+                    } else {
+                        let reader =
+                            Arc::new(tokio::sync::Mutex::new(tokio::fs::File::from_std(file)));
+                        put_multi(&store, &key, move || {
+                            let reader = Arc::clone(&reader);
+                            let temp = temp.clone();
+                            async move {
+                                let mut buffer = vec![0_u8; MULTIPART_PART];
+                                let mut file = reader.lock().await;
+                                let read = file.read(&mut buffer).await.map_err(|source| {
+                                    ObjectError::io("reading output", &temp, source)
+                                })?;
+                                if read == 0 {
+                                    Ok(None)
+                                } else {
+                                    buffer.truncate(read);
+                                    Ok(Some(PutPayload::from(Bytes::from(buffer))))
+                                }
+                            }
+                        })
+                        .await?;
+                    }
+                    Ok(size)
+                }
+                .await;
+                // The spill file is scratch: remove it either way.
+                let removed = remove_spill_file(&temp_for_cleanup).await;
+                let size = upload?;
+                removed?;
+                Ok(size)
+            }
+        }
+    }
+
+    /// Removes a temp file that will not be published. A missing file is success.
+    pub(crate) async fn discard_output(&self, target: OutputTarget) -> Result<(), ObjectError> {
+        let temp = target.temp.clone();
+        tokio::task::spawn_blocking(move || remove_temp_path(&temp))
+            .await
+            .map_err(|source| {
+                ObjectError::io(
+                    "removing output temp file",
+                    &target.temp,
+                    io::Error::other(source),
+                )
+            })?
+    }
+
+    /// Deletes leftover temp files: under `tables/` in local mode, every file
+    /// of the spill directory in remote mode.
+    ///
+    /// This walks the filesystem on the calling thread; open calls it from
+    /// `spawn_blocking`.
+    pub(crate) fn remove_temp_files(&self) -> Result<u64, ObjectError> {
+        match &self.kind {
+            Kind::Local { root } => {
+                let mut removed = 0;
+                remove_temps(&root.join("tables"), &mut removed)?;
+                Ok(removed)
+            }
+            Kind::Remote => {
+                let entries = match fs::read_dir(&self.spill_dir) {
+                    Ok(entries) => entries,
+                    Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(0),
+                    Err(source) => {
+                        return Err(ObjectError::io(
+                            "reading spill directory",
+                            &self.spill_dir,
+                            source,
+                        ));
+                    }
+                };
+                let mut removed = 0;
+                for entry in entries {
+                    let entry = entry.map_err(|source| {
+                        ObjectError::io("reading spill directory", &self.spill_dir, source)
+                    })?;
+                    if entry
+                        .file_type()
+                        .map_err(|source| {
+                            ObjectError::io("reading spill directory", &entry.path(), source)
+                        })?
+                        .is_file()
+                    {
+                        fs::remove_file(entry.path()).map_err(|source| {
+                            ObjectError::io("removing output temp file", &entry.path(), source)
+                        })?;
+                        removed += 1;
+                    }
+                }
+                Ok(removed)
+            }
+        }
+    }
+}
+
+/// Where an output is being written before it is published as `key`.
+#[derive(Debug)]
+pub(crate) struct OutputTarget {
+    key: String,
+    temp: PathBuf,
 }
 
 #[allow(clippy::clone_on_copy)]
@@ -278,12 +519,30 @@ fn put_local(root: &Path, key: &str, bytes: &Bytes, hooks: &Hooks) -> Result<(),
     file.write_all(bytes)
         .map_err(|source| ObjectError::io("writing object", &temp_path, source))?;
 
+    publish_local(root, key, &temp_path, file, hooks)
+}
+
+/// The publication tail shared by `put_local` and `Objects::publish_output`:
+/// `sync_all`, refuse an existing final name (removing the temp file), rename,
+/// then fsync the directory. An `ObjectDirSync` fault renames the file back.
+fn publish_local(
+    root: &Path,
+    key: &str,
+    temp_path: &Path,
+    file: fs::File,
+    hooks: &Hooks,
+) -> Result<(), ObjectError> {
+    let final_path = root.join(key);
+    let Some(directory) = final_path.parent() else {
+        return Err(ObjectError::InvalidPath);
+    };
+
     hooks.pause(HookPoint::ObjectSync);
     if let Some(source) = hooks.fail(HookPoint::ObjectSync) {
-        return Err(ObjectError::io("syncing object", &temp_path, source));
+        return Err(ObjectError::io("syncing object", temp_path, source));
     }
     file.sync_all()
-        .map_err(|source| ObjectError::io("syncing object", &temp_path, source))?;
+        .map_err(|source| ObjectError::io("syncing object", temp_path, source))?;
     drop(file);
 
     hooks.pause(HookPoint::ObjectRename);
@@ -291,21 +550,25 @@ fn put_local(root: &Path, key: &str, bytes: &Bytes, hooks: &Hooks) -> Result<(),
         return Err(ObjectError::io("renaming object", &final_path, source));
     }
     if try_exists(&final_path)? {
+        // Names are unique, so this is a retry that actually landed, or a
+        // caller bug. Do not leave the temp file behind.
+        fs::remove_file(temp_path)
+            .map_err(|source| ObjectError::io("removing object temp file", temp_path, source))?;
         return Err(ObjectError::AlreadyExists {
             path: key.to_owned(),
         });
     }
-    fs::rename(&temp_path, &final_path)
+    fs::rename(temp_path, &final_path)
         .map_err(|source| ObjectError::io("renaming object", &final_path, source))?;
 
     hooks.pause(HookPoint::ObjectDirSync);
     if let Some(source) = hooks.fail(HookPoint::ObjectDirSync) {
         // The rename already published the final name. Move it back so a failed
-        // `put_durable` does not leave that name, and startup cleanup can drop
-        // the temp file. A real `sync_dir` error below is not undone: the bytes
+        // publish does not leave that name, and startup cleanup can drop the
+        // temp file. A real `sync_dir` error below is not undone: the bytes
         // are already under the final name.
-        fs::rename(&final_path, &temp_path)
-            .map_err(|undo| ObjectError::io("restoring object temp file", &temp_path, undo))?;
+        fs::rename(&final_path, temp_path)
+            .map_err(|undo| ObjectError::io("restoring object temp file", temp_path, undo))?;
         return Err(ObjectError::io(
             "syncing object directory",
             directory,
@@ -320,7 +583,7 @@ fn put_local(root: &Path, key: &str, bytes: &Bytes, hooks: &Hooks) -> Result<(),
 async fn put_remote(
     store: &Arc<dyn ObjectStore>,
     path: &str,
-    mut bytes: Bytes,
+    bytes: Bytes,
 ) -> Result<(), ObjectError> {
     let location = object_key(path)?;
     if bytes.len() <= SINGLE_PUT_MAX {
@@ -329,23 +592,67 @@ async fn put_remote(
             .await
             .map_or_else(|source| Err(ObjectError::upload(path, source)), |_| Ok(()));
     }
+    let mut remaining = bytes;
+    put_multi(store, path, move || {
+        let part = if remaining.is_empty() {
+            None
+        } else {
+            Some(PutPayload::from(
+                remaining.split_to(MULTIPART_PART.min(remaining.len())),
+            ))
+        };
+        std::future::ready(Ok(part))
+    })
+    .await
+}
+
+/// One multipart upload, taking one part at a time from `next`. The first part
+/// failure aborts the upload. A failed `complete` is not aborted: the object
+/// may be visible, which is ambiguous.
+async fn put_multi<F, Fut>(
+    store: &Arc<dyn ObjectStore>,
+    path: &str,
+    mut next: F,
+) -> Result<(), ObjectError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<Option<PutPayload>, ObjectError>>,
+{
+    let location = object_key(path)?;
     let mut upload = store
         .put_multipart(&location)
         .await
         .map_err(|source| ObjectError::upload(path, source))?;
-    while !bytes.is_empty() {
-        let part = bytes.split_to(MULTIPART_PART.min(bytes.len()));
-        if let Err(source) = upload.put_part(PutPayload::from(part)).await {
+    while let Some(part) = next().await? {
+        if let Err(source) = upload.put_part(part).await {
             let _ = upload.abort().await;
             return Err(ObjectError::upload(path, source));
         }
     }
-    // A failed complete is ambiguous: the object may be visible. Do not abort.
     upload
         .complete()
         .await
         .map_err(|source| ObjectError::upload(path, source))?;
     Ok(())
+}
+
+/// Removes one temp file; a missing file is success.
+fn remove_temp_path(temp: &Path) -> Result<(), ObjectError> {
+    match fs::remove_file(temp) {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(ObjectError::io("removing output temp file", temp, source)),
+    }
+}
+
+/// Removes a spill file from the blocking pool. A missing file is success.
+async fn remove_spill_file(temp: &Path) -> Result<(), ObjectError> {
+    let moved = temp.to_path_buf();
+    tokio::task::spawn_blocking(move || remove_temp_path(&moved))
+        .await
+        .map_err(|source| {
+            ObjectError::io("removing output temp file", temp, io::Error::other(source))
+        })?
 }
 
 fn temp_name(file_name: &OsStr) -> OsString {
@@ -487,6 +794,7 @@ fn object_key(path: &str) -> Result<ObjectPath, ObjectError> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -589,6 +897,7 @@ mod tests {
 
         let again = objects.put_durable(&key, bytes).await.unwrap_err();
         assert!(matches!(again, ObjectError::AlreadyExists { .. }));
+        assert!(temps(&root).is_empty(), "AlreadyExists left a temp file");
 
         objects.delete(&key).await.unwrap();
         assert!(!final_path.exists());
@@ -620,7 +929,7 @@ mod tests {
                 "{point:?} returned {error}"
             );
             assert!(!root.join(&key).exists(), "{point:?} left the final file");
-            let removed = objects.remove_local_temp_files().unwrap();
+            let removed = objects.remove_temp_files().unwrap();
             if point == HookPoint::ObjectWrite {
                 assert_eq!(removed, 0, "{point:?}");
             } else {
@@ -633,9 +942,12 @@ mod tests {
 
     #[tokio::test]
     async fn remote_put_round_trips_and_reports_faults() {
+        let dir = tempfile::tempdir().unwrap();
         let inner = Arc::new(InMemory::new());
         let fault = FaultStore::new(Arc::clone(&inner) as Arc<dyn object_store::ObjectStore>);
-        let objects = Objects::remote_for_test(Arc::new(fault.clone()), Hooks::default()).unwrap();
+        let objects =
+            Objects::remote_for_test(Arc::new(fault.clone()), dir.path(), Hooks::default())
+                .unwrap();
         let small = Bytes::from_static(b"small");
         objects
             .put_durable("tables/spans/a.parquet", small.clone())
@@ -701,8 +1013,163 @@ mod tests {
         assert!(matches!(error, ObjectError::Upload { .. }));
         let landed = read_registered(&objects, "tables/spans/f.parquet").await;
         assert_eq!(landed.len(), SINGLE_PUT_MAX + 1);
-        assert_eq!(objects.remove_local_temp_files().unwrap(), 0);
+        assert_eq!(objects.remove_temp_files().unwrap(), 0);
         assert_eq!(OBJECT_STORE_URL, "llmobs://objects");
+    }
+
+    #[tokio::test]
+    async fn a_local_output_publishes_durably() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks = Hooks::default();
+        let objects = Objects::new(&local_config(dir.path()), hooks.clone())
+            .await
+            .unwrap();
+        let (key, _) = Objects::table_file_path(FileTable::Spans, project(), day(), 0);
+        let (target, mut file) = objects.create_output(&key).await.unwrap();
+        file.write_all(b"0123456789").unwrap();
+        let size = objects.publish_output(target, file).await.unwrap();
+        assert_eq!(size, 10);
+        let root = dir.path().join("objects");
+        assert_eq!(std::fs::read(root.join(&key)).unwrap(), b"0123456789");
+        assert!(temps(&root).is_empty());
+        // The writing happened through `FileWriter`, so no `ObjectWrite`.
+        assert_eq!(
+            hooks.points(),
+            vec![
+                HookPoint::ObjectSync,
+                HookPoint::ObjectRename,
+                HookPoint::ObjectDirSync,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_local_output_over_an_existing_final_name_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let objects = Objects::new(&local_config(dir.path()), Hooks::default())
+            .await
+            .unwrap();
+        let (key, _) = Objects::table_file_path(FileTable::Scores, project(), day(), 1);
+        objects
+            .put_durable(&key, Bytes::from_static(b"existing"))
+            .await
+            .unwrap();
+        let (target, mut file) = objects.create_output(&key).await.unwrap();
+        file.write_all(b"second").unwrap();
+        let error = objects.publish_output(target, file).await.unwrap_err();
+        assert!(
+            matches!(error, ObjectError::AlreadyExists { .. }),
+            "{error}"
+        );
+        let root = dir.path().join("objects");
+        assert!(temps(&root).is_empty(), "refused publish left a temp file");
+        assert_eq!(std::fs::read(root.join(&key)).unwrap(), b"existing");
+    }
+
+    #[tokio::test]
+    async fn a_discarded_output_leaves_no_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let objects = Objects::new(&local_config(dir.path()), Hooks::default())
+            .await
+            .unwrap();
+        let (key, _) = Objects::table_file_path(FileTable::Spans, project(), day(), 0);
+
+        let (target, mut file) = objects.create_output(&key).await.unwrap();
+        file.write_all(b"never").unwrap();
+        drop(file);
+        assert!(target.temp.is_file());
+        objects.discard_output(target).await.unwrap();
+
+        // A leftover temp file from `create_output` is startup cleanup's job.
+        let (target, file) = objects.create_output(&key).await.unwrap();
+        drop(file);
+        assert!(target.temp.is_file());
+        let root = dir.path().join("objects");
+        assert_eq!(objects.remove_temp_files().unwrap(), 1);
+        assert!(temps(&root).is_empty());
+    }
+
+    #[tokio::test]
+    async fn remote_outputs_upload_and_leave_no_spill_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let inner = Arc::new(InMemory::new());
+        let objects = Objects::remote_for_test(
+            Arc::clone(&inner) as Arc<dyn object_store::ObjectStore>,
+            dir.path(),
+            Hooks::default(),
+        )
+        .unwrap();
+        let spill = dir.path().join("tmp").join("compaction");
+
+        let small = vec![7_u8; 1024];
+        let (target, mut file) = objects
+            .create_output("tables/spans/small.parquet")
+            .await
+            .unwrap();
+        assert!(target.temp.starts_with(&spill));
+        let temp = target.temp.clone();
+        file.write_all(&small).unwrap();
+        let size = objects.publish_output(target, file).await.unwrap();
+        assert_eq!(size, 1024);
+        assert_eq!(
+            read_registered(&objects, "tables/spans/small.parquet").await,
+            Bytes::from(small)
+        );
+        assert!(!temp.exists());
+        assert!(std::fs::read_dir(&spill).unwrap().next().is_none());
+
+        let mut large = vec![0_u8; SINGLE_PUT_MAX + 1];
+        large[0] = 1;
+        large[MULTIPART_PART] = 2;
+        large[SINGLE_PUT_MAX] = 3;
+        let (target, mut file) = objects
+            .create_output("tables/spans/large.parquet")
+            .await
+            .unwrap();
+        let temp = target.temp.clone();
+        file.write_all(&large).unwrap();
+        let size = objects.publish_output(target, file).await.unwrap();
+        assert_eq!(size, u64::try_from(large.len()).unwrap());
+        assert_eq!(
+            read_registered(&objects, "tables/spans/large.parquet").await,
+            Bytes::from(large)
+        );
+        assert!(!temp.exists());
+
+        let (target, file) = objects
+            .create_output("tables/spans/leftover.parquet")
+            .await
+            .unwrap();
+        drop(file);
+        assert!(target.temp.is_file());
+        assert_eq!(objects.remove_temp_files().unwrap(), 1);
+        assert!(!target.temp.exists());
+    }
+
+    #[tokio::test]
+    async fn a_failed_remote_output_upload_removes_the_spill_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let inner = Arc::new(InMemory::new());
+        let fault = FaultStore::new(Arc::clone(&inner) as Arc<dyn object_store::ObjectStore>);
+        let objects =
+            Objects::remote_for_test(Arc::new(fault.clone()), dir.path(), Hooks::default())
+                .unwrap();
+        fault.arm(FaultKind::FailBefore);
+        let (target, mut file) = objects
+            .create_output("tables/spans/fail.parquet")
+            .await
+            .unwrap();
+        let temp = target.temp.clone();
+        let payload = vec![9_u8; SINGLE_PUT_MAX + 1];
+        file.write_all(&payload).unwrap();
+        let error = objects.publish_output(target, file).await.unwrap_err();
+        assert!(matches!(error, ObjectError::Upload { .. }), "{error}");
+        assert!(!temp.exists(), "failed upload left the spill file");
+        let missing = object_store::path::Path::parse("tables/spans/fail.parquet").unwrap();
+        assert!(matches!(
+            inner.get(&missing).await.unwrap_err(),
+            object_store::Error::NotFound { .. }
+        ));
     }
 
     #[test]
@@ -753,7 +1220,7 @@ mod tests {
         let parent = root.join(&key).parent().unwrap().to_path_buf();
         std::fs::write(parent.join(".keep"), b"keep").unwrap();
         std::fs::write(parent.join("note.tmp-1"), b"not-hidden").unwrap();
-        assert_eq!(objects.remove_local_temp_files().unwrap(), 0);
+        assert_eq!(objects.remove_temp_files().unwrap(), 0);
         assert_eq!(std::fs::read(parent.join(".keep")).unwrap(), b"keep");
         assert_eq!(
             std::fs::read(parent.join("note.tmp-1")).unwrap(),
