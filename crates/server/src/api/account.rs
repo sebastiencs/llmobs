@@ -220,6 +220,30 @@ pub struct ResetPasswordRequest {
     pub password: String,
 }
 
+/// `POST /api/auth/password/forgot`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ForgotPasswordRequest {
+    /// Email address.
+    pub email: String,
+}
+
+/// `POST /api/auth/email/verify`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VerifyEmailRequest {
+    /// The token from the verification link.
+    pub token: String,
+}
+
+/// `POST /api/auth/email/verify/resend`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResendVerificationRequest {
+    /// Email address.
+    pub email: String,
+}
+
 /// `PATCH /api/v1/me`.
 ///
 /// A missing `name` and JSON null both clear the display name.

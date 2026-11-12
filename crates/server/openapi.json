@@ -28,6 +28,86 @@
         "security": []
       }
     },
+    "/api/auth/email/verify": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Verify an email address",
+        "operationId": "post_email_verify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyEmailRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The email address is verified."
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/auth/email/verify/resend": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Resend an email verification",
+        "operationId": "post_email_verify_resend",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResendVerificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Accepted. A verification message is sent only for an unverified account."
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
     "/api/auth/invites/{token}": {
       "get": {
         "tags": [
@@ -274,6 +354,61 @@
             }
           }
         }
+      }
+    },
+    "/api/auth/password/forgot": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Request a password reset",
+        "operationId": "post_password_forgot",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgotPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Accepted. A reset message is sent only when that address can receive one."
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": []
       }
     },
     "/api/auth/password/reset": {
@@ -5564,6 +5699,20 @@
           }
         }
       },
+      "ForgotPasswordRequest": {
+        "type": "object",
+        "description": "`POST /api/auth/password/forgot`.",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address."
+          }
+        },
+        "additionalProperties": false
+      },
       "FunctionSchema": {
         "type": "object",
         "description": "One function the filter DSL or SQL console can call.\n\nSpec 05 § Filter DSL.",
@@ -6545,6 +6694,20 @@
           }
         },
         "additionalProperties": true
+      },
+      "ResendVerificationRequest": {
+        "type": "object",
+        "description": "`POST /api/auth/email/verify/resend`.",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address."
+          }
+        },
+        "additionalProperties": false
       },
       "ResetPasswordRequest": {
         "type": "object",
@@ -8404,6 +8567,20 @@
           "trace_count",
           "cost_total"
         ]
+      },
+      "VerifyEmailRequest": {
+        "type": "object",
+        "description": "`POST /api/auth/email/verify`.",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "The token from the verification link."
+          }
+        },
+        "additionalProperties": false
       },
       "ViewName": {
         "type": "string",

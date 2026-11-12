@@ -8,19 +8,23 @@ use axum::routing::{get, post};
 use uuid::Uuid;
 
 use crate::api::account::{
-    AuthConfig, LoginRequest, Me, OrgMembership, OrgRole, Project, ResetPasswordRequest,
-    SetupRequest, SetupResponse, SignupPolicy, SignupRequest, SignupResponse, User,
+    AuthConfig, ForgotPasswordRequest, LoginRequest, Me, OrgMembership, OrgRole, Project,
+    ResendVerificationRequest, ResetPasswordRequest, SetupRequest, SetupResponse, SignupPolicy,
+    SignupRequest, SignupResponse, User, VerifyEmailRequest,
 };
 use crate::api::common::{FieldError, Problem, ProblemCode};
 use crate::auth::password::check_policy;
 use crate::auth::principal::{self, Principal};
+use crate::auth::reset::{ResetError, reset_link, verification_link};
 use crate::auth::secret::{constant_time_eq, hash_token, is_opaque_token};
 use crate::auth::session::{clear_cookie, resolve_cookie_header, start_session};
 use crate::bootstrap::{self, BootstrapError};
+use crate::email::Email;
 use crate::http::AppState;
 use crate::http::access::{Access, RouteDef};
 use crate::http::client_ip::ClientIp;
 use crate::http::error::{self, ApiError};
+use crate::meta::email_verifications;
 use crate::meta::invites;
 use crate::meta::members;
 use crate::meta::orgs::orgs_of_user;
@@ -68,10 +72,31 @@ pub(crate) fn routes() -> Vec<RouteDef> {
         },
         RouteDef {
             method: axum::http::Method::POST,
+            path: "/api/auth/password/forgot",
+            access: Access::Public,
+            documented: true,
+            handler: post(forgot_password),
+        },
+        RouteDef {
+            method: axum::http::Method::POST,
             path: "/api/auth/password/reset",
             access: Access::Public,
             documented: true,
             handler: post(reset_password),
+        },
+        RouteDef {
+            method: axum::http::Method::POST,
+            path: "/api/auth/email/verify",
+            access: Access::Public,
+            documented: true,
+            handler: post(verify_email),
+        },
+        RouteDef {
+            method: axum::http::Method::POST,
+            path: "/api/auth/email/verify/resend",
+            access: Access::Public,
+            documented: true,
+            handler: post(resend_verification),
         },
         RouteDef {
             method: axum::http::Method::GET,
@@ -354,6 +379,132 @@ fn invalid_link() -> ApiError {
     }
 }
 
+fn email_not_configured() -> ApiError {
+    ApiError::BadRequest {
+        detail: Some("email is not configured".to_owned()),
+        errors: Vec::new(),
+    }
+}
+
+fn reset_error(error: ResetError) -> ApiError {
+    match error {
+        ResetError::Auth(error) => auth_error(error),
+        ResetError::Meta(error) => ApiError::from(error),
+    }
+}
+
+/// One token from the per-email mail budget. `false` means this send is skipped.
+fn mail_allowed(state: &AppState, email: &str, now: i64) -> bool {
+    state
+        .limits
+        .email_mail
+        .check(&email.to_owned(), now)
+        .is_ok()
+}
+
+fn send_mail(state: &AppState, to: String, message: Email) {
+    if let Some(mailer) = &state.mailer {
+        mailer.send_in_background(to, message);
+    }
+}
+
+async fn forgot_password(
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    error::Json(body): error::Json<ForgotPasswordRequest>,
+) -> Result<Response, ApiError> {
+    if state.mailer.is_none() {
+        return Err(email_not_configured());
+    }
+    if state.config.auth.disable_password {
+        return Err(ApiError::Forbidden {
+            code: ProblemCode::Forbidden,
+        });
+    }
+    state
+        .limits
+        .ip_forms
+        .check(&ip, state.clock.now_ns())
+        .map_err(|retry| ApiError::RateLimited {
+            retry_after_s: retry.0.as_secs().max(1),
+        })?;
+    let Ok(email) = normalize_email(&body.email) else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+    let now = state.clock.now_ns();
+    if let Some(user) = users::user_by_email(state.meta.reader(), &email).await?
+        && user.disabled_at.is_none()
+        && mail_allowed(&state, &email, now)
+    {
+        let url = reset_link(&state.meta, &state.config.public_url, user.id, now)
+            .await
+            .map_err(reset_error)?;
+        send_mail(&state, email, Email::PasswordReset { url });
+    }
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+async fn verify_email(
+    State(state): State<AppState>,
+    error::Json(body): error::Json<VerifyEmailRequest>,
+) -> Result<Response, ApiError> {
+    if !is_opaque_token(&body.token) {
+        return Err(invalid_link());
+    }
+    let token_hash = hash_token(&body.token);
+    let now = state.clock.now_ns();
+    let consumed = state
+        .meta
+        .write(move |conn| {
+            Box::pin(async move {
+                let Some(id) =
+                    email_verifications::use_verification(conn, &token_hash, now).await?
+                else {
+                    return Ok(None);
+                };
+                users::set_email_verified(conn, id, now).await?;
+                Ok(Some(()))
+            })
+        })
+        .await?;
+    if consumed.is_none() {
+        return Err(invalid_link());
+    }
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+async fn resend_verification(
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    error::Json(body): error::Json<ResendVerificationRequest>,
+) -> Result<Response, ApiError> {
+    if state.mailer.is_none() {
+        return Err(email_not_configured());
+    }
+    state
+        .limits
+        .ip_forms
+        .check(&ip, state.clock.now_ns())
+        .map_err(|retry| ApiError::RateLimited {
+            retry_after_s: retry.0.as_secs().max(1),
+        })?;
+    let Ok(email) = normalize_email(&body.email) else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+    let now = state.clock.now_ns();
+    if let Some(user) = users::user_by_email(state.meta.reader(), &email).await?
+        && user.disabled_at.is_none()
+        && user.email_verified_at.is_none()
+        && mail_allowed(&state, &email, now)
+    {
+        let url = verification_link(&state.meta, &state.config.public_url, user.id, now)
+            .await
+            .map_err(reset_error)?;
+        send_mail(&state, email, Email::VerifyEmail { url });
+    }
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
 async fn pending_signup_invite(
     state: &AppState,
     token: &str,
@@ -495,6 +646,10 @@ async fn signup(
         })
         .await?;
     if state.config.auth.require_email_verification {
+        let url = verification_link(&state.meta, &state.config.public_url, user.id, now)
+            .await
+            .map_err(reset_error)?;
+        send_mail(&state, user.email, Email::VerifyEmail { url });
         let response = SignupResponse {
             me: None,
             verification_required: true,
@@ -646,7 +801,7 @@ mod tests {
     use crate::meta::members::org_role;
     use crate::meta::projects::project_by_slugs;
     use crate::meta::users::{count_users, user_by_email};
-    use crate::test_support::{TestApp, assert_logs_clean, capture_logs};
+    use crate::test_support::{TestApp, TestResponse, assert_logs_clean, capture_logs};
 
     const PASSWORD: &str = "llmobs-ok1";
 
@@ -860,7 +1015,7 @@ mod tests {
         }
     }
 
-    fn session_cookie(response: &crate::test_support::TestResponse) -> String {
+    fn session_cookie(response: &TestResponse) -> String {
         let set = response
             .headers
             .get(axum::http::header::SET_COOKIE)
@@ -1817,7 +1972,243 @@ mod tests {
         token: String,
     }
 
-    fn text(response: &crate::test_support::TestResponse) -> String {
+    fn text(response: &TestResponse) -> String {
         String::from_utf8_lossy(&response.body).into_owned()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn forgot_password_sends_one_reset_and_hides_the_account() {
+        let app = TestApp::with_mailer().await;
+        insert_account(&app, "ada@example.com", Some(PASSWORD), true).await;
+        let ((known, unknown), logs) = capture_logs(async {
+            let known = post_forgot(&app, "ada@example.com").await;
+            let unknown = post_forgot(&app, "missing@example.com").await;
+            wait_mail(&app, 1).await;
+            (known, unknown)
+        })
+        .await;
+        assert_eq!(known.status, 204, "{}", text(&known));
+        same_response(&known, &unknown);
+        let token = link_token(&app.sent()[0].text);
+        assert!(app.sent()[0].text.contains("/reset?token="));
+        assert_eq!(app.sent()[0].to, "ada@example.com");
+        assert!(!logs.contains("ada@example.com"), "{logs}");
+        assert!(!logs.contains("missing@example.com"), "{logs}");
+        assert!(!logs.contains(&token), "{logs}");
+
+        let reset = assert_logs_clean(
+            &[&token, PASSWORD, "llmobs-ok2", "ada@example.com"],
+            async {
+                app.request(Method::POST, "/api/auth/password/reset")
+                    .json(&serde_json::json!({ "token": token, "password": "llmobs-ok2" }))
+                    .send()
+                    .await
+            },
+        )
+        .await;
+        assert_eq!(reset.status, 204, "{}", text(&reset));
+        let old = app
+            .request(Method::POST, "/api/auth/login")
+            .json(&login_body("ada@example.com", PASSWORD))
+            .send()
+            .await;
+        assert_eq!(old.status, 401);
+        let fresh = app
+            .request(Method::POST, "/api/auth/login")
+            .json(&login_body("ada@example.com", "llmobs-ok2"))
+            .send()
+            .await;
+        assert_eq!(fresh.status, 200);
+
+        post_forgot(&app, "ada@example.com").await;
+        post_forgot(&app, "ada@example.com").await;
+        wait_mail(&app, 3).await;
+        app.state.clock.advance(Duration::from_secs(61));
+        let limited = post_forgot(&app, "ada@example.com").await;
+        assert_eq!(limited.status, 204, "{}", text(&limited));
+        assert_eq!(settle_mail(&app).await, 3);
+
+        let malformed = post_forgot(&app, "not-an-email").await;
+        assert_eq!(malformed.status, 204);
+        let off = insert_account(&app, "off@example.com", Some(PASSWORD), true).await;
+        let now = app.state.clock.now_ns();
+        app.state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move { set_disabled(conn, off, Some(now), now).await })
+            })
+            .await
+            .unwrap();
+        let disabled = post_forgot(&app, "off@example.com").await;
+        assert_eq!(disabled.status, 204);
+        assert_eq!(settle_mail(&app).await, 3);
+    }
+
+    #[tokio::test]
+    async fn forgot_password_is_uniform_when_email_is_unconfigured() {
+        let app = TestApp::new().await;
+        insert_account(&app, "ada@example.com", Some(PASSWORD), true).await;
+        let known = post_forgot(&app, "ada@example.com").await;
+        let unknown = post_forgot(&app, "missing@example.com").await;
+        assert_eq!(known.status, 400);
+        assert_eq!(known.problem().code, ProblemCode::BadRequest);
+        assert_eq!(
+            known.problem().detail.as_deref(),
+            Some("email is not configured")
+        );
+        same_response(&known, &unknown);
+        let resent = post_resend(&app, "ada@example.com").await;
+        let resent_unknown = post_resend(&app, "missing@example.com").await;
+        same_response(&known, &resent);
+        same_response(&resent, &resent_unknown);
+        assert!(app.sent().is_empty());
+    }
+
+    #[tokio::test]
+    async fn forgot_password_is_forbidden_when_password_login_is_disabled() {
+        let app = TestApp::with_mailer_config(|config| config.auth.disable_password = true).await;
+        let known = post_forgot(&app, "ada@example.com").await;
+        let unknown = post_forgot(&app, "missing@example.com").await;
+        assert_eq!(known.status, 403);
+        assert_eq!(known.problem().code, ProblemCode::Forbidden);
+        same_response(&known, &unknown);
+        assert!(app.sent().is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn email_verification_blocks_login_until_the_link_is_used() {
+        let app = TestApp::with_mailer_config(|config| {
+            config.auth.require_email_verification = true;
+            config.auth.signup = SignupPolicy::Open;
+        })
+        .await;
+        let (tokens, logs) = capture_logs(async {
+            let created = app
+                .request(Method::POST, "/api/auth/signup")
+                .json(&signup_body("ada@example.com", PASSWORD, None))
+                .send()
+                .await;
+            assert_eq!(created.status, 201, "{}", text(&created));
+            assert!(
+                created
+                    .headers
+                    .get(axum::http::header::SET_COOKIE)
+                    .is_none()
+            );
+            let body: SignupResponse = created.json();
+            assert!(body.me.is_none());
+            assert!(body.verification_required);
+            wait_mail(&app, 1).await;
+            let first = link_token(&app.sent()[0].text);
+            assert!(app.sent()[0].text.contains("/verify?token="));
+
+            let blocked = app
+                .request(Method::POST, "/api/auth/login")
+                .json(&login_body("ada@example.com", PASSWORD))
+                .send()
+                .await;
+            assert_eq!(blocked.status, 403);
+            assert_eq!(blocked.problem().code, ProblemCode::EmailNotVerified);
+
+            let resent = post_resend(&app, "ada@example.com").await;
+            assert_eq!(resent.status, 204, "{}", text(&resent));
+            wait_mail(&app, 2).await;
+            let second = link_token(&app.sent()[1].text);
+            assert_ne!(first, second);
+            let replaced = post_verify(&app, &first).await;
+            assert_eq!(replaced.status, 400);
+            assert_eq!(
+                replaced.problem().detail.as_deref(),
+                Some("invalid or expired link")
+            );
+
+            app.state
+                .clock
+                .advance(Duration::from_secs(24 * 60 * 60 + 1));
+            let expired = post_verify(&app, &second).await;
+            assert_eq!(expired.status, 400);
+            assert_eq!(
+                expired.problem().detail.as_deref(),
+                Some("invalid or expired link")
+            );
+
+            let renewed = post_resend(&app, "ada@example.com").await;
+            assert_eq!(renewed.status, 204, "{}", text(&renewed));
+            wait_mail(&app, 3).await;
+            let third = link_token(&app.sent()[2].text);
+            let verified = post_verify(&app, &third).await;
+            assert_eq!(verified.status, 204, "{}", text(&verified));
+            let session = app
+                .request(Method::POST, "/api/auth/login")
+                .json(&login_body("ada@example.com", PASSWORD))
+                .send()
+                .await;
+            assert_eq!(session.status, 200);
+            let reuse = post_verify(&app, &third).await;
+            assert_eq!(reuse.status, 400);
+
+            let quiet = post_resend(&app, "ada@example.com").await;
+            assert_eq!(quiet.status, 204);
+            assert_eq!(settle_mail(&app).await, 3);
+            vec![first, second, third]
+        })
+        .await;
+        assert!(!logs.contains("ada@example.com"), "{logs}");
+        assert!(!logs.contains(PASSWORD), "{logs}");
+        for token in &tokens {
+            assert!(!logs.contains(token), "{logs}");
+        }
+    }
+
+    async fn post_forgot(app: &TestApp, email: &str) -> TestResponse {
+        app.request(Method::POST, "/api/auth/password/forgot")
+            .json(&serde_json::json!({ "email": email }))
+            .send()
+            .await
+    }
+
+    async fn post_resend(app: &TestApp, email: &str) -> TestResponse {
+        app.request(Method::POST, "/api/auth/email/verify/resend")
+            .json(&serde_json::json!({ "email": email }))
+            .send()
+            .await
+    }
+
+    async fn post_verify(app: &TestApp, token: &str) -> TestResponse {
+        app.request(Method::POST, "/api/auth/email/verify")
+            .json(&serde_json::json!({ "token": token }))
+            .send()
+            .await
+    }
+
+    fn link_token(text: &str) -> String {
+        text.split("token=")
+            .nth(1)
+            .expect("link")
+            .split_whitespace()
+            .next()
+            .expect("token")
+            .to_owned()
+    }
+
+    fn same_response(left: &TestResponse, right: &TestResponse) {
+        assert_eq!(left.status, right.status);
+        assert_eq!(left.body, right.body);
+        assert_eq!(left.headers, right.headers);
+    }
+
+    async fn wait_mail(app: &TestApp, count: usize) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while app.sent().len() < count && tokio::time::Instant::now() < deadline {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(app.sent().len(), count, "mail count");
+    }
+
+    async fn settle_mail(app: &TestApp) -> usize {
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        app.sent().len()
     }
 }

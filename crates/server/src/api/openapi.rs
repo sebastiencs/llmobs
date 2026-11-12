@@ -24,9 +24,10 @@ use utoipa::openapi::{Content, InfoBuilder, OpenApi, OpenApiBuilder, Ref, RefOr,
 use utoipa::{IntoParams, PartialSchema, ToSchema};
 
 use super::account::{
-    AuthConfig, ChangePasswordRequest, CreateOrgRequest, CreateProjectRequest, LoginRequest, Me,
-    OrgMembership, Project, ResetPasswordRequest, SetupRequest, SetupResponse, SignupRequest,
-    SignupResponse, UpdateMeRequest, UpdateOrgRequest, UpdateProjectRequest, User,
+    AuthConfig, ChangePasswordRequest, CreateOrgRequest, CreateProjectRequest,
+    ForgotPasswordRequest, LoginRequest, Me, OrgMembership, Project, ResendVerificationRequest,
+    ResetPasswordRequest, SetupRequest, SetupResponse, SignupRequest, SignupResponse,
+    UpdateMeRequest, UpdateOrgRequest, UpdateProjectRequest, User, VerifyEmailRequest,
 };
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
 use super::invites::{CreateInviteRequest, CreatedInvite, Invite, InvitePreview};
@@ -96,6 +97,9 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<InvitePreview>();
     set.insert_page::<Invite>("InvitePage");
     set.insert::<ResetPasswordRequest>();
+    set.insert::<ForgotPasswordRequest>();
+    set.insert::<VerifyEmailRequest>();
+    set.insert::<ResendVerificationRequest>();
     set.insert::<UpdateMeRequest>();
     set.insert::<ChangePasswordRequest>();
     set.insert::<Me>();
@@ -549,6 +553,19 @@ fn auth_paths(paths: PathsBuilder) -> PathsBuilder {
             &[401, 429],
         ))
         .build();
+    let forgot = operation("post_password_forgot", "auth", "Request a password reset")
+        .securities(Some(Vec::new()))
+        .request_body(Some(json_body("ForgotPasswordRequest")))
+        .responses(responses(
+            "204",
+            ResponseBuilder::new()
+                .description(
+                    "Accepted. A reset message is sent only when that address can receive one.",
+                )
+                .build(),
+            &[400, 403, 429],
+        ))
+        .build();
     let reset = operation(
         "post_password_reset",
         "auth",
@@ -562,6 +579,32 @@ fn auth_paths(paths: PathsBuilder) -> PathsBuilder {
             .description("The password is updated and every web session is deleted.")
             .build(),
         &[400, 403, 429],
+    ))
+    .build();
+    let verify = operation("post_email_verify", "auth", "Verify an email address")
+        .securities(Some(Vec::new()))
+        .request_body(Some(json_body("VerifyEmailRequest")))
+        .responses(responses(
+            "204",
+            ResponseBuilder::new()
+                .description("The email address is verified.")
+                .build(),
+            &[400],
+        ))
+        .build();
+    let resend = operation(
+        "post_email_verify_resend",
+        "auth",
+        "Resend an email verification",
+    )
+    .securities(Some(Vec::new()))
+    .request_body(Some(json_body("ResendVerificationRequest")))
+    .responses(responses(
+        "204",
+        ResponseBuilder::new()
+            .description("Accepted. A verification message is sent only for an unverified account.")
+            .build(),
+        &[400, 429],
     ))
     .build();
     let session_only = vec![SecurityRequirement::new("session", [] as [&str; 0])];
@@ -627,8 +670,20 @@ fn auth_paths(paths: PathsBuilder) -> PathsBuilder {
             PathItem::new(HttpMethod::Post, accept),
         )
         .path(
+            "/api/auth/password/forgot",
+            PathItem::new(HttpMethod::Post, forgot),
+        )
+        .path(
             "/api/auth/password/reset",
             PathItem::new(HttpMethod::Post, reset),
+        )
+        .path(
+            "/api/auth/email/verify",
+            PathItem::new(HttpMethod::Post, verify),
+        )
+        .path(
+            "/api/auth/email/verify/resend",
+            PathItem::new(HttpMethod::Post, resend),
         )
         .path("/api/auth/me", PathItem::new(HttpMethod::Get, me))
         .path("/api/v1/me", PathItem::new(HttpMethod::Patch, patch_me))

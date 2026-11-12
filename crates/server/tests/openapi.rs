@@ -22,7 +22,14 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
         "post_invite_accept",
     ),
     ("get", "/api/auth/me", "get_me"),
+    ("post", "/api/auth/password/forgot", "post_password_forgot"),
     ("post", "/api/auth/password/reset", "post_password_reset"),
+    ("post", "/api/auth/email/verify", "post_email_verify"),
+    (
+        "post",
+        "/api/auth/email/verify/resend",
+        "post_email_verify_resend",
+    ),
     ("patch", "/api/v1/me", "patch_me"),
     ("post", "/api/v1/me/password", "post_me_password"),
     ("get", "/api/v1/me/tokens", "list_personal_tokens"),
@@ -258,7 +265,10 @@ fn document_lint() {
                 | "post_login"
                 | "post_logout"
                 | "post_signup"
+                | "post_password_forgot"
                 | "post_password_reset"
+                | "post_email_verify"
+                | "post_email_verify_resend"
                 | "get_invite_preview"
         ) {
             assert_eq!(operation_security.map(Vec::len), Some(0), "{id}");
@@ -302,8 +312,12 @@ fn document_lint() {
             expected_errors.extend(["400", "403", "409", "429"]);
         } else if *id == "post_login" {
             expected_errors.extend(["401", "403", "429"]);
-        } else if *id == "post_password_reset" {
+        } else if *id == "post_password_reset" || *id == "post_password_forgot" {
             expected_errors.extend(["400", "403", "429"]);
+        } else if *id == "post_email_verify" {
+            expected_errors.extend(["400"]);
+        } else if *id == "post_email_verify_resend" {
+            expected_errors.extend(["400", "429"]);
         } else if *id == "patch_me" {
             expected_errors.extend(["400", "401", "403"]);
         } else if *id == "post_me_password" || *id == "post_personal_token" {

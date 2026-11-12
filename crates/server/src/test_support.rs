@@ -78,6 +78,11 @@ impl TestApp {
         Self::open(|_| {}, None, None, true).await
     }
 
+    /// [`Self::with_config`] with the stub mailer.
+    pub(crate) async fn with_mailer_config(tweak: impl FnOnce(&mut ServerConfig)) -> Self {
+        Self::open(tweak, None, None, true).await
+    }
+
     /// Messages the stub mailer accepted. Empty when the stub is not installed.
     pub(crate) fn sent(&self) -> Vec<crate::email::SentMail> {
         self.state
