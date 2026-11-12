@@ -21,7 +21,8 @@ from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 from opentelemetry.trace import NoOpTracerProvider, ProxyTracerProvider
 
 from llmobs import __version__
-from llmobs._config import Config, resolve_config
+from llmobs._config import Config, ConfigError, resolve_config
+from llmobs._instrument import enable_for, resolve
 from llmobs._log import logger, reset_warnings, warn_once
 from llmobs._mask import MaskingExporter
 from llmobs._processor import LlmobsSpanProcessor
@@ -46,6 +47,7 @@ class Runtime:
     processor: LlmobsSpanProcessor
     tracer: trace.Tracer
     scores: ScoreQueue
+    instrumentors: list[Any] = field(default_factory=list, repr=False)
     _shutdown_done: bool = field(default=False, repr=False)
 
     @classmethod
@@ -128,13 +130,20 @@ class Runtime:
     def shutdown(self) -> None:
         """Flush, then stop the processor and, when owned, the provider. Idempotent.
 
-        In global mode with the app's provider (D-F-4 branch 1) only our
-        processor stops: the app owns the provider. The score queue stops
-        after the span pipeline.
+        The instrumentors the runtime enabled are uninstrumented first, and
+        only those (D-F-7). In global mode with the app's provider (D-F-4
+        branch 1) only our processor stops: the app owns the provider. The
+        score queue stops after the span pipeline.
         """
         if self._shutdown_done:
             return
         self._shutdown_done = True
+        for instance in self.instrumentors:
+            try:
+                instance.uninstrument()
+            except Exception as error:  # noqa: BLE001  # never raise into the app (spec 10 rule 4)
+                logger.debug("llmobs: uninstrument failed (%s)", type(error).__name__)
+        self.instrumentors.clear()
         self.flush()
         self.processor.shutdown()
         if self.owns_provider:
@@ -186,7 +195,16 @@ def init(
     )
     if not config.enabled:
         return
-    install(Runtime.create(config))
+    # D-F-7: resolve before the runtime exists, so a bad name leaves nothing
+    # installed.
+    classes = resolve(config.instrument)
+    runtime = Runtime.create(config)
+    install(runtime)
+    try:
+        enable_for(runtime, classes)
+    except ConfigError:
+        uninstall(runtime)
+        raise
     if not _atexit_registered:
         _atexit_registered = True
         atexit.register(shutdown)
@@ -240,6 +258,18 @@ def install(runtime: Runtime) -> None:
     """Install ``runtime`` as the process runtime. Internal; also the test seam."""
     global _runtime
     _runtime = runtime
+
+
+def uninstall(runtime: Runtime) -> None:
+    """Shut ``runtime`` down and remove it when installed. Internal; test seam.
+
+    Used when enabling instrumentors fails after install (D-F-7): the process
+    is left with nothing installed and the error is re-raised.
+    """
+    global _runtime
+    runtime.shutdown()
+    if _runtime is runtime:
+        _runtime = None
 
 
 def reset() -> None:

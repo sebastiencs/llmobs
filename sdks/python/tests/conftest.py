@@ -12,11 +12,28 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.sdk.trace.id_generator import IdGenerator
 
 import llmobs._runtime as runtime_module
-from llmobs._config import resolve_config
-from llmobs._runtime import Runtime, install
+from llmobs._config import ConfigError, resolve_config
+from llmobs._instrument import enable_for, resolve
+from llmobs._runtime import Runtime, install, uninstall
 
 TEST_API_KEY = "sk-llmobs-test"
 TEST_BASE_URL = "http://127.0.0.1:9"
+
+# Minimal provider responses per request path (plan F § P10); the exact JSON
+# bodies the instrumentor tests replay, byte for byte.
+PATH_BODIES: dict[str, bytes] = {
+    "/v1/chat/completions": (
+        b'{"id":"chatcmpl-1","object":"chat.completion","created":0,"model":"gpt-4o-mini",'
+        b'"choices":[{"index":0,"message":{"role":"assistant","content":"hi"},'
+        b'"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":1,'
+        b'"total_tokens":6}}'
+    ),
+    "/v1/messages": (
+        b'{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5",'
+        b'"content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn",'
+        b'"stop_sequence":null,"usage":{"input_tokens":5,"output_tokens":1}}'
+    ),
+}
 
 
 class SequentialIds(IdGenerator):
@@ -34,16 +51,21 @@ class SequentialIds(IdGenerator):
 
 
 class HttpRecorder:
-    """Records requests as (method, path, headers, body); answers queued responses in order."""
+    """Records requests as (method, path, headers, body); answers queued responses in order.
+
+    Without a queued response, a request gets 200 with the JSON body registered
+    for its path (``PATH_BODIES``), or an empty body.
+    """
 
     def __init__(self, url: str) -> None:
         self.url = url
         self.requests: list[tuple[str, str, dict[str, str], bytes]] = []
         self._responses: list[tuple[int, dict[str, str], bytes]] = []
+        self._bodies: dict[str, bytes] = dict(PATH_BODIES)
         self._lock = threading.Lock()
 
     def queue_response(self, status: int, headers: dict[str, str], body: bytes) -> None:
-        """Queue a response for the next request; without one, 200 with an empty body."""
+        """Queue a response for the next request; without one, 200 with the path body."""
         with self._lock:
             self._responses.append((status, headers, body))
 
@@ -51,11 +73,13 @@ class HttpRecorder:
         with self._lock:
             self.requests.append((method, path, headers, body))
 
-    def take_response(self) -> tuple[int, dict[str, str], bytes]:
+    def take_response(self, path: str) -> tuple[int, dict[str, str], bytes]:
         with self._lock:
             if self._responses:
                 return self._responses.pop(0)
-            return (200, {}, b"")
+            body = self._bodies.get(path, b"")
+            headers = {"Content-Type": "application/json"} if body else {}
+            return (200, headers, body)
 
 
 class _RecordingHandler(BaseHTTPRequestHandler):
@@ -67,7 +91,7 @@ class _RecordingHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         headers = {name: value for name, value in self.headers.items()}
         self.recorder.record(self.command, self.path, headers, body)
-        status, response_headers, response_body = self.recorder.take_response()
+        status, response_headers, response_body = self.recorder.take_response(self.path)
         self.send_response(status)
         for name, value in response_headers.items():
             self.send_header(name, value)
@@ -100,8 +124,16 @@ def memory() -> tuple[InMemorySpanExporter, Callable[..., Runtime]]:
             **options,
         }
         config = resolve_config(**merged, env={})
+        # The production instrumentor path (plan F § P10): resolve before the
+        # runtime exists, enable after install.
+        classes = resolve(config.instrument)
         runtime = Runtime.create(config, exporter=exporter, id_generator=SequentialIds())
         install(runtime)
+        try:
+            enable_for(runtime, classes)
+        except ConfigError:
+            uninstall(runtime)
+            raise
         return runtime
 
     return exporter, start
