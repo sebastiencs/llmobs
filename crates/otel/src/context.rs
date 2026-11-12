@@ -40,6 +40,9 @@ const PROVIDER: &[Source] = &[
 /// Vercel v7 `context` call option, recorded under `ai.settings.`.
 const VERCEL_CONTEXT: &str = "ai.settings.context.";
 
+/// Google ADK sets `gen_ai.system` to its own framework name, not a provider.
+const ADK_FRAMEWORK: &str = "gcp.vertex.agent";
+
 const OPERATION: &[Source] = &[span("gen_ai.operation.name", Convention::Genai)];
 
 const SESSION_ID: &[Source] = &[
@@ -57,6 +60,7 @@ const SESSION_ID: &[Source] = &[
         "lmnr.association.properties.session_id",
         Convention::Laminar,
     ),
+    span("gcp.vertex.agent.session_id", Convention::GoogleAdk),
 ];
 
 const USER_ID: &[Source] = &[
@@ -163,9 +167,7 @@ pub(crate) fn fill(
 ) -> ContextFields {
     let request_model = string_field(bag, resource, REQUEST_MODEL);
     let response_model = string_field(bag, resource, RESPONSE_MODEL);
-    let provider = first_string(bag, resource, PROVIDER).map(|resolved| {
-        canonical_provider(&resolved.value, resolved.source.key == "ai.model.provider")
-    });
+    let provider = provider(bag, resource);
     let operation = string_field(bag, resource, OPERATION);
     let request_params = request_params(bag, warnings);
     let session_id = string_field(bag, resource, SESSION_ID);
@@ -187,6 +189,23 @@ pub(crate) fn fill(
         tags,
         metadata,
     }
+}
+
+/// Rule 12 over [`PROVIDER`]. ADK's `gen_ai.system = gcp.vertex.agent` is
+/// skipped and left unread, so the next source or the price table decides
+/// (D-B1-8).
+fn provider(bag: &mut AttrBag<'_>, resource: &ResourceView<'_>) -> Option<String> {
+    let sources: Vec<Source> = PROVIDER
+        .iter()
+        .copied()
+        .filter(|source| {
+            source.key != "gen_ai.system"
+                || bag.get(source.key).and_then(as_str) != Some(ADK_FRAMEWORK)
+        })
+        .collect();
+    first_string(bag, resource, &sources).map(|resolved| {
+        canonical_provider(&resolved.value, resolved.source.key == "ai.model.provider")
+    })
 }
 
 fn string_field(

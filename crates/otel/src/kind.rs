@@ -35,6 +35,11 @@ pub(crate) fn span_kind(bag: &mut AttrBag<'_>) -> SpanKind {
     if let Some(kind) = decide(bag, "lmnr.span.type", laminar) {
         return kind;
     }
+    // ADK's `call_llm` span sends no operation name; its `generate_content`
+    // child is the model call and repeats the usage (D-B1-8).
+    if present(bag, "gcp.vertex.agent.llm_request") && !present(bag, "gen_ai.tool.name") {
+        return SpanKind::Chain;
+    }
     if present(bag, "gen_ai.tool.name") || present(bag, "gen_ai.tool.call.id") {
         return SpanKind::Tool;
     }

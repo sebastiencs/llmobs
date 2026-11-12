@@ -35,6 +35,7 @@
       "end_time": "2025-12-31T23:59:51.000000000Z",
       "status": "unset",
       "service_name": "adk-app",
+      "session_id": "sess-1",
       "provider": "openai",
       "request_model": "gpt-4o-mini",
       "operation": "call_llm",
