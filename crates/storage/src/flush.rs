@@ -13,18 +13,24 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use arrow::array::{Array, AsArray, RecordBatch, UInt32Array};
-use arrow::compute::{concat_batches, take_record_batch};
+#[cfg(test)]
+use arrow::compute::concat_batches;
+use arrow::compute::take_record_batch;
 use arrow::datatypes::TimestampNanosecondType;
 use bytes::Bytes;
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
 
-use crate::catalog::{Catalog, CatalogEdit, Committer, FileMeta};
+use crate::anchor::{AnchorPlan, Anchors};
+use crate::catalog::{Catalog, CatalogEdit, Committer, FileId, FileMeta, FileTable};
 use crate::error::FlushError;
 use crate::hooks::{HookPoint, Hooks};
-use crate::memtable::{FrozenView, MemBatch, Memtable};
+#[cfg(test)]
+use crate::memtable::MemBatch;
+use crate::memtable::{FrozenView, Memtable, PartitionKey};
 use crate::objects::Objects;
-use crate::parquet::write_file;
+use crate::parquet::{WrittenFile, write_file};
+use crate::partials::partials_from_spans;
 use crate::read_state::{Published, ReadState};
 use crate::wal::writer::WriterShared;
 use crate::wal::{Table, truncate_segments};
@@ -42,6 +48,17 @@ struct PreparedFile {
     bytes: Bytes,
 }
 
+/// Files to stage and write, plus the `(traces, spans)` pairs for the commit.
+///
+/// `files` is in partition order; each spans file is immediately followed by
+/// its traces file.
+struct Prepared {
+    files: Vec<PreparedFile>,
+    sources: Vec<(FileId, FileId)>,
+    /// Planned anchor changes, applied only after the commit succeeds.
+    anchor_plan: Option<AnchorPlan>,
+}
+
 struct FlushParams {
     table: Table,
     dir: PathBuf,
@@ -53,6 +70,8 @@ struct FlushParams {
     max_bytes: u64,
     max_age: Duration,
     upload_concurrency: usize,
+    /// Present only on the spans flush task.
+    anchors: Option<Arc<Mutex<Anchors>>>,
     stop: watch::Receiver<bool>,
     notify: Arc<Notify>,
 }
@@ -80,6 +99,8 @@ pub(crate) struct FlushStart {
     pub max_age: Duration,
     /// `flush.upload_concurrency`.
     pub upload_concurrency: usize,
+    /// The spans task's anchor state. `None` for scores.
+    pub anchors: Option<Arc<Mutex<Anchors>>>,
 }
 
 /// A running flush task. Shutdown asks it to finish; drop cancels it.
@@ -130,6 +151,7 @@ pub(crate) fn spawn(start: FlushStart) -> FlushHandle {
         max_bytes: start.max_bytes,
         max_age: start.max_age,
         upload_concurrency: start.upload_concurrency,
+        anchors: start.anchors,
         stop,
         notify: Arc::clone(&notify),
     };
@@ -283,12 +305,22 @@ async fn flush_once(params: &FlushParams) -> Result<Option<u64>, FlushError> {
         }
     }
     let table = params.table;
-    let prepared = match tokio::task::spawn_blocking(move || prepare(table, &view)).await {
+    let anchors = params.anchors.clone();
+    let prepared = match tokio::task::spawn_blocking(move || {
+        prepare(table, &view, anchors.as_deref())
+    })
+    .await
+    {
         Ok(Ok(prepared)) => prepared,
         Ok(Err(error)) => return Err(log_retry(table, partitions, error)),
         Err(_) => return Err(log_retry(table, partitions, FlushError::Task)),
     };
-    let paths: Vec<String> = prepared.iter().map(|file| file.meta.path.clone()).collect();
+    let Prepared {
+        files,
+        sources,
+        anchor_plan,
+    } = prepared;
+    let paths: Vec<String> = files.iter().map(|file| file.meta.path.clone()).collect();
     if let Err(error) = params.committer.stage(&paths).await {
         return Err(log_retry(
             params.table,
@@ -300,7 +332,7 @@ async fn flush_once(params: &FlushParams) -> Result<Option<u64>, FlushError> {
     if params.hooks.fail(HookPoint::FlushAfterStage).is_some() {
         return Err(log_retry(params.table, partitions, FlushError::Fault));
     }
-    if let Err(error) = put_all(&params.objects, &prepared, params.upload_concurrency).await {
+    if let Err(error) = put_all(&params.objects, &files, params.upload_concurrency).await {
         return Err(log_retry(params.table, partitions, error));
     }
     params.hooks.pause(HookPoint::FlushAfterWrite);
@@ -308,9 +340,10 @@ async fn flush_once(params: &FlushParams) -> Result<Option<u64>, FlushError> {
         return Err(log_retry(params.table, partitions, FlushError::Fault));
     }
     let edit = CatalogEdit {
-        add: prepared.into_iter().map(|file| file.meta).collect(),
+        add: files.into_iter().map(|file| file.meta).collect(),
         remove: Vec::new(),
         flushed_seq: Some((params.table, max_seq)),
+        sources,
     };
     let published = Arc::clone(&params.published);
     let shared = Arc::clone(&params.shared);
@@ -323,6 +356,14 @@ async fn flush_once(params: &FlushParams) -> Result<Option<u64>, FlushError> {
         .await
     {
         return Err(log_retry(table, partitions, FlushError::commit(error)));
+    }
+    // The commit is durable. Only now may the anchor state change, so a failed
+    // attempt retries from the same state and assigns the same days.
+    if let (Some(anchors), Some(plan)) = (&params.anchors, anchor_plan) {
+        anchors
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .commit(plan);
     }
     params.hooks.pause(HookPoint::FlushAfterCommit);
     if let Some(error) = params.hooks.fail(HookPoint::FlushAfterCommit) {
@@ -375,63 +416,133 @@ fn publish_flush(
     shared.set_memtable_bytes(bytes);
 }
 
-fn prepare(table: Table, view: &FrozenView) -> Result<Vec<PreparedFile>, FlushError> {
+fn prepare(
+    table: Table,
+    view: &FrozenView,
+    anchors: Option<&Mutex<Anchors>>,
+) -> Result<Prepared, FlushError> {
+    let file_table = FileTable::from(table);
     let mut files = Vec::new();
-    for (key, batches) in view.partitions.iter() {
-        if batches.is_empty() {
-            continue;
-        }
-        let written = match table {
-            Table::Spans => {
-                let batch = dedup_spans(batches)?;
-                write_file(table, 0, &[Arc::new(batch)]).map_err(FlushError::prepare)?
+    let mut sources = Vec::new();
+    let mut anchor_plan = None;
+    match table {
+        Table::Spans => {
+            let anchors = anchors.ok_or_else(|| FlushError::dedup("missing anchor state"))?;
+            let (partitions, plan) = anchors
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .partition(view)?;
+            anchor_plan = Some(plan);
+            for partition in partitions {
+                let batch = dedup_batch(&partition.batch)?;
+                push_spans_files(&mut files, &mut sources, &partition.key, batch)?;
             }
-            Table::Scores => {
+        }
+        Table::Scores => {
+            for (key, batches) in view.partitions.iter() {
+                if batches.is_empty() {
+                    continue;
+                }
                 let refs: Vec<Arc<RecordBatch>> = batches
                     .iter()
                     .map(|batch| Arc::clone(&batch.batch))
                     .collect();
-                write_file(table, 0, &refs).map_err(FlushError::prepare)?
+                let written = write_file(file_table, 0, &refs).map_err(FlushError::prepare)?;
+                let (path, id) = Objects::table_file_path(file_table, key.project, key.day, 0);
+                files.push(prepared_file(id, file_table, key, path, written));
             }
-        };
-        let (path, id) = Objects::table_file_path(table, key.project, key.day, 0);
-        let size = u64::try_from(written.bytes.len()).unwrap_or(u64::MAX);
-        files.push(PreparedFile {
-            meta: FileMeta {
-                id,
-                table,
-                project: key.project,
-                day: key.day,
-                level: 0,
-                path,
-                size,
-                footer_size: written.footer_size,
-                rows: written.rows,
-                min_time: written.min_time,
-                max_time: written.max_time,
-                min_ingest_time: written.min_ingest_time,
-                max_ingest_time: written.max_ingest_time,
-                fully_merged: false,
-            },
-            bytes: written.bytes,
-        });
+        }
     }
     if files.is_empty() {
         return Err(FlushError::dedup("empty flush"));
     }
-    Ok(files)
+    Ok(Prepared {
+        files,
+        sources,
+        anchor_plan,
+    })
+}
+
+/// Writes a spans file and the traces partials derived from exactly its rows.
+fn push_spans_files(
+    files: &mut Vec<PreparedFile>,
+    sources: &mut Vec<(FileId, FileId)>,
+    key: &PartitionKey,
+    batch: RecordBatch,
+) -> Result<(), FlushError> {
+    let batch = Arc::new(batch);
+    let spans_written =
+        write_file(FileTable::Spans, 0, &[Arc::clone(&batch)]).map_err(FlushError::prepare)?;
+    let partials = partials_from_spans(&batch).map_err(FlushError::partials)?;
+    let traces_written =
+        write_file(FileTable::Traces, 0, &[Arc::new(partials)]).map_err(FlushError::prepare)?;
+    let (spans_path, spans_id) =
+        Objects::table_file_path(FileTable::Spans, key.project, key.day, 0);
+    let (traces_path, traces_id) =
+        Objects::table_file_path(FileTable::Traces, key.project, key.day, 0);
+    files.push(prepared_file(
+        spans_id,
+        FileTable::Spans,
+        key,
+        spans_path,
+        spans_written,
+    ));
+    files.push(prepared_file(
+        traces_id,
+        FileTable::Traces,
+        key,
+        traces_path,
+        traces_written,
+    ));
+    sources.push((traces_id, spans_id));
+    Ok(())
+}
+
+fn prepared_file(
+    id: FileId,
+    table: FileTable,
+    key: &PartitionKey,
+    path: String,
+    written: WrittenFile,
+) -> PreparedFile {
+    let size = u64::try_from(written.bytes.len()).unwrap_or(u64::MAX);
+    PreparedFile {
+        meta: FileMeta {
+            id,
+            table,
+            project: key.project,
+            day: key.day,
+            level: 0,
+            path,
+            size,
+            footer_size: written.footer_size,
+            rows: written.rows,
+            min_time: written.min_time,
+            max_time: written.max_time,
+            min_ingest_time: written.min_ingest_time,
+            max_ingest_time: written.max_ingest_time,
+            fully_merged: false,
+        },
+        bytes: written.bytes,
+    }
 }
 
 /// Keeps the greatest `ingest_time` for each `(trace_id, span_id)`.
 ///
 /// Batches are in WAL order. An equal `ingest_time` keeps the later row.
+#[cfg(test)]
 fn dedup_spans(batches: &[MemBatch]) -> Result<RecordBatch, FlushError> {
     let schema = batches[0].batch.schema();
     let refs: Vec<&RecordBatch> = batches.iter().map(|batch| batch.batch.as_ref()).collect();
     let combined = concat_batches(&schema, refs)
         .map_err(|source| FlushError::prepare(crate::error::ParquetWriteError::arrow(source)))?;
-    let trace = fixed(&combined, llmobs_core::schema::spans::TRACE_ID)?;
-    let span = fixed(&combined, llmobs_core::schema::spans::SPAN_ID)?;
+    dedup_batch(&combined)
+}
+
+/// Keeps the greatest `ingest_time` for each `(trace_id, span_id)` of one batch.
+fn dedup_batch(combined: &RecordBatch) -> Result<RecordBatch, FlushError> {
+    let trace = fixed(combined, llmobs_core::schema::spans::TRACE_ID)?;
+    let span = fixed(combined, llmobs_core::schema::spans::SPAN_ID)?;
     let ingest = combined
         .column_by_name(llmobs_core::schema::spans::INGEST_TIME)
         .and_then(|column| column.as_primitive_opt::<TimestampNanosecondType>())
@@ -455,7 +566,7 @@ fn dedup_spans(batches: &[MemBatch]) -> Result<RecordBatch, FlushError> {
         rows.push(u32::try_from(row).map_err(|_| FlushError::dedup("row index"))?);
     }
     rows.sort_unstable();
-    take_record_batch(&combined, &UInt32Array::from(rows))
+    take_record_batch(combined, &UInt32Array::from(rows))
         .map_err(|source| FlushError::prepare(crate::error::ParquetWriteError::arrow(source)))
 }
 
@@ -529,11 +640,23 @@ fn log_truncate(table: Table, error: &std::io::Error) {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+    use std::time::{Duration, Instant};
+
     use arrow::array::Array;
+    use chrono::{Datelike, NaiveDate};
+    use llmobs_core::ids::ProjectId;
 
     use super::dedup_spans;
+    use crate::Storage;
+    use crate::anchor::DAY_NS;
+    use crate::catalog::FileTable;
+    use crate::config::{
+        FlushConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig, WalConfig,
+    };
+    use crate::hooks::HookPoint;
     use crate::memtable::MemBatch;
-    use crate::wal::spans_named;
+    use crate::wal::{Table, spans_named};
 
     fn batch(starts: &[i64], name: &str) -> MemBatch {
         let batch = spans_named(starts, name);
@@ -542,6 +665,7 @@ mod tests {
             min_time: starts[0],
             max_time: *starts.last().unwrap(),
             bytes: batch.get_array_memory_size(),
+            partials: std::sync::Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -572,5 +696,138 @@ mod tests {
         let both = batch(&[10, 11], "both");
         let distinct = dedup_spans(&[both]).unwrap();
         assert_eq!(distinct.num_rows(), 2);
+    }
+
+    fn project() -> ProjectId {
+        "018f6b4e-7c1a-7c1a-8c1a-000000000001".parse().unwrap()
+    }
+
+    fn day() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 3, 5).unwrap()
+    }
+
+    fn at(day: NaiveDate, hour: i64, minute: i64, second: i64) -> i64 {
+        (i64::from(day.num_days_from_ce()) - 719_163) * DAY_NS
+            + (hour * 3_600 + minute * 60 + second) * 1_000_000_000
+    }
+
+    fn anchor_config(dir: &Path) -> StorageConfig {
+        StorageConfig {
+            data_dir: dir.to_path_buf(),
+            object_store: None,
+            s3: S3Config::default(),
+            wal: WalConfig::default(),
+            flush: FlushConfig {
+                max_age: Duration::from_millis(100),
+                ..FlushConfig::default()
+            },
+            memtable: MemtableConfig::default(),
+            query: QueryConfig::default(),
+            anchor: Default::default(),
+        }
+    }
+
+    async fn wait_rows(storage: &Storage, rows: u64) {
+        let started = Instant::now();
+        loop {
+            if storage.catalog_rows(Table::Spans) == rows
+                && storage.published_rows(Table::Spans) == 0
+            {
+                return;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(15),
+                "flush did not commit {rows} rows"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    fn span_days(storage: &Storage) -> Vec<NaiveDate> {
+        storage
+            .catalog_files(Table::Spans)
+            .iter()
+            .map(|file| file.day)
+            .collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_failed_commit_retries_with_the_same_anchor_days() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(anchor_config(dir.path())).await.unwrap();
+        // Arm the failure on the FIRST flush — the one that creates the anchor
+        // entry. A failed attempt must not write it; the retry recomputes the
+        // same days with an untouched anchor state and commits it.
+        storage.hooks().arm_fail(HookPoint::CatalogCommit);
+        let early = at(day(), 23, 59, 50);
+        storage
+            .append_spans(project(), spans_named(&[early], "a"))
+            .await
+            .unwrap();
+        wait_rows(&storage, 1).await;
+        let late = at(day().succ_opt().unwrap(), 0, 0, 10);
+        storage
+            .append_spans(project(), spans_named(&[late], "b"))
+            .await
+            .unwrap();
+        wait_rows(&storage, 2).await;
+        assert_eq!(span_days(&storage), vec![day(), day()]);
+        // Both a spans and a traces file are committed for each day.
+        assert_eq!(storage.catalog_paths(FileTable::Spans).len(), 2);
+        assert_eq!(storage.catalog_paths(FileTable::Traces).len(), 2);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn rebuild_uses_a_partials_end_time_near_midnight() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = anchor_config(dir.path());
+        let storage = Storage::open(config.clone()).await.unwrap();
+        // One flush: root at 22:00, child at 23:30. At runtime the child's
+        // start makes the entry; the partial's start_time is 22:00, so only
+        // its end_time (23:30) restores the entry after a restart.
+        let root = at(day(), 22, 0, 0);
+        let child = at(day(), 23, 30, 0);
+        storage
+            .append_spans(project(), spans_named(&[root, child], "a"))
+            .await
+            .unwrap();
+        wait_rows(&storage, 2).await;
+        drop(storage);
+        let storage = Storage::open(config).await.unwrap();
+        let late = at(day().succ_opt().unwrap(), 0, 0, 10);
+        storage
+            .append_spans(project(), spans_named(&[late], "b"))
+            .await
+            .unwrap();
+        wait_rows(&storage, 3).await;
+        assert_eq!(span_days(&storage), vec![day(), day()]);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn restart_rebuilds_the_anchor_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = anchor_config(dir.path());
+        let storage = Storage::open(config.clone()).await.unwrap();
+        let early = at(day(), 23, 59, 50);
+        storage
+            .append_spans(project(), spans_named(&[early], "a"))
+            .await
+            .unwrap();
+        wait_rows(&storage, 1).await;
+        drop(storage);
+        // The rebuild reads the traces file and restores the entry, so the
+        // late row after the reopen still lands in day D.
+        let storage = Storage::open(config).await.unwrap();
+        assert_eq!(span_days(&storage), vec![day()]);
+        let late = at(day().succ_opt().unwrap(), 0, 0, 10);
+        storage
+            .append_spans(project(), spans_named(&[late], "b"))
+            .await
+            .unwrap();
+        wait_rows(&storage, 2).await;
+        assert_eq!(span_days(&storage), vec![day(), day()]);
+        storage.shutdown().await.unwrap();
     }
 }

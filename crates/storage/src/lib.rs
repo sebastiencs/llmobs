@@ -6,10 +6,8 @@
 //!
 //! # What this crate does not do yet
 //!
-//! - there is no `traces` table; `Storage::query` returns an empty one;
 //! - compaction does not run, so level-0 files accumulate;
 //! - deletion and retention are absent;
-//! - day pruning is exact; the one-day anchor slack is not built;
 //! - the query runtime uses DataFusion's default memory pool.
 //!   Parquet footers and page indexes use DataFusion's built-in metadata cache.
 
@@ -23,7 +21,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow::array::{Array, RecordBatch, StringArray};
-use datafusion::datasource::MemTable;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use llmobs_core::ids::ProjectId;
 
@@ -41,6 +38,7 @@ use crate::wal::sync_dir;
 use crate::wal::writer::{WalWriterHandle, WriterExit, WriterParams, spawn};
 use crate::wal::{SegmentWriter, replay};
 
+pub(crate) mod anchor;
 pub(crate) mod catalog;
 pub mod config;
 pub mod error;
@@ -49,6 +47,7 @@ pub(crate) mod flush;
 pub(crate) mod gc;
 pub(crate) mod objects;
 pub(crate) mod parquet;
+pub(crate) mod partials;
 pub mod query;
 mod query_error;
 mod query_text;
@@ -64,8 +63,8 @@ pub use reads::{
     Series, SeriesName, SessionDetailData, SessionListRequest, SessionSort, SortOrder,
     SpanListRequest, SpanSort, TraceDetailData, TraceListRequest, TraceSort, USER_COLUMNS,
     UserDetailData, UserListRequest, UserSort, latest_scores, metrics::metrics, score_list,
-    session_detail, session_list, span_detail, span_list, trace_detail, trace_list, user_detail,
-    user_list,
+    session_detail, session_list, span_detail, span_list, trace_detail, trace_list,
+    trace_list_plan, user_detail, user_list,
 };
 pub use sql::{EXPORT_MAX_ROWS, ExportFormat, SQL_MAX_ROWS, SqlColumn, SqlJson, SqlRequest};
 pub use views::{
@@ -114,6 +113,8 @@ pub struct StorageHealth {
 pub struct Storage {
     hard_limit: u64,
     target_partitions: NonZeroUsize,
+    /// `query.trace_lookback` in ns, the padded window around a trace range.
+    lookback: i64,
     shutting_down: AtomicBool,
     /// Released by [`Self::shutdown`] so another process can open the directory
     /// while this value is still alive.
@@ -138,6 +139,16 @@ pub struct Storage {
     /// Shared with the writers and the flush tasks. Tests arm faults here.
     #[allow(dead_code)]
     hooks: Hooks,
+}
+
+/// Optional hints for one [`Storage::query`] call.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct QueryOptions {
+    /// Time hint for a single-trace lookup (`?around=`), ns.
+    ///
+    /// When a lookup has no `start_time` bound, only files overlapping
+    /// `[around - 1 day, around + 1 day]` are read (D154).
+    pub around: Option<i64>,
 }
 
 impl Storage {
@@ -179,6 +190,11 @@ impl Storage {
         };
         let max_age = config.flush.max_age;
         let upload_concurrency = config.flush.upload_concurrency;
+        // The padded trace window uses `query.trace_lookback` itself (D90, D86).
+        let lookback = i64::try_from(config.query.trace_lookback.as_nanos()).unwrap_or(i64::MAX);
+        // Resolve the anchor window once; `validate` has bounded both sources.
+        let window = config.anchor.window.unwrap_or(config.query.trace_lookback);
+        let window_ns = i64::try_from(window.as_nanos()).unwrap_or(i64::MAX);
         #[allow(clippy::default_constructed_unit_structs)]
         let hooks = Hooks::default();
         let layout_dir = data_dir.clone();
@@ -234,6 +250,9 @@ impl Storage {
             )
         })??;
         let catalog = committer.catalog().await;
+        let mut anchors = anchor::Anchors::new(window_ns);
+        anchors.rebuild(&catalog, &objects).await?;
+        let anchors = Arc::new(Mutex::new(anchors));
         let published = Arc::new(Published::new(ReadState {
             spans: recovered.spans.memtable.snapshot(),
             scores: recovered.scores.memtable.snapshot(),
@@ -266,6 +285,7 @@ impl Storage {
             max_bytes: tune.flush_max_bytes,
             max_age,
             upload_concurrency,
+            anchors: Some(Arc::clone(&anchors)),
         });
         let scores_flush = flush::spawn(flush::FlushStart {
             table: Table::Scores,
@@ -278,6 +298,7 @@ impl Storage {
             max_bytes: tune.flush_max_bytes,
             max_age,
             upload_concurrency,
+            anchors: None,
         });
         if let Err(error) =
             gc::collect_once(&committer, &objects, &hooks, catalog::now_ns(), gc::MAX_AGE).await
@@ -294,6 +315,7 @@ impl Storage {
         Ok(Self {
             hard_limit,
             target_partitions,
+            lookback,
             shutting_down: AtomicBool::new(false),
             lock: Mutex::new(Some(lock)),
             published,
@@ -335,7 +357,11 @@ impl Storage {
     /// [`ProjectQuery::runtime`] and [`ProjectQuery::target_partitions`].
     /// The runtime is the one built at open. Its memory pool stays the default
     /// until a later milestone installs one.
-    pub fn query(&self, project: ProjectId) -> Result<ProjectQuery, QueryError> {
+    pub fn query(
+        &self,
+        project: ProjectId,
+        options: QueryOptions,
+    ) -> Result<ProjectQuery, QueryError> {
         let state = self.published.load();
         let partitions = self.target_partitions.get();
         let spans = Arc::new(query::SpansProvider::new(
@@ -343,6 +369,7 @@ impl Storage {
             Arc::clone(&state.spans),
             Arc::clone(&state.catalog),
             partitions,
+            options.around,
         ));
         let scores = Arc::new(query::ScoresProvider::new(
             project,
@@ -350,17 +377,21 @@ impl Storage {
             Arc::clone(&state.catalog),
             partitions,
         ));
-        // There is no `traces` provider yet. Until then the view is empty.
-        let traces = Arc::new(MemTable::try_new(
-            llmobs_core::schema::traces_schema(),
-            vec![vec![]],
-        )?);
+        let traces = Arc::new(query::TracesProvider::new(
+            project,
+            Arc::clone(&state.catalog),
+            Arc::clone(&state.spans),
+            options,
+            self.lookback,
+            partitions,
+        ));
         Ok(ProjectQuery {
             spans,
             traces,
             scores,
             runtime: Arc::clone(&self.runtime),
             target_partitions: self.target_partitions,
+            optimizer_rules: vec![Arc::new(query::TraceListRule)],
         })
     }
 
@@ -489,7 +520,7 @@ impl Storage {
 
     /// Rows currently published for `table`.
     #[cfg(test)]
-    fn published_rows(&self, table: Table) -> usize {
+    pub(crate) fn published_rows(&self, table: Table) -> usize {
         let state = self.published.load();
         let snapshot = match table {
             Table::Spans => &state.spans,
@@ -505,13 +536,28 @@ impl Storage {
 
     /// Active catalog files for `table`.
     #[cfg(test)]
-    fn catalog_files(&self, table: Table) -> Vec<Arc<catalog::FileMeta>> {
-        self.published.load().catalog.test_files(table)
+    pub(crate) fn catalog_files(&self, table: Table) -> Vec<Arc<catalog::FileMeta>> {
+        self.published
+            .load()
+            .catalog
+            .test_files(catalog::FileTable::from(table))
+    }
+
+    /// Paths of the active files of a file table, including `traces`.
+    #[cfg(test)]
+    pub(crate) fn catalog_paths(&self, table: catalog::FileTable) -> Vec<String> {
+        self.published
+            .load()
+            .catalog
+            .test_files(table)
+            .iter()
+            .map(|file| file.path.clone())
+            .collect()
     }
 
     /// Rows in the active catalog files of `table`.
     #[cfg(test)]
-    fn catalog_rows(&self, table: Table) -> u64 {
+    pub(crate) fn catalog_rows(&self, table: Table) -> u64 {
         self.catalog_files(table).iter().map(|file| file.rows).sum()
     }
 
@@ -856,21 +902,27 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use arrow::array::StringArray;
+    use ::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use arrow::array::{ArrayRef, FixedSizeBinaryBuilder, StringArray};
+    use arrow::compute::concat_batches;
     use arrow::datatypes::{DataType, Field, Schema};
     use bytesize::ByteSize;
     use llmobs_core::batch::scores_to_record_batch;
     use llmobs_core::enums::ScoreSource;
     use llmobs_core::ids::{ProjectId, TraceId};
-    use llmobs_core::schema::spans_schema;
+    use llmobs_core::schema::{spans, spans_schema};
     use llmobs_core::score::{Score, ScoreTarget, ScoreValue};
     use object_store::ObjectStoreExt;
+    use sqlx::ConnectOptions;
+    use sqlx::sqlite::SqliteConnectOptions;
 
     use super::*;
+    use crate::catalog::FileTable;
     use crate::config::{FlushConfig, MemtableConfig, QueryConfig, S3Config, WalConfig};
     use crate::error::StorageError;
     use crate::hooks::HookPoint;
-    use crate::wal::{parse_segment_name, spans_at, spans_named};
+    use crate::partials::partials_from_spans;
+    use crate::wal::{parse_segment_name, spans_at, spans_keyed, spans_named};
 
     fn project() -> ProjectId {
         "018f6b4e-7c1a-7c1a-8c1a-000000000001".parse().unwrap()
@@ -889,7 +941,78 @@ mod tests {
             flush: FlushConfig::default(),
             memtable: MemtableConfig::default(),
             query: QueryConfig::default(),
+            anchor: Default::default(),
         }
+    }
+
+    /// Three distinct traces spread over two UTC days (one partition per day).
+    fn three_traces_two_days() -> RecordBatch {
+        const DAY_NS: i64 = 86_400_000_000_000;
+        let base = spans_at(&[1_000, 1_100, DAY_NS + 2_000]);
+        let mut ids = FixedSizeBinaryBuilder::with_capacity(3, 16);
+        for last in [1_u8, 2, 3] {
+            let mut bytes = [0_u8; 16];
+            bytes[15] = last;
+            ids.append_value(bytes).unwrap();
+        }
+        let mut columns: Vec<ArrayRef> = base.columns().to_vec();
+        let index = base.schema().index_of(spans::TRACE_ID).unwrap();
+        columns[index] = Arc::new(ids.finish());
+        RecordBatch::try_new(base.schema(), columns).unwrap()
+    }
+
+    /// Reads one Parquet object back with the sync reader.
+    fn read_parquet(dir: &Path, path: &str) -> RecordBatch {
+        let file = File::open(dir.join("objects").join(path)).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let schema = Arc::clone(builder.schema());
+        let batches: Vec<RecordBatch> = builder
+            .build()
+            .unwrap()
+            .map(|batch| batch.unwrap())
+            .collect();
+        concat_batches(&schema, &batches).unwrap()
+    }
+
+    /// Compares two batches column by column; the stored file's schema also
+    /// carries Parquet KV metadata, so whole-batch equality is too strict.
+    fn assert_same_rows(actual: &RecordBatch, expected: &RecordBatch, label: &str) {
+        assert_eq!(actual.num_rows(), expected.num_rows(), "{label}: rows");
+        for field in expected.schema().fields() {
+            let name = field.name();
+            assert_eq!(
+                actual.column_by_name(name),
+                expected.column_by_name(name),
+                "{label}: {name}"
+            );
+        }
+    }
+
+    /// `(spans path, traces path)` for every `file_sources` row.
+    async fn source_pairs(dir: &Path) -> Vec<(String, String)> {
+        let mut connection = SqliteConnectOptions::new()
+            .filename(dir.join("catalog.db"))
+            .read_only(true)
+            .connect()
+            .await
+            .unwrap();
+        let rows = sqlx::query(
+            "SELECT s.path AS spans_path, t.path AS traces_path
+             FROM file_sources fs
+             JOIN data_files s ON s.id = fs.spans_file_id
+             JOIN data_files t ON t.id = fs.traces_file_id",
+        )
+        .fetch_all(&mut connection)
+        .await
+        .unwrap();
+        rows.iter()
+            .map(|row| {
+                (
+                    sqlx::Row::try_get(row, "spans_path").unwrap(),
+                    sqlx::Row::try_get(row, "traces_path").unwrap(),
+                )
+            })
+            .collect()
     }
 
     fn score_batch(name: &str) -> RecordBatch {
@@ -1223,11 +1346,11 @@ mod tests {
             );
             tokio::task::yield_now().await;
         }
-        let during = storage.query(project()).unwrap();
+        let during = storage.query(project(), Default::default()).unwrap();
         assert!(span_names(Arc::clone(&during.spans)).await.is_empty());
         storage.hooks().release(HookPoint::AfterWalSync);
         append.await.unwrap().unwrap();
-        let after = storage.query(project()).unwrap();
+        let after = storage.query(project(), Default::default()).unwrap();
         assert_eq!(span_names(after.spans).await.len(), 1);
         assert!(span_names(during.spans).await.is_empty());
         storage.shutdown().await.unwrap();
@@ -1251,12 +1374,13 @@ mod tests {
             })
         };
         while !append.is_finished() {
-            let names = span_names(storage.query(project()).unwrap().spans).await;
+            let names =
+                span_names(storage.query(project(), Default::default()).unwrap().spans).await;
             assert!(!names.iter().any(|name| name == "lost"));
             tokio::task::yield_now().await;
         }
         assert_eq!(append.await.unwrap().unwrap_err(), AppendError::WalFailed);
-        let names = span_names(storage.query(project()).unwrap().spans).await;
+        let names = span_names(storage.query(project(), Default::default()).unwrap().spans).await;
         assert_eq!(names, vec!["kept".to_owned()]);
         let shutdown = storage.shutdown().await.unwrap_err();
         assert!(matches!(
@@ -1271,12 +1395,13 @@ mod tests {
         let config = config_in(dir.path());
         let storage = Arc::new(Storage::open(config.clone()).await.unwrap());
         let mut tasks = Vec::new();
-        for index in 0..8 {
+        for index in 0..8_u8 {
             let storage = Arc::clone(&storage);
             tasks.push(tokio::spawn(async move {
-                storage
-                    .append_spans(project(), spans_named(&[index], &format!("s{index}")))
-                    .await
+                // A distinct span id per append: a flush keeps one row per
+                // `(trace_id, span_id)`, so equal ids would merge the rows.
+                let batch = spans_keyed(&[i64::from(index)], &format!("s{index}"), index + 1);
+                storage.append_spans(project(), batch).await
             }));
         }
         tokio::task::yield_now().await;
@@ -1320,8 +1445,8 @@ mod tests {
         let mut config = config_in(dir.path());
         config.flush.max_age = Duration::from_millis(100);
         let storage = Storage::open(config.clone()).await.unwrap();
-        let first = storage.query(project()).unwrap();
-        let second = storage.query(project()).unwrap();
+        let first = storage.query(project(), Default::default()).unwrap();
+        let second = storage.query(project(), Default::default()).unwrap();
         assert!(Arc::ptr_eq(&first.runtime, &second.runtime));
         let receipt = storage
             .append_spans(project(), spans_at(&[1]))
@@ -1435,8 +1560,9 @@ mod tests {
             .iter()
             .map(|file| file.path.clone())
             .collect();
+        // Each failed attempt staged a spans file and its traces file.
         let staged = storage.staged_paths().await.unwrap();
-        assert_eq!(staged.len(), 2, "{staged:?}");
+        assert_eq!(staged.len(), 4, "{staged:?}");
         assert!(committed.iter().all(|path| !staged.contains(path)));
         storage.shutdown().await.unwrap();
     }
@@ -1460,17 +1586,113 @@ mod tests {
         wait_for_catalog(&storage, Table::Spans, 1).await;
         let committed = storage.catalog_files(Table::Spans);
         assert_eq!(committed.len(), 1);
+        // One failed attempt staged a spans file and its traces file. With
+        // serial uploads the ambiguous failure hits the first (spans) object,
+        // so only that object was written before the error.
         let staged = storage.staged_paths().await.unwrap();
-        assert_eq!(staged.len(), 1, "{staged:?}");
-        assert_ne!(staged[0], committed[0].path);
+        assert_eq!(staged.len(), 2, "{staged:?}");
+        assert!(staged.iter().all(|path| path != &committed[0].path));
+        let spans_staged = staged
+            .iter()
+            .find(|path| path.starts_with("tables/spans/"))
+            .unwrap();
         inner
-            .get(&object_store::path::Path::from(staged[0].as_str()))
+            .get(&object_store::path::Path::from(spans_staged.as_str()))
             .await
             .unwrap();
         inner
             .get(&object_store::path::Path::from(committed[0].path.as_str()))
             .await
             .unwrap();
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_flush_writes_a_traces_file_per_spans_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_in(dir.path());
+        config.flush.max_age = Duration::from_millis(100);
+        let storage = Storage::open(config.clone()).await.unwrap();
+        storage
+            .append_spans(project(), three_traces_two_days())
+            .await
+            .unwrap();
+        wait_for_catalog(&storage, Table::Spans, 3).await;
+        assert_eq!(storage.catalog_paths(FileTable::Spans).len(), 2);
+        assert_eq!(storage.catalog_paths(FileTable::Traces).len(), 2);
+        let pairs = source_pairs(dir.path()).await;
+        assert_eq!(pairs.len(), 2, "{pairs:?}");
+        for (spans_path, traces_path) in &pairs {
+            let spans_batch = read_parquet(dir.path(), spans_path);
+            let expected = partials_from_spans(&spans_batch).unwrap();
+            let actual = read_parquet(dir.path(), traces_path);
+            assert_same_rows(&actual, &expected, traces_path);
+        }
+        storage.shutdown().await.unwrap();
+
+        // Reopening loads the catalog (the open-time sources check passes) and
+        // the traces files are in the published read state.
+        let storage = Storage::open(config).await.unwrap();
+        assert_eq!(storage.catalog_paths(FileTable::Spans).len(), 2);
+        assert_eq!(storage.catalog_paths(FileTable::Traces).len(), 2);
+        assert_eq!(source_pairs(dir.path()).await.len(), 2);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_ambiguous_traces_upload_is_retried_under_new_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let inner = Arc::new(object_store::memory::InMemory::new());
+        let fault = test_support::FaultStore::new(Arc::clone(&inner) as _);
+        // Serial uploads: the spans upload consumes the delay, the traces
+        // upload writes the object and then fails ambiguously.
+        fault.enqueue(test_support::FaultKind::Delay(Duration::ZERO));
+        fault.enqueue(test_support::FaultKind::FailAfter);
+        let mut config = config_in(dir.path());
+        config.flush.max_age = Duration::from_millis(100);
+        config.flush.upload_concurrency = 1;
+        let storage = Storage::open_with_store(config, Arc::new(fault))
+            .await
+            .unwrap();
+        storage
+            .append_spans(project(), spans_at(&[1]))
+            .await
+            .unwrap();
+        wait_for_catalog(&storage, Table::Spans, 1).await;
+        let committed = [
+            storage.catalog_paths(FileTable::Spans),
+            storage.catalog_paths(FileTable::Traces),
+        ]
+        .concat();
+        assert_eq!(committed.len(), 2, "{committed:?}");
+        let staged = storage.staged_paths().await.unwrap();
+        assert_eq!(staged.len(), 2, "{staged:?}");
+        assert!(staged.iter().all(|path| !committed.contains(path)));
+        // The first attempt's spans object succeeded and its traces object was
+        // written before the ambiguous failure; both are staged orphans.
+        for path in &staged {
+            inner
+                .get(&object_store::path::Path::from(path.as_str()))
+                .await
+                .unwrap();
+        }
+        storage.collect_staged(Duration::ZERO).await.unwrap();
+        assert!(storage.staged_paths().await.unwrap().is_empty());
+        for path in &staged {
+            assert!(
+                inner
+                    .get(&object_store::path::Path::from(path.as_str()))
+                    .await
+                    .is_err(),
+                "{path} survived collection"
+            );
+        }
+        for path in &committed {
+            inner
+                .get(&object_store::path::Path::from(path.as_str()))
+                .await
+                .unwrap();
+        }
         storage.shutdown().await.unwrap();
     }
 
