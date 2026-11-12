@@ -11,7 +11,6 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::account::AuthProvider;
 use crate::api::admin::{
     AdminResetLink, AdminSettings, AdminUser, CreateAdminUserRequest, CreatedAdminUser,
     UpdateAdminUserRequest,
@@ -273,8 +272,7 @@ async fn get_settings(
         enforce_sso_domains: auth.enforce_sso_domains.clone(),
         smtp_enabled: state.mailer.is_some(),
         email_from: state.config.email_from.clone(),
-        // OAuth provider tables arrive with the providers (P23).
-        providers: Vec::<AuthProvider>::new(),
+        providers: state.providers.list(),
         trusted_proxies: state
             .config
             .trusted_proxies

@@ -36,6 +36,10 @@ rand.workspace = true
 subtle.workspace = true
 sha2.workspace = true
 base64.workspace = true
+openidconnect.workspace = true
+oauth2.workspace = true
+reqwest.workspace = true
+hmac.workspace = true
 
 [dev-dependencies]
 bytesize.workspace = true
@@ -46,3 +50,5 @@ tempfile.workspace = true
 jsonschema.workspace = true
 sha2.workspace = true
 strum.workspace = true
+# Mock IdP signatures. `pkcs1v15` is the RS256 signer. `rand_core` 0.10 matches workspace `rand` 0.10.
+rsa = { workspace = true, features = ["pkcs1v15"] }

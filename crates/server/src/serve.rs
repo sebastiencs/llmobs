@@ -184,6 +184,28 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
             }));
         }
     };
+    let providers = match crate::auth::oidc::identity_client()
+        .and_then(|http| crate::auth::oidc::Providers::from_config(&config.auth, &http))
+    {
+        Ok(providers) => providers,
+        Err(error) => {
+            release_storage(storage).await;
+            meta.close().await;
+            let reason = match error {
+                crate::auth::oidc::OidcError::Client => {
+                    "could not build the identity provider client"
+                }
+                crate::auth::oidc::OidcError::Unavailable
+                | crate::auth::oidc::OidcError::Invalid => {
+                    "identity provider configuration is invalid"
+                }
+            };
+            return Err(ServeError::Config(ConfigError::Invalid {
+                key: "auth",
+                reason,
+            }));
+        }
+    };
     let storage = Arc::new(storage);
     let state = AppState::new(AppInner {
         config,
@@ -198,6 +220,7 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         setup: crate::bootstrap::SetupState::new(),
         password_hasher: tokio::sync::OnceCell::new(),
         mailer,
+        providers,
     });
     if let Err(error) = crate::bootstrap::prepare(&state).await {
         release_state(state).await;

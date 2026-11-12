@@ -10,6 +10,7 @@
 //! before the table is deserialized. [`StorageConfig::validate`] then runs
 //! with the same field paths (`storage.wal.sync`, and so on).
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -209,9 +210,11 @@ impl<'de> Deserialize<'de> for PublicUrl {
     }
 }
 
-/// Who may register, and the related auth flags (spec 08).
+/// Who may register, password and SSO flags, and the OAuth providers (spec 08).
 ///
-/// OAuth provider tables arrive with the providers. They are not fields here.
+/// GitHub and Google accept the split env form (`LLMOBS_AUTH__GITHUB__CLIENT_ID`,
+/// `LLMOBS_AUTH__GOOGLE__CLIENT_SECRET`, and the other scalar fields).
+/// `[[auth.oidc]]` is TOML only. `LLMOBS_AUTH__OIDC__*` is ignored.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AuthSettings {
@@ -230,6 +233,15 @@ pub struct AuthSettings {
     /// Domains that must use SSO. Empty means SSO is not required.
     #[serde(default, deserialize_with = "deserialize_string_list")]
     pub enforce_sso_domains: Vec<String>,
+    /// GitHub OAuth, when configured.
+    #[serde(default)]
+    pub github: Option<GithubAuth>,
+    /// Google OIDC, when configured.
+    #[serde(default)]
+    pub google: Option<GoogleAuth>,
+    /// Generic OIDC providers, in config order. TOML only.
+    #[serde(default)]
+    pub oidc: Vec<OidcAuth>,
 }
 
 impl Default for AuthSettings {
@@ -240,8 +252,81 @@ impl Default for AuthSettings {
             disable_password: false,
             require_email_verification: false,
             enforce_sso_domains: Vec::new(),
+            github: None,
+            google: None,
+            oidc: Vec::new(),
         }
     }
+}
+
+/// `[auth.github]`. Linking an existing account by email defaults to on (D148).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GithubAuth {
+    /// OAuth client id.
+    pub client_id: String,
+    /// OAuth client secret.
+    pub client_secret: Secret<String>,
+    /// Link a verified email to an existing account. Default true.
+    #[serde(default = "default_link_known")]
+    pub link_existing_by_email: bool,
+}
+
+/// `[auth.google]`. The issuer is fixed to `https://accounts.google.com`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoogleAuth {
+    /// OAuth client id.
+    pub client_id: String,
+    /// OAuth client secret.
+    pub client_secret: Secret<String>,
+    /// Checked against the verified email and the `hd` claim.
+    #[serde(default, deserialize_with = "deserialize_string_list")]
+    pub allowed_domains: Vec<String>,
+    /// Link a verified email to an existing account. Default true.
+    #[serde(default = "default_link_known")]
+    pub link_existing_by_email: bool,
+}
+
+/// One `[[auth.oidc]]` provider. The id is `oidc:<name>`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OidcAuth {
+    /// `[a-z0-9-]{1,32}`, unique among the OIDC providers.
+    pub name: String,
+    /// Name shown on the login button.
+    pub display_name: String,
+    /// `https` issuer, or `http` on a loopback host.
+    pub issuer: String,
+    /// OAuth client id.
+    pub client_id: String,
+    /// OAuth client secret.
+    pub client_secret: Secret<String>,
+    /// Must include `openid`. Default `openid`, `email`, `profile`.
+    #[serde(
+        default = "default_oidc_scopes",
+        deserialize_with = "deserialize_string_list"
+    )]
+    pub scopes: Vec<String>,
+    /// Checked against the verified email.
+    #[serde(default, deserialize_with = "deserialize_string_list")]
+    pub allowed_domains: Vec<String>,
+    /// Org and role for a new user. The org is not required to exist yet.
+    #[serde(default)]
+    pub auto_provision: Option<AutoProvision>,
+    /// Link a verified email to an existing account. Default false.
+    #[serde(default)]
+    pub link_existing_by_email: bool,
+}
+
+/// `auto_provision` on a generic OIDC provider.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutoProvision {
+    /// Org slug.
+    pub org: String,
+    /// `admin`, `member`, or `viewer`. Never `owner`.
+    pub role: String,
 }
 
 /// Values that create the first admin, org, and project when the database is empty.
@@ -396,9 +481,9 @@ pub enum ConfigError {
     /// Figment could not parse or deserialize a value.
     ///
     /// The message names the key. Errors on `smtp_url`, `init.admin_password`,
-    /// and `init.secret_key` are [`Self::Invalid`] instead, because figment's
-    /// type error includes the rejected value. The error is boxed so
-    /// [`Result`] stays small.
+    /// `init.secret_key`, and any `client_secret` are [`Self::Invalid`]
+    /// instead, because figment's type error includes the rejected value. The
+    /// error is boxed so [`Result`] stays small.
     #[error(transparent)]
     Figment(Box<figment::Error>),
     /// A value failed a check in this module or in [`StorageConfig::validate`].
@@ -407,6 +492,16 @@ pub enum ConfigError {
         /// Dotted config path, for example `auth.signup_domains`.
         key: &'static str,
         /// Static rule. Never the rejected input.
+        reason: &'static str,
+    },
+    /// A provider value failed a check. `key` includes the provider name.
+    ///
+    /// `reason` is static. It is never a secret, an email, or the issuer URL.
+    #[error("{key}: {reason}")]
+    Provider {
+        /// Dotted path, for example `auth.oidc.okta.issuer`.
+        key: String,
+        /// Static rule.
         reason: &'static str,
     },
     /// `path` or `$LLMOBS_CONFIG` names a file that does not exist.
@@ -424,6 +519,18 @@ fn default_http_addr() -> SocketAddr {
 
 fn default_signup() -> SignupPolicy {
     SignupPolicy::InviteOnly
+}
+
+fn default_link_known() -> bool {
+    true
+}
+
+fn default_oidc_scopes() -> Vec<String> {
+    vec![
+        "openid".to_owned(),
+        "email".to_owned(),
+        "profile".to_owned(),
+    ]
 }
 
 fn default_log_level() -> String {
@@ -518,6 +625,19 @@ fn secret_key(path: &[String]) -> Option<&'static str> {
         [key] if key == "smtp_url" => Some("smtp_url"),
         [parent, key] if parent == "init" && key == "admin_password" => Some("init.admin_password"),
         [parent, key] if parent == "init" && key == "secret_key" => Some("init.secret_key"),
+        [section, provider, key]
+            if section == "auth" && provider == "github" && key == "client_secret" =>
+        {
+            Some("auth.github.client_secret")
+        }
+        [section, provider, key]
+            if section == "auth" && provider == "google" && key == "client_secret" =>
+        {
+            Some("auth.google.client_secret")
+        }
+        [..] if path.last().is_some_and(|key| key == "client_secret") => {
+            Some("auth.oidc.client_secret")
+        }
         _ => None,
     }
 }
@@ -535,6 +655,7 @@ fn validate(config: &mut ServerConfig) -> Result<(), ConfigError> {
             reason: "email verification needs `smtp_url`",
         });
     }
+    validate_auth(&mut config.auth)?;
     validate_init(&config.init)?;
     config.storage.validate().map_err(|error| match error {
         llmobs_storage::error::ConfigError::Invalid { field, rule } => ConfigError::Invalid {
@@ -550,6 +671,209 @@ fn normalize_domains(key: &'static str, domains: &mut [String]) -> Result<(), Co
         *domain = domain.to_lowercase();
         if !domain_ok(domain) {
             return Err(ConfigError::Invalid {
+                key,
+                reason: "invalid domain",
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_auth(auth: &mut AuthSettings) -> Result<(), ConfigError> {
+    if let Some(github) = &auth.github {
+        require_client(
+            "auth.github.client_id",
+            "auth.github.client_secret",
+            &github.client_id,
+            github.client_secret.expose(),
+        )?;
+    }
+    if let Some(google) = &mut auth.google {
+        require_client(
+            "auth.google.client_id",
+            "auth.google.client_secret",
+            &google.client_id,
+            google.client_secret.expose(),
+        )?;
+        normalize_domains("auth.google.allowed_domains", &mut google.allowed_domains)?;
+    }
+    let mut names = BTreeSet::new();
+    for provider in &mut auth.oidc {
+        validate_oidc(provider, &mut names)?;
+    }
+    let configured = auth.github.is_some() || auth.google.is_some() || !auth.oidc.is_empty();
+    if auth.disable_password && !configured {
+        return Err(ConfigError::Invalid {
+            key: "auth.disable_password",
+            reason: "a provider is required when passwords are disabled",
+        });
+    }
+    if !auth.enforce_sso_domains.is_empty() && !configured {
+        return Err(ConfigError::Invalid {
+            key: "auth.enforce_sso_domains",
+            reason: "a provider is required when SSO domains are set",
+        });
+    }
+    Ok(())
+}
+
+fn require_client(
+    id_key: &'static str,
+    secret_key: &'static str,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<(), ConfigError> {
+    if client_id.is_empty() {
+        return Err(ConfigError::Invalid {
+            key: id_key,
+            reason: "client id is required",
+        });
+    }
+    if client_secret.is_empty() {
+        return Err(ConfigError::Invalid {
+            key: secret_key,
+            reason: "client secret is required",
+        });
+    }
+    Ok(())
+}
+
+fn validate_oidc(provider: &mut OidcAuth, names: &mut BTreeSet<String>) -> Result<(), ConfigError> {
+    if !oidc_name_ok(&provider.name) {
+        return Err(ConfigError::Provider {
+            key: "auth.oidc.name".to_owned(),
+            reason: "name must be 1-32 characters of [a-z0-9-]",
+        });
+    }
+    if !names.insert(provider.name.clone()) {
+        return Err(ConfigError::Provider {
+            key: format!("auth.oidc.{}", provider.name),
+            reason: "duplicate name",
+        });
+    }
+    let name = provider.name.clone();
+    provider.display_name = provider.display_name.trim().to_owned();
+    if provider.display_name.is_empty() {
+        return Err(ConfigError::Provider {
+            key: format!("auth.oidc.{name}.display_name"),
+            reason: "display name is required",
+        });
+    }
+    validate_issuer(format!("auth.oidc.{name}.issuer"), &provider.issuer)?;
+    if provider.client_id.is_empty() {
+        return Err(ConfigError::Provider {
+            key: format!("auth.oidc.{name}.client_id"),
+            reason: "client id is required",
+        });
+    }
+    if provider.client_secret.expose().is_empty() {
+        return Err(ConfigError::Provider {
+            key: format!("auth.oidc.{name}.client_secret"),
+            reason: "client secret is required",
+        });
+    }
+    if !provider.scopes.iter().any(|scope| scope == "openid") {
+        return Err(ConfigError::Provider {
+            key: format!("auth.oidc.{name}.scopes"),
+            reason: "scopes must include openid",
+        });
+    }
+    normalize_named_domains(
+        format!("auth.oidc.{name}.allowed_domains"),
+        &mut provider.allowed_domains,
+    )?;
+    if let Some(provision) = &provider.auto_provision {
+        validate_provision(&name, provision)?;
+    }
+    Ok(())
+}
+
+fn oidc_name_ok(name: &str) -> bool {
+    (1..=32).contains(&name.len())
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn validate_issuer(key: String, issuer: &str) -> Result<(), ConfigError> {
+    let url = match url::Url::parse(issuer) {
+        Ok(url) => url,
+        Err(_) => {
+            return Err(ConfigError::Provider {
+                key,
+                reason: "invalid issuer",
+            });
+        }
+    };
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(ConfigError::Provider {
+            key,
+            reason: "invalid issuer",
+        });
+    }
+    let loopback = loopback_host(&url);
+    if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
+        return Err(ConfigError::Provider {
+            key,
+            reason: "issuer must be https, or http on a loopback host",
+        });
+    }
+    if multi_tenant_entra(&url) {
+        return Err(ConfigError::Provider {
+            key,
+            reason: "multi-tenant Microsoft issuers are not allowed",
+        });
+    }
+    Ok(())
+}
+
+fn loopback_host(url: &url::Url) -> bool {
+    match url.host() {
+        // `host_str` for IPv6 includes the brackets (`[::1]`). Match the parsed host.
+        Some(url::Host::Domain("localhost")) => true,
+        Some(url::Host::Ipv4(addr)) => addr == std::net::Ipv4Addr::LOCALHOST,
+        Some(url::Host::Ipv6(addr)) => addr == std::net::Ipv6Addr::LOCALHOST,
+        _ => false,
+    }
+}
+
+fn multi_tenant_entra(url: &url::Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    if !host.eq_ignore_ascii_case("login.microsoftonline.com") {
+        return false;
+    }
+    let segment = url.path().split('/').find(|segment| !segment.is_empty());
+    matches!(
+        segment.map(str::to_ascii_lowercase).as_deref(),
+        Some("common" | "organizations" | "consumers")
+    )
+}
+
+fn validate_provision(name: &str, provision: &AutoProvision) -> Result<(), ConfigError> {
+    if crate::meta::orgs::validate_slug(&provision.org).is_err() {
+        return Err(ConfigError::Provider {
+            key: format!("auth.oidc.{name}.auto_provision.org"),
+            reason: "invalid org slug",
+        });
+    }
+    let reason = match provision.role.as_str() {
+        "admin" | "member" | "viewer" => return Ok(()),
+        "owner" => "role must not be owner",
+        _ => "invalid role",
+    };
+    Err(ConfigError::Provider {
+        key: format!("auth.oidc.{name}.auto_provision.role"),
+        reason,
+    })
+}
+
+fn normalize_named_domains(key: String, domains: &mut [String]) -> Result<(), ConfigError> {
+    for domain in domains {
+        *domain = domain.to_lowercase();
+        if !domain_ok(domain) {
+            return Err(ConfigError::Provider {
                 key,
                 reason: "invalid domain",
             });
@@ -839,6 +1163,11 @@ impl Provider for EnvSource<'_> {
         let mut dict = Dict::new();
         for (name, value) in self.pairs {
             if let Some(dotted) = split_key(name) {
+                // `[[auth.oidc]]` is a TOML array. The split form cannot name an
+                // element, so those variables are ignored rather than merged.
+                if dotted == "auth.oidc" || dotted.starts_with("auth.oidc.") {
+                    continue;
+                }
                 insert_dotted(&mut dict, &dotted, env_value(&dotted, value));
             }
         }
@@ -882,7 +1211,7 @@ fn alias_key(name: &str) -> Option<&'static str> {
 fn env_value(dotted: &str, raw: &str) -> Value {
     if is_secret_path(dotted) {
         // Keep the bytes as a string. Figment's env parser would turn an
-        // all-digit password into a number and then print that number in a
+        // all-digit secret into a number and then print that number in a
         // type error.
         Value::from(raw)
     } else {
@@ -894,7 +1223,7 @@ fn is_secret_path(dotted: &str) -> bool {
     matches!(
         dotted,
         "smtp_url" | "init.admin_password" | "init.secret_key"
-    )
+    ) || dotted.ends_with(".client_secret")
 }
 
 fn parse_env_value(raw: &str) -> Value {
@@ -1071,6 +1400,10 @@ mod tests {
                 r#"
                 trusted_proxies = ["127.0.0.1/32"]
                 auth.signup_domains = ["Example.COM", ""]
+
+                [auth.github]
+                client_id = "gh"
+                client_secret = "secret"
                 "#,
             ),
             &[(
@@ -1414,4 +1747,232 @@ mod tests {
             "{error}"
         );
     }
+
+    #[test]
+    fn providers_parse_and_debug_hides_client_secrets() {
+        let config = load_from(Some(PROVIDERS_TOML), &[]).expect("providers");
+        let github = config.auth.github.as_ref().expect("github");
+        assert_eq!(github.client_id, "gh-client");
+        assert_eq!(github.client_secret.expose(), "gh-secret-value");
+        assert!(github.link_existing_by_email);
+        let google = config.auth.google.as_ref().expect("google");
+        assert_eq!(google.allowed_domains, vec!["acme.test".to_owned()]);
+        assert!(google.link_existing_by_email);
+        assert_eq!(config.auth.oidc.len(), 5);
+        let okta = &config.auth.oidc[0];
+        assert_eq!(okta.name, "okta");
+        assert_eq!(okta.display_name, "Okta");
+        assert_eq!(
+            okta.scopes,
+            vec![
+                "openid".to_owned(),
+                "email".to_owned(),
+                "profile".to_owned()
+            ]
+        );
+        assert!(!okta.link_existing_by_email);
+        assert_eq!(
+            okta.auto_provision.as_ref().map(|item| item.role.as_str()),
+            Some("member")
+        );
+        assert_eq!(config.auth.oidc[1].issuer, "http://127.0.0.1:9");
+        assert_eq!(config.auth.oidc[2].issuer, "http://localhost:9");
+        assert_eq!(config.auth.oidc[3].issuer, "http://[::1]:9");
+        assert!(config.auth.oidc[4].link_existing_by_email);
+        assert!(config.auth.disable_password);
+        assert_eq!(
+            config.auth.enforce_sso_domains,
+            vec!["acme.test".to_owned()]
+        );
+        let rendered = format!("{config:?}");
+        for secret in [
+            "gh-secret-value",
+            "google-secret-value",
+            "okta-secret-value",
+            "local-secret-value",
+            "loop-secret-value",
+            "v6-secret-value",
+            "entra-secret-value",
+        ] {
+            assert!(!rendered.contains(secret), "{secret} leaked: {rendered}");
+        }
+        assert!(rendered.contains("Secret(***)"), "{rendered}");
+    }
+
+    #[test]
+    fn provider_rules_name_the_key_and_hide_the_value() {
+        assert_rejected(
+            &oidc("name = \"Okta\""),
+            "auth.oidc.name",
+            "name must be 1-32 characters of [a-z0-9-]",
+        );
+        assert_rejected(
+            &format!("{}\n{}", oidc("name = \"okta\""), oidc("name = \"okta\"")),
+            "auth.oidc.okta",
+            "duplicate name",
+        );
+        assert_rejected(
+            &oidc("issuer = \"http://idp.example.com\""),
+            "auth.oidc.okta.issuer",
+            "issuer must be https, or http on a loopback host",
+        );
+        assert_rejected(
+            &oidc("issuer = \"https://user:s3cret@idp.example.com\""),
+            "auth.oidc.okta.issuer",
+            "invalid issuer",
+        );
+        assert_rejected(
+            &oidc("issuer = \"https://login.microsoftonline.com/common/v2.0\""),
+            "auth.oidc.okta.issuer",
+            "multi-tenant Microsoft issuers are not allowed",
+        );
+        assert_rejected(
+            &oidc("issuer = \"https://login.microsoftonline.com/organizations\""),
+            "auth.oidc.okta.issuer",
+            "multi-tenant Microsoft issuers are not allowed",
+        );
+        assert_rejected(
+            &oidc("issuer = \"https://LOGIN.MICROSOFTONLINE.COM/consumers/v2.0\""),
+            "auth.oidc.okta.issuer",
+            "multi-tenant Microsoft issuers are not allowed",
+        );
+        assert_rejected(
+            &oidc("auto_provision = { org = \"acme\", role = \"owner\" }"),
+            "auth.oidc.okta.auto_provision.role",
+            "role must not be owner",
+        );
+        assert_rejected(
+            &oidc("auto_provision = { org = \"x\", role = \"member\" }"),
+            "auth.oidc.okta.auto_provision.org",
+            "invalid org slug",
+        );
+        assert_rejected(
+            &oidc("scopes = [\"email\"]"),
+            "auth.oidc.okta.scopes",
+            "scopes must include openid",
+        );
+        assert_rejected(
+            "[auth]\ndisable_password = true\n",
+            "auth.disable_password",
+            "a provider is required when passwords are disabled",
+        );
+        assert_rejected(
+            "[auth]\nenforce_sso_domains = [\"acme.test\"]\n",
+            "auth.enforce_sso_domains",
+            "a provider is required when SSO domains are set",
+        );
+    }
+
+    #[test]
+    fn github_client_secret_stays_a_string_and_oidc_env_is_ignored() {
+        let config = load_from(
+            None,
+            &[
+                ("LLMOBS_AUTH__GITHUB__CLIENT_ID", "gh-client"),
+                ("LLMOBS_AUTH__GITHUB__CLIENT_SECRET", "987654321"),
+                ("LLMOBS_AUTH__OIDC__0__NAME", "okta"),
+                ("LLMOBS_AUTH__OIDC__0__CLIENT_SECRET", "from-env"),
+            ],
+        )
+        .expect("env github");
+        let github = config.auth.github.expect("github");
+        assert_eq!(github.client_secret.expose(), "987654321");
+        assert!(config.auth.oidc.is_empty());
+
+        let kept = load_from(
+            Some(oidc("client_secret = \"from-toml\"").as_str()),
+            &[("LLMOBS_AUTH__OIDC__0__CLIENT_SECRET", "from-env")],
+        )
+        .expect("toml oidc");
+        assert_eq!(kept.auth.oidc[0].client_secret.expose(), "from-toml");
+
+        let error = load_from(
+            Some("[auth.github]\nclient_id = \"gh\"\nclient_secret = 987654321\n"),
+            &[],
+        )
+        .expect_err("number");
+        let text = error.to_string();
+        assert_eq!(text, "auth.github.client_secret: expected a string");
+        assert!(!text.contains("987654321"), "{text}");
+    }
+
+    fn assert_rejected(toml: &str, key: &str, reason: &str) {
+        let error = load_from(Some(toml), &[]).expect_err("rejected");
+        assert_eq!(error.to_string(), format!("{key}: {reason}"));
+    }
+
+    fn oidc(extra: &str) -> String {
+        let mut lines = vec![
+            "name = \"okta\"".to_owned(),
+            "display_name = \"Okta\"".to_owned(),
+            "issuer = \"https://acme.okta.com\"".to_owned(),
+            "client_id = \"client\"".to_owned(),
+            "client_secret = \"secret\"".to_owned(),
+        ];
+        for line in extra.lines() {
+            let Some(key) = line.split('=').next() else {
+                continue;
+            };
+            let key = key.trim();
+            if key.is_empty() {
+                continue;
+            }
+            lines.retain(|existing| !existing.starts_with(&format!("{key} ")));
+            lines.push(line.trim().to_owned());
+        }
+        format!("[[auth.oidc]]\n{}\n", lines.join("\n"))
+    }
+
+    const PROVIDERS_TOML: &str = r#"
+[auth]
+disable_password = true
+enforce_sso_domains = ["Acme.test"]
+
+[auth.github]
+client_id = "gh-client"
+client_secret = "gh-secret-value"
+
+[auth.google]
+client_id = "google-client"
+client_secret = "google-secret-value"
+allowed_domains = ["Acme.TEST"]
+
+[[auth.oidc]]
+name = "okta"
+display_name = " Okta "
+issuer = "https://acme.okta.com"
+client_id = "okta-client"
+client_secret = "okta-secret-value"
+auto_provision = { org = "acme", role = "member" }
+
+[[auth.oidc]]
+name = "local"
+display_name = "Local"
+issuer = "http://127.0.0.1:9"
+client_id = "local-client"
+client_secret = "local-secret-value"
+
+[[auth.oidc]]
+name = "loop"
+display_name = "Loop"
+issuer = "http://localhost:9"
+client_id = "loop-client"
+client_secret = "loop-secret-value"
+
+[[auth.oidc]]
+name = "v6"
+display_name = "V6"
+issuer = "http://[::1]:9"
+client_id = "v6-client"
+client_secret = "v6-secret-value"
+
+[[auth.oidc]]
+name = "entra"
+display_name = "Entra"
+issuer = "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0"
+client_id = "entra-client"
+client_secret = "entra-secret-value"
+scopes = ["openid", "email"]
+link_existing_by_email = true
+"#;
 }

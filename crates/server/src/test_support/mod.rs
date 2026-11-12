@@ -1,6 +1,8 @@
 //! HTTP tests: a real `meta.db` and storage, a manual clock, `oneshot` (D151).
 #![cfg(test)]
 
+pub(crate) mod mock_idp;
+
 use std::future::Future;
 use std::io::{self, Write};
 use std::net::{IpAddr, SocketAddr};
@@ -114,6 +116,11 @@ impl TestApp {
                 .expect("smtp settings build a mailer")
                 .map(Arc::new)
         };
+        let providers = {
+            let http = crate::auth::oidc::identity_client().expect("identity client");
+            crate::auth::oidc::Providers::from_config(&config.auth, &http)
+                .expect("identity providers")
+        };
         let state = AppState::new(AppInner {
             config,
             meta,
@@ -127,6 +134,7 @@ impl TestApp {
             setup: crate::bootstrap::SetupState::new(),
             password_hasher: tokio::sync::OnceCell::new(),
             mailer,
+            providers,
         });
         let router = if let Some(table) = table {
             serve_router(state.clone(), table)

@@ -55,6 +55,8 @@ pub(crate) struct AppInner {
     pub(crate) password_hasher: OnceCell<crate::auth::password::Hasher>,
     /// `None` when `smtp_url` is unset. Shared so a send can outlive the request.
     pub(crate) mailer: Option<Arc<crate::email::Mailer>>,
+    /// OAuth and OIDC providers from `[auth]`. Discovery has not run yet.
+    pub(crate) providers: crate::auth::oidc::Providers,
 }
 
 impl AppState {

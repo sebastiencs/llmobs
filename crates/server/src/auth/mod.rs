@@ -3,6 +3,7 @@
 pub(crate) mod cache;
 pub(crate) mod last_used;
 mod limits;
+pub(crate) mod oidc;
 pub(crate) mod password;
 pub(crate) mod principal;
 pub(crate) mod reset;

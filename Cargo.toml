@@ -162,8 +162,14 @@ rand = "0.10.3"
 dirs = "7.0.0"
 # CLI credentials file (P17). Figment still uses toml 0.8.
 toml = "1.2.1"
-# CLI login and logout (P17). `openidconnect` later uses this pin.
+# CLI login and logout (P17). `openidconnect` uses this pin.
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json"] }
+# OIDC discovery and id_token checks (D148). Same reqwest and rustls backend as `reqwest`.
+openidconnect = { version = "4.1.0", default-features = false, features = ["reqwest", "rustls-tls"] }
+# GitHub's OAuth 2 flow. Same HTTP backend as `openidconnect`.
+oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest", "rustls-tls"] }
+# HMAC-SHA256 for the OAuth state cookie (P24). RustCrypto 0.13, matching `sha2` 0.11.
+hmac = "0.13.0"
 # Constant-time compare of token hashes.
 subtle = "2.6.1"
 # OpenAPI 3.1 schemas. `uuid` enables the `format: uuid` schema. Do not enable
@@ -174,6 +180,8 @@ serde_urlencoded = "0.7.1"
 tempfile = "3.27.0"
 # OTLP property tests in llmobs-otel. MSRV 1.88. Tests enable `std` only.
 proptest = "1.12.0"
+# Mock identity-provider RS256 keys (tests only). `rand_core` 0.10 matches workspace `rand`.
+rsa = { version = "0.10.0", features = ["pkcs1v15"] }
 
 [profile.dev]
 debug = "line-tables-only"

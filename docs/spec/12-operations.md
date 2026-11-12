@@ -4,6 +4,8 @@
 
 Sources, later overriding earlier: built-in defaults → `llmobs.toml` (`--config` or `LLMOBS_CONFIG`) → env vars (`LLMOBS_` + upper-snake path, e.g. `LLMOBS_STORAGE__OBJECT_STORE` for `storage.object_store`; common ones also have short aliases listed below). Parsed with `figment`; unknown keys are an error. `llmobs admin check` validates config, data dir, encryption key, SMTP and object store connectivity.
 
+GitHub and Google also accept the split form (`LLMOBS_AUTH__GITHUB__CLIENT_ID`, `LLMOBS_AUTH__GOOGLE__CLIENT_SECRET`, and the other scalar fields of those tables). `[[auth.oidc]]` is TOML only; `LLMOBS_AUTH__OIDC__*` is ignored.
+
 | Key | Env alias | Default |
 |---|---|---|
 | `data_dir` | `LLMOBS_DATA_DIR` | `./llmobs-data` |
@@ -110,7 +112,7 @@ llmobs admin backup --to /backups/llmobs-$(date +%F)   # online, consistent
 ## Security checklist (MVP)
 
 - All secrets encrypted at rest (04 §Encryption); keys/tokens hashed.
-- Outbound requests (webhooks, LLM connections, OIDC, Slack) go through an HTTP client with an SSRF guard: deny private/link-local/loopback ranges unless `security.allow_private_network_egress = true` (needed for local Ollama/vLLM — the setting is shown in the LLM connection form).
+- Outbound requests (webhooks, LLM connections, OIDC, Slack) go through an HTTP client with an SSRF guard: deny private/link-local/loopback ranges unless `security.allow_private_network_egress = true` (needed for local Ollama/vLLM — the setting is shown in the LLM connection form). Identity-provider URLs are operator configuration and are not passed through that guard. The OIDC client refuses redirects and times out after 10 seconds.
 - Request size limits everywhere; JSON depth limit 128.
 - Credentials are never taken from query strings. Request logs carry the matched route template, not the raw URI (D150).
 - Content-Security-Policy on the UI (`default-src 'self'`; media from `self` only); payloads rendered as text (no HTML injection from trace content).

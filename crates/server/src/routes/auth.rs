@@ -116,7 +116,7 @@ async fn config(State(state): State<AppState>) -> Result<error::Json<AuthConfig>
         setup_required: users == 0,
         password_enabled: !state.config.auth.disable_password,
         signup: state.config.auth.signup,
-        providers: Vec::new(),
+        providers: state.providers.list(),
         smtp_enabled: state.mailer.is_some(),
         email_verification_required: state.config.auth.require_email_verification,
     }))
@@ -795,7 +795,7 @@ mod tests {
     use axum::http::Method;
 
     use super::*;
-    use crate::api::account::{OrgRole, SignupPolicy};
+    use crate::api::account::{AuthProvider, OrgRole, SignupPolicy};
     use crate::api::common::ProblemCode;
     use crate::auth::secret::hash_token;
     use crate::meta::members::org_role;
@@ -2210,5 +2210,63 @@ mod tests {
             tokio::task::yield_now().await;
         }
         app.sent().len()
+    }
+
+    #[tokio::test]
+    async fn config_lists_providers_in_order() {
+        let secret = |value: &str| -> crate::config::Secret<String> {
+            serde_json::from_str(&format!("\"{value}\"")).expect("secret")
+        };
+        let app = TestApp::with_config(|config| {
+            config.auth.github = Some(crate::config::GithubAuth {
+                client_id: "gh".to_owned(),
+                client_secret: secret("gh-secret"),
+                link_existing_by_email: true,
+            });
+            config.auth.google = Some(crate::config::GoogleAuth {
+                client_id: "g".to_owned(),
+                client_secret: secret("g-secret"),
+                allowed_domains: Vec::new(),
+                link_existing_by_email: true,
+            });
+            config.auth.oidc.push(crate::config::OidcAuth {
+                name: "okta".to_owned(),
+                display_name: "Okta".to_owned(),
+                issuer: "https://acme.okta.com".to_owned(),
+                client_id: "o".to_owned(),
+                client_secret: secret("o-secret"),
+                scopes: vec![
+                    "openid".to_owned(),
+                    "email".to_owned(),
+                    "profile".to_owned(),
+                ],
+                allowed_domains: Vec::new(),
+                auto_provision: None,
+                link_existing_by_email: false,
+            });
+        })
+        .await;
+        let config: AuthConfig = app
+            .request(Method::GET, "/api/auth/config")
+            .send()
+            .await
+            .json();
+        assert_eq!(
+            config.providers,
+            vec![
+                AuthProvider {
+                    id: "github".to_owned(),
+                    display_name: "GitHub".to_owned(),
+                },
+                AuthProvider {
+                    id: "google".to_owned(),
+                    display_name: "Google".to_owned(),
+                },
+                AuthProvider {
+                    id: "oidc:okta".to_owned(),
+                    display_name: "Okta".to_owned(),
+                },
+            ]
+        );
     }
 }
