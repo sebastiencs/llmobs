@@ -64,6 +64,7 @@
       "cost_output": 0.000032,
       "cost_total": 0.000052000000000000004,
       "cost_source": "computed",
+      "ttft_ns": 157778394,
       "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Describe the harbor in a few words.\"}]}]",
       "input_format": "messages",
       "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Clear skies over the harbor.\"}],\"finish_reason\":\"stop\"}]",

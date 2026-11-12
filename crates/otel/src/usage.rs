@@ -12,6 +12,7 @@ use llmobs_core::names::attr;
 use llmobs_core::time_serde::parse_rfc3339;
 use opentelemetry_proto::tonic::common::v1::AnyValue;
 use opentelemetry_proto::tonic::common::v1::any_value::Value;
+use opentelemetry_proto::tonic::trace::v1::span::Event;
 use serde_json::Value as Json;
 
 use crate::bag::AttrBag;
@@ -253,6 +254,13 @@ const REASONING: &[UsageSource] = &[
     ),
 ];
 
+const EMBEDDING_INPUT: &[UsageSource] = &[count(
+    "ai.usage.tokens",
+    Convention::Vercel,
+    Inclusive::Yes,
+    Inclusive::Yes,
+)];
+
 const TOTAL: &[UsageSource] = &[
     count(
         "llm.token_count.total",
@@ -315,13 +323,19 @@ pub(crate) fn usage(
     }
     let resource = ResourceView::new(&[]);
     let legacy = vercel_legacy(bag, provider);
-    let input = first_count(bag, &resource, INPUT, warnings);
+    let mut input = first_count(bag, &resource, INPUT, warnings);
+    if input.is_none() && kind == SpanKind::Embedding {
+        // Vercel `embed`/`embedMany` report one count, which is the input (D-B1-6).
+        input = first_count(bag, &resource, EMBEDDING_INPUT, warnings);
+    }
     let output = first_count(bag, &resource, OUTPUT, warnings);
-    let mut cache_read =
-        first_count(bag, &resource, CACHE_READ, warnings).map(|(value, _, _)| value);
+    let mut cache_read = match first_count(bag, &resource, CACHE_READ, warnings) {
+        Some((value, _, _)) => Some(value),
+        None => provider_cache_count(bag, ANTHROPIC_CACHE_READ, warnings),
+    };
     let mut cache_write = match first_count(bag, &resource, CACHE_WRITE, warnings) {
         Some((value, _, _)) => Some(value),
-        None => provider_cache_write(bag, warnings),
+        None => provider_cache_count(bag, ANTHROPIC_CACHE_WRITE, warnings),
     };
     let mut reasoning = first_count(bag, &resource, REASONING, warnings).map(|(value, _, _)| value);
     let mut reported_total =
@@ -333,9 +347,9 @@ pub(crate) fn usage(
         None => details
             .as_ref()
             .and_then(|details| details.input)
-            .map(|value| {
+            .map(|(value, semantics)| {
                 from_details = true;
-                (value, Inclusive::No, Inclusive::Yes)
+                (value, semantics, Inclusive::Yes)
             }),
     };
     let output = match output {
@@ -476,7 +490,12 @@ fn gemini_usage(bag: &AttrBag<'_>, warnings: &mut Warnings) -> Option<GeminiUsag
 ///
 /// `warnings` is not in the plan's sketch; a non-numeric candidate records
 /// `invalid_number` and is skipped, matching rule 20.
-pub(crate) fn ttft(bag: &mut AttrBag<'_>, start_time: i64, warnings: &mut Warnings) -> Option<i64> {
+pub(crate) fn ttft(
+    bag: &mut AttrBag<'_>,
+    events: &[Event],
+    start_time: i64,
+    warnings: &mut Warnings,
+) -> Option<i64> {
     if let Some(nanos) = take(bag, attr::TTFT_NS, warnings, read_nanos) {
         return Some(nanos);
     }
@@ -488,22 +507,62 @@ pub(crate) fn ttft(bag: &mut AttrBag<'_>, start_time: i64, warnings: &mut Warnin
     ) {
         return Some(nanos);
     }
+    if let Some(nanos) = take(
+        bag,
+        "gen_ai.client.operation.time_to_first_chunk",
+        warnings,
+        read_seconds,
+    ) {
+        return Some(nanos);
+    }
     if let Some(nanos) = take(bag, "ai.response.msToFirstChunk", warnings, read_millis) {
         return Some(nanos);
     }
     if let Some(nanos) = take(bag, "ai.stream.msToFirstChunk", warnings, read_millis) {
         return Some(nanos);
     }
-    take_instant(
+    if let Some(nanos) = take_instant(
         bag,
         "langfuse.observation.completion_start_time",
         start_time,
         warnings,
-    )
+    ) {
+        return Some(nanos);
+    }
+    event_ttft(events, start_time)
+}
+
+/// OpenInference marks the first token with one event.
+const FIRST_TOKEN_EVENT: &str = "First Token Stream Event";
+/// OpenLLMetry and Laminar record one event per streamed chunk.
+const CHUNK_EVENTS: &[&str] = &[
+    "gen_ai.content.completion.chunk",
+    "llm.content.completion.chunk",
+];
+
+/// Event-based time to first token, after every attribute source (D-B1-4).
+///
+/// The OpenInference first-token event wins; otherwise the earliest chunk
+/// event. Events are kept as they are.
+fn event_ttft(events: &[Event], start_time: i64) -> Option<i64> {
+    let earliest = |names: &[&str]| {
+        events
+            .iter()
+            .filter(|event| names.contains(&event.name.as_str()))
+            .map(|event| event.time_unix_nano)
+            .min()
+    };
+    let time = earliest(&[FIRST_TOKEN_EVENT]).or_else(|| earliest(CHUNK_EVENTS))?;
+    let time = i64::try_from(time).ok()?;
+    match duration_since(time, start_time) {
+        Read::Value(nanos) => Some(nanos),
+        Read::Skip | Read::Invalid => None,
+    }
 }
 
 struct LangfuseUsage {
-    input: Option<i64>,
+    /// The input count and whether it already includes cache.
+    input: Option<(i64, Inclusive)>,
     output: Option<i64>,
     total: Option<i64>,
     cache_read: Option<i64>,
@@ -530,28 +589,56 @@ fn fill_detail(slot: &mut Option<i64>, value: Option<i64>, used: &mut bool) {
 
 /// Langfuse `usage_details`, after the attribute sources.
 ///
-/// `input` excludes cache. The attribute is consumed only when a column is
-/// filled from it.
+/// Langfuse keys: `input` excludes cache. The OpenAI usage object that the
+/// SDK's OpenAI wrapper copies (`prompt_tokens`, …) is read when `input` is
+/// absent: `prompt_tokens` includes cache (D-B1-1). The attribute is consumed
+/// only when a column is filled from it.
 fn langfuse_usage(bag: &AttrBag<'_>, warnings: &mut Warnings) -> Option<LangfuseUsage> {
     let value = bag.get(USAGE_DETAILS)?;
     let json = crate::payload::decode_json_text(value, warnings)?;
     let object = json.as_object()?;
+    let input = match detail_count(object, &["input"], warnings) {
+        Some(input) => Some((input, Inclusive::No)),
+        None => {
+            detail_count(object, &["prompt_tokens"], warnings).map(|input| (input, Inclusive::Yes))
+        }
+    };
     Some(LangfuseUsage {
-        input: detail_count(object, &["input"], warnings),
-        output: detail_count(object, &["output"], warnings),
-        total: detail_count(object, &["total"], warnings),
+        input,
+        output: detail_count(object, &["output", "completion_tokens"], warnings),
+        total: detail_count(object, &["total", "total_tokens"], warnings),
         cache_read: detail_count(
             object,
             &["input_cached_tokens", "cache_read_input_tokens"],
             warnings,
-        ),
+        )
+        .or_else(|| nested_count(object, "prompt_tokens_details", "cached_tokens", warnings)),
         cache_write: detail_count(object, &["cache_creation_input_tokens"], warnings),
         reasoning: detail_count(
             object,
             &["output_reasoning_tokens", "reasoning_tokens"],
             warnings,
-        ),
+        )
+        .or_else(|| {
+            nested_count(
+                object,
+                "completion_tokens_details",
+                "reasoning_tokens",
+                warnings,
+            )
+        }),
     })
+}
+
+/// `object[outer][inner]`, when `outer` is an object.
+fn nested_count(
+    object: &serde_json::Map<String, Json>,
+    outer: &str,
+    inner: &str,
+    warnings: &mut Warnings,
+) -> Option<i64> {
+    let details = object.get(outer)?.as_object()?;
+    detail_count(details, &[inner], warnings)
 }
 
 fn detail_count(
@@ -593,15 +680,38 @@ fn first_count(
     None
 }
 
-/// Anthropic cache write recorded only inside `ai.response.providerMetadata`.
+/// The `anthropic` keys of `ai.response.providerMetadata` for one cache count:
+/// the camelCase field, then the raw Anthropic `usage` field.
+#[derive(Clone, Copy)]
+struct ProviderCacheKeys {
+    camel: &'static str,
+    usage: &'static str,
+}
+
+const ANTHROPIC_CACHE_READ: ProviderCacheKeys = ProviderCacheKeys {
+    camel: "cacheReadInputTokens",
+    usage: "cache_read_input_tokens",
+};
+
+const ANTHROPIC_CACHE_WRITE: ProviderCacheKeys = ProviderCacheKeys {
+    camel: "cacheCreationInputTokens",
+    usage: "cache_creation_input_tokens",
+};
+
+/// Anthropic cache counts recorded only inside `ai.response.providerMetadata`.
 ///
-/// v5 uses `anthropic.cacheCreationInputTokens`. Later responses use
-/// `anthropic.usage.cache_creation_input_tokens`. The attribute stays unread:
-/// it also carries provider fields that are not token counts.
-fn provider_cache_write(bag: &AttrBag<'_>, warnings: &mut Warnings) -> Option<i64> {
+/// Before Vercel v6 the cache counts are not usage attributes. v5 sends
+/// `anthropic.cacheCreationInputTokens` and the raw `anthropic.usage` object
+/// (D-B1-2). The attribute stays unread: it also carries provider fields that
+/// are not token counts.
+fn provider_cache_count(
+    bag: &AttrBag<'_>,
+    keys: ProviderCacheKeys,
+    warnings: &mut Warnings,
+) -> Option<i64> {
     let value = bag.get("ai.response.providerMetadata")?;
     let json = crate::payload::decode_json_text(value, warnings)?;
-    match cache_write_count(&json) {
+    match anthropic_count(&json, keys) {
         Ok(count) => count,
         Err(InvalidNumber) => {
             warnings.add(Warning::InvalidNumber);
@@ -610,17 +720,17 @@ fn provider_cache_write(bag: &AttrBag<'_>, warnings: &mut Warnings) -> Option<i6
     }
 }
 
-fn cache_write_count(json: &Json) -> Result<Option<i64>, InvalidNumber> {
+fn anthropic_count(json: &Json, keys: ProviderCacheKeys) -> Result<Option<i64>, InvalidNumber> {
     let Some(anthropic) = json.get("anthropic") else {
         return Ok(None);
     };
-    if let Some(count) = json_count(anthropic.get("cacheCreationInputTokens"))? {
+    if let Some(count) = json_count(anthropic.get(keys.camel))? {
         return Ok(Some(count));
     }
     json_count(
         anthropic
             .get("usage")
-            .and_then(|usage| usage.get("cache_creation_input_tokens")),
+            .and_then(|usage| usage.get(keys.usage)),
     )
 }
 
@@ -1156,7 +1266,7 @@ mod tests {
         let attrs = [double_attr("gen_ai.response.time_to_first_chunk", 0.25)];
         let mut warnings = Warnings::default();
         let mut bag = AttrBag::new(&attrs, &mut warnings);
-        assert_eq!(ttft(&mut bag, start, &mut warnings), Some(250_000_000));
+        assert_eq!(ttft(&mut bag, &[], start, &mut warnings), Some(250_000_000));
         assert_eq!(
             bag.state("gen_ai.response.time_to_first_chunk"),
             Some(Use::Consumed)
@@ -1167,30 +1277,33 @@ mod tests {
             double_attr("gen_ai.response.time_to_first_chunk", 1.5),
         ];
         let mut bag = AttrBag::new(&attrs, &mut warnings);
-        assert_eq!(ttft(&mut bag, start, &mut warnings), Some(1_500_000_000));
+        assert_eq!(
+            ttft(&mut bag, &[], start, &mut warnings),
+            Some(1_500_000_000)
+        );
         assert_eq!(bag.state(attr::TTFT_NS), Some(Use::Unread));
 
         let attrs = [int_attr("ai.response.msToFirstChunk", 2)];
         let mut bag = AttrBag::new(&attrs, &mut warnings);
-        assert_eq!(ttft(&mut bag, start, &mut warnings), Some(2_000_000));
+        assert_eq!(ttft(&mut bag, &[], start, &mut warnings), Some(2_000_000));
 
         let attrs = [double_attr("ai.stream.msToFirstChunk", 0.5)];
         let mut bag = AttrBag::new(&attrs, &mut warnings);
-        assert_eq!(ttft(&mut bag, start, &mut warnings), Some(500_000));
+        assert_eq!(ttft(&mut bag, &[], start, &mut warnings), Some(500_000));
 
         let attrs = [string_attr(
             "langfuse.observation.completion_start_time",
             "2026-01-01T00:00:00.250000000Z",
         )];
         let mut bag = AttrBag::new(&attrs, &mut warnings);
-        assert_eq!(ttft(&mut bag, start, &mut warnings), Some(250_000_000));
+        assert_eq!(ttft(&mut bag, &[], start, &mut warnings), Some(250_000_000));
 
         let attrs = [int_attr(
             "langfuse.observation.completion_start_time",
             start - 1,
         )];
         let mut bag = AttrBag::new(&attrs, &mut warnings);
-        assert_eq!(ttft(&mut bag, start, &mut warnings), None);
+        assert_eq!(ttft(&mut bag, &[], start, &mut warnings), None);
         assert_eq!(
             bag.state("langfuse.observation.completion_start_time"),
             Some(Use::Unread)

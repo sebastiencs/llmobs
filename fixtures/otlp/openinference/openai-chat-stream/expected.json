@@ -21,6 +21,7 @@
       "cost_output": 0.000032,
       "cost_total": 0.000052000000000000004,
       "cost_source": "computed",
+      "ttft_ns": 128000000,
       "request_params": "{\"model\":\"gpt-4o-mini-2024-07-18\",\"stream\":true,\"stream_options\":{\"include_usage\":true}}",
       "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Describe the harbor in a few words.\"}]}]",
       "input_format": "messages",

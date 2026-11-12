@@ -98,8 +98,12 @@ fn vercel(text: &str) -> Option<SpanKind> {
     if text == "ai.toolCall" {
         return Some(SpanKind::Tool);
     }
-    if text.starts_with("ai.embed") {
+    if text.ends_with(".doEmbed") {
         return Some(SpanKind::Embedding);
+    }
+    // The outer call repeats its `doEmbed` child's usage (D-B1-6).
+    if matches!(text, "ai.embed" | "ai.embedMany") {
+        return Some(SpanKind::Chain);
     }
     None
 }
@@ -296,8 +300,10 @@ mod tests {
             ("ai.generateObject", SpanKind::Chain),
             ("ai.streamObject", SpanKind::Chain),
             ("ai.toolCall", SpanKind::Tool),
-            ("ai.embed", SpanKind::Embedding),
-            ("ai.embedMany", SpanKind::Embedding),
+            ("ai.embed", SpanKind::Chain),
+            ("ai.embedMany", SpanKind::Chain),
+            ("ai.embed.doEmbed", SpanKind::Embedding),
+            ("ai.embedMany.doEmbed", SpanKind::Embedding),
         ] {
             assert_eq!(
                 kind_of(&[string_attr("ai.operationId", text)]),

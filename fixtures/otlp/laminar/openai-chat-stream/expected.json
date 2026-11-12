@@ -23,6 +23,7 @@
       "cost_output": 0.000048,
       "cost_total": 0.000068,
       "cost_source": "computed",
+      "ttft_ns": 130000000,
       "request_params": "{\"base_url\":\"https://api.openai.com/v1/\"}",
       "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
       "input_format": "messages",
