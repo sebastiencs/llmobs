@@ -553,9 +553,13 @@ pub(crate) fn scan_union(
             gated.push(file);
         }
     }
-    let both = !batches.is_empty() && !(clean.is_empty() && gated.is_empty());
+    let sides = [!clean.is_empty(), !gated.is_empty(), !batches.is_empty()]
+        .iter()
+        .filter(|side| **side)
+        .count();
+    let several = sides > 1;
     // A limit on each side would drop rows the other side still has.
-    let side_limit = if both { None } else { scan.limit };
+    let side_limit = if several { None } else { scan.limit };
     let mut plans = Vec::new();
     if !clean.is_empty() {
         plans.push(file_plan(scan, &clean, side_limit)?);
@@ -585,7 +589,7 @@ pub(crate) fn scan_union(
     } else {
         UnionExec::try_new(plans)?
     };
-    if both
+    if several
         && scan.filters.is_empty()
         && let Some(fetch) = scan.limit
     {

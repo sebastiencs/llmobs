@@ -361,6 +361,89 @@ async fn a_raised_file_escapes_the_tombstone_filter() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_limit_over_clean_and_gated_sides_sits_above_the_union() {
+    let dir = tempfile::tempdir().unwrap();
+    // Two flushes: one file holds the covered trace 2, the other the visible
+    // traces 3 and 4. Nothing stays in the memtable.
+    let storage = crate::Storage::open(config_in(dir.path())).await.unwrap();
+    storage
+        .append_spans(project(), span_rows(&[span_row(2, 0, INGEST, INGEST)]))
+        .await
+        .unwrap();
+    storage.shutdown().await.unwrap();
+    let storage = crate::Storage::open(config_in(dir.path())).await.unwrap();
+    storage
+        .append_spans(
+            project(),
+            span_rows(&[
+                span_row(3, 0, INGEST, INGEST),
+                span_row(4, 0, INGEST, INGEST),
+            ]),
+        )
+        .await
+        .unwrap();
+    storage.shutdown().await.unwrap();
+    let storage = crate::Storage::open(config_in(dir.path())).await.unwrap();
+    storage
+        .register_deletion(traces_deletion(&[2], INGEST))
+        .await
+        .unwrap();
+
+    // Raise the file with no covered row: it becomes the clean side.
+    let query = storage.query(project(), QueryOptions::default()).unwrap();
+    let files = query
+        .spans
+        .downcast_ref::<crate::query::SpansProvider>()
+        .unwrap()
+        .candidate_files(&[]);
+    assert_eq!(files.len(), 2);
+    let covered = *span_row(2, 0, 0, 0).trace_id.as_bytes();
+    let clean = files
+        .iter()
+        .find(|file| !spans_trace_ids(dir.path(), file).contains(&covered))
+        .expect("one file holds no covered row");
+    storage
+        .commit_test_edit(&crate::catalog::CatalogEdit {
+            add: Vec::new(),
+            remove: Vec::new(),
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: vec![(clean.id, 1)],
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        scalar(
+            &storage,
+            "SELECT count(*) FROM (SELECT span_id FROM spans LIMIT 1)"
+        )
+        .await,
+        1,
+        "the limit returns exactly one row"
+    );
+    assert_eq!(scalar(&storage, "SELECT count(*) FROM spans").await, 2);
+    // DataFusion 55 fuses the `GlobalLimitExec` scan_union builds over the
+    // union into a `CoalescePartitionsExec: fetch=1` node; either name above
+    // the `UnionExec` is the limit applied after both sides.
+    let plan = text(&storage, "EXPLAIN SELECT span_id FROM spans LIMIT 1").await;
+    let lines: Vec<&str> = plan.lines().collect();
+    let union = lines
+        .iter()
+        .position(|line| line.contains("UnionExec"))
+        .expect("a union of the two file sides");
+    let limit_above_union = lines[..union].iter().any(|line| {
+        line.contains("GlobalLimitExec")
+            || (line.contains("CoalescePartitionsExec") && line.contains("fetch=1"))
+    });
+    assert!(
+        limit_above_union,
+        "the limit sits above the union, not on the clean side:\n{plan}"
+    );
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn hidden_rows_stay_hidden_after_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let storage = crate::Storage::open(config_in(dir.path())).await.unwrap();
