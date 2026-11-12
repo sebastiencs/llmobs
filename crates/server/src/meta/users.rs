@@ -1,6 +1,8 @@
 //! `users` rows (spec 04).
 #![cfg_attr(not(test), allow(dead_code))]
 
+use std::collections::HashMap;
+
 use sqlx::{SqliteConnection, SqlitePool};
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
@@ -304,6 +306,12 @@ pub(crate) async fn set_instance_admin(
     Ok(())
 }
 
+/// Changing this user would leave no enabled instance admin.
+pub(crate) const NO_ACTIVE_ADMIN: &str = "the instance would have no active administrator";
+
+/// This user is the only enabled owner of an org.
+pub(crate) const LAST_ORG_OWNER: &str = "the user is the last owner of an org";
+
 /// Enabled instance admins.
 ///
 /// # Errors
@@ -318,6 +326,130 @@ pub(crate) async fn count_active_instance_admins(
     .fetch_one(&mut *conn)
     .await
     .map_err(MetaError::from)
+}
+
+/// [`MetaError::Conflict`] [`NO_ACTIVE_ADMIN`] when the change would leave none.
+///
+/// `disabled` and `instance_admin` are the requested values. `None` keeps the
+/// current column. The row is not modified.
+///
+/// # Errors
+///
+/// Returns [`MetaError::Conflict`] when the user is the last enabled instance
+/// admin and the change would disable them or clear the flag. Returns
+/// [`MetaError::Db`] when the count fails.
+pub(crate) async fn ensure_active_admin(
+    conn: &mut SqliteConnection,
+    user: &UserRow,
+    disabled: Option<bool>,
+    instance_admin: Option<bool>,
+) -> Result<(), MetaError> {
+    let enabled_admin = user.is_instance_admin && user.disabled_at.is_none();
+    let admin_after = instance_admin.unwrap_or(user.is_instance_admin);
+    let disabled_after = disabled.unwrap_or(user.disabled_at.is_some());
+    let enabled_after = admin_after && !disabled_after;
+    if enabled_admin == enabled_after {
+        return Ok(());
+    }
+    let count = count_active_instance_admins(conn).await?;
+    let next = if enabled_after { count + 1 } else { count - 1 };
+    if next <= 0 {
+        return Err(MetaError::Conflict(NO_ACTIVE_ADMIN));
+    }
+    Ok(())
+}
+
+/// Whether `user_id` is the only enabled owner of any org.
+///
+/// A disabled user is not an active owner, so this is false for them.
+///
+/// # Errors
+///
+/// Returns [`MetaError::Db`] when the query fails.
+pub(crate) async fn is_last_active_owner(
+    conn: &mut SqliteConnection,
+    user_id: Uuid,
+) -> Result<bool, MetaError> {
+    let found: i64 = sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1
+             FROM org_members AS mine
+             JOIN users AS me ON me.id = mine.user_id
+             WHERE mine.user_id = ?
+               AND mine.role = 'owner'
+               AND me.disabled_at IS NULL
+               AND (
+                   SELECT COUNT(*)
+                   FROM org_members AS owners
+                   JOIN users AS account ON account.id = owners.user_id
+                   WHERE owners.org_id = mine.org_id
+                     AND owners.role = 'owner'
+                     AND account.disabled_at IS NULL
+               ) = 1
+         )",
+    )
+    .bind(user_id.to_string())
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(found == 1)
+}
+
+/// Provider ids linked to these users, ordered by provider.
+///
+/// Users with no identity are absent from the map.
+///
+/// # Errors
+///
+/// Returns [`MetaError`] when the query fails or a stored user id does not parse.
+pub(crate) async fn providers_by_user(
+    pool: &SqlitePool,
+    user_ids: &[Uuid],
+) -> Result<HashMap<Uuid, Vec<String>>, MetaError> {
+    let mut providers: HashMap<Uuid, Vec<String>> = HashMap::new();
+    if user_ids.is_empty() {
+        return Ok(providers);
+    }
+    let mut builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        "SELECT user_id, provider FROM identities WHERE user_id IN (",
+    );
+    let mut separated = builder.separated(", ");
+    for id in user_ids {
+        separated.push_bind(id.to_string());
+    }
+    separated.push_unseparated(") ORDER BY user_id, provider");
+    let rows: Vec<(String, String)> = builder
+        .build_query_as()
+        .fetch_all(pool)
+        .await
+        .map_err(MetaError::from)?;
+    for (user_id, provider) in rows {
+        let id = Uuid::parse_str(&user_id).map_err(|_| MetaError::Corrupt {
+            table: "identities",
+            column: "user_id",
+        })?;
+        providers.entry(id).or_default().push(provider);
+    }
+    Ok(providers)
+}
+
+/// The user with this id, read on the writer connection.
+///
+/// # Errors
+///
+/// Returns [`MetaError`] when the query fails or a stored flag is not 0 or 1.
+pub(crate) async fn user_by_id_tx(
+    conn: &mut SqliteConnection,
+    id: Uuid,
+) -> Result<Option<UserRow>, MetaError> {
+    fetch_user(
+        sqlx::query_as(
+            "SELECT id, email, name, password_hash, email_verified_at, is_instance_admin, \
+             disabled_at, created_at, updated_at FROM users WHERE id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&mut *conn)
+        .await?,
+    )
 }
 
 /// Users ordered by email, after `after_email` (exclusive), at most `limit`.
@@ -391,6 +523,7 @@ fn user_row(record: UserRecord) -> Result<UserRow, MetaError> {
 mod tests {
     use super::*;
     use crate::meta::test_db;
+    use uuid::Uuid;
 
     #[test]
     fn normalize_email_trims_and_rejects_a_bad_shape() {
@@ -518,5 +651,137 @@ mod tests {
 
     fn emails(users: &[UserRow]) -> Vec<&str> {
         users.iter().map(|user| user.email.as_str()).collect()
+    }
+
+    #[tokio::test]
+    async fn the_last_active_admin_cannot_be_removed() {
+        let (_dir, db) = test_db().await;
+        let only = insert(&db, "ada@example.com", true).await;
+        let error = db
+            .write({
+                let only = only.clone();
+                move |conn| {
+                    Box::pin(async move {
+                        ensure_active_admin(conn, &only, Some(true), None).await?;
+                        Ok(())
+                    })
+                }
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, MetaError::Conflict(NO_ACTIVE_ADMIN)),
+            "{error}"
+        );
+        let demote = db
+            .write({
+                let only = only.clone();
+                move |conn| {
+                    Box::pin(async move {
+                        ensure_active_admin(conn, &only, None, Some(false)).await?;
+                        Ok(())
+                    })
+                }
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(demote, MetaError::Conflict(NO_ACTIVE_ADMIN)));
+
+        let second = insert(&db, "bob@example.com", true).await;
+        db.write(move |conn| {
+            Box::pin(async move {
+                ensure_active_admin(conn, &second, Some(true), None).await?;
+                ensure_active_admin(conn, &only, None, Some(false)).await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_last_active_owner_of_an_org_is_reported() {
+        let (_dir, db) = test_db().await;
+        let owner = insert(&db, "ada@example.com", false).await;
+        let other = insert(&db, "bob@example.com", false).await;
+        db.write({
+            let owner_id = owner.id;
+            let other_id = other.id;
+            move |conn| {
+                Box::pin(async move {
+                    assert!(!is_last_active_owner(conn, owner_id).await?);
+                    let org = crate::meta::orgs::insert_org(conn, "Acme", "acme", 1).await?;
+                    crate::meta::members::add_org_member(
+                        conn,
+                        org.id,
+                        owner_id,
+                        crate::auth::OrgRole::Owner,
+                        1,
+                    )
+                    .await?;
+                    assert!(is_last_active_owner(conn, owner_id).await?);
+                    crate::meta::members::add_org_member(
+                        conn,
+                        org.id,
+                        other_id,
+                        crate::auth::OrgRole::Owner,
+                        1,
+                    )
+                    .await?;
+                    assert!(!is_last_active_owner(conn, owner_id).await?);
+                    set_disabled(conn, other_id, Some(2), 2).await?;
+                    assert!(is_last_active_owner(conn, owner_id).await?);
+                    set_disabled(conn, owner_id, Some(3), 3).await?;
+                    assert!(!is_last_active_owner(conn, owner_id).await?);
+                    Ok(())
+                })
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn providers_are_grouped_and_ordered() {
+        let (_dir, db) = test_db().await;
+        let user = insert(&db, "ada@example.com", false).await;
+        let other = insert(&db, "bob@example.com", false).await;
+        db.write({
+            let user_id = user.id.to_string();
+            let other_id = other.id.to_string();
+            move |conn| {
+                Box::pin(async move {
+                    for (id, user_id, provider, subject) in [
+                        (Uuid::now_v7(), &user_id, "oidc:okta", "okta-1"),
+                        (Uuid::now_v7(), &user_id, "github", "gh-1"),
+                        (Uuid::now_v7(), &other_id, "google", "g-1"),
+                    ] {
+                        sqlx::query(
+                            "INSERT INTO identities \
+                             (id, user_id, provider, subject, email, created_at) \
+                             VALUES (?, ?, ?, ?, NULL, 1)",
+                        )
+                        .bind(id.to_string())
+                        .bind(user_id)
+                        .bind(provider)
+                        .bind(subject)
+                        .execute(&mut *conn)
+                        .await?;
+                    }
+                    Ok(())
+                })
+            }
+        })
+        .await
+        .unwrap();
+        let found = providers_by_user(db.reader(), &[user.id, other.id])
+            .await
+            .unwrap();
+        let ada = vec!["github".to_owned(), "oidc:okta".to_owned()];
+        let bob = vec!["google".to_owned()];
+        assert_eq!(found.get(&user.id), Some(&ada));
+        assert_eq!(found.get(&other.id), Some(&bob));
+        let empty = providers_by_user(db.reader(), &[]).await.unwrap();
+        assert!(empty.is_empty());
     }
 }

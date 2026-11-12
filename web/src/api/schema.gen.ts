@@ -208,6 +208,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the instance settings */
+        get: operations["get_admin_settings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/settings/test-email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send a test email to yourself */
+        post: operations["post_admin_settings_test_email"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List accounts */
+        get: operations["list_admin_users"];
+        put?: never;
+        /** Create an account */
+        post: operations["post_admin_user"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Disable or demote an account */
+        patch: operations["patch_admin_user"];
+        trace?: never;
+    };
+    "/api/v1/admin/users/{id}/reset-link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mint a password reset link */
+        post: operations["post_admin_user_reset_link"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me": {
         parameters: {
             query?: never;
@@ -817,6 +903,76 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description `POST /api/v1/admin/users/{id}/reset-link` returns 200. */
+        AdminResetLink: {
+            /** @description `<public_url>/reset?token=…`. Valid for one hour. */
+            url: string;
+        };
+        /**
+         * @description Effective instance settings. Read-only: they come from config.
+         *
+         *     `GET /api/v1/admin/settings`. No SMTP URL and no client secret.
+         */
+        AdminSettings: {
+            /** @description `From` mailbox. Omitted when SMTP is not configured. */
+            email_from?: string;
+            /** @description New accounts must verify their email before signing in. */
+            email_verification_required: boolean;
+            /** @description Domains that must use SSO. Empty means SSO is not required. */
+            enforce_sso_domains: string[];
+            /** @description Password login is enabled. */
+            password_enabled: boolean;
+            /** @description Configured OAuth and OIDC providers. No client secrets. */
+            providers: components["schemas"]["AuthProvider"][];
+            /** @description Origin used in links. */
+            public_url: string;
+            /** @description Who may create an account. */
+            signup: components["schemas"]["SignupPolicy"];
+            /** @description Email domains allowed to sign up. Empty means no domain restriction. */
+            signup_domains: string[];
+            /** @description SMTP is configured. */
+            smtp_enabled: boolean;
+            /** @description Proxy CIDRs whose `X-Forwarded-For` is trusted. */
+            trusted_proxies: string[];
+        };
+        /**
+         * @description One account, as an instance admin sees it.
+         *
+         *     `GET /api/v1/admin/users` and the user field of the create and update responses.
+         */
+        AdminUser: {
+            /**
+             * Format: date-time
+             * @description When the account was created. JSON is RFC 3339.
+             */
+            created_at: string;
+            /** @description The account cannot sign in. */
+            disabled: boolean;
+            /** @description Email address. */
+            email: string;
+            /** @description The address has been verified. */
+            email_verified: boolean;
+            /** @description A password is set. SSO-only accounts are false. */
+            has_password: boolean;
+            /**
+             * Format: uuid
+             * @description User id.
+             */
+            id: string;
+            /** @description Instance administrator. */
+            is_instance_admin: boolean;
+            /** @description Display name. Omitted when the user has not set one. */
+            name?: string;
+            /** @description Linked provider ids, such as `github` or `oidc:okta`. */
+            providers: string[];
+        };
+        /** @description One page of results. `next_cursor` is null when there is no next page. */
+        AdminUserPage: {
+            /** @description Items in this page. */
+            data: components["schemas"]["AdminUser"][];
+            /** @description Opaque cursor for the next page, or null when this is the last page. */
+            next_cursor: string | null;
+        };
         /** @description A project API key. The secret is not a field. */
         ApiKey: {
             /**
@@ -959,6 +1115,15 @@ export interface components {
          * @enum {string}
          */
         CostSource: "computed" | "reported" | "none";
+        /** @description `POST /api/v1/admin/users`. */
+        CreateAdminUserRequest: {
+            /** @description Email address. */
+            email: string;
+            /** @description Grant instance admin. Absent means no. */
+            is_instance_admin?: boolean;
+            /** @description Display name. Absent when the admin does not set one. */
+            name?: string;
+        };
         /** @description `POST /api/v1/projects/{project}/api-keys` body. */
         CreateApiKeyRequest: {
             /** @description When the key stops working. Absent when the key does not expire. */
@@ -1021,6 +1186,17 @@ export interface components {
             shared?: boolean;
             /** @description Opaque UI state: list-page URL params, or `{query, params}` for SQL. */
             state: Record<string, never>;
+        };
+        /**
+         * @description `POST /api/v1/admin/users` returns 201.
+         *
+         *     The user has no password. `reset_url` is the one-hour link that sets one.
+         */
+        CreatedAdminUser: {
+            /** @description `<public_url>/reset?token=…`. */
+            reset_url: string;
+            /** @description The new account. The address is already verified. */
+            user: components["schemas"]["AdminUser"];
         };
         /** @description `POST /api/v1/projects/{project}/api-keys`. The response is the only place the secret appears. */
         CreatedApiKey: {
@@ -2580,6 +2756,17 @@ export interface components {
             [key: string]: unknown;
         };
         /**
+         * @description `PATCH /api/v1/admin/users/{id}`.
+         *
+         *     Absent fields stay as they are.
+         */
+        UpdateAdminUserRequest: {
+            /** @description Disable or re-enable the account. */
+            disabled?: boolean;
+            /** @description Grant or remove instance admin. */
+            is_instance_admin?: boolean;
+        };
+        /**
          * @description `PATCH /api/v1/me`.
          *
          *     A missing `name` and JSON null both clear the display name.
@@ -3191,6 +3378,404 @@ export interface operations {
             };
             /** @description The credentials do not allow this operation. */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request conflicts with the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_admin_settings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The effective settings. No secret is included. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSettings"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    post_admin_settings_test_email: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The test message was accepted by the SMTP server. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The SMTP server could not be reached or refused the message. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_admin_users: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of items to return (1–1000, default 50). */
+                limit?: components["schemas"]["Limit"];
+                /** @description Opaque cursor from a previous page. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of accounts, ordered by email. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserPage"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    post_admin_user: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAdminUserRequest"];
+            };
+        };
+        responses: {
+            /** @description The account, already verified, and a one-hour link that sets its password. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedAdminUser"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request conflicts with the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    patch_admin_user: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description User id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAdminUserRequest"];
+            };
+        };
+        responses: {
+            /** @description The account. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUser"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request conflicts with the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    post_admin_user_reset_link: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description User id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A one-hour link that sets the password. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminResetLink"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

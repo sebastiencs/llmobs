@@ -29,6 +29,10 @@ use super::account::{
     ResetPasswordRequest, SetupRequest, SetupResponse, SignupRequest, SignupResponse,
     UpdateMeRequest, UpdateOrgRequest, UpdateProjectRequest, User, VerifyEmailRequest,
 };
+use super::admin::{
+    AdminResetLink, AdminSettings, AdminUser, CreateAdminUserRequest, CreatedAdminUser,
+    UpdateAdminUserRequest,
+};
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
 use super::invites::{CreateInviteRequest, CreatedInvite, Invite, InvitePreview};
 use super::keys::{
@@ -104,6 +108,13 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<ChangePasswordRequest>();
     set.insert::<Me>();
     set.insert::<User>();
+    set.insert::<AdminUser>();
+    set.insert_page::<AdminUser>("AdminUserPage");
+    set.insert::<CreateAdminUserRequest>();
+    set.insert::<CreatedAdminUser>();
+    set.insert::<UpdateAdminUserRequest>();
+    set.insert::<AdminResetLink>();
+    set.insert::<AdminSettings>();
     set.insert::<OrgMembership>();
     set.insert::<CreateOrgRequest>();
     set.insert::<UpdateOrgRequest>();
@@ -211,6 +222,10 @@ pub fn openapi() -> OpenApi {
             tag(
                 "auth",
                 "Login, logout, sign-up, password reset, the current user, and first-run setup.",
+            ),
+            tag(
+                "admin",
+                "Instance administrators: accounts and the effective settings.",
             ),
             tag("orgs", "Organizations the caller belongs to."),
             tag("projects", "Projects the caller can see."),
@@ -488,6 +503,7 @@ fn tag(name: &str, description: &str) -> Tag {
 fn paths() -> Paths {
     let paths = PathsBuilder::new();
     let paths = auth_paths(paths);
+    let paths = admin_paths(paths);
     let paths = invite_paths(paths);
     let paths = project_paths(paths);
     let paths = member_paths(paths);
@@ -498,6 +514,95 @@ fn paths() -> Paths {
     let paths = score_paths(paths);
     let paths = saved_view_paths(paths);
     media_paths(paths).build()
+}
+
+fn admin_paths(paths: PathsBuilder) -> PathsBuilder {
+    let session = Some(vec![SecurityRequirement::new("session", [] as [&str; 0])]);
+    let list = operation("list_admin_users", "admin", "List accounts")
+        .securities(session.clone())
+        .parameters(Some(with_query::<PageParams>(Vec::new())))
+        .responses(responses(
+            "200",
+            json_named("AdminUserPage", "One page of accounts, ordered by email."),
+            &[400, 401, 403, 429],
+        ))
+        .build();
+    let create = operation("post_admin_user", "admin", "Create an account")
+        .securities(session.clone())
+        .request_body(Some(json_body("CreateAdminUserRequest")))
+        .responses(responses(
+            "201",
+            json_of::<CreatedAdminUser>(
+                "The account, already verified, and a one-hour link that sets its password.",
+            ),
+            &[400, 401, 403, 409, 429],
+        ))
+        .build();
+    let update = operation("patch_admin_user", "admin", "Disable or demote an account")
+        .securities(session.clone())
+        .parameters(Some(vec![path_string("id", "User id.")]))
+        .request_body(Some(json_body("UpdateAdminUserRequest")))
+        .responses(responses(
+            "200",
+            json_of::<AdminUser>("The account."),
+            &[400, 401, 403, 404, 409, 429],
+        ))
+        .build();
+    let reset = operation(
+        "post_admin_user_reset_link",
+        "admin",
+        "Mint a password reset link",
+    )
+    .securities(session.clone())
+    .parameters(Some(vec![path_string("id", "User id.")]))
+    .responses(responses(
+        "200",
+        json_of::<AdminResetLink>("A one-hour link that sets the password."),
+        &[400, 401, 403, 404, 409, 429],
+    ))
+    .build();
+    let settings = operation("get_admin_settings", "admin", "Read the instance settings")
+        .securities(session.clone())
+        .responses(responses(
+            "200",
+            json_of::<AdminSettings>("The effective settings. No secret is included."),
+            &[401, 403, 429],
+        ))
+        .build();
+    let test_email = operation(
+        "post_admin_settings_test_email",
+        "admin",
+        "Send a test email to yourself",
+    )
+    .securities(session)
+    .responses(responses(
+        "204",
+        ResponseBuilder::new()
+            .description("The test message was accepted by the SMTP server.")
+            .build(),
+        &[400, 401, 403, 429, 503],
+    ))
+    .build();
+    let mut users = PathItem::new(HttpMethod::Get, list);
+    users.post = Some(create);
+    paths
+        .path("/api/v1/admin/users", users)
+        .path(
+            "/api/v1/admin/users/{id}",
+            PathItem::new(HttpMethod::Patch, update),
+        )
+        .path(
+            "/api/v1/admin/users/{id}/reset-link",
+            PathItem::new(HttpMethod::Post, reset),
+        )
+        .path(
+            "/api/v1/admin/settings",
+            PathItem::new(HttpMethod::Get, settings),
+        )
+        .path(
+            "/api/v1/admin/settings/test-email",
+            PathItem::new(HttpMethod::Post, test_email),
+        )
 }
 
 fn auth_paths(paths: PathsBuilder) -> PathsBuilder {
@@ -1497,6 +1602,7 @@ fn problem(code: u16) -> Response {
         409 => "The request conflicts with the current state.",
         416 => "The Range header does not overlap the blob.",
         429 => "Too many requests.",
+        503 => "The SMTP server could not be reached or refused the message.",
         _ => "Request failed.",
     };
     ResponseBuilder::new()

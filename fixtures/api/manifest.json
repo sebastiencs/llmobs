@@ -1,5 +1,13 @@
 [
   {
+    "operation_id": "get_admin_settings",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/admin-settings.json"
+  },
+  {
     "operation_id": "get_auth_config",
     "path_params": {},
     "query": {},
@@ -348,6 +356,14 @@
     "file": "responses/users/user-7.json"
   },
   {
+    "operation_id": "list_admin_users",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/admin-users.json"
+  },
+  {
     "operation_id": "list_api_keys",
     "path_params": {},
     "query": {},
@@ -486,6 +502,14 @@
     "status": 200,
     "content_type": "application/json",
     "file": "responses/users.json"
+  },
+  {
+    "operation_id": "post_admin_user",
+    "path_params": {},
+    "query": {},
+    "status": 201,
+    "content_type": "application/json",
+    "file": "static/admin-user-created.json"
   },
   {
     "operation_id": "post_api_key",

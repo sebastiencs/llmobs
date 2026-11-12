@@ -610,6 +610,506 @@
         "security": []
       }
     },
+    "/api/v1/admin/settings": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read the instance settings",
+        "operationId": "get_admin_settings",
+        "responses": {
+          "200": {
+            "description": "The effective settings. No secret is included.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/settings/test-email": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Send a test email to yourself",
+        "operationId": "post_admin_settings_test_email",
+        "responses": {
+          "204": {
+            "description": "The test message was accepted by the SMTP server."
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The SMTP server could not be reached or refused the message.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/users": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "List accounts",
+        "operationId": "list_admin_users",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return (1–1000, default 50).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Limit",
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of accounts, ordered by email.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Create an account",
+        "operationId": "post_admin_user",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAdminUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The account, already verified, and a one-hour link that sets its password.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedAdminUser"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/users/{id}": {
+      "patch": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Disable or demote an account",
+        "operationId": "patch_admin_user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "User id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAdminUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUser"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/users/{id}/reset-link": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Mint a password reset link",
+        "operationId": "post_admin_user_reset_link",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "User id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A one-hour link that sets the password.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminResetLink"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/api/v1/me": {
       "patch": {
         "tags": [
@@ -5096,6 +5596,169 @@
   },
   "components": {
     "schemas": {
+      "AdminResetLink": {
+        "type": "object",
+        "description": "`POST /api/v1/admin/users/{id}/reset-link` returns 200.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "`<public_url>/reset?token=…`. Valid for one hour."
+          }
+        }
+      },
+      "AdminSettings": {
+        "type": "object",
+        "description": "Effective instance settings. Read-only: they come from config.\n\n`GET /api/v1/admin/settings`. No SMTP URL and no client secret.",
+        "required": [
+          "public_url",
+          "signup",
+          "signup_domains",
+          "password_enabled",
+          "email_verification_required",
+          "enforce_sso_domains",
+          "smtp_enabled",
+          "providers",
+          "trusted_proxies"
+        ],
+        "properties": {
+          "email_from": {
+            "type": "string",
+            "description": "`From` mailbox. Omitted when SMTP is not configured."
+          },
+          "email_verification_required": {
+            "type": "boolean",
+            "description": "New accounts must verify their email before signing in."
+          },
+          "enforce_sso_domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Domains that must use SSO. Empty means SSO is not required."
+          },
+          "password_enabled": {
+            "type": "boolean",
+            "description": "Password login is enabled."
+          },
+          "providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthProvider"
+            },
+            "description": "Configured OAuth and OIDC providers. No client secrets."
+          },
+          "public_url": {
+            "type": "string",
+            "description": "Origin used in links."
+          },
+          "signup": {
+            "$ref": "#/components/schemas/SignupPolicy",
+            "description": "Who may create an account."
+          },
+          "signup_domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Email domains allowed to sign up. Empty means no domain restriction."
+          },
+          "smtp_enabled": {
+            "type": "boolean",
+            "description": "SMTP is configured."
+          },
+          "trusted_proxies": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Proxy CIDRs whose `X-Forwarded-For` is trusted."
+          }
+        }
+      },
+      "AdminUser": {
+        "type": "object",
+        "description": "One account, as an instance admin sees it.\n\n`GET /api/v1/admin/users` and the user field of the create and update responses.",
+        "required": [
+          "id",
+          "email",
+          "is_instance_admin",
+          "disabled",
+          "email_verified",
+          "has_password",
+          "providers",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the account was created. JSON is RFC 3339."
+          },
+          "disabled": {
+            "type": "boolean",
+            "description": "The account cannot sign in."
+          },
+          "email": {
+            "type": "string",
+            "description": "Email address."
+          },
+          "email_verified": {
+            "type": "boolean",
+            "description": "The address has been verified."
+          },
+          "has_password": {
+            "type": "boolean",
+            "description": "A password is set. SSO-only accounts are false."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "User id."
+          },
+          "is_instance_admin": {
+            "type": "boolean",
+            "description": "Instance administrator."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name. Omitted when the user has not set one."
+          },
+          "providers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Linked provider ids, such as `github` or `oidc:okta`."
+          }
+        }
+      },
+      "AdminUserPage": {
+        "type": "object",
+        "description": "One page of results. `next_cursor` is null when there is no next page.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminUser"
+            },
+            "description": "Items in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
+      },
       "ApiKey": {
         "type": "object",
         "description": "A project API key. The secret is not a field.",
@@ -5377,6 +6040,28 @@
           "none"
         ]
       },
+      "CreateAdminUserRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/admin/users`.",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address."
+          },
+          "is_instance_admin": {
+            "type": "boolean",
+            "description": "Grant instance admin. Absent means no."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name. Absent when the admin does not set one."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateApiKeyRequest": {
         "type": "object",
         "description": "`POST /api/v1/projects/{project}/api-keys` body.",
@@ -5524,6 +6209,24 @@
           }
         },
         "additionalProperties": false
+      },
+      "CreatedAdminUser": {
+        "type": "object",
+        "description": "`POST /api/v1/admin/users` returns 201.\n\nThe user has no password. `reset_url` is the one-hour link that sets one.",
+        "required": [
+          "user",
+          "reset_url"
+        ],
+        "properties": {
+          "reset_url": {
+            "type": "string",
+            "description": "`<public_url>/reset?token=…`."
+          },
+          "user": {
+            "$ref": "#/components/schemas/AdminUser",
+            "description": "The new account. The address is already verified."
+          }
+        }
       },
       "CreatedApiKey": {
         "type": "object",
@@ -8412,6 +9115,21 @@
         },
         "additionalProperties": true
       },
+      "UpdateAdminUserRequest": {
+        "type": "object",
+        "description": "`PATCH /api/v1/admin/users/{id}`.\n\nAbsent fields stay as they are.",
+        "properties": {
+          "disabled": {
+            "type": "boolean",
+            "description": "Disable or re-enable the account."
+          },
+          "is_instance_admin": {
+            "type": "boolean",
+            "description": "Grant or remove instance admin."
+          }
+        },
+        "additionalProperties": false
+      },
       "UpdateMeRequest": {
         "type": "object",
         "description": "`PATCH /api/v1/me`.\n\nA missing `name` and JSON null both clear the display name.",
@@ -8647,6 +9365,10 @@
     {
       "name": "auth",
       "description": "Login, logout, sign-up, password reset, the current user, and first-run setup."
+    },
+    {
+      "name": "admin",
+      "description": "Instance administrators: accounts and the effective settings."
     },
     {
       "name": "orgs",

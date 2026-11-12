@@ -14,6 +14,7 @@ use llmobs_core::span::Span;
 use llmobs_server::api::account::{
     AuthConfig, Me, OrgMembership, OrgRole, Project, SetupResponse, SignupResponse,
 };
+use llmobs_server::api::admin::{AdminSettings, AdminUser, CreatedAdminUser};
 use llmobs_server::api::common::Page;
 use llmobs_server::api::invites::{CreatedInvite, Invite, InvitePreview};
 use llmobs_server::api::keys::{ApiKey, CreatedApiKey, CreatedPersonalToken, PersonalToken};
@@ -346,6 +347,25 @@ fn build() -> Built {
     ));
 
     manifest.extend([
+        example(
+            "list_admin_users",
+            BTreeMap::new(),
+            BTreeMap::new(),
+            "static/admin-users.json",
+            "application/json",
+        ),
+        example_created(
+            "post_admin_user",
+            BTreeMap::new(),
+            "static/admin-user-created.json",
+        ),
+        example(
+            "get_admin_settings",
+            BTreeMap::new(),
+            BTreeMap::new(),
+            "static/admin-settings.json",
+            "application/json",
+        ),
         example(
             "get_auth_config",
             BTreeMap::new(),
@@ -995,6 +1015,9 @@ fn static_files_match_their_types() {
     roundtrip::<OrgMembership>("static/org.json");
     roundtrip::<Page<OrgMember>>("static/org-members.json");
     roundtrip::<Page<Invite>>("static/invites.json");
+    roundtrip::<Page<AdminUser>>("static/admin-users.json");
+    roundtrip::<CreatedAdminUser>("static/admin-user-created.json");
+    roundtrip::<AdminSettings>("static/admin-settings.json");
     roundtrip::<CreatedInvite>("static/invite-created.json");
     roundtrip::<InvitePreview>("static/invite-preview.json");
     roundtrip::<Page<ProjectMember>>("static/project-members.json");
@@ -1046,7 +1069,10 @@ fn generated_files_roundtrip() {
             | "get_metrics"
             | "post_setup"
             | "post_login"
-            | "post_signup" => {}
+            | "post_signup"
+            | "list_admin_users"
+            | "post_admin_user"
+            | "get_admin_settings" => {}
             other => panic!("{other} has no round-trip"),
         }
     }

@@ -21,6 +21,20 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
         "/api/auth/invites/{token}/accept",
         "post_invite_accept",
     ),
+    ("get", "/api/v1/admin/users", "list_admin_users"),
+    ("post", "/api/v1/admin/users", "post_admin_user"),
+    ("patch", "/api/v1/admin/users/{id}", "patch_admin_user"),
+    (
+        "post",
+        "/api/v1/admin/users/{id}/reset-link",
+        "post_admin_user_reset_link",
+    ),
+    ("get", "/api/v1/admin/settings", "get_admin_settings"),
+    (
+        "post",
+        "/api/v1/admin/settings/test-email",
+        "post_admin_settings_test_email",
+    ),
     ("get", "/api/auth/me", "get_me"),
     ("post", "/api/auth/password/forgot", "post_password_forgot"),
     ("post", "/api/auth/password/reset", "post_password_reset"),
@@ -187,6 +201,7 @@ const QUERY_OR_BODY: &[&str] = &[
 ];
 
 const TAGS: &[&str] = &[
+    "admin",
     "auth",
     "orgs",
     "projects",
@@ -289,6 +304,12 @@ fn document_lint() {
                 | "list_personal_tokens"
                 | "post_personal_token"
                 | "delete_personal_token"
+                | "list_admin_users"
+                | "post_admin_user"
+                | "patch_admin_user"
+                | "post_admin_user_reset_link"
+                | "get_admin_settings"
+                | "post_admin_settings_test_email"
         ) {
             let security = operation_security.unwrap_or_else(|| panic!("{id}"));
             assert_eq!(security.len(), 1, "{id}");
@@ -341,6 +362,14 @@ fn document_lint() {
         } else if *id == "get_invite_preview" {
             expected_errors.extend(["404", "429"]);
         } else if *id == "post_org_invite" || *id == "post_project" {
+            expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
+        } else if *id == "list_admin_users" || *id == "post_admin_settings_test_email" {
+            expected_errors.extend(["400", "401", "403", "429"]);
+        } else if *id == "get_admin_settings" {
+            expected_errors.extend(["401", "403", "429"]);
+        } else if *id == "post_admin_user" {
+            expected_errors.extend(["400", "401", "403", "409", "429"]);
+        } else if *id == "patch_admin_user" || *id == "post_admin_user_reset_link" {
             expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
         } else if *id == "post_logout" {
             // The handler always answers 204. CSRF is the shared origin check.
@@ -419,6 +448,7 @@ fn document_lint() {
         ("OrgPage", "OrgMembership"),
         ("OrgMemberPage", "OrgMember"),
         ("InvitePage", "Invite"),
+        ("AdminUserPage", "AdminUser"),
         ("ProjectMemberPage", "ProjectMember"),
         ("ProjectPage", "Project"),
         ("ApiKeyPage", "ApiKey"),
@@ -667,6 +697,7 @@ fn assert_nullability(schemas: &serde_json::Map<String, Value>) {
         "OrgPage",
         "OrgMemberPage",
         "InvitePage",
+        "AdminUserPage",
         "ProjectMemberPage",
         "ProjectPage",
         "ApiKeyPage",
