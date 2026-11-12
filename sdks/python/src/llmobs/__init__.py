@@ -9,11 +9,13 @@ import importlib.metadata
 __version__ = importlib.metadata.version("llmobs")
 
 from llmobs._config import ConfigError
+from llmobs._context import context
 from llmobs._runtime import flush, init, shutdown, span_processor, tracer_provider
 
 __all__ = [
     "ConfigError",
     "__version__",
+    "context",
     "flush",
     "init",
     "shutdown",

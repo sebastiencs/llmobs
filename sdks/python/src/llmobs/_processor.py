@@ -1,17 +1,52 @@
 """The llmobs span processor.
 
-Stamps the configured attributes on span start, then batch-exports
-(spec 10 § Design rules 1, D-F-4). P4 adds the ``context()`` values to
-``on_start``; P8 adds the export filter to ``on_end``.
+Stamps the ``context()`` values, then the configured attributes, on span
+start, and batch-exports on end (spec 10 § Design rules 1, D-F-4, D-F-12).
+P8 adds the export filter to ``on_end``.
 """
 
-from collections.abc import Callable
+import re
+import threading
+from collections.abc import Callable, Mapping
 
+from opentelemetry.baggage import get_baggage
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 
+from llmobs._context import current_values
 from llmobs._log import logger
+from llmobs._serialize import attribute_value
+
+# § Span attributes: empty or outside [A-Za-z0-9_.-] fails the key rule.
+_METADATA_KEY_OK = re.compile(r"^[A-Za-z0-9_.-]+$")
+_METADATA_PREFIX = "llmobs.metadata."
+
+_skip_lock = threading.Lock()
+_skipped_keys: set[str] = set()
+
+
+def _metadata_attribute(key: str) -> str | None:
+    """The attribute name for a metadata key, or ``None`` when it fails the key rule.
+
+    A skipped key is logged once per process at debug level, with its length
+    only, never the key itself.
+    """
+    if _METADATA_KEY_OK.fullmatch(key) is not None:
+        return f"{_METADATA_PREFIX}{key}"
+    with _skip_lock:
+        first = key not in _skipped_keys
+        if first:
+            _skipped_keys.add(key)
+    if first:
+        logger.debug("llmobs: metadata key skipped (length %d)", len(key))
+    return None
+
+
+def _baggage_string(key: str, ctx: Context | None) -> str | None:
+    """The baggage value for ``key`` in ``ctx``, when it is a string."""
+    value = get_baggage(key, ctx)
+    return value if isinstance(value, str) else None
 
 
 class LlmobsSpanProcessor(SpanProcessor):
@@ -42,12 +77,35 @@ class LlmobsSpanProcessor(SpanProcessor):
             export_timeout_millis=10_000,
         )
 
+    def _stamp(self, span: Span, parent_context: Context | None) -> None:
+        values = current_values(parent_context)
+        session_id = values.session_id
+        if session_id is None:
+            session_id = _baggage_string("llmobs.session.id", parent_context)
+        if session_id is not None:
+            span.set_attribute("llmobs.session.id", session_id)
+        user_id = values.user_id
+        if user_id is None:
+            user_id = _baggage_string("llmobs.user.id", parent_context)
+        if user_id is not None:
+            span.set_attribute("llmobs.user.id", user_id)
+        if values.tags:
+            span.set_attribute("llmobs.tags", list(values.tags))
+        self._stamp_metadata(span, values.metadata)
+        if self._environment is not None:
+            span.set_attribute("llmobs.environment", self._environment)
+        if self._release is not None:
+            span.set_attribute("llmobs.release", self._release)
+
+    def _stamp_metadata(self, span: Span, metadata: Mapping[str, object]) -> None:
+        for key, value in metadata.items():
+            name = _metadata_attribute(key)
+            if name is not None:
+                span.set_attribute(name, attribute_value(value))
+
     def on_start(self, span: Span, parent_context: Context | None = None) -> None:
         try:
-            if self._environment is not None:
-                span.set_attribute("llmobs.environment", self._environment)
-            if self._release is not None:
-                span.set_attribute("llmobs.release", self._release)
+            self._stamp(span, parent_context)
         except Exception as error:  # noqa: BLE001  # never raise into the app (spec 10 rule 4)
             logger.debug("llmobs: could not stamp span attributes (%s)", type(error).__name__)
 
