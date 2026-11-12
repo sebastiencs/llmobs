@@ -45,6 +45,8 @@ Competitor research: `research/competitors.md`.
 
 ## Decision log
 
+D1–D168 below are numbered in one sequence. From now on a track's decisions are `D-<track>-<n>` (e.g. `D-F-1`) in a `## Track <id> — <name>` section of their own after this table, and a decision that belongs to no track takes the next plain number (`roadmap.md` § Decision IDs).
+
 | # | Topic | Decision |
 |---|---|---|
 | D1 | Positioning | Lightweight, single-binary self-host for bottom-up adoption; revenue from enterprise self-host features, then cost governance (gateway). |
