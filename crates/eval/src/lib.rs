@@ -6,6 +6,9 @@
 mod check;
 mod config;
 mod error;
+// The adapters in E11 are the first non-test caller.
+#[cfg_attr(not(test), allow(dead_code))]
+mod judge;
 mod mapping;
 mod secret;
 mod template;
@@ -16,7 +19,7 @@ pub use config::{
     Check, ContainsMode, Evaluator, EvaluatorConfig, JudgeConfig, JudgeOutput, OutputScore,
     WebhookConfig,
 };
-pub use error::{CheckError, ConfigError, MappingError, TemplateError};
+pub use error::{CheckError, ConfigError, JudgeError, MappingError, TemplateError};
 pub use mapping::resolve::{ItemData, TraceData, Variables, resolve};
 pub use mapping::{Expr, VariableMapping};
 pub use secret::Secret;

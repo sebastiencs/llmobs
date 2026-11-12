@@ -1,8 +1,9 @@
-//! Configuration, check, and mapping errors.
+//! Configuration, check, mapping, template, and judge errors.
 //!
 //! Messages name the evaluator kind, the field, the variable, the expression, the
 //! byte offset, or serde's error category with its line and column. They never
-//! quote prompt text, check inputs, patterns, header values, URLs, or other payload.
+//! quote prompt text, check inputs, patterns, header values, URLs, judge answers,
+//! or other payload.
 
 use llmobs_core::enums::ScoreDataType;
 use serde_json::error::Category;
@@ -175,6 +176,45 @@ pub enum TemplateError {
         /// UTF-8 length of the rendered prompt.
         bytes: usize,
     },
+}
+
+/// A judge answer could not be turned into a score.
+///
+/// No variant stores the answer text or the rejected value.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum JudgeError {
+    /// The model returned only whitespace.
+    #[error("empty answer")]
+    EmptyAnswer,
+    /// The text is not JSON, has no fence containing JSON, and has no object.
+    #[error("answer is not JSON")]
+    NotJson,
+    /// JSON was found, and it is not an object.
+    #[error("answer is not a JSON object")]
+    NotAnObject,
+    /// The score field is absent. `field` is `value` or `label`.
+    #[error("missing field {field}")]
+    MissingField {
+        /// `value` or `label`.
+        field: &'static str,
+    },
+    /// The score field is present but has a type this output cannot use.
+    #[error("field {field} has the wrong type")]
+    WrongType {
+        /// `value` or `label`.
+        field: &'static str,
+    },
+    /// A numeric answer is not finite or lies outside the configured bounds.
+    #[error("value is outside {min}..={max}")]
+    OutOfRange {
+        /// Inclusive lower bound from the evaluator.
+        min: f64,
+        /// Inclusive upper bound from the evaluator.
+        max: f64,
+    },
+    /// A categorical answer matches none of the configured labels.
+    #[error("unknown label")]
+    UnknownLabel,
 }
 
 /// Fails the test when `message` contains `payload`.
