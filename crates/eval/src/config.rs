@@ -426,7 +426,9 @@ pub enum Check {
         #[serde(default)]
         case_sensitive: bool,
     },
-    /// Rust regex searched anywhere in the output. Compiled when the check runs.
+    /// Rust regex searched anywhere in the output.
+    ///
+    /// [`crate::check::compile_regex`] compiles it here and again when the check runs.
     Regex {
         /// Pattern stored as written.
         pattern: String,
@@ -458,22 +460,37 @@ impl Check {
     }
 
     fn validate_parts(&self) -> Result<(), ConfigError> {
-        if let Self::Contains { value, values, .. } = self {
-            if value.is_some() && !values.is_empty() {
-                return Err(ConfigError::Invalid {
-                    field: "values",
-                    reason: "set value or values, not both",
-                });
+        match self {
+            Self::Contains { value, values, .. } => {
+                if value.is_some() && !values.is_empty() {
+                    return Err(ConfigError::Invalid {
+                        field: "values",
+                        reason: "set value or values, not both",
+                    });
+                }
+                let empty_value = value.as_ref().is_some_and(String::is_empty);
+                if empty_value || values.iter().any(String::is_empty) {
+                    return Err(ConfigError::Invalid {
+                        field: "values",
+                        reason: "must not be empty",
+                    });
+                }
+                Ok(())
             }
-            let empty_value = value.as_ref().is_some_and(String::is_empty);
-            if empty_value || values.iter().any(String::is_empty) {
-                return Err(ConfigError::Invalid {
-                    field: "values",
-                    reason: "must not be empty",
-                });
+            Self::Regex { pattern } => {
+                if crate::check::compile_regex(pattern).is_err() {
+                    return Err(ConfigError::Invalid {
+                        field: "pattern",
+                        reason: "invalid regular expression",
+                    });
+                }
+                Ok(())
             }
+            Self::ExactMatch { .. }
+            | Self::JsonValid
+            | Self::JsonSchema { .. }
+            | Self::Levenshtein { .. } => Ok(()),
         }
-        Ok(())
     }
 }
 

@@ -2647,6 +2647,7 @@ version = "0.0.0"
 dependencies = [
  "insta",
  "llmobs-core",
+ "regex",
  "serde",
  "serde_json",
  "thiserror",

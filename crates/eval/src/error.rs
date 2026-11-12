@@ -1,8 +1,8 @@
-//! Configuration errors.
+//! Configuration and check errors.
 //!
-//! Messages name the evaluator kind, the field, and serde's error category with
-//! its line and column. They never quote prompt text, header values, URLs, or
-//! other payload from the configuration JSON.
+//! Messages name the evaluator kind, the field, the missing variable, or serde's
+//! error category with its line and column. They never quote prompt text, check
+//! inputs, patterns, header values, URLs, or other payload.
 
 use llmobs_core::enums::ScoreDataType;
 use serde_json::error::Category;
@@ -61,6 +61,22 @@ impl ConfigError {
             message: format!("{category} at line {line} column {column}"),
         }
     }
+}
+
+/// A text check could not produce a score.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CheckError {
+    /// `output` or `expected` was absent and this check reads it.
+    #[error("missing variable {name}")]
+    MissingVariable {
+        /// `output` or `expected`.
+        name: &'static str,
+    },
+    /// The pattern does not compile, or its compiled form exceeds 1 MiB.
+    ///
+    /// The pattern is omitted: it can be attacker-controlled text.
+    #[error("invalid regular expression")]
+    InvalidPattern,
 }
 
 /// Fails the test when `message` contains `payload`.
