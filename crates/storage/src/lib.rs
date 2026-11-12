@@ -49,6 +49,7 @@ pub(crate) mod flush;
 pub(crate) mod gc;
 pub(crate) mod objects;
 pub(crate) mod parquet;
+pub(crate) mod partials;
 pub mod query;
 mod query_error;
 mod query_text;

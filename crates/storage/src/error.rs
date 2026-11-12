@@ -423,6 +423,31 @@ pub enum ParquetWriteError {
     },
 }
 
+/// Building or merging trace partials failed.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PartialsError {
+    /// A required column is missing, has the wrong type, or holds an invalid id.
+    #[error("partials column {name} is missing or invalid")]
+    Column {
+        /// The `traces` or `spans` column name. Never a row value.
+        name: String,
+    },
+    /// A `trace_id` value is not a valid id.
+    #[error("partials trace id is invalid")]
+    InvalidTraceId,
+    /// Arrow rejected the output batch.
+    #[error("partials: {0}")]
+    Arrow(#[from] ArrowError),
+}
+
+impl PartialsError {
+    pub(crate) fn column(name: &str) -> Self {
+        Self::Column {
+            name: name.to_owned(),
+        }
+    }
+}
+
 /// A memtable flush failed before the catalog commit.
 ///
 /// The frozen memtable stays. The task retries with new file names.

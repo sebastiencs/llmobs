@@ -180,7 +180,7 @@ impl TableProvider for RecordingTable {
     }
 }
 
-fn trace_batch(spans: &[Span]) -> RecordBatch {
+pub(crate) fn trace_batch(spans: &[Span]) -> RecordBatch {
     let mut grouped: BTreeMap<TraceId, Vec<&Span>> = BTreeMap::new();
     for span in spans {
         grouped.entry(span.trace_id).or_default().push(span);
