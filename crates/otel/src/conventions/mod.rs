@@ -14,12 +14,15 @@ mod openllmetry;
 mod vercel;
 
 use llmobs_core::enums::Convention;
+use llmobs_core::message::{Message, Part};
 use opentelemetry_proto::tonic::common::v1::AnyValue;
 use serde_json::Value as Json;
 
 pub(crate) use langfuse::apply_status;
 
-use crate::payload::{ConventionPayload, Payload, PayloadKeys, decode_json_text};
+use crate::payload::{
+    ConventionPayload, Payload, PayloadKeys, decode_json_text, parse_tool_arguments,
+};
 use crate::value::{as_str, to_json};
 use crate::warn::Warnings;
 
@@ -104,7 +107,10 @@ pub(super) fn messages_from_value(value: &AnyValue, warnings: &mut Warnings) -> 
     if let Some(json) = decode_json_text(value, warnings) {
         let text = serde_json::to_string(&json).unwrap_or_else(|_| "null".to_owned());
         return match llmobs_core::message::parse_messages(&text) {
-            Ok(messages) => (Payload::Messages(messages), false),
+            Ok(mut messages) => {
+                parse_tool_values(&mut messages);
+                (Payload::Messages(messages), false)
+            }
             Err(_) => (Payload::Json(json), true),
         };
     }
@@ -112,6 +118,26 @@ pub(super) fn messages_from_value(value: &AnyValue, warnings: &mut Warnings) -> 
         return (Payload::Text(text.to_owned()), true);
     }
     (Payload::Json(to_json(value, warnings)), true)
+}
+
+/// Rule 6 on canonical messages: a JSON string in a tool call's `arguments` or
+/// a tool response's `response` becomes that JSON value.
+fn parse_tool_values(messages: &mut [Message]) {
+    for part in messages
+        .iter_mut()
+        .flat_map(|message| message.parts.iter_mut())
+    {
+        match part {
+            Part::ToolCall {
+                arguments: Some(arguments),
+                ..
+            } => *arguments = parse_tool_arguments(std::mem::take(arguments)),
+            Part::ToolCallResponse { response, .. } => {
+                *response = parse_tool_arguments(std::mem::take(response));
+            }
+            _ => {}
+        }
+    }
 }
 
 /// JSON from an attribute. An empty string is absent.
