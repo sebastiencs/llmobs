@@ -11,11 +11,12 @@
 mod scores;
 mod spans;
 
+use std::collections::BTreeSet;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use chrono::{Datelike, NaiveDate};
 use datafusion::catalog::Session;
 use datafusion::common::{DFSchema, ScalarValue};
@@ -32,6 +33,8 @@ use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_datasource::source::DataSourceExec;
 use llmobs_core::ids::ProjectId;
+use llmobs_core::ids::TraceId;
+use llmobs_core::schema::traces;
 
 use crate::catalog::{Catalog, FileMeta, FileTable};
 use crate::memtable::{MemBatch, MemSnapshot};
@@ -292,6 +295,8 @@ pub(crate) struct ScanUnion<'a> {
     pub table: Table,
     /// Event-time column used for day and file pruning.
     pub time_column: &'static str,
+    /// `?around=` hint for a single-trace lookup (D154).
+    pub around: Option<i64>,
     /// Stored schema, before projection.
     pub schema: SchemaRef,
     /// Column indices the caller asked for.
@@ -306,24 +311,132 @@ pub(crate) struct ScanUnion<'a> {
     pub session: &'a dyn Session,
 }
 
+/// The `trace_id`s named by a scan's top-level id conjuncts, or `None` when
+/// the scan is not a lookup (D154).
+///
+/// Only top-level conjuncts are inspected: each filter and each side of an
+/// `AND`, recursively. `OR`, `NOT`, `NOT IN`, `!=` and anything else are
+/// ignored, never an error; they are still evaluated as ordinary filters.
+pub(crate) fn lookup_ids(filters: &[Expr]) -> Option<BTreeSet<TraceId>> {
+    let mut found: Option<BTreeSet<TraceId>> = None;
+    for filter in filters {
+        if let Some(ids) = conjunct_ids(filter) {
+            found = Some(match found {
+                None => ids,
+                Some(existing) => existing.intersection(&ids).copied().collect(),
+            });
+        }
+    }
+    found
+}
+
+fn conjunct_ids(expr: &Expr) -> Option<BTreeSet<TraceId>> {
+    match peel(expr) {
+        Expr::BinaryExpr(binary) if binary.op == Operator::And => {
+            match (conjunct_ids(&binary.left), conjunct_ids(&binary.right)) {
+                (Some(left), Some(right)) => Some(left.intersection(&right).copied().collect()),
+                (Some(ids), None) | (None, Some(ids)) => Some(ids),
+                (None, None) => None,
+            }
+        }
+        Expr::BinaryExpr(binary) if binary.op == Operator::Eq => {
+            let literal = match (is_trace_id(&binary.left), is_trace_id(&binary.right)) {
+                (true, false) => &binary.right,
+                (false, true) => &binary.left,
+                _ => return None,
+            };
+            let id = TraceId::from_slice(&literal_bytes(literal)?).ok()?;
+            Some(std::iter::once(id).collect())
+        }
+        Expr::InList(in_list) if !in_list.negated && is_trace_id(&in_list.expr) => {
+            let mut ids = BTreeSet::new();
+            for item in &in_list.list {
+                let bytes = literal_bytes(item)?;
+                ids.insert(TraceId::from_slice(&bytes).ok()?);
+            }
+            Some(ids)
+        }
+        _ => None,
+    }
+}
+
+fn peel(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Alias(alias) => peel(&alias.expr),
+        other => other,
+    }
+}
+
+fn is_trace_id(expr: &Expr) -> bool {
+    matches!(peel(expr), Expr::Column(column) if column.name == traces::TRACE_ID)
+}
+
+/// A non-null 16-byte id literal, in one of the three forms A2's hex rewrite
+/// and the SQL parser produce. `arrow_cast` may reach the provider simplified
+/// to `Cast`/`TryCast` or still as the scalar function.
+fn literal_bytes(expr: &Expr) -> Option<Vec<u8>> {
+    match peel(expr) {
+        Expr::Literal(ScalarValue::FixedSizeBinary(16, Some(bytes)), _) if bytes.len() == 16 => {
+            Some(bytes.clone())
+        }
+        Expr::Literal(value, _) => match value {
+            ScalarValue::Binary(Some(bytes))
+            | ScalarValue::LargeBinary(Some(bytes))
+            | ScalarValue::BinaryView(Some(bytes))
+                if bytes.len() == 16 =>
+            {
+                Some(bytes.clone())
+            }
+            _ => None,
+        },
+        Expr::Cast(cast) if cast.field.data_type() == &DataType::FixedSizeBinary(16) => {
+            literal_bytes(&cast.expr)
+        }
+        Expr::TryCast(cast) if cast.field.data_type() == &DataType::FixedSizeBinary(16) => {
+            literal_bytes(&cast.expr)
+        }
+        Expr::ScalarFunction(func) if func.name() == "arrow_cast" => {
+            literal_bytes(func.args.first()?)
+        }
+        _ => None,
+    }
+}
+
 /// Files whose day and `[min_time, max_time]` overlap the time filters.
+///
+/// A lookup with `around` and no `start_time` bound reads only files in the
+/// `±1 day` window; without `around` it reads every file of the project and
+/// leaves the pruning to DataFusion's statistics and bloom filters (D154).
 pub(crate) fn overlapping_files(
     catalog: &Catalog,
     table: Table,
     project: ProjectId,
     time_column: &str,
     filters: &[Expr],
+    around: Option<i64>,
 ) -> Vec<Arc<FileMeta>> {
     let bounds = time_bounds(filters, time_column);
     if bounds.contradicts() {
         return Vec::new();
     }
     let file_table = FileTable::from(table);
-    catalog
+    let files: Vec<Arc<FileMeta>> = catalog
         .files(file_table, project, file_day_range(&bounds, file_table))
         .filter(|file| file_overlaps(file, &bounds))
         .cloned()
-        .collect()
+        .collect();
+    let lookup = lookup_ids(filters).is_some() && bounds.min.is_none() && bounds.max.is_none();
+    if lookup && let Some(instant) = around {
+        let window = TimeBounds {
+            min: Some(instant.saturating_sub(DAY_NS)),
+            max: Some(instant.saturating_add(DAY_NS)),
+        };
+        return files
+            .into_iter()
+            .filter(|file| file_overlaps(file, &window))
+            .collect();
+    }
+    files
 }
 
 /// Union of the Parquet files and the memtable. An empty side is left out.
@@ -337,6 +450,7 @@ pub(crate) fn scan_union(
         scan.project,
         scan.time_column,
         scan.filters,
+        scan.around,
     );
     let both = !batches.is_empty() && !files.is_empty();
     // A limit on each side would drop rows the other side still has.
@@ -622,10 +736,7 @@ mod tests {
         assert_eq!(bounds_of(or), TimeBounds::open());
         let not = Expr::Not(Box::new(comparison.clone()));
         assert_eq!(bounds_of(not), TimeBounds::open());
-        let cast = Expr::Cast(Cast::new(
-            Box::new(comparison),
-            arrow::datatypes::DataType::Boolean,
-        ));
+        let cast = Expr::Cast(Cast::new(Box::new(comparison), DataType::Boolean));
         assert_eq!(bounds_of(cast), TimeBounds::open());
         let negated = Expr::Between(Between::new(
             Box::new(col("start_time")),
@@ -727,5 +838,243 @@ mod tests {
             };
             prop_assert_eq!(in_range(start_times(&selected)), in_range(start_times(&all)));
         }
+    }
+
+    fn project() -> ProjectId {
+        "018f6b4e-7c1a-7c1a-8c1a-000000000001".parse().unwrap()
+    }
+
+    fn id(last: u8) -> TraceId {
+        let mut bytes = [0_u8; 16];
+        bytes[15] = last;
+        TraceId::from_bytes(bytes).unwrap()
+    }
+
+    fn fixed(bytes: &[u8]) -> Expr {
+        Expr::Literal(ScalarValue::FixedSizeBinary(16, Some(bytes.to_vec())), None)
+    }
+
+    fn binary(bytes: &[u8]) -> Expr {
+        Expr::Literal(ScalarValue::Binary(Some(bytes.to_vec())), None)
+    }
+
+    /// `arrow_cast(X'..', 'FixedSizeBinary(16)')`, the form S1 found. The SQL
+    /// simplifier turns it into a `Cast` over the binary literal; the unsimplified
+    /// scalar-function form is checked separately.
+    fn arrow_cast_cast(bytes: &[u8]) -> Expr {
+        Expr::Cast(Cast::new(
+            Box::new(binary(bytes)),
+            DataType::FixedSizeBinary(16),
+        ))
+    }
+
+    fn arrow_cast_fn(bytes: &[u8]) -> Expr {
+        datafusion::functions::core::expr_fn::arrow_cast(binary(bytes), lit("FixedSizeBinary(16)"))
+    }
+
+    fn eq(left: Expr, right: Expr) -> Expr {
+        Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left),
+            Operator::Eq,
+            Box::new(right),
+        ))
+    }
+
+    fn in_list(expr: Expr, list: Vec<Expr>, negated: bool) -> Expr {
+        Expr::InList(datafusion::logical_expr::expr::InList::new(
+            Box::new(expr),
+            list,
+            negated,
+        ))
+    }
+
+    fn trace_col() -> Expr {
+        col(traces::TRACE_ID)
+    }
+
+    fn good_id() -> Expr {
+        fixed(id(3).as_bytes())
+    }
+
+    #[test]
+    fn lookup_ids_accepts_the_three_literal_forms_and_in_lists() {
+        let seven = id(7);
+        let bytes = seven.as_bytes();
+        let want: BTreeSet<TraceId> = [seven].into_iter().collect();
+        let forms = [
+            eq(trace_col(), fixed(bytes)),
+            eq(fixed(bytes), trace_col()),
+            eq(trace_col(), binary(bytes)),
+            eq(trace_col(), arrow_cast_cast(bytes)),
+            eq(trace_col(), arrow_cast_fn(bytes)),
+            in_list(trace_col(), vec![fixed(bytes)], false),
+            in_list(trace_col(), vec![binary(bytes)], false),
+            in_list(trace_col(), vec![arrow_cast_cast(bytes)], false),
+        ];
+        for expr in forms {
+            assert_eq!(
+                lookup_ids(std::slice::from_ref(&expr)),
+                Some(want.clone()),
+                "{expr}"
+            );
+        }
+        // `IN ()` is a lookup with no ids.
+        assert_eq!(
+            lookup_ids(&[in_list(trace_col(), vec![], false)]),
+            Some(BTreeSet::new())
+        );
+        let eight = id(8);
+        assert_eq!(
+            lookup_ids(&[in_list(
+                trace_col(),
+                vec![fixed(bytes), fixed(eight.as_bytes())],
+                false,
+            )]),
+            Some([seven, eight].into_iter().collect())
+        );
+    }
+
+    #[test]
+    fn lookup_ids_intersects_several_id_conjuncts() {
+        let one = eq(trace_col(), fixed(id(1).as_bytes()));
+        let two = eq(trace_col(), fixed(id(2).as_bytes()));
+        assert_eq!(
+            lookup_ids(&[one.clone(), two.clone()]),
+            Some(BTreeSet::new())
+        );
+        assert_eq!(
+            lookup_ids(std::slice::from_ref(&one.clone().and(two))),
+            Some(BTreeSet::new())
+        );
+        assert_eq!(
+            lookup_ids(std::slice::from_ref(&one)),
+            Some([id(1)].into_iter().collect())
+        );
+        assert_eq!(
+            lookup_ids(&[one, col("name").eq(lit("x"))]),
+            Some([id(1)].into_iter().collect())
+        );
+    }
+
+    #[test]
+    fn lookup_ids_ignores_non_id_conjuncts() {
+        let cases = [
+            eq(trace_col(), binary(&[0_u8; 15])),
+            eq(trace_col(), col("other")),
+            eq(trace_col(), good_id()).or(col("name").eq(lit("x"))),
+            Expr::Not(Box::new(eq(trace_col(), good_id()))),
+            Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(trace_col()),
+                Operator::NotEq,
+                Box::new(good_id()),
+            )),
+            in_list(trace_col(), vec![good_id()], true),
+            in_list(
+                trace_col(),
+                vec![good_id(), Expr::Literal(ScalarValue::Binary(None), None)],
+                false,
+            ),
+            in_list(trace_col(), vec![good_id(), binary(&[0_u8; 15])], false),
+            col("name").eq(lit("x")),
+        ];
+        for expr in cases {
+            assert_eq!(lookup_ids(std::slice::from_ref(&expr)), None, "{expr}");
+        }
+    }
+
+    fn file_meta(day: NaiveDate, min_time: i64, max_time: i64) -> FileMeta {
+        FileMeta {
+            id: crate::catalog::FileId::new_v7(),
+            table: FileTable::Spans,
+            project: project(),
+            day,
+            level: 0,
+            path: format!("tables/spans/day={day}/0.parquet"),
+            size: 1,
+            footer_size: 1,
+            rows: 1,
+            min_time,
+            max_time,
+            min_ingest_time: min_time,
+            max_ingest_time: max_time,
+            fully_merged: false,
+        }
+    }
+
+    fn catalog_with(files: Vec<FileMeta>) -> Catalog {
+        Catalog::empty()
+            .apply(&crate::catalog::CatalogEdit {
+                add: files,
+                remove: Vec::new(),
+                flushed_seq: None,
+                sources: Vec::new(),
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn span_file_days_widen_by_one_day_on_each_side() {
+        let day = NaiveDate::from_ymd_opt(2026, 3, 5).unwrap();
+        let base = (i64::from(day.num_days_from_ce()) - 719_163) * DAY_NS;
+        let bounds = TimeBounds {
+            min: Some(base),
+            max: Some(base + 10),
+        };
+        let range = file_day_range(&bounds, FileTable::Spans);
+        assert_eq!(*range.start(), day.pred_opt().unwrap());
+        assert_eq!(*range.end(), day.succ_opt().unwrap());
+        let exact = file_day_range(&bounds, FileTable::Scores);
+        assert_eq!(*exact.start(), day);
+        assert_eq!(*exact.end(), day);
+    }
+
+    #[test]
+    fn around_selects_only_the_files_within_one_day_of_the_hint() {
+        let day = NaiveDate::from_ymd_opt(2026, 3, 5).unwrap();
+        let earlier = day.pred_opt().unwrap().pred_opt().unwrap();
+        let later = day.succ_opt().unwrap().succ_opt().unwrap();
+        let base = (i64::from(day.num_days_from_ce()) - 719_163) * DAY_NS;
+        let catalog = catalog_with(vec![
+            file_meta(earlier, base - 2 * DAY_NS, base - 2 * DAY_NS + 10),
+            file_meta(day, base, base + 10),
+            file_meta(later, base + 2 * DAY_NS, base + 2 * DAY_NS + 10),
+        ]);
+        let filter = eq(trace_col(), fixed(id(1).as_bytes()));
+        let selected = overlapping_files(
+            &catalog,
+            Table::Spans,
+            project(),
+            "start_time",
+            std::slice::from_ref(&filter),
+            Some(base),
+        );
+        assert_eq!(selected.len(), 1, "{selected:?}");
+        assert_eq!(selected[0].day, day);
+        // The file groups of the physical plan hold the same single file.
+        let groups = file_groups(&selected, 2);
+        assert_eq!(groups.len(), 1);
+    }
+
+    #[test]
+    fn a_lookup_without_around_reads_files_from_every_day() {
+        let day = NaiveDate::from_ymd_opt(2026, 3, 5).unwrap();
+        let next = day.succ_opt().unwrap();
+        let base = (i64::from(day.num_days_from_ce()) - 719_163) * DAY_NS;
+        let catalog = catalog_with(vec![
+            file_meta(day, base, base + 10),
+            file_meta(next, base + DAY_NS, base + DAY_NS + 10),
+        ]);
+        let filter = eq(trace_col(), fixed(id(1).as_bytes()));
+        let selected = overlapping_files(
+            &catalog,
+            Table::Spans,
+            project(),
+            "start_time",
+            std::slice::from_ref(&filter),
+            None,
+        );
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].day, day);
+        assert_eq!(selected[1].day, next);
     }
 }

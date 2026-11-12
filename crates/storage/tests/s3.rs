@@ -267,7 +267,7 @@ async fn round_trip(config: &StorageConfig) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let count = span_count(
         &storage
-            .query(project())
+            .query(project(), Default::default())
             .map_err(|error| error.to_string())?,
     )
     .await;
@@ -281,7 +281,7 @@ async fn round_trip(config: &StorageConfig) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let count = span_count(
         &storage
-            .query(project())
+            .query(project(), Default::default())
             .map_err(|error| error.to_string())?,
     )
     .await;
@@ -299,7 +299,7 @@ async fn round_trip(config: &StorageConfig) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let count = span_count(
         &storage
-            .query(project())
+            .query(project(), Default::default())
             .map_err(|error| error.to_string())?,
     )
     .await;

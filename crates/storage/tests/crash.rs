@@ -323,7 +323,7 @@ async fn check_dir(dir: &Path, before: &[Ack], previous: (u64, u64)) -> Result<(
         .map_err(|error| error.to_string())?;
     let stored = stored_rows(
         &storage
-            .query(project())
+            .query(project(), Default::default())
             .map_err(|error| error.to_string())?,
     )
     .await;

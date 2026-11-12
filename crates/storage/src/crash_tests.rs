@@ -152,7 +152,7 @@ fn expected_ids() -> Vec<Vec<u8>> {
 }
 
 async fn stored_ids(storage: &crate::Storage) -> Vec<Vec<u8>> {
-    let query = storage.query(project()).unwrap();
+    let query = storage.query(project(), Default::default()).unwrap();
     let ctx = SessionContext::new_with_config_rt(
         SessionConfig::new(),
         std::sync::Arc::clone(&query.runtime),

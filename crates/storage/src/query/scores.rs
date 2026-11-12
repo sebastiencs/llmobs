@@ -37,6 +37,7 @@ pub(crate) struct ScoresProvider {
     snapshot: Arc<MemSnapshot>,
     catalog: Arc<Catalog>,
     target_partitions: usize,
+    around: Option<i64>,
 }
 
 impl ScoresProvider {
@@ -45,12 +46,14 @@ impl ScoresProvider {
         snapshot: Arc<MemSnapshot>,
         catalog: Arc<Catalog>,
         target_partitions: usize,
+        around: Option<i64>,
     ) -> Self {
         Self {
             project,
             snapshot,
             catalog,
             target_partitions,
+            around,
         }
     }
 
@@ -69,6 +72,7 @@ impl ScoresProvider {
             self.project,
             scores::CREATED_AT,
             filters,
+            self.around,
         )
     }
 }
@@ -80,6 +84,7 @@ struct RawScores {
     snapshot: Arc<MemSnapshot>,
     catalog: Arc<Catalog>,
     target_partitions: usize,
+    around: Option<i64>,
 }
 
 #[async_trait]
@@ -111,6 +116,7 @@ impl TableProvider for ScoresProvider {
             snapshot: Arc::clone(&self.snapshot),
             catalog: Arc::clone(&self.catalog),
             target_partitions: self.target_partitions,
+            around: self.around,
         });
         let window = row_number()
             .partition_by(vec![col(scores::SCORE_ID)])
@@ -205,6 +211,7 @@ impl TableProvider for RawScores {
             catalog: &self.catalog,
             table: Table::Scores,
             time_column: scores::CREATED_AT,
+            around: self.around,
             schema: scores_schema(),
             projection,
             filters,
@@ -295,7 +302,7 @@ mod tests {
     }
 
     async fn names(storage: &crate::Storage) -> Vec<String> {
-        let query = storage.query(project()).unwrap();
+        let query = storage.query(project(), Default::default()).unwrap();
         let ctx = SessionContext::new();
         ctx.register_table("scores_t", query.scores).unwrap();
         let batches = ctx
@@ -356,7 +363,7 @@ mod tests {
             .append_scores(project(), batch_of(&rows))
             .await
             .unwrap();
-        let query = storage.query(project()).unwrap();
+        let query = storage.query(project(), Default::default()).unwrap();
         let ctx = SessionContext::new();
         ctx.register_table("scores_t", query.scores).unwrap();
         let count = ctx
@@ -398,7 +405,7 @@ mod tests {
     }
 
     async fn query_off(storage: &crate::Storage, sql: &str) -> Vec<RecordBatch> {
-        let query = storage.query(project()).unwrap();
+        let query = storage.query(project(), Default::default()).unwrap();
         let runtime = std::sync::Arc::clone(&query.runtime);
         let provider = std::sync::Arc::clone(&query.scores);
         let sql = sql.to_owned();
@@ -430,7 +437,7 @@ mod tests {
     async fn wait_flushed(storage: &crate::Storage, files: usize) {
         let started = std::time::Instant::now();
         loop {
-            let query = storage.query(project()).unwrap();
+            let query = storage.query(project(), Default::default()).unwrap();
             let provider = scores_of(&query);
             if provider.candidate_files(&[]).len() == files && provider.candidate_batches(&[]) == 0
             {
@@ -495,7 +502,7 @@ mod tests {
             .await
             .unwrap();
 
-        let query = storage.query(project()).unwrap();
+        let query = storage.query(project(), Default::default()).unwrap();
         let provider = scores_of(&query);
         assert_eq!(provider.candidate_files(&[]).len(), 2);
         assert!(provider.candidate_batches(&[]) >= 1);

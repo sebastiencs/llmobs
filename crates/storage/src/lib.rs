@@ -142,6 +142,16 @@ pub struct Storage {
     hooks: Hooks,
 }
 
+/// Optional hints for one [`Storage::query`] call.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct QueryOptions {
+    /// Time hint for a single-trace lookup (`?around=`), ns.
+    ///
+    /// When a lookup has no `start_time` bound, only files overlapping
+    /// `[around - 1 day, around + 1 day]` are read (D154).
+    pub around: Option<i64>,
+}
+
 impl Storage {
     /// Creates the directory layout, takes `data_dir/LOCK`, replays both WALs
     /// after `flushed_seq`, and starts the writers and flush tasks.
@@ -345,7 +355,11 @@ impl Storage {
     /// [`ProjectQuery::runtime`] and [`ProjectQuery::target_partitions`].
     /// The runtime is the one built at open. Its memory pool stays the default
     /// until a later milestone installs one.
-    pub fn query(&self, project: ProjectId) -> Result<ProjectQuery, QueryError> {
+    pub fn query(
+        &self,
+        project: ProjectId,
+        options: QueryOptions,
+    ) -> Result<ProjectQuery, QueryError> {
         let state = self.published.load();
         let partitions = self.target_partitions.get();
         let spans = Arc::new(query::SpansProvider::new(
@@ -353,12 +367,14 @@ impl Storage {
             Arc::clone(&state.spans),
             Arc::clone(&state.catalog),
             partitions,
+            options.around,
         ));
         let scores = Arc::new(query::ScoresProvider::new(
             project,
             Arc::clone(&state.scores),
             Arc::clone(&state.catalog),
             partitions,
+            options.around,
         ));
         // There is no `traces` provider yet. Until then the view is empty.
         let traces = Arc::new(MemTable::try_new(
@@ -1325,11 +1341,11 @@ mod tests {
             );
             tokio::task::yield_now().await;
         }
-        let during = storage.query(project()).unwrap();
+        let during = storage.query(project(), Default::default()).unwrap();
         assert!(span_names(Arc::clone(&during.spans)).await.is_empty());
         storage.hooks().release(HookPoint::AfterWalSync);
         append.await.unwrap().unwrap();
-        let after = storage.query(project()).unwrap();
+        let after = storage.query(project(), Default::default()).unwrap();
         assert_eq!(span_names(after.spans).await.len(), 1);
         assert!(span_names(during.spans).await.is_empty());
         storage.shutdown().await.unwrap();
@@ -1353,12 +1369,13 @@ mod tests {
             })
         };
         while !append.is_finished() {
-            let names = span_names(storage.query(project()).unwrap().spans).await;
+            let names =
+                span_names(storage.query(project(), Default::default()).unwrap().spans).await;
             assert!(!names.iter().any(|name| name == "lost"));
             tokio::task::yield_now().await;
         }
         assert_eq!(append.await.unwrap().unwrap_err(), AppendError::WalFailed);
-        let names = span_names(storage.query(project()).unwrap().spans).await;
+        let names = span_names(storage.query(project(), Default::default()).unwrap().spans).await;
         assert_eq!(names, vec!["kept".to_owned()]);
         let shutdown = storage.shutdown().await.unwrap_err();
         assert!(matches!(
@@ -1422,8 +1439,8 @@ mod tests {
         let mut config = config_in(dir.path());
         config.flush.max_age = Duration::from_millis(100);
         let storage = Storage::open(config.clone()).await.unwrap();
-        let first = storage.query(project()).unwrap();
-        let second = storage.query(project()).unwrap();
+        let first = storage.query(project(), Default::default()).unwrap();
+        let second = storage.query(project(), Default::default()).unwrap();
         assert!(Arc::ptr_eq(&first.runtime, &second.runtime));
         let receipt = storage
             .append_spans(project(), spans_at(&[1]))
