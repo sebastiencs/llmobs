@@ -133,6 +133,7 @@ CREATE TABLE llm_connections (
   secret_enc BLOB NOT NULL,           -- AES-256-GCM(nonce || ciphertext) of the API key
   extra_headers_enc BLOB,             -- encrypted JSON map
   default_model TEXT,
+  structured_output TEXT NOT NULL DEFAULT 'native', -- 'native' | 'tool' | 'prompt' (06)
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
 ```

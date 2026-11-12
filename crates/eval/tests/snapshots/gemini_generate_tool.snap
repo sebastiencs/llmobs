@@ -1,0 +1,53 @@
+---
+source: crates/eval/tests/modes.rs
+expression: "seen[4].body"
+---
+{
+  "contents": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "text": "Grade the answer."
+        }
+      ]
+    }
+  ],
+  "generationConfig": {
+    "maxOutputTokens": 1024
+  },
+  "tools": [
+    {
+      "functionDeclarations": [
+        {
+          "name": "submit_judgement",
+          "description": "Submit your judgement.",
+          "parametersJsonSchema": {
+            "type": "object",
+            "properties": {
+              "explanation": {
+                "type": "string"
+              },
+              "value": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "explanation",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "toolConfig": {
+    "functionCallingConfig": {
+      "mode": "ANY",
+      "allowedFunctionNames": [
+        "submit_judgement"
+      ]
+    }
+  }
+}

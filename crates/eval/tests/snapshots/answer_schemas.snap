@@ -1,0 +1,98 @@
+---
+source: crates/eval/src/judge/answer.rs
+expression: schemas
+---
+{
+  "numeric": {
+    "type": "object",
+    "properties": {
+      "value": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "value"
+    ],
+    "additionalProperties": false
+  },
+  "numeric_with_reason": {
+    "type": "object",
+    "properties": {
+      "explanation": {
+        "type": "string"
+      },
+      "value": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "explanation",
+      "value"
+    ],
+    "additionalProperties": false
+  },
+  "boolean": {
+    "type": "object",
+    "properties": {
+      "value": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "value"
+    ],
+    "additionalProperties": false
+  },
+  "boolean_with_reason": {
+    "type": "object",
+    "properties": {
+      "explanation": {
+        "type": "string"
+      },
+      "value": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "explanation",
+      "value"
+    ],
+    "additionalProperties": false
+  },
+  "categorical": {
+    "type": "object",
+    "properties": {
+      "label": {
+        "type": "string",
+        "enum": [
+          "correct",
+          "incorrect"
+        ]
+      }
+    },
+    "required": [
+      "label"
+    ],
+    "additionalProperties": false
+  },
+  "categorical_with_reason": {
+    "type": "object",
+    "properties": {
+      "explanation": {
+        "type": "string"
+      },
+      "label": {
+        "type": "string",
+        "enum": [
+          "correct",
+          "incorrect"
+        ]
+      }
+    },
+    "required": [
+      "explanation",
+      "label"
+    ],
+    "additionalProperties": false
+  }
+}

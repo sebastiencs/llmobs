@@ -1,0 +1,19 @@
+---
+source: crates/eval/tests/modes.rs
+expression: "seen[5].body"
+---
+{
+  "contents": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "text": "Grade the answer.\n\nReply with one JSON object and nothing else. It must match this JSON Schema:\n{\n  \"type\": \"object\",\n  \"properties\": {\n    \"explanation\": {\n      \"type\": \"string\"\n    },\n    \"value\": {\n      \"type\": \"number\"\n    }\n  },\n  \"required\": [\n    \"explanation\",\n    \"value\"\n  ],\n  \"additionalProperties\": false\n}"
+        }
+      ]
+    }
+  ],
+  "generationConfig": {
+    "maxOutputTokens": 1024
+  }
+}

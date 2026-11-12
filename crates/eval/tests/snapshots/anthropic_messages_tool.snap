@@ -1,0 +1,40 @@
+---
+source: crates/eval/tests/modes.rs
+expression: "seen[2].body"
+---
+{
+  "model": "claude-sonnet-4-5",
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Grade the answer."
+    }
+  ],
+  "tools": [
+    {
+      "name": "submit_judgement",
+      "description": "Submit your judgement.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "explanation": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "explanation",
+          "value"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "tool_choice": {
+    "type": "tool",
+    "name": "submit_judgement"
+  }
+}

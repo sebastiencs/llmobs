@@ -1,0 +1,46 @@
+---
+source: crates/eval/tests/modes.rs
+expression: "seen[0].body"
+---
+{
+  "model": "gpt-4o-mini",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Grade the answer."
+    }
+  ],
+  "max_completion_tokens": 1024,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "submit_judgement",
+        "description": "Submit your judgement.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "explanation": {
+              "type": "string"
+            },
+            "value": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "explanation",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        "strict": true
+      }
+    }
+  ],
+  "tool_choice": {
+    "type": "function",
+    "function": {
+      "name": "submit_judgement"
+    }
+  }
+}
