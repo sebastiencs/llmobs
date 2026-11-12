@@ -119,6 +119,18 @@ def spans() -> Callable[[InMemorySpanExporter], list[ReadableSpan]]:
 
 
 @pytest.fixture
+def score_runtime(http_recorder: HttpRecorder) -> tuple[HttpRecorder, Runtime]:
+    """A running runtime whose score queue posts to the recorder (plan F § P9).
+
+    The autouse ``isolated_runtime`` fixture resets it after the test.
+    """
+    config = resolve_config(api_key=TEST_API_KEY, base_url=http_recorder.url, env={})
+    runtime = Runtime.create(config, id_generator=SequentialIds())
+    install(runtime)
+    return http_recorder, runtime
+
+
+@pytest.fixture
 def http_recorder() -> Iterator[HttpRecorder]:
     """A local HTTP server that records requests and serves queued responses."""
     server = ThreadingHTTPServer(("127.0.0.1", 0), _RecordingHandler)

@@ -25,6 +25,7 @@ from llmobs._config import Config, resolve_config
 from llmobs._log import logger, reset_warnings, warn_once
 from llmobs._mask import MaskingExporter
 from llmobs._processor import LlmobsSpanProcessor
+from llmobs._scores import ScoreQueue
 
 _INIT_TWICE_WARNING = "llmobs: init() was already called; this call is ignored"
 _GLOBAL_SAMPLE_RATE_WARNING = (
@@ -44,6 +45,7 @@ class Runtime:
     owns_provider: bool
     processor: LlmobsSpanProcessor
     tracer: trace.Tracer
+    scores: ScoreQueue
     _shutdown_done: bool = field(default=False, repr=False)
 
     @classmethod
@@ -106,22 +108,29 @@ class Runtime:
             default_filter=use_default_filter,
         )
         provider.add_span_processor(processor)
+        # A disabled config never reaches Runtime.create, so the key is set;
+        # ``or ""`` only satisfies the type checker.
+        scores = ScoreQueue(base_url=config.base_url, api_key=config.api_key or "")
         return cls(
             config=config,
             provider=provider,
             owns_provider=owns_provider,
             processor=processor,
             tracer=provider.get_tracer("llmobs", __version__),
+            scores=scores,
         )
 
     def flush(self, timeout_millis: int = 30_000) -> bool:
-        return self.processor.force_flush(timeout_millis)
+        spans_ok = self.processor.force_flush(timeout_millis)
+        scores_ok = self.scores.flush(timeout_millis / 1000)
+        return spans_ok and scores_ok
 
     def shutdown(self) -> None:
         """Flush, then stop the processor and, when owned, the provider. Idempotent.
 
         In global mode with the app's provider (D-F-4 branch 1) only our
-        processor stops: the app owns the provider.
+        processor stops: the app owns the provider. The score queue stops
+        after the span pipeline.
         """
         if self._shutdown_done:
             return
@@ -130,6 +139,7 @@ class Runtime:
         self.processor.shutdown()
         if self.owns_provider:
             self.provider.shutdown()
+        self.scores.shutdown()
 
 
 _runtime: Runtime | None = None
