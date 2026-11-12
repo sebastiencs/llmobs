@@ -6,6 +6,106 @@
     "version": "0.0.0"
   },
   "paths": {
+    "/api/auth/authorize/{provider}": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Start an OAuth or OIDC login",
+        "description": "Redirects to the provider and sets the `llmobs_oauth` cookie. `redirect` is kept when it starts with `/`, does not start with `//` or `/\\`, is at most 1024 bytes, and contains no ASCII control character. Otherwise the browser returns to `/`. An unknown provider is 404. When metadata cannot be loaded, the response redirects to `/login?error=provider_unavailable` and sets no cookie.",
+        "operationId": "get_oauth_authorize",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "Provider id: `github`, `google`, or `oidc:<name>`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "redirect",
+            "in": "query",
+            "description": "Relative path to open after a successful login.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to the provider, or to `/login?error=provider_unavailable`."
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/auth/callback/{provider}": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finish an OAuth or OIDC login",
+        "description": "Clears the login cookie. Success sets the session cookie and redirects to the saved relative path. Failure redirects to `/login?error=<code>`. Codes: `invalid_state`, `provider_error`, `provider_unavailable`, `email_not_verified`, `domain_not_allowed`, `signup_closed`, `account_disabled`, `link_refused`, `setup_required`.",
+        "operationId": "get_oauth_callback",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "Provider id: `github`, `google`, or `oidc:<name>`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "description": "Authorization code from the provider.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "State value from the authorization redirect.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "description": "Error code from the provider, when it refused the login.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to the saved path, or to `/login?error=<code>` (`invalid_state`, `provider_error`, `provider_unavailable`, `email_not_verified`, `domain_not_allowed`, `signup_closed`, `account_disabled`, `link_refused`, `setup_required`)."
+          }
+        },
+        "security": []
+      }
+    },
     "/api/auth/config": {
       "get": {
         "tags": [

@@ -57,6 +57,8 @@ pub(crate) struct AppInner {
     pub(crate) mailer: Option<Arc<crate::email::Mailer>>,
     /// OAuth and OIDC providers from `[auth]`. Discovery has not run yet.
     pub(crate) providers: crate::auth::oidc::Providers,
+    /// HMAC key for the OAuth state cookie. A new process mints a new key.
+    pub(crate) oauth_key: [u8; 32],
 }
 
 impl AppState {

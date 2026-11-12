@@ -23,6 +23,7 @@ use crate::http::AppState;
 use crate::http::access::{Access, RouteDef};
 use crate::http::error::{self, ApiError, problem_response};
 use crate::meta::MetaError;
+use crate::meta::identities;
 use crate::meta::password_resets::insert_reset;
 use crate::meta::users::{self, NewUser, UserRow};
 use crate::meta::web_sessions::delete_user_sessions;
@@ -220,12 +221,8 @@ async fn update_user(
         user_id = %user.id,
         "admin user updated"
     );
-    let providers = users::providers_by_user(state.meta.reader(), &[user.id]).await?;
-    Ok((
-        StatusCode::OK,
-        error::Json(view(&user, providers.get(&user.id))),
-    )
-        .into_response())
+    let providers = identities::user_identities(state.meta.reader(), user.id).await?;
+    Ok((StatusCode::OK, error::Json(view(&user, Some(&providers)))).into_response())
 }
 
 async fn reset_link(

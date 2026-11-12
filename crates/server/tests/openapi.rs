@@ -10,6 +10,12 @@ use serde_json::Value;
 use llmobs_server::api::openapi::openapi;
 
 const OPERATIONS: &[(&str, &str, &str)] = &[
+    (
+        "get",
+        "/api/auth/authorize/{provider}",
+        "get_oauth_authorize",
+    ),
+    ("get", "/api/auth/callback/{provider}", "get_oauth_callback"),
     ("get", "/api/auth/config", "get_auth_config"),
     ("post", "/api/auth/setup", "post_setup"),
     ("post", "/api/auth/login", "post_login"),
@@ -276,6 +282,8 @@ fn document_lint() {
         if matches!(
             *id,
             "get_auth_config"
+                | "get_oauth_authorize"
+                | "get_oauth_callback"
                 | "post_setup"
                 | "post_login"
                 | "post_logout"
@@ -329,6 +337,10 @@ fn document_lint() {
         let mut expected_errors = BTreeSet::new();
         if *id == "get_me" {
             expected_errors.extend(["401", "429"]);
+        } else if *id == "get_oauth_authorize" {
+            expected_errors.extend(["404"]);
+        } else if *id == "get_oauth_callback" {
+            // Failure is a redirect, not a problem response.
         } else if *id == "post_setup" || *id == "post_signup" {
             expected_errors.extend(["400", "403", "409", "429"]);
         } else if *id == "post_login" {

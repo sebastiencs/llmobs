@@ -2,13 +2,12 @@
 //!
 //! Discovery runs on first use, not at startup, so an identity provider outage
 //! does not stop the server. The HTTP client refuses redirects.
-//!
-//! The login flow reads [`Providers::get`]. Until that lands, only [`Providers::list`]
-//! is called from the running server.
 #![cfg_attr(not(test), allow(dead_code))]
 
+pub(crate) mod flow;
 mod github;
 mod provider;
+pub(crate) mod state_cookie;
 
 use std::time::Duration;
 
@@ -17,6 +16,35 @@ use crate::config::AuthSettings;
 
 pub(crate) use github::GithubProvider;
 pub(crate) use provider::OidcProvider;
+pub(crate) use state_cookie::random_key;
+
+/// Failure talking to an identity provider during login.
+///
+/// The variants carry nothing. Discovery and token errors can quote a body or
+/// name the issuer, so they are not formatted.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ExchangeError {
+    /// The provider could not be reached, or metadata could not be loaded.
+    Unavailable,
+    /// The provider rejected the code, or the token failed validation.
+    Rejected,
+}
+
+/// Claims the login flow is allowed to read. `hd` is kept for the domain check.
+#[derive(Debug)]
+pub(crate) struct LoginClaims {
+    /// `sub`, or GitHub's numeric id as a decimal string.
+    pub(crate) subject: String,
+    /// Provider email. Absent when the provider did not assert one.
+    pub(crate) email: Option<String>,
+    /// Missing means false.
+    pub(crate) email_verified: bool,
+    /// Google hosted-domain claim. The domain check reads it later.
+    #[allow(dead_code)]
+    pub(crate) hd: Option<String>,
+    /// Display name, before trimming.
+    pub(crate) name: Option<String>,
+}
 
 /// One hour, in nanoseconds. Metadata older than this is fetched again.
 pub(crate) const METADATA_TTL_NS: i64 = 3_600 * 1_000_000_000;
@@ -25,7 +53,7 @@ pub(crate) const METADATA_TTL_NS: i64 = 3_600 * 1_000_000_000;
 ///
 /// The text is static. It does not include an issuer, a client secret, or a
 /// response body.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, Copy, thiserror::Error)]
 pub(crate) enum OidcError {
     /// Discovery failed and there is no cached document.
     #[error("identity provider metadata is unavailable")]
@@ -68,7 +96,10 @@ impl Providers {
         cfg: &AuthSettings,
         http: &reqwest::Client,
     ) -> Result<Self, OidcError> {
-        let github = cfg.github.as_ref().map(GithubProvider::from_settings);
+        let github = cfg
+            .github
+            .as_ref()
+            .map(|settings| GithubProvider::from_settings(settings, http.clone()));
         let mut oidc = Vec::new();
         if let Some(google) = &cfg.google {
             oidc.push(OidcProvider::from_google(google, http.clone())?);
@@ -106,6 +137,14 @@ impl Providers {
             });
         }
         providers
+    }
+
+    /// Points GitHub at a mock base. No change when GitHub is not configured.
+    #[cfg(test)]
+    pub(crate) fn retarget_github(&mut self, base: &str) {
+        if let Some(github) = &mut self.github {
+            github.point_at(base);
+        }
     }
 }
 

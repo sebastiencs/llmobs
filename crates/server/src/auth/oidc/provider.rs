@@ -1,15 +1,22 @@
 //! Google and generic OIDC providers. Metadata is fetched lazily and cached.
 //!
-//! The login flow reads the client, scopes, and linking fields. Until that
-//! lands, the running server stores them and lists the display name.
+//! Google and a generic issuer share one code exchange. The issuer is not
+//! rewritten. `hd` is read from the id_token payload after the signature check.
 #![cfg_attr(not(test), allow(dead_code))]
 
-use oauth2::ClientId;
-use openidconnect::IssuerUrl;
-use openidconnect::core::CoreProviderMetadata;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use oauth2::{
+    AuthorizationCode, ClientId, ClientSecret, EndpointMaybeSet, EndpointNotSet, EndpointSet,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RequestTokenError, Scope,
+};
+use openidconnect::core::{CoreAuthenticationFlow, CoreClient, CoreIdToken, CoreProviderMetadata};
+use openidconnect::{
+    ClaimsVerificationError, CsrfToken, IssuerUrl, Nonce, SignatureVerificationError, TokenResponse,
+};
 use tokio::sync::RwLock;
 
-use super::OidcError;
+use super::{ExchangeError, LoginClaims, OidcError};
 use crate::config::{AutoProvision as ConfigProvision, GoogleAuth, OidcAuth, Secret};
 
 /// How the issuer and the hosted-domain claim are interpreted.
@@ -160,6 +167,137 @@ impl OidcProvider {
         }
     }
 
+    /// Fetches metadata and replaces the cache. A failure does not keep the
+    /// previous document: this is the key-rotation retry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OidcError::Unavailable`] when discovery fails. The issuer is
+    /// not included.
+    pub(crate) async fn refresh_metadata(
+        &self,
+        now: i64,
+    ) -> Result<CoreProviderMetadata, OidcError> {
+        match CoreProviderMetadata::discover_async(self.issuer.clone(), &self.http).await {
+            Ok(fresh) => {
+                *self.metadata.write().await = Some((fresh.clone(), now));
+                Ok(fresh)
+            }
+            Err(_error) => {
+                tracing::warn!("identity provider discovery failed");
+                Err(OidcError::Unavailable)
+            }
+        }
+    }
+
+    /// Authorization URL and the PKCE verifier to store in the state cookie.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExchangeError::Unavailable`] when metadata cannot be loaded.
+    pub(crate) async fn authorization_url(
+        &self,
+        redirect_uri: &str,
+        state: &str,
+        nonce: &str,
+        now: i64,
+    ) -> Result<(String, String), ExchangeError> {
+        let metadata = self.metadata(now).await.map_err(exchange_unavailable)?;
+        let client = self.client(metadata, redirect_uri)?;
+        let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
+        let verifier = verifier.secret().clone();
+        let state = state.to_owned();
+        let nonce = nonce.to_owned();
+        let mut request = client.authorize_url(
+            CoreAuthenticationFlow::AuthorizationCode,
+            move || CsrfToken::new(state),
+            move || Nonce::new(nonce),
+        );
+        for scope in &self.scopes {
+            if scope != "openid" {
+                request = request.add_scope(Scope::new(scope.clone()));
+            }
+        }
+        let (url, _csrf, _nonce) = request.set_pkce_challenge(challenge).url();
+        Ok((url.to_string(), verifier))
+    }
+
+    /// Exchanges `code` and checks the id_token.
+    ///
+    /// On a missing signing key, metadata is fetched once and the same token is
+    /// checked again. The code is not exchanged twice.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExchangeError::Unavailable`] when the provider cannot be
+    /// reached, and [`ExchangeError::Rejected`] when the token is refused or
+    /// the claims do not verify.
+    pub(crate) async fn exchange_code(
+        &self,
+        redirect_uri: &str,
+        code: &str,
+        verifier: &str,
+        nonce: &str,
+        now: i64,
+    ) -> Result<LoginClaims, ExchangeError> {
+        let metadata = self.metadata(now).await.map_err(exchange_unavailable)?;
+        let client = self.client(metadata, redirect_uri)?;
+        let token = client
+            .exchange_code(AuthorizationCode::new(code.to_owned()))
+            .map_err(|_| ExchangeError::Rejected)?
+            .set_pkce_verifier(PkceCodeVerifier::new(verifier.to_owned()))
+            .request_async(&self.http)
+            .await
+            .map_err(|error| token_error(&error))?;
+        let Some(id_token) = token.id_token() else {
+            return Err(ExchangeError::Rejected);
+        };
+        let nonce = Nonce::new(nonce.to_owned());
+        let claims = match id_token.claims(&client.id_token_verifier(), &nonce) {
+            Ok(claims) => claims,
+            Err(error) if missing_key(&error) => {
+                let metadata = self
+                    .refresh_metadata(now)
+                    .await
+                    .map_err(exchange_unavailable)?;
+                let client = self.client(metadata, redirect_uri)?;
+                id_token
+                    .claims(&client.id_token_verifier(), &nonce)
+                    .map_err(|_| ExchangeError::Rejected)?
+            }
+            Err(_error) => return Err(ExchangeError::Rejected),
+        };
+        let subject = claims.subject().to_string();
+        if subject.is_empty() {
+            return Err(ExchangeError::Rejected);
+        }
+        Ok(LoginClaims {
+            subject,
+            email: claims.email().map(|email| email.to_string()),
+            email_verified: matches!(claims.email_verified(), Some(true)),
+            hd: hosted_domain(id_token),
+            name: claims
+                .name()
+                .and_then(|localized| localized.get(None))
+                .map(|name| name.to_string()),
+        })
+    }
+
+    fn client(
+        &self,
+        metadata: CoreProviderMetadata,
+        redirect_uri: &str,
+    ) -> Result<ReadyClient, ExchangeError> {
+        let redirect =
+            RedirectUrl::new(redirect_uri.to_owned()).map_err(|_| ExchangeError::Rejected)?;
+        Ok(CoreClient::from_provider_metadata(
+            metadata,
+            self.client_id.clone(),
+            Some(ClientSecret::new(self.client_secret.expose().clone())),
+        )
+        .set_redirect_uri(redirect))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new(
         kind: OidcKind,
@@ -190,6 +328,57 @@ impl OidcProvider {
             metadata: RwLock::new(None),
         })
     }
+}
+
+type ReadyClient = CoreClient<
+    EndpointSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointMaybeSet,
+    EndpointMaybeSet,
+>;
+
+fn exchange_unavailable(error: OidcError) -> ExchangeError {
+    match error {
+        OidcError::Unavailable => ExchangeError::Unavailable,
+        OidcError::Client | OidcError::Invalid => ExchangeError::Rejected,
+    }
+}
+
+fn missing_key(error: &ClaimsVerificationError) -> bool {
+    matches!(
+        error,
+        ClaimsVerificationError::SignatureVerification(SignatureVerificationError::NoMatchingKey)
+    )
+}
+
+fn token_error<E, T>(error: &RequestTokenError<E, T>) -> ExchangeError
+where
+    E: std::error::Error + 'static,
+    T: oauth2::ErrorResponse + 'static,
+{
+    match error {
+        RequestTokenError::Request(_) => ExchangeError::Unavailable,
+        RequestTokenError::ServerResponse(_)
+        | RequestTokenError::Parse(_, _)
+        | RequestTokenError::Other(_) => ExchangeError::Rejected,
+    }
+}
+
+/// `hd` is not a standard claim, so it is read from the verified compact JWT.
+///
+/// The string is the id_token. It is not logged.
+fn hosted_domain(id_token: &CoreIdToken) -> Option<String> {
+    let compact = id_token.to_string();
+    let payload = compact.split('.').nth(1)?;
+    let bytes = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    claims
+        .get("hd")
+        .and_then(serde_json::Value::as_str)
+        .filter(|domain| !domain.is_empty())
+        .map(str::to_owned)
 }
 
 fn default_scopes() -> Vec<String> {

@@ -606,6 +606,76 @@ fn admin_paths(paths: PathsBuilder) -> PathsBuilder {
 }
 
 fn auth_paths(paths: PathsBuilder) -> PathsBuilder {
+    let authorize = operation(
+        "get_oauth_authorize",
+        "auth",
+        "Start an OAuth or OIDC login",
+    )
+    .description(Some(
+        "Redirects to the provider and sets the `llmobs_oauth` cookie. `redirect` is kept when it \
+         starts with `/`, does not start with `//` or `/\\`, is at most 1024 bytes, and contains \
+         no ASCII control character. Otherwise the browser returns to `/`. An unknown provider is \
+         404. When metadata cannot be loaded, the response redirects to \
+         `/login?error=provider_unavailable` and sets no cookie.",
+    ))
+    .securities(Some(Vec::new()))
+    .parameters(Some(vec![
+        path_string(
+            "provider",
+            "Provider id: `github`, `google`, or `oidc:<name>`.",
+        ),
+        query_string(
+            "redirect",
+            "Relative path to open after a successful login.",
+            false,
+        ),
+    ]))
+    .responses(responses(
+        "302",
+        redirect_to("Redirect to the provider, or to `/login?error=provider_unavailable`."),
+        &[404],
+    ))
+    .build();
+    let callback = operation(
+        "get_oauth_callback",
+        "auth",
+        "Finish an OAuth or OIDC login",
+    )
+    .description(Some(
+        "Clears the login cookie. Success sets the session cookie and redirects to the saved \
+         relative path. Failure redirects to `/login?error=<code>`. Codes: `invalid_state`, \
+         `provider_error`, `provider_unavailable`, `email_not_verified`, `domain_not_allowed`, \
+         `signup_closed`, `account_disabled`, `link_refused`, `setup_required`.",
+    ))
+    .securities(Some(Vec::new()))
+    .parameters(Some(vec![
+        path_string(
+            "provider",
+            "Provider id: `github`, `google`, or `oidc:<name>`.",
+        ),
+        query_string("code", "Authorization code from the provider.", false),
+        query_string(
+            "state",
+            "State value from the authorization redirect.",
+            false,
+        ),
+        query_string(
+            "error",
+            "Error code from the provider, when it refused the login.",
+            false,
+        ),
+    ]))
+    .responses(responses(
+        "302",
+        redirect_to(
+            "Redirect to the saved path, or to `/login?error=<code>` (`invalid_state`, \
+             `provider_error`, `provider_unavailable`, `email_not_verified`, \
+             `domain_not_allowed`, `signup_closed`, `account_disabled`, `link_refused`, \
+             `setup_required`).",
+        ),
+        &[],
+    ))
+    .build();
     let config = operation("get_auth_config", "auth", "Get the auth config")
         .securities(Some(Vec::new()))
         .responses(responses(
@@ -761,6 +831,14 @@ fn auth_paths(paths: PathsBuilder) -> PathsBuilder {
         ))
         .build();
     paths
+        .path(
+            "/api/auth/authorize/{provider}",
+            PathItem::new(HttpMethod::Get, authorize),
+        )
+        .path(
+            "/api/auth/callback/{provider}",
+            PathItem::new(HttpMethod::Get, callback),
+        )
         .path("/api/auth/config", PathItem::new(HttpMethod::Get, config))
         .path("/api/auth/setup", PathItem::new(HttpMethod::Post, setup))
         .path("/api/auth/login", PathItem::new(HttpMethod::Post, login))
@@ -1467,6 +1545,24 @@ fn path_string(name: &str, description: &str) -> Parameter {
         .description(Some(description))
         .schema(Some(string_schema()))
         .build()
+}
+
+fn query_string(name: &str, description: &str, required: bool) -> Parameter {
+    ParameterBuilder::new()
+        .name(name)
+        .parameter_in(ParameterIn::Query)
+        .required(if required {
+            Required::True
+        } else {
+            Required::False
+        })
+        .description(Some(description))
+        .schema(Some(string_schema()))
+        .build()
+}
+
+fn redirect_to(description: &str) -> Response {
+    ResponseBuilder::new().description(description).build()
 }
 
 fn path_ref(name: &str, schema_name: &str, description: &str) -> Parameter {

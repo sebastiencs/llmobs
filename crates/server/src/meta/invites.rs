@@ -342,3 +342,26 @@ fn parse_org_id(value: &str) -> Result<OrgId, MetaError> {
 fn parse_uuid(value: &str, table: &'static str, column: &'static str) -> Result<Uuid, MetaError> {
     Uuid::parse_str(value).map_err(|_| MetaError::Corrupt { table, column })
 }
+
+/// Whether a pending, unexpired invitation exists for `email` in any org.
+///
+/// Pending means `accepted_at` is null and `expires_at` is still in the future.
+/// The caller runs this inside the login transaction. `email` is normalized.
+///
+/// # Errors
+///
+/// Returns [`MetaError`] when the query fails.
+pub(crate) async fn has_pending_invite(
+    conn: &mut SqliteConnection,
+    email: &str,
+    now: i64,
+) -> Result<bool, MetaError> {
+    let found: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM invites WHERE email = ? AND accepted_at IS NULL AND expires_at > ? LIMIT 1",
+    )
+    .bind(email)
+    .bind(now)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(found.is_some())
+}

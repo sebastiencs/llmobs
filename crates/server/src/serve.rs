@@ -206,6 +206,17 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
             }));
         }
     };
+    let oauth_key = match crate::auth::oidc::random_key() {
+        Ok(key) => key,
+        Err(_error) => {
+            release_storage(storage).await;
+            meta.close().await;
+            return Err(ServeError::Config(ConfigError::Invalid {
+                key: "auth",
+                reason: "could not generate the oauth state key",
+            }));
+        }
+    };
     let storage = Arc::new(storage);
     let state = AppState::new(AppInner {
         config,
@@ -221,6 +232,7 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         password_hasher: tokio::sync::OnceCell::new(),
         mailer,
         providers,
+        oauth_key,
     });
     if let Err(error) = crate::bootstrap::prepare(&state).await {
         release_state(state).await;

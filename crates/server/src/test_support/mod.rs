@@ -47,19 +47,19 @@ pub(crate) struct TestApp {
 impl TestApp {
     /// Defaults, `data_dir` in a temp directory, `public_url` `http://localhost:8080`.
     pub(crate) async fn new() -> Self {
-        Self::open(|_| {}, None, None, false).await
+        Self::open(|_| {}, None, None, false, None).await
     }
 
     /// `tweak` runs before storage and `meta.db` open.
     ///
     /// `storage.data_dir` is then copied from the top-level `data_dir`.
     pub(crate) async fn with_config(tweak: impl FnOnce(&mut ServerConfig)) -> Self {
-        Self::open(tweak, None, None, false).await
+        Self::open(tweak, None, None, false, None).await
     }
 
     /// Same as [`Self::new`] with extra routes inside the shared layers.
     pub(crate) async fn with_routes(routes: Router<AppState>) -> Self {
-        Self::open(|_| {}, Some(routes), None, false).await
+        Self::open(|_| {}, Some(routes), None, false, None).await
     }
 
     /// [`Self::with_config`] and [`Self::with_routes`] together.
@@ -67,22 +67,27 @@ impl TestApp {
         tweak: impl FnOnce(&mut ServerConfig),
         routes: Router<AppState>,
     ) -> Self {
-        Self::open(tweak, Some(routes), None, false).await
+        Self::open(tweak, Some(routes), None, false, None).await
     }
 
     /// The given route table instead of the server's, with the same layers.
     pub(crate) async fn with_route_table(routes: Vec<RouteDef>) -> Self {
-        Self::open(|_| {}, None, Some(routes), false).await
+        Self::open(|_| {}, None, Some(routes), false, None).await
     }
 
     /// The stub mailer. [`Self::sent`] reads what it accepted.
     pub(crate) async fn with_mailer() -> Self {
-        Self::open(|_| {}, None, None, true).await
+        Self::open(|_| {}, None, None, true, None).await
     }
 
     /// [`Self::with_config`] with the stub mailer.
     pub(crate) async fn with_mailer_config(tweak: impl FnOnce(&mut ServerConfig)) -> Self {
-        Self::open(tweak, None, None, true).await
+        Self::open(tweak, None, None, true, None).await
+    }
+
+    /// [`Self::with_config`] with GitHub's endpoints pointed at `base`.
+    pub(crate) async fn with_github(base: &str, tweak: impl FnOnce(&mut ServerConfig)) -> Self {
+        Self::open(tweak, None, None, false, Some(base)).await
     }
 
     /// Messages the stub mailer accepted. Empty when the stub is not installed.
@@ -99,6 +104,7 @@ impl TestApp {
         routes: Option<Router<AppState>>,
         table: Option<Vec<RouteDef>>,
         stub_mailer: bool,
+        github_base: Option<&str>,
     ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let mut config = default_config(dir.path());
@@ -116,11 +122,14 @@ impl TestApp {
                 .expect("smtp settings build a mailer")
                 .map(Arc::new)
         };
-        let providers = {
+        let mut providers = {
             let http = crate::auth::oidc::identity_client().expect("identity client");
             crate::auth::oidc::Providers::from_config(&config.auth, &http)
                 .expect("identity providers")
         };
+        if let Some(base) = github_base {
+            providers.retarget_github(base);
+        }
         let state = AppState::new(AppInner {
             config,
             meta,
@@ -135,6 +144,7 @@ impl TestApp {
             password_hasher: tokio::sync::OnceCell::new(),
             mailer,
             providers,
+            oauth_key: crate::auth::oidc::random_key().expect("oauth key"),
         });
         let router = if let Some(table) = table {
             serve_router(state.clone(), table)

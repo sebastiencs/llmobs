@@ -1099,7 +1099,13 @@ fn manifest_covers_the_read_operations() {
                 .as_str()
                 .unwrap_or_else(|| panic!("operation id"));
             known.insert(id.to_owned());
-            if method == "get" && id != "stream_traces" && id != "stream_trace" {
+            // Streams and the OAuth redirects have no JSON body to fixture.
+            if method == "get"
+                && id != "stream_traces"
+                && id != "stream_trace"
+                && id != "get_oauth_authorize"
+                && id != "get_oauth_callback"
+            {
                 gets.insert(id.to_owned());
             }
         }

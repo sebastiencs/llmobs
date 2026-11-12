@@ -4,6 +4,46 @@
  */
 
 export interface paths {
+    "/api/auth/authorize/{provider}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Start an OAuth or OIDC login
+         * @description Redirects to the provider and sets the `llmobs_oauth` cookie. `redirect` is kept when it starts with `/`, does not start with `//` or `/\`, is at most 1024 bytes, and contains no ASCII control character. Otherwise the browser returns to `/`. An unknown provider is 404. When metadata cannot be loaded, the response redirects to `/login?error=provider_unavailable` and sets no cookie.
+         */
+        get: operations["get_oauth_authorize"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/callback/{provider}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Finish an OAuth or OIDC login
+         * @description Clears the login cookie. Success sets the session cookie and redirects to the saved relative path. Failure redirects to `/login?error=<code>`. Codes: `invalid_state`, `provider_error`, `provider_unavailable`, `email_not_verified`, `domain_not_allowed`, `signup_closed`, `account_disabled`, `link_refused`, `setup_required`.
+         */
+        get: operations["get_oauth_callback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/config": {
         parameters: {
             query?: never;
@@ -2889,6 +2929,67 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    get_oauth_authorize: {
+        parameters: {
+            query?: {
+                /** @description Relative path to open after a successful login. */
+                redirect?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Provider id: `github`, `google`, or `oidc:<name>`. */
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect to the provider, or to `/login?error=provider_unavailable`. */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_oauth_callback: {
+        parameters: {
+            query?: {
+                /** @description Authorization code from the provider. */
+                code?: string;
+                /** @description State value from the authorization redirect. */
+                state?: string;
+                /** @description Error code from the provider, when it refused the login. */
+                error?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Provider id: `github`, `google`, or `oidc:<name>`. */
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect to the saved path, or to `/login?error=<code>` (`invalid_state`, `provider_error`, `provider_unavailable`, `email_not_verified`, `domain_not_allowed`, `signup_closed`, `account_disabled`, `link_refused`, `setup_required`). */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     get_auth_config: {
         parameters: {
             query?: never;

@@ -8,6 +8,7 @@
 
 pub(crate) mod api_keys;
 pub(crate) mod email_verifications;
+pub(crate) mod identities;
 pub(crate) mod invites;
 pub(crate) mod members;
 pub(crate) mod orgs;
