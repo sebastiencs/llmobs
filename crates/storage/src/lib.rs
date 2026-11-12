@@ -392,6 +392,7 @@ impl Storage {
             scores,
             runtime: Arc::clone(&self.runtime),
             target_partitions: self.target_partitions,
+            optimizer_rules: vec![Arc::new(query::TraceListRule)],
         })
     }
 

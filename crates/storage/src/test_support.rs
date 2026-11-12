@@ -98,6 +98,7 @@ pub(crate) fn example_query() -> ProjectQuery {
         scores: live_scores_table(&scores),
         runtime: Arc::new(RuntimeEnv::default()),
         target_partitions: NonZeroUsize::new(2).expect("two partitions"),
+        optimizer_rules: Vec::new(),
     }
 }
 

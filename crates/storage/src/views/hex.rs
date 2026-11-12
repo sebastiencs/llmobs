@@ -206,6 +206,7 @@ mod tests {
                 scores: score_table.provider(),
                 runtime: Arc::new(RuntimeEnv::default()),
                 target_partitions: NonZeroUsize::new(2).expect("two partitions"),
+                optimizer_rules: Vec::new(),
             },
             None,
         )

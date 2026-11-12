@@ -20,6 +20,7 @@ use datafusion::datasource::{TableProvider, ViewTable, provider_as_source};
 use datafusion::error::DataFusionError;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, col, lit};
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::prelude::{SessionContext, cast, encode};
 
 use crate::query_error::RunError;
@@ -49,6 +50,8 @@ pub struct ProjectQuery {
     pub runtime: Arc<RuntimeEnv>,
     /// DataFusion `target_partitions` for this query.
     pub target_partitions: NonZeroUsize,
+    /// Physical optimizer rules the session must append: the trace list fast path (D153).
+    pub optimizer_rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
 }
 
 /// Inclusive `from`, exclusive `to`, nanoseconds since the Unix epoch, UTC (D101).
@@ -177,7 +180,11 @@ impl QueryContext {
     ///
     /// Returns [`RunError::Internal`] when a view cannot be planned or registered.
     pub fn new(source: ProjectQuery, window: Option<TimeWindow>) -> Result<Self, RunError> {
-        let state = session::session_state(source.runtime, source.target_partitions);
+        let state = session::session_state(
+            source.runtime,
+            source.target_partitions,
+            source.optimizer_rules,
+        );
         let session = SessionContext::new_with_state(state);
         let mut schemas = HashMap::new();
         schemas.insert(
@@ -785,6 +792,7 @@ mod tests {
                 scores: scores_table,
                 runtime: Arc::new(RuntimeEnv::default()),
                 target_partitions: NonZeroUsize::new(2).expect("partitions"),
+                optimizer_rules: Vec::new(),
             },
             Some(window),
         )

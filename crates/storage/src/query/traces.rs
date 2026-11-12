@@ -5,17 +5,25 @@
 //! hash-partitions them by `trace_id`, and merges each partition into one row
 //! per trace with [`TraceMerger`]. Filters are answered `Exact`, so they are
 //! evaluated on the *merged* rows, after the merge, not on the partials.
+//!
+//! M3.7 adds *list mode* (D153): for the "latest N" plan the provider reads a
+//! few short time slices of partials, ranks trace ids, then fetches only the
+//! rows it will return.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, RecordBatch, RecordBatchOptions, TimestampNanosecondArray,
+    Array, ArrayRef, BooleanArray, FixedSizeBinaryArray, RecordBatch, RecordBatchOptions,
+    TimestampNanosecondArray,
 };
-use arrow::compute::filter_record_batch;
+use arrow::compute::{
+    SortColumn, SortOptions, concat_batches, filter_record_batch, lexsort_to_indices,
+    take_record_batch,
+};
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
@@ -23,6 +31,7 @@ use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{DFSchema, DataFusionError, ScalarValue};
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::error::Result as DfResult;
+use datafusion::execution::SessionState;
 use datafusion::execution::TaskContext;
 use datafusion::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -34,7 +43,9 @@ use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::utils::conjunction_opt;
 use datafusion::physical_expr::{Partitioning, PhysicalExpr};
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::execution_plan::{
+    Boundedness, EmissionType, collect as collect_plan,
+};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -46,7 +57,7 @@ use datafusion::physical_plan::{
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_datasource::source::DataSourceExec;
-use futures::stream::Stream;
+use futures::stream::{Stream, StreamExt};
 use llmobs_core::ids::{ProjectId, TraceId};
 use llmobs_core::schema::{traces, traces_schema};
 
@@ -60,7 +71,7 @@ use crate::memtable::{MemBatch, MemSnapshot};
 use crate::objects::OBJECT_STORE_URL;
 use crate::partials::{MergeColumns, TraceMerger};
 
-/// Traces of one project at one read snapshot (range and lookup, D152/D154).
+/// Traces of one project at one read snapshot (D152/D154, D153 in list mode).
 #[derive(Debug)]
 pub(crate) struct TracesProvider {
     project: ProjectId,
@@ -93,11 +104,12 @@ impl TracesProvider {
     }
 }
 
-/// Whether the merged start-time bound comes from a range scan or a lookup.
+/// How a `TracesExec` runs. List mode is installed by `TraceListRule` (D153).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Mode {
+pub(crate) enum Mode {
     Range,
     Lookup,
+    List { fetch: usize },
 }
 
 impl Mode {
@@ -105,8 +117,65 @@ impl Mode {
         match self {
             Self::Range => "range",
             Self::Lookup => "lookup",
+            Self::List { .. } => "list",
         }
     }
+}
+
+/// Everything a range-mode plan needs. Stored on `TracesExec` so list mode can
+/// build fresh inner plans at execution time, and shared by `scan` and list run.
+#[derive(Clone)]
+struct ScanContext {
+    project: ProjectId,
+    catalog: Arc<Catalog>,
+    spans_mem: Arc<MemSnapshot>,
+    /// Owned session state, used to plan physical filter expressions when the
+    /// inner slice plans are built during execution.
+    session: Arc<SessionState>,
+    lookback: i64,
+    partitions: usize,
+    /// Logical filters pushed `Exact` into the scan.
+    filters: Vec<Expr>,
+    around: Option<i64>,
+}
+
+impl ScanContext {
+    fn new(provider: &TracesProvider, state: &dyn Session, filters: &[Expr]) -> DfResult<Self> {
+        let session = state
+            .as_any()
+            .downcast_ref::<SessionState>()
+            .ok_or_else(|| {
+                DataFusionError::Internal("traces scan requires a SessionState".into())
+            })?;
+        Ok(Self {
+            project: provider.project,
+            catalog: Arc::clone(&provider.catalog),
+            spans_mem: Arc::clone(&provider.spans_mem),
+            session: Arc::new(session.clone()),
+            lookback: provider.lookback,
+            partitions: provider.partitions,
+            filters: filters.to_vec(),
+            around: provider.options.around,
+        })
+    }
+
+    fn session(&self) -> &dyn Session {
+        self.session.as_ref()
+    }
+}
+
+/// One range-mode plan's parameters. `build_range_plan` is the single builder
+/// shared by `scan` and list mode's phase-1/phase-2 inner plans.
+struct RangeSpec {
+    /// Unpadded window: merged `start_time` must lie within it.
+    bounds: TimeBounds,
+    mode: Mode,
+    merge_columns: MergeColumns,
+    /// `trace_id IN ids` added to the partial-scan predicate (phase 2).
+    scan_ids: Option<BTreeSet<TraceId>>,
+    projection: Projection,
+    output_schema: SchemaRef,
+    limit: Option<usize>,
 }
 
 #[async_trait]
@@ -135,117 +204,146 @@ impl TableProvider for TracesProvider {
         limit: Option<usize>,
     ) -> DfResult<Arc<dyn ExecutionPlan>> {
         let schema = traces_schema();
+        let ctx = ScanContext::new(self, state, filters)?;
         let bounds = time_bounds(filters, traces::START_TIME);
         let ids = lookup_ids(filters);
-        let padded = padded_bounds(bounds, self.lookback);
-
-        // Columns the merge reads and produces, in traces_schema() order.
         let requested = requested_names(projection, filters, &schema)?;
         let requested_refs: Vec<&str> = requested.iter().map(String::as_str).collect();
         let merge_columns = MergeColumns::new(&requested_refs);
-        let input_names = merge_columns.input();
-        let output_names = merge_columns.output();
-        let input_indices = indices_of(&schema, &input_names)?;
-        let output_indices = indices_of(&schema, &output_names)?;
-        let input_schema: SchemaRef = Arc::new(project_schema(&schema, &input_indices));
-        let merged_schema: SchemaRef = Arc::new(project_schema(&schema, &output_indices));
-        let (output_schema, projection_kind) = output_of(projection, &schema)?;
-
-        let full_df = DFSchema::try_from(Arc::clone(&schema))?;
-        let input_df = DFSchema::try_from(Arc::clone(&input_schema))?;
-        let merged_df = DFSchema::try_from(Arc::clone(&merged_schema))?;
-
-        // The scan predicate is applied to *partials*, so it only contains the
-        // padded time window and the trace ids. Filter predicates that only
-        // pass after the merge (e.g. cost_total > 1.0) are never pushed here.
-        let scan_exprs = scan_exprs(&padded, &ids);
-        let file_pred = to_physical(state, &full_df, &scan_exprs)?;
-        let mem_pred = to_physical(state, &input_df, &scan_exprs)?;
-
-        let files = trace_files(
-            &self.catalog,
-            self.project,
-            &padded,
-            filters,
-            &bounds,
-            self.options.around,
-        );
-        let batches = mem_batches(&self.spans_mem, self.project, &padded);
-        let mut partials = Vec::with_capacity(batches.len());
-        for batch in &batches {
-            let cached = batch.trace_partials().map_err(partial_err)?;
-            partials.push((*cached).clone());
-        }
-
-        let mut plans: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
-        if !files.is_empty() {
-            plans.push(file_plan(
-                &schema,
-                &input_indices,
-                &files,
-                &input_df,
-                file_pred.as_ref(),
-                self.partitions,
-            )?);
-        }
-        plans.push(mem_plan(
-            &schema,
-            &input_indices,
-            partials,
-            self.partitions,
-            mem_pred,
-        )?);
-        let union = UnionExec::try_new(plans)?;
-
-        let trace_id_index = input_names
-            .iter()
-            .position(|name| *name == traces::TRACE_ID)
-            .ok_or_else(|| DataFusionError::Internal("trace_id missing from merge input".into()))?;
-        let key: Arc<dyn PhysicalExpr> = Arc::new(Column::new(traces::TRACE_ID, trace_id_index));
-        let partitions = if limit.is_some() { 1 } else { self.partitions };
-        let repartition: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
-            union,
-            Partitioning::Hash(vec![Arc::clone(&key)], partitions),
-        )?);
-
-        // Filters are converted once, against the merged output schema.
-        let mut physical_filters = Vec::with_capacity(filters.len());
-        for filter in filters {
-            physical_filters.push(state.create_physical_expr(filter.clone(), &merged_df)?);
-        }
-        let predicate = conjunction_opt(physical_filters);
-
-        let columns = input_names.join(", ");
+        let (projection_kind, output_schema) = output_of(projection, &schema)?;
         let mode = if ids.is_some() {
             Mode::Lookup
         } else {
             Mode::Range
         };
-        let display = format!(
-            "TracesExec: mode={}, files={}, mem_batches={}, columns=[{columns}]",
-            mode.as_str(),
-            files.len(),
-            batches.len(),
-        );
-
-        Ok(Arc::new(TracesExec {
-            input: repartition,
-            properties: Arc::new(PlanProperties::new(
-                EquivalenceProperties::new(Arc::clone(&output_schema)),
-                Partitioning::UnknownPartitioning(partitions),
-                EmissionType::Incremental,
-                Boundedness::Bounded,
-            )),
-            merge_columns,
-            key: vec![key],
-            predicate,
-            bounds,
-            projection: projection_kind,
-            output_schema,
-            limit,
-            display,
-        }))
+        Ok(build_range_plan(
+            &ctx,
+            RangeSpec {
+                bounds,
+                mode,
+                merge_columns,
+                scan_ids: ids,
+                projection: projection_kind,
+                output_schema,
+                limit,
+            },
+        )?)
     }
+}
+
+/// Builds one complete range-mode `TracesExec` (with its repartition and scans).
+fn build_range_plan(ctx: &ScanContext, spec: RangeSpec) -> DfResult<Arc<TracesExec>> {
+    let schema = traces_schema();
+    let padded = padded_bounds(spec.bounds, ctx.lookback);
+
+    let input_names = spec.merge_columns.input();
+    let output_names = spec.merge_columns.output();
+    let input_indices = indices_of(&schema, &input_names)?;
+    let output_indices = indices_of(&schema, &output_names)?;
+    let input_schema: SchemaRef = Arc::new(project_schema(&schema, &input_indices));
+    let merged_schema: SchemaRef = Arc::new(project_schema(&schema, &output_indices));
+
+    let full_df = DFSchema::try_from(Arc::clone(&schema))?;
+    let input_df = DFSchema::try_from(Arc::clone(&input_schema))?;
+    let merged_df = DFSchema::try_from(Arc::clone(&merged_schema))?;
+
+    // Partial-level predicate: only the padded window and the trace ids. A
+    // filter that passes only after the merge is never pushed down here.
+    let scan_exprs = scan_exprs(&padded, &spec.scan_ids);
+    let file_pred = to_physical(ctx.session(), &full_df, &scan_exprs)?;
+    let mem_pred = to_physical(ctx.session(), &input_df, &scan_exprs)?;
+
+    let files = trace_files(
+        &ctx.catalog,
+        ctx.project,
+        &padded,
+        &ctx.filters,
+        &spec.bounds,
+        ctx.around,
+    );
+    let batches = mem_batches(&ctx.spans_mem, ctx.project, &padded);
+    let mut partials = Vec::with_capacity(batches.len());
+    for batch in &batches {
+        let cached = batch.trace_partials().map_err(partial_err)?;
+        partials.push((*cached).clone());
+    }
+
+    let mut plans: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
+    if !files.is_empty() {
+        plans.push(file_plan(
+            &schema,
+            &input_indices,
+            &files,
+            &input_df,
+            file_pred.as_ref(),
+            ctx.partitions,
+        )?);
+    }
+    plans.push(mem_plan(
+        &schema,
+        &input_indices,
+        partials,
+        ctx.partitions,
+        mem_pred,
+    )?);
+    let union = UnionExec::try_new(plans)?;
+
+    let trace_id_index = input_names
+        .iter()
+        .position(|name| *name == traces::TRACE_ID)
+        .ok_or_else(|| DataFusionError::Internal("trace_id missing from merge input".into()))?;
+    let key: Arc<dyn PhysicalExpr> = Arc::new(Column::new(traces::TRACE_ID, trace_id_index));
+    let partitions = if spec.limit.is_some() {
+        1
+    } else {
+        ctx.partitions
+    };
+    let repartition: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+        union,
+        Partitioning::Hash(vec![Arc::clone(&key)], partitions),
+    )?);
+
+    // Merged-level filters, converted once against the merged output schema.
+    let mut physical_filters = Vec::with_capacity(ctx.filters.len());
+    for filter in &ctx.filters {
+        physical_filters.push(
+            ctx.session
+                .create_physical_expr(filter.clone(), &merged_df)?,
+        );
+    }
+    let predicate = conjunction_opt(physical_filters);
+
+    let columns = input_names.join(", ");
+    let display = format!(
+        "TracesExec: mode={}, files={}, mem_batches={}, columns=[{columns}]",
+        spec.mode.as_str(),
+        files.len(),
+        batches.len(),
+    );
+
+    Ok(Arc::new(TracesExec {
+        input: repartition,
+        properties: Arc::new(properties_for(&spec.output_schema, partitions)),
+        scan_ctx: ctx.clone(),
+        mode: spec.mode,
+        merge_columns: spec.merge_columns,
+        key: vec![key],
+        predicate,
+        bounds: spec.bounds,
+        projection: spec.projection,
+        output_schema: spec.output_schema,
+        limit: spec.limit,
+        display,
+    }))
+}
+
+fn properties_for(schema: &SchemaRef, partitions: usize) -> PlanProperties {
+    PlanProperties::new(
+        EquivalenceProperties::new(Arc::clone(schema)),
+        Partitioning::UnknownPartitioning(partitions),
+        EmissionType::Incremental,
+        Boundedness::Bounded,
+    )
 }
 
 /// `[a - L, b + L]`, with a missing end left open. With no bounds at all
@@ -286,6 +384,24 @@ fn requested_names(
     Ok(names)
 }
 
+fn filter_names(filters: &[Expr]) -> Vec<String> {
+    let mut names = Vec::new();
+    for filter in filters {
+        for column in filter.column_refs() {
+            names.push(column.name.clone());
+        }
+    }
+    names
+}
+
+fn projection_names(projection: &Projection, schema: &SchemaRef) -> Vec<String> {
+    match projection {
+        Projection::All => schema.fields().iter().map(|f| f.name().clone()).collect(),
+        Projection::Indices(names) => names.clone(),
+        Projection::Empty => Vec::new(),
+    }
+}
+
 fn indices_of(schema: &SchemaRef, names: &[&str]) -> DfResult<Vec<usize>> {
     names
         .iter()
@@ -305,10 +421,10 @@ fn project_schema(schema: &SchemaRef, indices: &[usize]) -> Schema {
 fn output_of(
     projection: Option<&Vec<usize>>,
     schema: &SchemaRef,
-) -> DfResult<(SchemaRef, Projection)> {
+) -> DfResult<(Projection, SchemaRef)> {
     match projection {
-        None => Ok((Arc::clone(schema), Projection::All)),
-        Some(indices) if indices.is_empty() => Ok((Arc::new(Schema::empty()), Projection::Empty)),
+        None => Ok((Projection::All, Arc::clone(schema))),
+        Some(indices) if indices.is_empty() => Ok((Projection::Empty, Arc::new(Schema::empty()))),
         Some(indices) => {
             let names: Vec<String> = indices
                 .iter()
@@ -318,7 +434,7 @@ fn output_of(
                 .iter()
                 .map(|&index| schema.field(index).clone())
                 .collect();
-            Ok((Arc::new(Schema::new(fields)), Projection::Indices(names)))
+            Ok((Projection::Indices(names), Arc::new(Schema::new(fields))))
         }
     }
 }
@@ -501,10 +617,12 @@ enum Projection {
     Empty,
 }
 
-/// Merges one hash partition's partials into traces.
-struct TracesExec {
+/// Merges one hash partition's partials into traces, or runs the list fast path.
+pub(crate) struct TracesExec {
     input: Arc<dyn ExecutionPlan>,
     properties: Arc<PlanProperties>,
+    scan_ctx: ScanContext,
+    mode: Mode,
     merge_columns: MergeColumns,
     key: Vec<Arc<dyn PhysicalExpr>>,
     /// Filters, against the merged output schema. `None` when there are none.
@@ -523,6 +641,26 @@ impl fmt::Debug for TracesExec {
             .field("display", &self.display)
             .finish_non_exhaustive()
     }
+}
+
+/// If `plan` is a range-mode `TracesExec`, return it rewritten to list mode.
+/// Called by `TraceListRule` (D153).
+pub(crate) fn rewrite_list(
+    plan: &Arc<dyn ExecutionPlan>,
+    fetch: usize,
+) -> Option<Arc<dyn ExecutionPlan>> {
+    let exec = plan.downcast_ref::<TracesExec>()?;
+    if exec.mode != Mode::Range {
+        return None;
+    }
+    let mut new = exec.clone();
+    new.mode = Mode::List { fetch };
+    new.display = exec
+        .display
+        .replacen("mode=range", &format!("mode=list, fetch={fetch}"), 1);
+    // List mode emits one stream; the ancestors are rebuilt by `transform_up`.
+    new.properties = Arc::new(properties_for(&new.output_schema, 1));
+    Some(Arc::new(new))
 }
 
 impl DisplayAs for TracesExec {
@@ -563,18 +701,17 @@ impl ExecutionPlan for TracesExec {
             .ok_or_else(|| DataFusionError::Internal("TracesExec needs one child".into()))?;
         // The optimizer may add or remove the hash repartition (for a single
         // input partition it is unnecessary). Keep our output partitioning in
-        // step with the child so the number of execute() partitions matches.
-        let partitions = this
-            .input
-            .properties()
-            .output_partitioning()
-            .partition_count();
-        this.properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(Arc::clone(&this.output_schema)),
-            Partitioning::UnknownPartitioning(partitions),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        ));
+        // step with the child so the number of execute() partitions matches;
+        // list mode always stays a single stream.
+        let partitions = if matches!(this.mode, Mode::List { .. }) {
+            1
+        } else {
+            this.input
+                .properties()
+                .output_partitioning()
+                .partition_count()
+        };
+        this.properties = Arc::new(properties_for(&this.output_schema, partitions));
         Ok(Arc::new(this))
     }
 
@@ -587,6 +724,37 @@ impl ExecutionPlan for TracesExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> datafusion::error::Result<SendableRecordBatchStream> {
+        if let Mode::List { fetch } = self.mode {
+            let ctx = self.scan_ctx.clone();
+            let bounds = self.bounds;
+            let projection = self.projection.clone();
+            let output_schema = Arc::clone(&self.output_schema);
+            let batch_size = context.session_config().batch_size();
+            let stream = futures::stream::once(async move {
+                run_list(
+                    ctx,
+                    fetch,
+                    bounds,
+                    projection,
+                    output_schema,
+                    context,
+                    batch_size,
+                )
+                .await
+            })
+            .flat_map(|result: DfResult<Vec<RecordBatch>>| {
+                let items: Vec<DfResult<RecordBatch>> = match result {
+                    Ok(batches) => batches.into_iter().map(Ok).collect(),
+                    Err(error) => vec![Err(error)],
+                };
+                futures::stream::iter(items)
+            });
+            return Ok(Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&self.output_schema),
+                stream,
+            )));
+        }
+
         let input = self.input.execute(partition, Arc::clone(&context))?;
         let reservation =
             MemoryConsumer::new(format!("TracesExec[{partition}]")).register(context.memory_pool());
@@ -617,6 +785,8 @@ impl Clone for TracesExec {
         Self {
             input: Arc::clone(&self.input),
             properties: Arc::clone(&self.properties),
+            scan_ctx: self.scan_ctx.clone(),
+            mode: self.mode,
             merge_columns: self.merge_columns.clone(),
             key: self.key.clone(),
             predicate: self.predicate.clone(),
@@ -782,6 +952,293 @@ impl Stream for MergeStream {
                 }
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------- list mode
+
+const MIN15: i64 = 15 * 60 * 1_000_000_000;
+const HOUR1: i64 = 60 * 60 * 1_000_000_000;
+const HOUR6: i64 = 6 * HOUR1;
+const HOUR24: i64 = 24 * HOUR1;
+
+/// Inclusive slices, newest first, intersected with `[a, b]`. Stops when a
+/// slice's intersection is empty (it lies entirely before `a`).
+fn slices(a: i64, b: i64) -> Vec<TimeBounds> {
+    let raw = [
+        (b.saturating_sub(MIN15), b),
+        (
+            b.saturating_sub(HOUR1),
+            b.saturating_sub(MIN15).saturating_sub(1),
+        ),
+        (
+            b.saturating_sub(HOUR6),
+            b.saturating_sub(HOUR1).saturating_sub(1),
+        ),
+        (
+            b.saturating_sub(HOUR24),
+            b.saturating_sub(HOUR6).saturating_sub(1),
+        ),
+        (a, b.saturating_sub(HOUR24).saturating_sub(1)),
+    ];
+    let mut out = Vec::with_capacity(raw.len());
+    for (lo, hi) in raw {
+        let lo = lo.max(a);
+        let hi = hi.min(b);
+        if lo > hi {
+            break;
+        }
+        out.push(TimeBounds {
+            min: Some(lo),
+            max: Some(hi),
+        });
+    }
+    out
+}
+
+/// All `traces` files and memtable batches, used to bound an open-ended list.
+fn all_sources(ctx: &ScanContext) -> (Vec<Arc<FileMeta>>, Vec<MemBatch>) {
+    let open = TimeBounds {
+        min: None,
+        max: None,
+    };
+    let files: Vec<Arc<FileMeta>> = ctx
+        .catalog
+        .files(
+            FileTable::Traces,
+            ctx.project,
+            file_day_range(&open, FileTable::Traces),
+        )
+        .cloned()
+        .collect();
+    let batches = mem_batches(&ctx.spans_mem, ctx.project, &open);
+    (files, batches)
+}
+
+/// Replace open ends with data bounds. `None` means there is no data at all.
+fn data_bounds(ctx: &ScanContext, bounds: TimeBounds) -> Option<(i64, i64)> {
+    let (files, batches) = all_sources(ctx);
+    if files.is_empty() && batches.is_empty() {
+        return None;
+    }
+    let min = files
+        .iter()
+        .map(|f| f.min_time)
+        .chain(batches.iter().map(|b| b.min_time))
+        .min()?;
+    let max = files
+        .iter()
+        .map(|f| f.max_time)
+        .chain(batches.iter().map(|b| b.max_time))
+        .max()?;
+    Some((bounds.min.unwrap_or(min), bounds.max.unwrap_or(max)))
+}
+
+struct Candidate {
+    start: i64,
+    id: TraceId,
+    slice: usize,
+}
+
+/// Phase 1: rank `(start_time, trace_id)` over slices. Phase 2: fetch the kept
+/// ids with full columns. Returns the projected rows, newest first, at most k.
+async fn run_list(
+    ctx: ScanContext,
+    fetch: usize,
+    bounds: TimeBounds,
+    projection: Projection,
+    output_schema: SchemaRef,
+    context: Arc<TaskContext>,
+    batch_size: usize,
+) -> DfResult<Vec<RecordBatch>> {
+    let schema = traces_schema();
+    let filters = filter_names(&ctx.filters);
+    let phase1_cols = MergeColumns::new(&refs(&filters));
+    let mut full = projection_names(&projection, &schema);
+    full.extend(filters.iter().cloned());
+    let phase2_cols = MergeColumns::new(&refs(&full));
+
+    let Some((a, b)) = data_bounds(&ctx, bounds) else {
+        return Ok(Vec::new());
+    };
+    if a > b {
+        return Ok(Vec::new());
+    }
+    let windows = slices(a, b);
+
+    // Phase 1, rank.
+    let phase1_schema: SchemaRef = Arc::new(project_schema(
+        &schema,
+        &indices_of(&schema, &phase1_cols.output())?,
+    ));
+    let mut seen: BTreeSet<TraceId> = BTreeSet::new();
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for (index, window) in windows.iter().copied().enumerate() {
+        let plan = build_range_plan(
+            &ctx,
+            RangeSpec {
+                bounds: window,
+                mode: Mode::Range,
+                merge_columns: phase1_cols.clone(),
+                scan_ids: None,
+                projection: Projection::All,
+                output_schema: Arc::clone(&phase1_schema),
+                limit: None,
+            },
+        )?;
+        for batch in collect_plan(plan, Arc::clone(&context)).await? {
+            let start = batch
+                .column_by_name(traces::START_TIME)
+                .ok_or_else(|| DataFusionError::Internal("phase 1 start_time missing".into()))?
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .ok_or_else(|| DataFusionError::Internal("phase 1 start_time type".into()))?;
+            let ids = batch
+                .column_by_name(traces::TRACE_ID)
+                .ok_or_else(|| DataFusionError::Internal("phase 1 trace_id missing".into()))?
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .ok_or_else(|| DataFusionError::Internal("phase 1 trace_id type".into()))?;
+            for row in 0..batch.num_rows() {
+                let id = TraceId::from_slice(ids.value(row)).map_err(|_| {
+                    DataFusionError::External(Box::new(crate::error::PartialsError::InvalidTraceId))
+                })?;
+                if seen.insert(id) {
+                    candidates.push(Candidate {
+                        start: start.value(row),
+                        id,
+                        slice: index,
+                    });
+                }
+            }
+        }
+        // A slice with no matching trace is not empty; only an exhausted
+        // intersection stops the walk. Stop once the total reaches k.
+        if candidates.len() >= fetch {
+            break;
+        }
+    }
+    candidates.sort_by(|left, right| {
+        right
+            .start
+            .cmp(&left.start)
+            .then_with(|| right.id.as_bytes().cmp(left.id.as_bytes()))
+    });
+    candidates.truncate(fetch);
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Phase 2, fetch, grouped by the slice each id was ranked in.
+    let mut groups: BTreeMap<usize, Vec<TraceId>> = BTreeMap::new();
+    for candidate in &candidates {
+        groups
+            .entry(candidate.slice)
+            .or_default()
+            .push(candidate.id);
+    }
+    let phase2_schema: SchemaRef = Arc::new(project_schema(
+        &schema,
+        &indices_of(&schema, &phase2_cols.output())?,
+    ));
+    let mut fetched: Vec<RecordBatch> = Vec::new();
+    for (index, ids) in groups {
+        let wanted = ids.len();
+        let plan = build_range_plan(
+            &ctx,
+            RangeSpec {
+                bounds: windows[index],
+                mode: Mode::Range,
+                merge_columns: phase2_cols.clone(),
+                scan_ids: Some(ids.into_iter().collect()),
+                projection: Projection::All,
+                output_schema: Arc::clone(&phase2_schema),
+                limit: None,
+            },
+        )?;
+        let batches = collect_plan(plan, Arc::clone(&context)).await?;
+        let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+        // Re-applying the filters held in phase 1; the inner plan evaluates
+        // them, so at most the requested ids come back.
+        debug_assert!(rows <= wanted, "phase 2 returned more rows than ranked");
+        fetched.extend(batches);
+    }
+    if fetched.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Sort by (start_time DESC, trace_id DESC), take k, project and batch.
+    let merged = concat_batches(&phase2_schema, fetched.iter())?;
+    let start = Arc::clone(
+        merged
+            .column_by_name(traces::START_TIME)
+            .ok_or_else(|| DataFusionError::Internal("merged start_time missing".into()))?,
+    );
+    let trace = Arc::clone(
+        merged
+            .column_by_name(traces::TRACE_ID)
+            .ok_or_else(|| DataFusionError::Internal("merged trace_id missing".into()))?,
+    );
+    let descending = Some(SortOptions {
+        descending: true,
+        nulls_first: false,
+    });
+    let indices = lexsort_to_indices(
+        &[
+            SortColumn {
+                values: start,
+                options: descending,
+            },
+            SortColumn {
+                values: trace,
+                options: descending,
+            },
+        ],
+        Some(fetch),
+    )?;
+    let sorted = take_record_batch(&merged, &indices)?;
+    let final_batch = project_final(&sorted, &projection, &output_schema)?;
+    let total = final_batch.num_rows();
+    let mut out = Vec::new();
+    let mut offset = 0;
+    while offset < total {
+        let length = batch_size.min(total - offset);
+        out.push(final_batch.slice(offset, length));
+        offset += length;
+    }
+    Ok(out)
+}
+
+fn refs(names: &[String]) -> Vec<&str> {
+    names.iter().map(String::as_str).collect()
+}
+
+fn project_final(
+    sorted: &RecordBatch,
+    projection: &Projection,
+    output_schema: &SchemaRef,
+) -> DfResult<RecordBatch> {
+    match projection {
+        Projection::All => Ok(sorted.clone()),
+        Projection::Indices(names) => {
+            let columns: Vec<ArrayRef> = names
+                .iter()
+                .map(|name| {
+                    sorted
+                        .column_by_name(name)
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(format!("merged column {name} missing"))
+                        })
+                        .map(Arc::clone)
+                })
+                .collect::<DfResult<Vec<_>>>()?;
+            Ok(RecordBatch::try_new(Arc::clone(output_schema), columns)?)
+        }
+        Projection::Empty => Ok(RecordBatch::try_new_with_options(
+            Arc::clone(output_schema),
+            Vec::new(),
+            &RecordBatchOptions::new().with_row_count(Some(sorted.num_rows())),
+        )?),
     }
 }
 
@@ -1877,6 +2334,527 @@ mod tests {
             .unwrap()
             .to_owned();
         assert!(line.contains("mode=range"), "{line}");
+        storage.shutdown().await.unwrap();
+    }
+
+    // ------------------------------------------------------------ M3.7 tests
+
+    use proptest::prelude::*;
+
+    /// A list-mode context (with `TraceListRule`) and a range-mode context
+    /// (rules cleared), both over the same providers.
+    fn query_contexts(
+        storage: &crate::Storage,
+        project: ProjectId,
+    ) -> (QueryContext, QueryContext) {
+        let query = storage.query(project, Default::default()).unwrap();
+        let range = ProjectQuery {
+            spans: Arc::clone(&query.spans),
+            traces: Arc::clone(&query.traces),
+            scores: Arc::clone(&query.scores),
+            runtime: Arc::clone(&query.runtime),
+            target_partitions: query.target_partitions,
+            optimizer_rules: Vec::new(),
+        };
+        (
+            QueryContext::new(query, None).unwrap(),
+            QueryContext::new(range, None).unwrap(),
+        )
+    }
+
+    fn request<'a>(
+        filter: Option<&'a str>,
+        limit: usize,
+        cursor: Option<&'a str>,
+    ) -> TraceListRequest<'a> {
+        TraceListRequest {
+            filter,
+            search: None,
+            scope: ListScope {
+                window: None,
+                include_eval: true,
+                include_experiments: true,
+            },
+            sort: TraceSort::StartTime,
+            order: SortOrder::Desc,
+            limit,
+            cursor,
+            timeout: TIMEOUT,
+        }
+    }
+
+    fn page_batch(page: &Page) -> RecordBatch {
+        let schema = page
+            .batches
+            .first()
+            .map(RecordBatch::schema)
+            .unwrap_or_else(|| Arc::new(Schema::empty()));
+        concat(&page.batches, schema)
+    }
+
+    /// Equivalence: list mode returns exactly the same rows as range mode.
+    async fn assert_equivalent(
+        list: &QueryContext,
+        range: &QueryContext,
+        filter: Option<&str>,
+        limit: usize,
+        cursor: Option<&str>,
+    ) {
+        let a = trace_list(list, request(filter, limit, cursor))
+            .await
+            .unwrap();
+        let b = trace_list(range, request(filter, limit, cursor))
+            .await
+            .unwrap();
+        assert_eq!(a.next_cursor, b.next_cursor, "next_cursor");
+        assert_batches_equal(&page_batch(&a), &page_batch(&b));
+    }
+
+    /// Generate `count` traces, each with 1–3 spans no more than L/2 apart,
+    /// spread over three days, with random filterable fields.
+    fn generated_spans(seed: u64, count: usize) -> Vec<Span> {
+        let mut rng = seed | 1;
+        let base = 20_000 * DAY + 10 * HOUR;
+        let unit = (3 * DAY) / (1_i64 << 31);
+        let mut spans = Vec::new();
+        for trace_index in 0..count {
+            let trace = trace_id(u8::try_from(trace_index % 250 + 1).unwrap());
+            let root = base + i64::from(next(&mut rng) as u32) * unit;
+            let span_count = 1 + next(&mut rng) % 3;
+            for span_index in 0..span_count {
+                let start = root + i64::try_from(span_index).unwrap() * 5 * MIN;
+                let mut span =
+                    base_span(trace, span_id(u8::try_from(span_index + 1).unwrap()), start);
+                span.cost_total = Some((next(&mut rng) % 200) as f64 / 100.0);
+                span.environment = match next(&mut rng) % 3 {
+                    0 => Some("prod".to_owned()),
+                    1 => Some("eval".to_owned()),
+                    _ => None,
+                };
+                span.session_id = match next(&mut rng) % 3 {
+                    0 => Some("s1".to_owned()),
+                    1 => Some("s2".to_owned()),
+                    _ => None,
+                };
+                span.tags = if next(&mut rng).is_multiple_of(2) {
+                    vec!["beta".to_owned()]
+                } else {
+                    vec!["alpha".to_owned()]
+                };
+                span.metadata.insert(
+                    "channel".to_owned(),
+                    if next(&mut rng).is_multiple_of(2) {
+                        "email".to_owned()
+                    } else {
+                        "chat".to_owned()
+                    },
+                );
+                if span_index > 0 {
+                    span.parent_span_id = Some(span_id(1));
+                }
+                spans.push(span);
+            }
+        }
+        spans
+    }
+
+    /// Append with `groups - 1` flushes and leave the last part in the memtable.
+    async fn ingest(dir: &Path, spans: &[Span], groups: usize) -> crate::Storage {
+        let chunk_size = spans.len().div_ceil(groups).max(1);
+        let mut storage = crate::Storage::open(config_in(dir)).await.unwrap();
+        for (index, chunk) in spans.chunks(chunk_size).enumerate() {
+            storage
+                .append_spans(project(), spans_batch(chunk))
+                .await
+                .unwrap();
+            if index < groups - 1 {
+                storage = reopen(dir, storage).await;
+            }
+        }
+        storage
+    }
+
+    async fn equivalence_case(seed: u64, filter_case: usize, limit: usize, cursor_at: usize) {
+        let spans = generated_spans(seed, 40);
+        let dir = tempfile::tempdir().unwrap();
+        let storage = ingest(dir.path(), &spans, 3).await;
+        let (list, range) = query_contexts(&storage, project());
+        let filter = match filter_case {
+            0 => None,
+            1 => Some("cost_total > 0.5"),
+            2 => Some("environment = 'prod'"),
+            3 => Some("session_id = 's1'"),
+            4 => Some("tags @> ['beta']"),
+            _ => Some("metadata['channel'] = 'email'"),
+        };
+        assert_equivalent(&list, &range, filter, limit, None).await;
+
+        // A2's cursor predicate after a random row.
+        let first = trace_list(&range, request(None, cursor_at, None))
+            .await
+            .unwrap();
+        if let Some(cursor) = first.next_cursor.as_deref() {
+            assert_equivalent(&list, &range, None, limit, Some(cursor)).await;
+        }
+        storage.shutdown().await.unwrap();
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        /// Group 1 (Equivalence): list mode == range mode + sort + truncate.
+        #[test]
+        fn list_mode_matches_range_mode(
+            seed in any::<u64>(),
+            filter_case in 0usize..6,
+            limit in prop_oneof![Just(1usize), Just(3usize), Just(50usize), Just(500usize)],
+            cursor_at in 1usize..10,
+        ) {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(equivalence_case(seed, filter_case, limit, cursor_at));
+        }
+    }
+
+    async fn plan_line(frame: datafusion::prelude::DataFrame) -> String {
+        let explained = frame
+            .explain(false, false)
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let text = plan_text(&explained);
+        text.lines()
+            .find(|line| line.contains("TracesExec:"))
+            .unwrap_or("")
+            .to_owned()
+    }
+
+    fn plan_ts(value: i64) -> Expr {
+        Expr::Literal(
+            ScalarValue::TimestampNanosecond(Some(value), Some(Arc::from("UTC"))),
+            None,
+        )
+    }
+
+    /// Rebuilds the A2 list query (`table("traces")` + filter + sort + limit)
+    /// from the same pieces `list_frame` uses, then reads its physical plan.
+    /// Group 2 (Plan shapes): list mode for the four list shapes, range mode
+    /// for the three shapes the rule must not touch.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn plan_shapes_through_a2() {
+        use crate::filter::FilterView;
+        use datafusion::logical_expr::{SortExpr, lit};
+
+        let desc_sorts = || -> Vec<SortExpr> {
+            vec![
+                col("start_time").sort(false, false),
+                col("trace_id").sort(false, false),
+            ]
+        };
+        let spans = generated_spans(0x2545_F491_4F6C_DD1D, 20);
+        let dir = tempfile::tempdir().unwrap();
+        let storage = ingest(dir.path(), &spans, 2).await;
+        let (list, _) = query_contexts(&storage, project());
+        let session = list.session();
+
+        // The default list.
+        let frame = session
+            .table("traces")
+            .await
+            .unwrap()
+            .sort(desc_sorts())
+            .unwrap()
+            .limit(0, Some(51))
+            .unwrap();
+        assert!(plan_line(frame).await.contains("mode=list, fetch=51"));
+
+        // With a window.
+        let windowed = session
+            .table("traces")
+            .await
+            .unwrap()
+            .filter(
+                col("start_time")
+                    .gt_eq(plan_ts(20_000 * DAY))
+                    .and(col("start_time").lt(plan_ts(20_003 * DAY))),
+            )
+            .unwrap()
+            .sort(desc_sorts())
+            .unwrap()
+            .limit(0, Some(51))
+            .unwrap();
+        assert!(plan_line(windowed).await.contains("mode=list, fetch=51"));
+
+        // With A2's cursor predicate after a row.
+        let at = 20_001 * DAY;
+        let cursor = col("start_time")
+            .lt(plan_ts(at))
+            .or(col("start_time")
+                .eq(plan_ts(at))
+                .and(col("trace_id").lt(lit("ff"))))
+            .or(col("start_time").is_null());
+        let with_cursor = session
+            .table("traces")
+            .await
+            .unwrap()
+            .filter(cursor)
+            .unwrap()
+            .sort(desc_sorts())
+            .unwrap()
+            .limit(0, Some(51))
+            .unwrap();
+        assert!(plan_line(with_cursor).await.contains("mode=list, fetch=51"));
+
+        // With a plain filter.
+        let plain = session
+            .table("traces")
+            .await
+            .unwrap()
+            .filter(col("cost_total").gt(lit(0.0_f64)))
+            .unwrap()
+            .sort(desc_sorts())
+            .unwrap()
+            .limit(0, Some(51))
+            .unwrap();
+        assert!(plan_line(plain).await.contains("mode=list, fetch=51"));
+
+        // A score-function filter puts a join in the way: no rewrite.
+        let score = list
+            .parse_filter(FilterView::Traces, "score('helpfulness') >= 0.5")
+            .unwrap();
+        let scored = score
+            .apply(session.table("traces").await.unwrap(), &list)
+            .await
+            .unwrap()
+            .sort(desc_sorts())
+            .unwrap()
+            .limit(0, Some(51))
+            .unwrap();
+        assert!(plan_line(scored).await.contains("mode=range"));
+
+        // A different sort column: no rewrite.
+        let by_cost = session
+            .table("traces")
+            .await
+            .unwrap()
+            .sort(vec![
+                col("cost_total").sort(false, false),
+                col("trace_id").sort(false, false),
+            ])
+            .unwrap()
+            .limit(0, Some(51))
+            .unwrap();
+        assert!(plan_line(by_cost).await.contains("mode=range"));
+
+        // Ascending order: no rewrite.
+        let ascending = session
+            .table("traces")
+            .await
+            .unwrap()
+            .sort(vec![
+                col("start_time").sort(true, false),
+                col("trace_id").sort(true, false),
+            ])
+            .unwrap()
+            .limit(0, Some(51))
+            .unwrap();
+        assert!(plan_line(ascending).await.contains("mode=range"));
+
+        storage.shutdown().await.unwrap();
+    }
+
+    fn hex_ids(page: &Page) -> Vec<String> {
+        let mut ids = Vec::new();
+        for batch in &page.batches {
+            let column = batch
+                .column_by_name(traces::TRACE_ID)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            for row in 0..column.len() {
+                ids.push(column.value(row).to_owned());
+            }
+        }
+        ids
+    }
+
+    /// Group 3 (Paging): walking pages of 2 over the real engine gives the
+    /// same ids as one page of 50.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn paging_over_the_real_engine() {
+        let spans = generated_spans(0x51ED_270B, 30);
+        let dir = tempfile::tempdir().unwrap();
+        let storage = ingest(dir.path(), &spans, 2).await;
+        let (list, _) = query_contexts(&storage, project());
+
+        let mut walked = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..60 {
+            let page = trace_list(&list, request(None, 2, cursor.as_deref()))
+                .await
+                .unwrap();
+            walked.extend(hex_ids(&page));
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        let full = trace_list(&list, request(None, 50, None)).await.unwrap();
+        assert_eq!(walked, hex_ids(&full));
+        storage.shutdown().await.unwrap();
+    }
+
+    /// Group 4 (Slices): 55 traces within 24 h of the newest plus 5 older ones,
+    /// k = 50. Phase 1 reaches k inside the 24 h slices and stops before the
+    /// oldest slice; the result is still the 50 newest traces.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn slices_read_newest_traces_over_three_days() {
+        let b = 20_000 * DAY + 12 * HOUR;
+        let mut spans: Vec<Span> = (0..55)
+            .map(|index| {
+                let mut span = base_span(
+                    trace_id(u8::try_from(index + 1).unwrap()),
+                    span_id(1),
+                    b - i64::from(index) * 20 * MIN,
+                );
+                span.cost_total = Some(1.0);
+                span
+            })
+            .collect();
+        for index in 0..5 {
+            let mut span = base_span(
+                trace_id(u8::try_from(60 + index).unwrap()),
+                span_id(1),
+                b - 2 * DAY - i64::from(index) * HOUR,
+            );
+            span.cost_total = Some(1.0);
+            spans.push(span);
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let storage = ingest(dir.path(), &spans, 3).await;
+        let (list, range) = query_contexts(&storage, project());
+        assert_equivalent(&list, &range, None, 50, None).await;
+        let page = trace_list(&list, request(None, 50, None)).await.unwrap();
+        assert_eq!(hex_ids(&page).len(), 50);
+        storage.shutdown().await.unwrap();
+    }
+
+    /// Group 4 (Slices): a filter matching only traces older than 24 h still
+    /// finds them — every slice is searched.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn slices_reach_traces_older_than_a_day() {
+        let b = 20_000 * DAY + 12 * HOUR;
+        let mut spans: Vec<Span> = (0..20)
+            .map(|index| {
+                let mut span = base_span(
+                    trace_id(u8::try_from(index + 1).unwrap()),
+                    span_id(1),
+                    b - 2 * DAY + i64::from(index) * MIN,
+                );
+                span.cost_total = Some(1.0);
+                span
+            })
+            .collect();
+        let mut fresh = base_span(trace_id(200), span_id(1), b);
+        fresh.cost_total = Some(0.0);
+        spans.push(fresh);
+        let dir = tempfile::tempdir().unwrap();
+        let storage = ingest(dir.path(), &spans, 2).await;
+        let (list, range) = query_contexts(&storage, project());
+        assert_equivalent(&list, &range, Some("cost_total > 0.5"), 50, None).await;
+        let page = trace_list(&list, request(Some("cost_total > 0.5"), 50, None))
+            .await
+            .unwrap();
+        assert_eq!(hex_ids(&page).len(), 20);
+        storage.shutdown().await.unwrap();
+    }
+
+    /// Group 4 (Slices): a 3-hour gap right before the newest data must not
+    /// end the search (empty slices are not a stop condition).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn slices_skip_empty_windows() {
+        let b = 20_000 * DAY + 12 * HOUR;
+        let mut spans: Vec<Span> = (0..20)
+            .map(|index| {
+                let mut span = base_span(
+                    trace_id(u8::try_from(index + 1).unwrap()),
+                    span_id(1),
+                    b - 3 * HOUR + i64::from(index) * MIN,
+                );
+                span.cost_total = Some(1.0);
+                span
+            })
+            .collect();
+        let mut top = base_span(trace_id(201), span_id(1), b);
+        top.cost_total = Some(1.0);
+        spans.push(top);
+        let dir = tempfile::tempdir().unwrap();
+        let storage = ingest(dir.path(), &spans, 2).await;
+        let (list, range) = query_contexts(&storage, project());
+        assert_equivalent(&list, &range, None, 50, None).await;
+        let page = trace_list(&list, request(None, 50, None)).await.unwrap();
+        assert_eq!(hex_ids(&page).len(), 21);
+        storage.shutdown().await.unwrap();
+    }
+
+    /// Group 4 (Slices): an open upper bound starts from the newest data,
+    /// not the wall clock. Data far in the past is still returned.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn open_upper_bound_starts_from_data() {
+        let mut spans = generated_spans(0x1357_9BDF, 10);
+        // 1970-era timestamps: nowhere near wall-clock "now".
+        for (index, span) in spans.iter_mut().enumerate() {
+            span.start_time = 100 + i64::try_from(index).unwrap() * 1_000;
+            span.end_time = span.start_time + 10;
+            span.ingest_time = span.start_time + 1;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let storage = ingest(dir.path(), &spans, 2).await;
+        let (list, range) = query_contexts(&storage, project());
+        assert_equivalent(&list, &range, None, 50, None).await;
+        let page = trace_list(&list, request(None, 50, None)).await.unwrap();
+        assert_eq!(hex_ids(&page).len(), 10);
+        storage.shutdown().await.unwrap();
+    }
+
+    /// Group 5 (Window limit): a trace whose late partial starts 2 h after its
+    /// root and inside the newest slice appears in list mode with its late
+    /// start. This is the documented window limit (partials more than L apart).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn window_limit_late_partial_appears_with_late_start() {
+        let late = 20_000 * DAY + 12 * HOUR;
+        let root = late - 3 * HOUR;
+        let trace = trace_id(7);
+        let root_span = base_span(trace, span_id(1), root);
+        let mut late_span = base_span(trace, span_id(2), late);
+        late_span.parent_span_id = Some(span_id(1));
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut storage = crate::Storage::open(config_in(dir.path())).await.unwrap();
+        storage
+            .append_spans(project(), spans_batch(&[root_span]))
+            .await
+            .unwrap();
+        storage = reopen(dir.path(), storage).await;
+        storage
+            .append_spans(project(), spans_batch(&[late_span]))
+            .await
+            .unwrap();
+        let (list, _) = query_contexts(&storage, project());
+
+        let page = trace_list(&list, request(None, 50, None)).await.unwrap();
+        assert_eq!(hex_ids(&page).len(), 1);
+        let start = page.batches[0]
+            .column_by_name(traces::START_TIME)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow::array::TimestampNanosecondArray>()
+            .unwrap();
+        assert_eq!(start.value(0), late, "list mode uses the late start");
         storage.shutdown().await.unwrap();
     }
 }

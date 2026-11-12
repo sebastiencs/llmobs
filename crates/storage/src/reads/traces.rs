@@ -1008,6 +1008,7 @@ mod tests {
                 scores: live_scores_table(&dataset_scores()),
                 runtime: Arc::new(RuntimeEnv::default()),
                 target_partitions: NonZeroUsize::new(1).expect("one partition"),
+                optimizer_rules: Vec::new(),
             },
             None,
         )

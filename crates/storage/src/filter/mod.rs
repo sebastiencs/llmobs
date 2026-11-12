@@ -784,6 +784,7 @@ mod tests {
                 scores: live_scores_table(scores),
                 runtime: Arc::new(RuntimeEnv::default()),
                 target_partitions: NonZeroUsize::new(2).expect("two partitions"),
+                optimizer_rules: Vec::new(),
             },
             None,
         )
@@ -972,6 +973,7 @@ mod tests {
                 scores: live_scores_table(&dataset_scores()),
                 runtime: Arc::new(RuntimeEnv::default()),
                 target_partitions: NonZeroUsize::new(2).expect("two partitions"),
+                optimizer_rules: Vec::new(),
             },
             None,
         )

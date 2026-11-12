@@ -10,6 +10,7 @@
 
 mod scores;
 mod spans;
+mod trace_list;
 mod traces;
 
 use std::collections::BTreeSet;
@@ -44,6 +45,7 @@ use crate::wal::Table;
 
 pub(crate) use scores::ScoresProvider;
 pub(crate) use spans::SpansProvider;
+pub(crate) use trace_list::TraceListRule;
 pub(crate) use traces::TracesProvider;
 
 /// Nanoseconds in a UTC day.
