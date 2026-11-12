@@ -78,9 +78,21 @@ impl Mock {
     }
 
     /// Base URL, including `/v1`, for an OpenAI-compatible connection.
+    ///
+    /// Each adapter test crate uses one of `url` and `origin`.
+    #[allow(dead_code)]
     #[must_use]
     pub(crate) fn url(&self) -> Url {
         Url::parse(&format!("http://127.0.0.1:{}/v1", self.port)).expect("mock url")
+    }
+
+    /// Origin without a version path, for a connection whose base is the host.
+    ///
+    /// Each adapter test crate uses one of `url` and `origin`.
+    #[allow(dead_code)]
+    #[must_use]
+    pub(crate) fn origin(&self) -> Url {
+        Url::parse(&format!("http://127.0.0.1:{}", self.port)).expect("mock origin")
     }
 
     /// Appends one scripted reply.

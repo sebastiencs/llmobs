@@ -3,22 +3,20 @@
 //! The base URL includes the version (`https://api.openai.com/v1`). Compatible
 //! servers use the same path.
 
-use reqwest::Url;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Map, Value};
 
 use super::answer::answer_schema;
 use super::http::provider_error;
 use super::{
-    Adapter, JudgeCall, JudgeConnection, JudgeReply, JudgeUsage, RawAnswer, StructuredOutput,
+    Adapter, JudgeCall, JudgeConnection, JudgeReply, JudgeUsage, RESPONSE_MAX_BYTES, RawAnswer,
+    StructuredOutput, endpoint, validate_model,
 };
 use crate::egress::{EgressClient, EgressRequest};
 use crate::error::JudgeError;
 use crate::secret::Secret;
 
 const DEFAULT_BASE: &str = "https://api.openai.com/v1";
-const RESPONSE_MAX_BYTES: usize = 4 * 1024 * 1024;
-const MODEL_MAX_BYTES: usize = 256;
 
 pub(crate) async fn complete(
     client: &EgressClient,
@@ -26,7 +24,7 @@ pub(crate) async fn complete(
     call: &JudgeCall<'_>,
 ) -> Result<JudgeReply, JudgeError> {
     validate_model(call.model)?;
-    let url = chat_completions_url(conn.base_url.as_ref())?;
+    let url = endpoint(conn.base_url.as_ref(), DEFAULT_BASE, "chat/completions")?;
     let headers = headers(conn)?;
     let body = match conn.structured_output {
         StructuredOutput::Native => request_body(call)?,
@@ -48,43 +46,6 @@ pub(crate) async fn complete(
         ));
     }
     parse_completion(&response.body)
-}
-
-fn validate_model(model: &str) -> Result<(), JudgeError> {
-    if model.is_empty() || model.len() > MODEL_MAX_BYTES || model.chars().any(forbidden_in_model) {
-        return Err(JudgeError::InvalidModel);
-    }
-    Ok(())
-}
-
-fn forbidden_in_model(ch: char) -> bool {
-    ch.is_whitespace() || ch.is_control() || ch == '/' || ch == '?' || ch == '#'
-}
-
-fn chat_completions_url(base: Option<&Url>) -> Result<Url, JudgeError> {
-    let parsed;
-    let base = match base {
-        Some(base) => base,
-        None => {
-            parsed = Url::parse(DEFAULT_BASE).map_err(|_| JudgeError::InvalidRequest)?;
-            &parsed
-        }
-    };
-    let query = base.query().map(ToOwned::to_owned);
-    let mut directory = base.clone();
-    if !directory.path().ends_with('/') {
-        let mut path = directory.path().to_owned();
-        path.push('/');
-        directory.set_path(&path);
-    }
-    let mut url = directory
-        .join("chat/completions")
-        .map_err(|_| JudgeError::InvalidRequest)?;
-    // `set_path` drops the query. Azure-style bases use `?api-version=`.
-    if let Some(query) = query {
-        url.set_query(Some(&query));
-    }
-    Ok(url)
 }
 
 fn headers(conn: &JudgeConnection) -> Result<Vec<(HeaderName, HeaderValue)>, JudgeError> {
@@ -213,9 +174,14 @@ fn u64_field(object: &Map<String, Value>, key: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{chat_completions_url, validate_model};
+    use super::super::{endpoint, validate_model};
+    use super::DEFAULT_BASE;
     use crate::error::JudgeError;
     use reqwest::Url;
+
+    fn chat_completions_url(base: Option<&Url>) -> Result<Url, JudgeError> {
+        endpoint(base, DEFAULT_BASE, "chat/completions")
+    }
 
     #[test]
     fn joins_the_default_and_a_custom_base() {

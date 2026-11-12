@@ -1,10 +1,11 @@
 //! LLM judge calls.
 //!
-//! E11 is the OpenAI-compatible adapter. Anthropic and Gemini arrive in E12 and E13.
+//! E11 is the OpenAI-compatible adapter and E12 is Anthropic. Gemini arrives in E13.
 
 // `parse_answer` is first called by the runner in E17.
 #[cfg_attr(not(test), allow(dead_code))]
 mod answer;
+mod anthropic;
 mod http;
 mod openai;
 
@@ -21,11 +22,13 @@ use crate::secret::Secret;
 
 /// Which provider API a connection calls.
 ///
-/// Anthropic and Gemini are added with their adapters.
+/// Gemini is added with its adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Adapter {
     /// OpenAI Chat Completions, including compatible servers.
     OpenAi,
+    /// Anthropic Messages.
+    Anthropic,
 }
 
 impl Adapter {
@@ -34,6 +37,7 @@ impl Adapter {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::OpenAi => "openai",
+            Self::Anthropic => "anthropic",
         }
     }
 }
@@ -44,6 +48,7 @@ impl FromStr for Adapter {
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         match text {
             "openai" => Ok(Self::OpenAi),
+            "anthropic" => Ok(Self::Anthropic),
             _ => Err(UnknownName),
         }
     }
@@ -189,7 +194,58 @@ pub async fn call(
 ) -> Result<JudgeReply, JudgeError> {
     match conn.adapter {
         Adapter::OpenAi => openai::complete(client, conn, call).await,
+        Adapter::Anthropic => anthropic::complete(client, conn, call).await,
     }
+}
+
+/// Largest provider response body, in bytes (D159).
+pub(crate) const RESPONSE_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+const MODEL_MAX_BYTES: usize = 256;
+
+/// Rejects a model name that would be placed in a URL or a JSON body.
+pub(crate) fn validate_model(model: &str) -> Result<(), JudgeError> {
+    if model.is_empty() || model.len() > MODEL_MAX_BYTES || model.chars().any(forbidden_in_model) {
+        return Err(JudgeError::InvalidModel);
+    }
+    Ok(())
+}
+
+fn forbidden_in_model(ch: char) -> bool {
+    ch.is_whitespace() || ch.is_control() || ch == '/' || ch == '?' || ch == '#'
+}
+
+/// Joins `path` onto a provider base, preserving a query string.
+///
+/// A base without a trailing slash is treated as a directory. `set_path` drops
+/// the query, so it is written back for bases such as `?api-version=`.
+pub(crate) fn endpoint(
+    base: Option<&Url>,
+    default_base: &str,
+    path: &str,
+) -> Result<Url, JudgeError> {
+    let parsed;
+    let base = match base {
+        Some(base) => base,
+        None => {
+            parsed = Url::parse(default_base).map_err(|_| JudgeError::InvalidRequest)?;
+            &parsed
+        }
+    };
+    let query = base.query().map(ToOwned::to_owned);
+    let mut directory = base.clone();
+    if !directory.path().ends_with('/') {
+        let mut with_slash = directory.path().to_owned();
+        with_slash.push('/');
+        directory.set_path(&with_slash);
+    }
+    let mut url = directory
+        .join(path)
+        .map_err(|_| JudgeError::InvalidRequest)?;
+    if let Some(query) = query {
+        url.set_query(Some(&query));
+    }
+    Ok(url)
 }
 
 #[cfg(test)]
@@ -200,9 +256,11 @@ mod tests {
     fn parses_adapter_and_mode_names() {
         assert_eq!("openai".parse::<Adapter>(), Ok(Adapter::OpenAi));
         assert_eq!(Adapter::OpenAi.as_str(), "openai");
-        let err = "anthropic/SECRET-PAYLOAD"
+        assert_eq!("anthropic".parse::<Adapter>(), Ok(Adapter::Anthropic));
+        assert_eq!(Adapter::Anthropic.as_str(), "anthropic");
+        let err = "gemini/SECRET-PAYLOAD"
             .parse::<Adapter>()
-            .expect_err("anthropic arrives in E12");
+            .expect_err("gemini arrives in E13");
         assert_eq!(err, UnknownName);
         assert_eq!(err.to_string(), "unknown name");
         assert!(!err.to_string().contains("SECRET-PAYLOAD"));

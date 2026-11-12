@@ -1,7 +1,8 @@
 //! Provider status classification (D160).
 //!
-//! OpenAI's error object is read here. Anthropic and Gemini objects are read
-//! when those adapters arrive; the class rules already accept their codes.
+//! OpenAI and Anthropic both put `type`, `code`, and `message` on an `error`
+//! object. Gemini's object is read when that adapter arrives; the class rules
+//! already accept its codes.
 
 use serde_json::Value;
 
@@ -17,7 +18,7 @@ const MESSAGE_MAX_CHARS: usize = 500;
 /// cut to 500 Unicode scalar values and is not included in the error's `Display`.
 pub(crate) fn provider_error(adapter: Adapter, status: u16, body: &[u8]) -> JudgeError {
     let (provider_type, provider_code, provider_message) = match adapter {
-        Adapter::OpenAi => openai_error(body),
+        Adapter::OpenAi | Adapter::Anthropic => error_object(body),
     };
     let class = classify(status, provider_type.as_deref(), provider_code.as_deref());
     JudgeError::Provider {
@@ -30,7 +31,7 @@ pub(crate) fn provider_error(adapter: Adapter, status: u16, body: &[u8]) -> Judg
     }
 }
 
-fn openai_error(body: &[u8]) -> (Option<String>, Option<String>, Option<String>) {
+fn error_object(body: &[u8]) -> (Option<String>, Option<String>, Option<String>) {
     let Ok(value) = serde_json::from_slice::<Value>(body) else {
         return (None, None, None);
     };
@@ -264,5 +265,34 @@ mod tests {
         };
         assert_eq!(provider_code, None);
         assert_eq!(provider_message, None);
+    }
+
+    #[test]
+    fn reads_an_anthropic_error_envelope() {
+        let body = json!({
+            "type": "error",
+            "error": {"type": "overloaded_error", "message": "SECRET-PAYLOAD"}
+        });
+        let err = provider_error(
+            Adapter::Anthropic,
+            529,
+            &serde_json::to_vec(&body).expect("body"),
+        );
+        let JudgeError::Provider {
+            provider_type,
+            provider_code,
+            provider_message,
+            class,
+            ..
+        } = &err
+        else {
+            panic!("provider error");
+        };
+        assert_eq!(provider_type.as_deref(), Some("overloaded_error"));
+        assert_eq!(provider_code, &None);
+        assert_eq!(provider_message.as_deref(), Some("SECRET-PAYLOAD"));
+        assert_eq!(class, &ErrorClass::Retryable);
+        assert_eq!(err.to_string(), "provider status 529");
+        assert!(!err.to_string().contains("SECRET-PAYLOAD"));
     }
 }
