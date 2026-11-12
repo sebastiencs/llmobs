@@ -19,7 +19,7 @@
       "cost_source": "none",
       "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Describe the harbor in a few words.\"}]}]",
       "input_format": "messages",
-      "output": "[{\"role\":\"model\",\"parts\":[{\"type\":\"reasoning\",\"text\":\"The harbor is calm.\"},{\"type\":\"text\",\"content\":\"Clear skies over the harbor.\"}]}]",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"reasoning\",\"content\":\"The harbor is calm.\"},{\"type\":\"text\",\"content\":\"Clear skies over the harbor.\"}]}]",
       "output_format": "messages",
       "input_preview": "Describe the harbor in a few words.",
       "output_preview": "Clear skies over the harbor.",

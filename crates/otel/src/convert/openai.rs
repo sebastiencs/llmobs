@@ -115,6 +115,9 @@ fn content_part(value: Json) -> Part {
     match kind.as_str() {
         "text" => text_part(map, "text"),
         "refusal" => text_part(map, "refusal"),
+        // Not an OpenAI type: OpenInference writes thinking blocks as
+        // `message_content.type = reasoning` with the text in `text`.
+        "reasoning" => reasoning_part(map),
         "image_url" => image_part(map),
         "input_audio" => audio_part(map),
         // `file`, and any type this converter does not model, stays verbatim.
@@ -130,6 +133,16 @@ fn text_part(map: Map<String, Json>, field: &str) -> Part {
     extra.shift_remove("type");
     extra.shift_remove(field);
     Part::Text { content, extra }
+}
+
+fn reasoning_part(map: Map<String, Json>) -> Part {
+    let Some(Json::String(content)) = map.get("text").cloned() else {
+        return Part::Unknown(Json::Object(map));
+    };
+    let mut extra = map;
+    extra.shift_remove("type");
+    extra.shift_remove("text");
+    Part::Reasoning { content, extra }
 }
 
 fn image_part(map: Map<String, Json>) -> Part {

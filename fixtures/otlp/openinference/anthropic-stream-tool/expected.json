@@ -22,7 +22,7 @@
       "request_params": "{\"max_tokens\":64,\"stream\":true}",
       "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
       "input_format": "messages",
-      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"I'll check the weather.\"},{\"type\":\"tool_use\"},{\"type\":\"tool_call\",\"id\":\"toolu_weather_1\",\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}]}]",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"I'll check the weather.\"},{\"type\":\"tool_call\",\"id\":\"toolu_weather_1\",\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}]}]",
       "output_format": "messages",
       "input_preview": "What's the weather in Paris?",
       "output_preview": "I'll check the weather.",
