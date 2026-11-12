@@ -1,3 +1,4 @@
+import logging
 import math
 from collections.abc import Callable, Sequence
 
@@ -17,10 +18,20 @@ from llmobs._config import (
     ConfigError,
     resolve_config,
 )
+from llmobs._log import reset_warnings
 
 KEY = "sk-llmobs-test"
 STORED_KEY = "sk-llmobs-super-secret-key-42"
 BAD_KEY = "not-a-key-DISTINCTIVE"
+MISSING_KEY_MESSAGE = (
+    "llmobs: no API key; set LLMOBS_API_KEY, or LLMOBS_ENABLED=false to silence this; "
+    "tracing is disabled"
+)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_warnings() -> None:
+    reset_warnings()
 
 
 def test_defaults() -> None:
@@ -248,10 +259,6 @@ def test_api_key_errors_do_not_echo_the_value() -> None:
     assert STORED_KEY not in repr(config)
     assert STORED_KEY not in str(config)
 
-    with pytest.raises(ConfigError, match="api_key: required") as missing:
-        resolve_config(env={})
-    assert ENV_API_KEY in str(missing.value)
-    assert ENV_ENABLED in str(missing.value)
     with pytest.raises(ConfigError, match="api_key: must start with sk-llmobs-") as argument_error:
         resolve_config(api_key=BAD_KEY, env={})
     assert BAD_KEY not in str(argument_error.value)
@@ -260,6 +267,37 @@ def test_api_key_errors_do_not_echo_the_value() -> None:
     ) as env_error:
         resolve_config(env={ENV_API_KEY: BAD_KEY})
     assert BAD_KEY not in str(env_error.value)
+
+
+@pytest.mark.parametrize("source", [{}, {ENV_API_KEY: "  "}])
+def test_missing_api_key_warns_once_and_disables(
+    source: dict[str, str], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="llmobs"):
+        config = resolve_config(env=source)
+        again = resolve_config(env=source)
+    assert config.enabled is False
+    assert again.enabled is False
+    assert config == Config(
+        enabled=False,
+        api_key=None,
+        base_url="http://localhost:8080",
+        environment=None,
+        release=None,
+        capture_content=True,
+        sample_rate=1.0,
+        instrument=(),
+        mask=None,
+    )
+    warnings = [record for record in caplog.records if record.name == "llmobs"]
+    assert len(warnings) == 1
+    assert warnings[0].levelno == logging.WARNING
+    assert warnings[0].getMessage() == MISSING_KEY_MESSAGE
+
+
+def test_missing_api_key_skips_other_validation() -> None:
+    config = resolve_config(env={ENV_BASE_URL: "ftp://x", ENV_SAMPLE_RATE: "nope"})
+    assert config.enabled is False
 
 
 def test_base_url_strips_trailing_slashes() -> None:

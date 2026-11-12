@@ -10,6 +10,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from llmobs._log import warn_once
+
 _ENV_PREFIX = "LLMOBS_"
 ENV_API_KEY = f"{_ENV_PREFIX}API_KEY"
 ENV_BASE_URL = f"{_ENV_PREFIX}BASE_URL"
@@ -27,6 +29,11 @@ _RESERVED_ENVIRONMENT = "llmobs-eval"
 _DEFAULT_BASE_URL = "http://localhost:8080"
 _TRUE = frozenset({"true", "1", "yes", "on"})
 _FALSE = frozenset({"false", "0", "no", "off"})
+# D-F-3: exact text, pinned by the tests and spec 10 § Configuration rule 11.
+_MISSING_KEY_WARNING = (
+    "llmobs: no API key; set LLMOBS_API_KEY, or LLMOBS_ENABLED=false to silence this; "
+    "tracing is disabled"
+)
 
 
 class ConfigError(ValueError):
@@ -70,9 +77,15 @@ def resolve_config(
     resolved_enabled = _resolve_bool("enabled", ENV_ENABLED, enabled, source, default=True)
     if not resolved_enabled:
         return _disabled()
+    api_key = _resolve_api_key(api_key, source)
+    if api_key is None:
+        # D-F-3: a missing key warns once and runs the SDK disabled; nothing else is
+        # validated. A key with the wrong prefix still raises, in _resolve_api_key.
+        warn_once("missing-api-key", _MISSING_KEY_WARNING)
+        return _disabled()
     return Config(
         enabled=True,
-        api_key=_resolve_api_key(api_key, source),
+        api_key=api_key,
         base_url=_resolve_base_url(base_url, source),
         environment=_resolve_environment(environment, source),
         release=_resolve_release(release, source),
@@ -136,16 +149,15 @@ def _resolve_bool(
     raise ConfigError(f"{env_name}: must be a boolean")
 
 
-def _resolve_api_key(value: object, source: Mapping[str, str]) -> str:
+def _resolve_api_key(value: object, source: Mapping[str, str]) -> str | None:
+    """Return the key, or ``None`` when it is missing (D-F-3: not an error)."""
     if value is not None:
         if not isinstance(value, str) or not value.startswith(_KEY_PREFIX):
             raise ConfigError(f"api_key: must start with {_KEY_PREFIX}")
         return value
     raw = _read_env(source, ENV_API_KEY)
     if raw is None:
-        raise ConfigError(
-            f"api_key: required; set {ENV_API_KEY}, or {ENV_ENABLED}=false to run without llmobs",
-        )
+        return None
     if not raw.startswith(_KEY_PREFIX):
         raise ConfigError(f"{ENV_API_KEY}: must start with {_KEY_PREFIX}")
     return raw

@@ -6,7 +6,12 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "opentelemetry-api>=1.45.2,<2",
+  "opentelemetry-sdk>=1.45.2,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.45.2,<2",
+  "requests>=2.32",
+]
 classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -22,7 +27,13 @@ requires = ["uv_build>=0.13.6,<0.14"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = ["ruff>=0.17.3", "mypy>=2.4.1", "pytest>=9.2.0"]
+dev = [
+    "ruff>=0.17.3",
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "types-protobuf>=7.35.1.20260906",
+    "types-requests>=2.33.0.20261030",
+]
 
 [tool.ruff]
 target-version = "py311"
