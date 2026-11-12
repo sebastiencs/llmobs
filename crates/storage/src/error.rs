@@ -578,6 +578,12 @@ pub(crate) enum FlushError {
         /// Static reason. Never a cell value.
         reason: &'static str,
     },
+    /// The covered-row filter failed while preparing the flush.
+    #[error("deletion filter: {reason}")]
+    Deletion {
+        /// Static reason. Never a cell value.
+        reason: &'static str,
+    },
     /// Recording the paths in `staged_objects` failed.
     #[error("flush stage: {0}")]
     Stage(CatalogError),
