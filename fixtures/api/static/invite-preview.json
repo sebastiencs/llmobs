@@ -1,0 +1,10 @@
+{
+  "org": {
+    "name": "Acme",
+    "slug": "acme"
+  },
+  "email": "guest@example.com",
+  "role": "member",
+  "expires_at": "2026-01-10T09:00:00.000000000Z",
+  "account_exists": false
+}

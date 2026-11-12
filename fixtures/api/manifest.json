@@ -1,11 +1,29 @@
 [
   {
+    "operation_id": "get_admin_settings",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/admin-settings.json"
+  },
+  {
     "operation_id": "get_auth_config",
     "path_params": {},
     "query": {},
     "status": 200,
     "content_type": "application/json",
     "file": "static/auth-config.json"
+  },
+  {
+    "operation_id": "get_invite_preview",
+    "path_params": {
+      "token": "EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXA"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/invite-preview.json"
   },
   {
     "operation_id": "get_me",
@@ -32,6 +50,16 @@
     "status": 200,
     "content_type": "application/json",
     "file": "static/metrics.json"
+  },
+  {
+    "operation_id": "get_org",
+    "path_params": {
+      "org": "acme"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/org.json"
   },
   {
     "operation_id": "get_project",
@@ -328,6 +356,66 @@
     "file": "responses/users/user-7.json"
   },
   {
+    "operation_id": "list_admin_users",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/admin-users.json"
+  },
+  {
+    "operation_id": "list_api_keys",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/api-keys.json"
+  },
+  {
+    "operation_id": "list_org_invites",
+    "path_params": {
+      "org": "acme"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/invites.json"
+  },
+  {
+    "operation_id": "list_org_members",
+    "path_params": {
+      "org": "acme"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/org-members.json"
+  },
+  {
+    "operation_id": "list_orgs",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/orgs.json"
+  },
+  {
+    "operation_id": "list_personal_tokens",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/personal-tokens.json"
+  },
+  {
+    "operation_id": "list_project_members",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/project-members.json"
+  },
+  {
     "operation_id": "list_projects",
     "path_params": {
       "org": "acme"
@@ -414,5 +502,63 @@
     "status": 200,
     "content_type": "application/json",
     "file": "responses/users.json"
+  },
+  {
+    "operation_id": "post_admin_user",
+    "path_params": {},
+    "query": {},
+    "status": 201,
+    "content_type": "application/json",
+    "file": "static/admin-user-created.json"
+  },
+  {
+    "operation_id": "post_api_key",
+    "path_params": {},
+    "query": {},
+    "status": 201,
+    "content_type": "application/json",
+    "file": "static/api-key-created.json"
+  },
+  {
+    "operation_id": "post_login",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/me.json"
+  },
+  {
+    "operation_id": "post_org_invite",
+    "path_params": {
+      "org": "acme"
+    },
+    "query": {},
+    "status": 201,
+    "content_type": "application/json",
+    "file": "static/invite-created.json"
+  },
+  {
+    "operation_id": "post_personal_token",
+    "path_params": {},
+    "query": {},
+    "status": 201,
+    "content_type": "application/json",
+    "file": "static/personal-token-created.json"
+  },
+  {
+    "operation_id": "post_setup",
+    "path_params": {},
+    "query": {},
+    "status": 201,
+    "content_type": "application/json",
+    "file": "static/setup-response.json"
+  },
+  {
+    "operation_id": "post_signup",
+    "path_params": {},
+    "query": {},
+    "status": 201,
+    "content_type": "application/json",
+    "file": "static/signup-response.json"
   }
 ]

@@ -4,11 +4,14 @@
 
 Sources, later overriding earlier: built-in defaults → `llmobs.toml` (`--config` or `LLMOBS_CONFIG`) → env vars (`LLMOBS_` + upper-snake path, e.g. `LLMOBS_STORAGE__OBJECT_STORE` for `storage.object_store`; common ones also have short aliases listed below). Parsed with `figment`; unknown keys are an error. `llmobs admin check` validates config, data dir, encryption key, SMTP and object store connectivity.
 
+GitHub and Google also accept the split form (`LLMOBS_AUTH__GITHUB__CLIENT_ID`, `LLMOBS_AUTH__GOOGLE__CLIENT_SECRET`, and the other scalar fields of those tables). `[[auth.oidc]]` is TOML only; `LLMOBS_AUTH__OIDC__*` is ignored.
+
 | Key | Env alias | Default |
 |---|---|---|
 | `data_dir` | `LLMOBS_DATA_DIR` | `./llmobs-data` |
 | `public_url` | `LLMOBS_PUBLIC_URL` | `http://localhost:8080` |
 | `http_addr` | `LLMOBS_HTTP_ADDR` | `0.0.0.0:8080` |
+| `trusted_proxies` | `LLMOBS_TRUSTED_PROXIES` | empty (comma-separated CIDRs, D142) |
 | `grpc_addr` | `LLMOBS_GRPC_ADDR` | `0.0.0.0:4317` |
 | `otlp_http_addr` | `LLMOBS_OTLP_HTTP_ADDR` | `0.0.0.0:4318` (empty = disabled) |
 | `storage.object_store` | `LLMOBS_OBJECT_STORE` | `file://<data_dir>/objects`. A set value is `file://<absolute path>` or `s3://<bucket>[/<prefix>]` |
@@ -19,6 +22,11 @@ Sources, later overriding earlier: built-in defaults → `llmobs.toml` (`--confi
 | `encryption_key` | `LLMOBS_ENCRYPTION_KEY` | generated into `secret.key` |
 | `smtp_url`, `email_from` | `LLMOBS_SMTP_URL`, `LLMOBS_EMAIL_FROM` | unset (email off) |
 | `auth.*` | see 08 | |
+| `init.admin_email` | `LLMOBS_INIT_ADMIN_EMAIL` | unset |
+| `init.admin_password` | `LLMOBS_INIT_ADMIN_PASSWORD` | unset |
+| `init.org` | `LLMOBS_INIT_ORG` | unset |
+| `init.project` | `LLMOBS_INIT_PROJECT` | unset |
+| `init.secret_key` | `LLMOBS_INIT_SECRET_KEY` | unset (optional `sk-llmobs-` key for headless init) |
 | `ingest.max_request_bytes` | | 10 MiB |
 | `ingest.max_attribute_bytes` | | 8 MiB |
 | `media.min_bytes` / `media.max_bytes` | | 4 KiB / 32 MiB |
@@ -50,7 +58,7 @@ A file lock (`flock` on `<data_dir>/LOCK`) prevents two processes from opening t
 
 ## Process lifecycle
 
-- **Startup:** lock data dir → load config → open `meta.db` + migrations → verify encryption key → open storage (`catalog.db` + migrations, load catalog, replay WAL; ingestion cannot start before this ends) → start background tasks → bind ports → `/readyz` = 200.
+- **Startup:** load config → lock data dir and open storage (`catalog.db`, replay WAL) → open `meta.db` + migrations → (log the setup URL if no user exists) → start background tasks → bind ports → `/readyz` = 200 (D137). Track E adds: verify encryption key, after `meta.db`.
 - **Shutdown (SIGTERM/SIGINT):** stop accepting connections, drain in-flight requests (≤ 20 s), flush memtables (best effort ≤ 30 s), stop workers (leases expire and are re-queued), close SQLite.
 - `/healthz`: process alive. `/readyz`: WAL writable, SQLite reachable, object store reachable (cached 10 s), free disk above threshold.
 
@@ -104,8 +112,9 @@ llmobs admin backup --to /backups/llmobs-$(date +%F)   # online, consistent
 ## Security checklist (MVP)
 
 - All secrets encrypted at rest (04 §Encryption); keys/tokens hashed.
-- Outbound requests (webhooks, LLM connections, OIDC, Slack) go through an HTTP client with an SSRF guard. Unless `security.allow_private_network_egress = true` (needed for local Ollama/vLLM — the setting is shown in the LLM connection form), the client drops every resolved address, and any literal IP in the URL, in these ranges (D166): loopback, RFC 1918, CGNAT `100.64.0.0/10`, link-local, unique local `fc00::/7`, unspecified, multicast, broadcast, `192.0.0.0/24`, `198.18.0.0/15`, documentation ranges, and IPv4-mapped or NAT64 forms of any of these. If none is left, the call fails before connecting. Redirects are never followed. `http` and `https` only.
+- Outbound requests (webhooks, LLM connections, OIDC, Slack) go through an HTTP client with an SSRF guard. Unless `security.allow_private_network_egress = true` (needed for local Ollama/vLLM — the setting is shown in the LLM connection form), the client drops every resolved address, and any literal IP in the URL, in these ranges (D166): loopback, RFC 1918, CGNAT `100.64.0.0/10`, link-local, unique local `fc00::/7`, unspecified, multicast, broadcast, `192.0.0.0/24`, `198.18.0.0/15`, documentation ranges, and IPv4-mapped or NAT64 forms of any of these. If none is left, the call fails before connecting. Redirects are never followed. `http` and `https` only. Identity-provider URLs are operator configuration and are not passed through that guard. The OIDC client refuses redirects and times out after 10 seconds.
 - Request size limits everywhere; JSON depth limit 128.
+- Credentials are never taken from query strings. Request logs carry the matched route template, not the raw URI (D150).
 - Content-Security-Policy on the UI (`default-src 'self'`; media from `self` only); payloads rendered as text (no HTML injection from trace content).
 - `cargo deny` (advisories, bans, sources) on every CI run and `cargo deny check advisories` weekly (RustSec, the database `cargo audit` uses); Dependabot alerts for JS and Python; dependency licenses compatible with any license we later pick (license check enabled once D9 is decided, D57).
 
