@@ -41,6 +41,7 @@ use crate::wal::sync_dir;
 use crate::wal::writer::{WalWriterHandle, WriterExit, WriterParams, spawn};
 use crate::wal::{SegmentWriter, replay};
 
+pub(crate) mod anchor;
 pub(crate) mod catalog;
 pub mod config;
 pub mod error;
@@ -180,6 +181,9 @@ impl Storage {
         };
         let max_age = config.flush.max_age;
         let upload_concurrency = config.flush.upload_concurrency;
+        // Resolve the anchor window once; `validate` has bounded both sources.
+        let window = config.anchor.window.unwrap_or(config.query.trace_lookback);
+        let window_ns = i64::try_from(window.as_nanos()).unwrap_or(i64::MAX);
         #[allow(clippy::default_constructed_unit_structs)]
         let hooks = Hooks::default();
         let layout_dir = data_dir.clone();
@@ -235,6 +239,9 @@ impl Storage {
             )
         })??;
         let catalog = committer.catalog().await;
+        let mut anchors = anchor::Anchors::new(window_ns);
+        anchors.rebuild(&catalog, &objects).await?;
+        let anchors = Arc::new(Mutex::new(anchors));
         let published = Arc::new(Published::new(ReadState {
             spans: recovered.spans.memtable.snapshot(),
             scores: recovered.scores.memtable.snapshot(),
@@ -267,6 +274,7 @@ impl Storage {
             max_bytes: tune.flush_max_bytes,
             max_age,
             upload_concurrency,
+            anchors: Some(Arc::clone(&anchors)),
         });
         let scores_flush = flush::spawn(flush::FlushStart {
             table: Table::Scores,
@@ -279,6 +287,7 @@ impl Storage {
             max_bytes: tune.flush_max_bytes,
             max_age,
             upload_concurrency,
+            anchors: None,
         });
         if let Err(error) =
             gc::collect_once(&committer, &objects, &hooks, catalog::now_ns(), gc::MAX_AGE).await
@@ -490,7 +499,7 @@ impl Storage {
 
     /// Rows currently published for `table`.
     #[cfg(test)]
-    fn published_rows(&self, table: Table) -> usize {
+    pub(crate) fn published_rows(&self, table: Table) -> usize {
         let state = self.published.load();
         let snapshot = match table {
             Table::Spans => &state.spans,
@@ -506,7 +515,7 @@ impl Storage {
 
     /// Active catalog files for `table`.
     #[cfg(test)]
-    fn catalog_files(&self, table: Table) -> Vec<Arc<catalog::FileMeta>> {
+    pub(crate) fn catalog_files(&self, table: Table) -> Vec<Arc<catalog::FileMeta>> {
         self.published
             .load()
             .catalog
@@ -515,7 +524,7 @@ impl Storage {
 
     /// Paths of the active files of a file table, including `traces`.
     #[cfg(test)]
-    fn catalog_paths(&self, table: catalog::FileTable) -> Vec<String> {
+    pub(crate) fn catalog_paths(&self, table: catalog::FileTable) -> Vec<String> {
         self.published
             .load()
             .catalog
@@ -527,7 +536,7 @@ impl Storage {
 
     /// Rows in the active catalog files of `table`.
     #[cfg(test)]
-    fn catalog_rows(&self, table: Table) -> u64 {
+    pub(crate) fn catalog_rows(&self, table: Table) -> u64 {
         self.catalog_files(table).iter().map(|file| file.rows).sum()
     }
 
@@ -911,6 +920,7 @@ mod tests {
             flush: FlushConfig::default(),
             memtable: MemtableConfig::default(),
             query: QueryConfig::default(),
+            anchor: Default::default(),
         }
     }
 

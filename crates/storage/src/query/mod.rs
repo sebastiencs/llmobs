@@ -318,8 +318,9 @@ pub(crate) fn overlapping_files(
     if bounds.contradicts() {
         return Vec::new();
     }
+    let file_table = FileTable::from(table);
     catalog
-        .files(FileTable::from(table), project, day_range(&bounds))
+        .files(file_table, project, file_day_range(&bounds, file_table))
         .filter(|file| file_overlaps(file, &bounds))
         .cloned()
         .collect()
@@ -455,6 +456,21 @@ fn day_range(bounds: &TimeBounds) -> RangeInclusive<NaiveDate> {
         return NaiveDate::MIN..=NaiveDate::MAX;
     }
     start..=end
+}
+
+/// File day pruning for `spans` and `traces` widens by one day on each side:
+/// an anchor partition may hold rows whose own day is one day away (D86).
+/// `scores` files stay in their own day; memtable pruning stays exact.
+fn file_day_range(bounds: &TimeBounds, table: FileTable) -> RangeInclusive<NaiveDate> {
+    let range = day_range(bounds);
+    match table {
+        FileTable::Spans | FileTable::Traces => {
+            let start = range.start().pred_opt().unwrap_or(NaiveDate::MIN);
+            let end = range.end().succ_opt().unwrap_or(NaiveDate::MAX);
+            start..=end
+        }
+        FileTable::Scores => range,
+    }
 }
 
 fn day_of_ns(ns: i64) -> Option<NaiveDate> {

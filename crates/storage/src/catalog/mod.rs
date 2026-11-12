@@ -155,6 +155,14 @@ impl Catalog {
             .collect()
     }
 
+    /// Every active file of `table`, across projects and days, in key order.
+    pub(crate) fn files_all(&self, table: FileTable) -> impl Iterator<Item = &Arc<FileMeta>> {
+        self.tables[file_index(table)]
+            .values()
+            .flat_map(|days| days.values())
+            .flatten()
+    }
+
     /// Files for `project` on the inclusive day range, in `(min_time, id)` order.
     ///
     /// A reversed range yields nothing.

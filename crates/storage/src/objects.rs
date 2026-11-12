@@ -121,6 +121,11 @@ impl Objects {
         &self.url
     }
 
+    /// The object store, for async Parquet reads at open.
+    pub(crate) fn store(&self) -> Arc<dyn ObjectStore> {
+        Arc::clone(&self.store)
+    }
+
     /// `tables/<table>/project=<project_id>/day=<YYYY-MM-DD>/<level>-<uuidv7>.parquet`.
     ///
     /// This is the only path formatter. `level` is `0` or `1`.
@@ -512,6 +517,7 @@ mod tests {
             flush: FlushConfig::default(),
             memtable: MemtableConfig::default(),
             query: QueryConfig::default(),
+            anchor: Default::default(),
         }
     }
 

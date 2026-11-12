@@ -144,6 +144,7 @@ mod tests {
                 target_partitions: 2,
                 ..QueryConfig::default()
             },
+            anchor: Default::default(),
         }
     }
 
@@ -533,9 +534,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn start_time_bounds_skip_files_from_other_days() {
+    async fn start_time_bounds_find_a_row_in_the_anchor_partition() {
         let dir = tempfile::tempdir().unwrap();
         let storage = crate::Storage::open(aged(dir.path())).await.unwrap();
+        // Both spans belong to the same trace and are near midnight, so the
+        // anchor keeps the day-2 row in the day-1 partition (D86).
         storage
             .append_spans(project(), spans_at(&[1_000]))
             .await
@@ -544,12 +547,13 @@ mod tests {
             .append_spans(project(), spans_at(&[DAY_NS + 1_000]))
             .await
             .unwrap();
-        wait_flushed(&storage, 2).await;
+        wait_flushed(&storage, 1).await;
         let query = storage.query(project()).unwrap();
         let spans = provider(&query);
         let bound = start_ge(DAY_NS);
+        // One day of file slack finds that day-1 file for a day-2 range.
         assert_eq!(spans.candidate_files(std::slice::from_ref(&bound)).len(), 1);
-        assert_eq!(spans.candidate_files(&[]).len(), 2);
+        assert_eq!(spans.candidate_files(&[]).len(), 1);
         let ctx = session(&query);
         ctx.register_table("spans_t", Arc::clone(&query.spans))
             .unwrap();

@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use arrow::array::{Array, FixedSizeBinaryArray, Int64Array, StringArray};
 use bytesize::ByteSize;
+use chrono::{Datelike, NaiveDate};
 use datafusion::execution::context::{SessionConfig, SessionContext};
 use llmobs_core::batch::spans_to_record_batch;
 use llmobs_core::enums::{SpanKind, SpanStatus};
@@ -57,19 +58,42 @@ fn child_config(dir: &Path) -> StorageConfig {
             hard_limit: ByteSize::mib(256),
         },
         query: QueryConfig::default(),
+        anchor: Default::default(),
     }
 }
 
+/// 2026-03-05 23:30 UTC, in nanoseconds. The stream spreads over the hour
+/// `[D 23:30, D+1 00:30)`, so every row is within `anchor.window` (1 h) of
+/// the D+1 midnight.
+fn anchor_start() -> i64 {
+    let day = NaiveDate::from_ymd_opt(2026, 3, 5).unwrap();
+    let days = i64::from(day.num_days_from_ce()) - 719_163;
+    days * 86_400_000_000_000 + 23 * 3_600 * 1_000_000_000 + 30 * 60 * 1_000_000_000
+}
+
+/// `(iteration, trace index)` identifies a trace; span ids come from the batch
+/// counter. Each trace's rows are appended in three consecutive batches, far
+/// enough apart that a kill usually splits them across flushes.
 fn span_batch(batch_id: u64, rows: usize) -> arrow::array::RecordBatch {
     let project_id = project();
-    let trace_id = "4bf92f3577b34da6a3ce929d0e0e4736"
-        .parse::<TraceId>()
-        .unwrap();
+    let sequence = batch_id % 1_000_000;
+    let run_id = batch_id / 1_000_000;
+    let trace_index = sequence / 3;
+    let mut trace_bytes = [0_u8; 16];
+    trace_bytes[..8].copy_from_slice(&run_id.to_be_bytes());
+    trace_bytes[8..].copy_from_slice(&(trace_index + 1).to_be_bytes());
+    let trace_id = TraceId::from_bytes(trace_bytes).unwrap();
+    // Three consecutive batches of one trace land at 23:30, 23:50 and 00:10,
+    // so every trace straddles the D+1 midnight.
+    let start_base =
+        anchor_start() + i64::try_from((sequence * 1_200) % 3_600).unwrap() * 1_000_000_000;
     let spans: Vec<Span> = (0..rows)
         .map(|row| {
+            // A counter in the upper seven bytes; the row owns the last byte.
+            // Byte 6 is never zero, so the id is never all-zero.
             let mut bytes = (batch_id.saturating_add(1) << 8).to_be_bytes();
             bytes[7] = u8::try_from(row).unwrap_or(0);
-            let start = 1_000 + i64::try_from(row).unwrap_or(0);
+            let start = start_base + i64::try_from(row).unwrap_or(0) * 1_000_000_000;
             Span {
                 project_id,
                 trace_id,
@@ -121,7 +145,7 @@ fn span_batch(batch_id: u64, rows: usize) -> arrow::array::RecordBatch {
                 media_refs: Vec::new(),
                 truncated: Vec::new(),
                 conventions: Vec::new(),
-                ingest_time: start + 200,
+                ingest_time: start + 1_000_000_000,
                 schema_version: 1,
             }
         })
@@ -312,6 +336,7 @@ async fn check_dir(dir: &Path, before: &[Ack], previous: (u64, u64)) -> Result<(
     for (spans_path, traces_path) in &catalog.sources {
         check_source_pair(dir, spans_path, traces_path)?;
     }
+    anchor_days_are_singular(dir, &catalog)?;
     for (path, size) in &catalog.files {
         let file = dir.join("objects").join(path);
         let meta = std::fs::metadata(&file).map_err(|error| format!("{path}: {error}"))?;
@@ -392,6 +417,8 @@ struct CatalogView {
     staged_at: Vec<i64>,
     /// `(spans path, traces path)` for every `file_sources` row.
     sources: Vec<(String, String)>,
+    /// `(path, partition day)` of every active spans file.
+    spans_files: Vec<(String, String)>,
 }
 
 async fn read_catalog(dir: &Path) -> Result<CatalogView, String> {
@@ -454,13 +481,55 @@ async fn read_catalog(dir: &Path) -> Result<CatalogView, String> {
             sqlx::Row::try_get(&row, "traces_path").map_err(|error| error.to_string())?;
         sources.push((spans_path, traces_path));
     }
+    let spans_rows = sqlx::query(
+        "SELECT path, day FROM data_files
+         WHERE table_name = 'spans' AND state = 'active'",
+    )
+    .fetch_all(&mut connection)
+    .await
+    .map_err(|error| error.to_string())?;
+    let mut spans_files = Vec::new();
+    for row in spans_rows {
+        let path: String = sqlx::Row::try_get(&row, "path").map_err(|error| error.to_string())?;
+        let day: String = sqlx::Row::try_get(&row, "day").map_err(|error| error.to_string())?;
+        spans_files.push((path, day));
+    }
     Ok(CatalogView {
         files,
         spans_seq,
         scores_seq,
         staged_at,
         sources,
+        spans_files,
     })
+}
+
+/// Every trace's rows must live in exactly one partition day. All rows are
+/// near one midnight, so the anchor must hold for all of them (D86).
+fn anchor_days_are_singular(dir: &Path, catalog: &CatalogView) -> Result<(), String> {
+    let mut seen: BTreeMap<Vec<u8>, String> = BTreeMap::new();
+    for (path, day) in &catalog.spans_files {
+        let reader = projected_reader(dir, path, &["trace_id"])?;
+        for batch in reader {
+            let batch = batch.map_err(|error| format!("{path}: {error}"))?;
+            let ids = batch
+                .column_by_name("trace_id")
+                .and_then(|column| column.as_any().downcast_ref::<FixedSizeBinaryArray>())
+                .ok_or_else(|| format!("{path}: no trace_id column"))?;
+            for row in 0..batch.num_rows() {
+                let id = ids.value(row).to_vec();
+                match seen.get(&id) {
+                    Some(other) if other != day => {
+                        return Err(format!("trace appears in partition days {other} and {day}"));
+                    }
+                    _ => {
+                        seen.insert(id, day.clone());
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The sync Parquet reader over a local object, projected to `columns`.

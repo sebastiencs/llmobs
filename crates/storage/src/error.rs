@@ -70,6 +70,9 @@ pub enum OpenError {
     /// `catalog.db` could not be opened or migrated.
     #[error(transparent)]
     Catalog(#[from] CatalogError),
+    /// The trace anchor state could not be rebuilt.
+    #[error(transparent)]
+    Anchor(#[from] AnchorError),
     /// The object store could not be opened, or a startup cleanup failed.
     #[error(transparent)]
     Objects(#[from] ObjectError),
@@ -423,6 +426,33 @@ pub enum ParquetWriteError {
     },
 }
 
+/// The trace anchor could not partition rows or rebuild its state.
+#[derive(Debug, thiserror::Error)]
+pub enum AnchorError {
+    /// A required column of a spans or traces batch is missing or mistyped.
+    #[error("anchor: missing or invalid column {name}")]
+    Column {
+        /// Column name. Never a row value.
+        name: &'static str,
+    },
+    /// Arrow rejected a batch operation.
+    #[error("anchor: {0}")]
+    Arrow(#[from] ArrowError),
+    /// An async Parquet read during the startup rebuild failed.
+    #[error("anchor rebuild: {0}")]
+    Parquet(#[source] Box<parquet::errors::ParquetError>),
+}
+
+impl AnchorError {
+    pub(crate) fn column(name: &'static str) -> Self {
+        Self::Column { name }
+    }
+
+    pub(crate) fn parquet(source: parquet::errors::ParquetError) -> Self {
+        Self::Parquet(Box::new(source))
+    }
+}
+
 /// Building or merging trace partials failed.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum PartialsError {
@@ -456,6 +486,9 @@ pub(crate) enum FlushError {
     /// Sorting or encoding the frozen batches failed.
     #[error("flush prepare: {0}")]
     Prepare(ParquetWriteError),
+    /// Anchor partitioning failed.
+    #[error("flush anchor: {0}")]
+    Anchor(#[from] AnchorError),
     /// Computing the trace partials of a spans file failed.
     #[error("flush partials: {0}")]
     Partials(PartialsError),

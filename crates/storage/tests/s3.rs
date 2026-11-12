@@ -75,6 +75,7 @@ fn config(dir: &std::path::Path, bucket: &str, prefix: &str, endpoint: &str) -> 
             hard_limit: ByteSize::gib(1),
         },
         query: QueryConfig::default(),
+        anchor: Default::default(),
     }
 }
 

@@ -245,6 +245,7 @@ mod tests {
             flush: FlushConfig::default(),
             memtable: MemtableConfig::default(),
             query: QueryConfig::default(),
+            anchor: Default::default(),
         }
     }
 
