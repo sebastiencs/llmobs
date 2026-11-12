@@ -922,7 +922,7 @@ mod tests {
     use crate::error::StorageError;
     use crate::hooks::HookPoint;
     use crate::partials::partials_from_spans;
-    use crate::wal::{parse_segment_name, spans_at, spans_named};
+    use crate::wal::{parse_segment_name, spans_at, spans_keyed, spans_named};
 
     fn project() -> ProjectId {
         "018f6b4e-7c1a-7c1a-8c1a-000000000001".parse().unwrap()
@@ -1395,12 +1395,13 @@ mod tests {
         let config = config_in(dir.path());
         let storage = Arc::new(Storage::open(config.clone()).await.unwrap());
         let mut tasks = Vec::new();
-        for index in 0..8 {
+        for index in 0..8_u8 {
             let storage = Arc::clone(&storage);
             tasks.push(tokio::spawn(async move {
-                storage
-                    .append_spans(project(), spans_named(&[index], &format!("s{index}")))
-                    .await
+                // A distinct span id per append: a flush keeps one row per
+                // `(trace_id, span_id)`, so equal ids would merge the rows.
+                let batch = spans_keyed(&[i64::from(index)], &format!("s{index}"), index + 1);
+                storage.append_spans(project(), batch).await
             }));
         }
         tokio::task::yield_now().await;

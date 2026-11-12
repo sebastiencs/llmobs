@@ -142,6 +142,18 @@ pub(crate) fn spans_at(starts: &[i64]) -> arrow::array::RecordBatch {
 /// [`spans_at`] with a chosen span name.
 #[cfg(test)]
 pub(crate) fn spans_named(starts: &[i64], name: &str) -> arrow::array::RecordBatch {
+    spans_keyed(starts, name, 1)
+}
+
+/// [`spans_named`] where the span ids count up from `first_span_id`. Batches
+/// that use the same ids share their `(trace_id, span_id)` keys, and a flush
+/// keeps only one row per key.
+#[cfg(test)]
+pub(crate) fn spans_keyed(
+    starts: &[i64],
+    name: &str,
+    first_span_id: u8,
+) -> arrow::array::RecordBatch {
     use std::collections::BTreeMap;
 
     use llmobs_core::batch::spans_to_record_batch;
@@ -160,7 +172,7 @@ pub(crate) fn spans_named(starts: &[i64], name: &str) -> arrow::array::RecordBat
         .enumerate()
         .map(|(index, start)| {
             let mut span_bytes = [0; 8];
-            span_bytes[7] = u8::try_from(index + 1).unwrap_or(1);
+            span_bytes[7] = u8::try_from(usize::from(first_span_id) + index).unwrap_or(1);
             Span {
                 project_id,
                 trace_id,
