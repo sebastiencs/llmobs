@@ -7,12 +7,11 @@ bucket `llmobs-cache`. The S3 endpoint and bucket are configured in
 ## Credentials
 
 In Cloudflare, open **R2 Object Storage → Manage R2 API Tokens** and create
-two tokens, each scoped only to `llmobs-cache`:
+one token with **Object Read & Write** permission, scoped only to `llmobs-cache`.
+Store its credentials in these GitHub repository secrets:
 
-| Token | Permission | GitHub repository secrets |
-| --- | --- | --- |
-| CI writer | Object Read & Write | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
-| CI reader | Object Read only | `R2_READ_ACCESS_KEY_ID`, `R2_READ_SECRET_ACCESS_KEY` |
+- `R2_ACCESS_KEY_ID`
+- `R2_SECRET_ACCESS_KEY`
 
 Save the generated **Access Key ID** and **Secret Access Key**, not the
 Cloudflare API token value. Add them under the GitHub repository's
@@ -23,14 +22,26 @@ each value at its hidden prompt:
 ```sh
 gh secret set R2_ACCESS_KEY_ID --repo sebastiencs/llmobs
 gh secret set R2_SECRET_ACCESS_KEY --repo sebastiencs/llmobs
-gh secret set R2_READ_ACCESS_KEY_ID --repo sebastiencs/llmobs
-gh secret set R2_READ_SECRET_ACCESS_KEY --repo sebastiencs/llmobs
 ```
 
-Pushes and manual runs on `main` use the writer. Pull requests and manual runs
-on other branches use the reader and disable remote writes in kache. Fork and
-Dependabot PRs do not receive these secrets and compile without the cache.
+## Trusted runs
+
+| Run | Cache access |
+| --- | --- |
+| Push or manual run on `main` | Read and save |
+| PR authored by `sebastiencs`, from this repository, triggered and re-run by `sebastiencs` | Read and save |
+| Other PRs, forks, Dependabot, or manual runs on other branches | None |
+
+`CI_CACHE_ALLOWED` checks GitHub's event metadata before the Rust jobs receive
+R2 credentials. The composite action skips kache when caching is disabled or
+credentials are missing. Whenever caching is enabled, kache saves its results.
 Jobs with `cache: "false"` do not install kache or access R2.
+
+Only the writer credential pair is used. A read-only R2 token is no longer
+needed. This policy assumes that repository writers and the code executed in
+trusted runs are trusted; repository writers can modify workflows to access
+repository secrets. Keep the `pull_request` trigger, which withholds secrets
+from fork PRs; do not switch to `pull_request_target` to expose the cache.
 
 The bucket stays private; neither public access nor CORS configuration is
 needed. GitHub's workflow token keeps `contents: read`, and kache writes its
@@ -38,10 +49,10 @@ report to the job summary without posting PR comments.
 
 ## First runs
 
-After the workflow change reaches `main` and the secrets are configured, run
-CI on `main` to populate the cache. Run it again and compare the complete
+After the secrets are configured, a qualifying owner PR or a run on `main`
+can populate the cache. Run it again and compare the complete
 `rust-lint` and `rust-test` job durations, including kache setup and its post
-step. A PR cannot populate an empty remote because it has read-only access.
+step.
 
 The kache setup step should report the configured S3 remote. Its job summary
 shows cache hits and misses. Lint and test jobs have separate prefetch manifests

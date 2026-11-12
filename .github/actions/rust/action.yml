@@ -3,11 +3,11 @@ description: Install the repo toolchain, just, and cargo-deny
 
 inputs:
   cache:
-    description: Use the R2 compiler cache. PRs restore but do not save.
+    description: Read and save the R2 compiler cache for a trusted CI run.
     required: false
     default: "true"
   r2-access-key-id:
-    description: Bucket-scoped R2 access key ID; use a read-only key for PRs.
+    description: Bucket-scoped R2 access key ID with Object Read & Write permission.
     required: false
   r2-secret-access-key:
     description: Secret access key paired with r2-access-key-id.
@@ -22,7 +22,7 @@ runs:
       run: rustup toolchain install
 
     - name: Cache Rust compilation with kache and R2
-      # Fork and Dependabot PRs have no R2 secrets and compile without the cache.
+      # The caller enables caching and supplies credentials only for trusted runs.
       if: inputs.cache == 'true' && inputs.r2-access-key-id != '' && inputs.r2-secret-access-key != ''
       uses: kunobi-ninja/kache-action@ad7317540dcdd71c904f7a60a87b620a0c0e67ed # v1
       with:
@@ -37,7 +37,7 @@ runs:
         manifest-key: ${{ github.job }}
         cache-executables: true
         github-cache: false
-        save-cache: ${{ github.ref == 'refs/heads/main' }}
+        save-cache: true
         # Reports go in the job summary; the workflow token stays contents:read.
         pr-comment: false
 
