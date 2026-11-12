@@ -16,5 +16,6 @@ pub use config::{
     WebhookConfig,
 };
 pub use error::{CheckError, ConfigError, MappingError};
+pub use mapping::resolve::{ItemData, TraceData, Variables, resolve};
 pub use mapping::{Expr, VariableMapping};
 pub use secret::Secret;

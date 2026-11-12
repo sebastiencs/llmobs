@@ -1,8 +1,8 @@
 //! Configuration, check, and mapping errors.
 //!
-//! Messages name the evaluator kind, the field, the variable, the byte offset, or
-//! serde's error category with its line and column. They never quote prompt text,
-//! check inputs, patterns, header values, URLs, expression text, or other payload.
+//! Messages name the evaluator kind, the field, the variable, the expression, the
+//! byte offset, or serde's error category with its line and column. They never
+//! quote prompt text, check inputs, patterns, header values, URLs, or other payload.
 
 use llmobs_core::enums::ScoreDataType;
 use serde_json::error::Category;
@@ -86,8 +86,9 @@ pub enum CheckError {
 
 /// A mapping document or one of its expressions broke a rule.
 ///
-/// [`Syntax`](MappingError::Syntax) names a byte offset and a static reason. The
-/// expression text stays on [`crate::Expr`] for the caller; it is not repeated here.
+/// [`Syntax`](MappingError::Syntax) names a byte offset and a static reason.
+/// [`MissingVariable`](MappingError::MissingVariable) names the variable and the
+/// expression text. No variant quotes a payload value.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum MappingError {
     /// The expression does not match the mapping grammar.
@@ -120,6 +121,23 @@ pub enum MappingError {
     /// The mapping has more than 32 variables.
     #[error("mapping has more than 32 variables")]
     TooMany,
+    /// A required expression resolved to nothing.
+    #[error("missing variable {name} ({expr})")]
+    MissingVariable {
+        /// Mapping variable name.
+        name: String,
+        /// Original expression text.
+        expr: String,
+    },
+    /// `span.*` was used and the target span was absent or not in the trace.
+    #[error("no target span")]
+    NoTargetSpan,
+    /// A trace expression was used without trace data.
+    #[error("no trace")]
+    NoTrace,
+    /// An item expression was used without an item.
+    #[error("no item")]
+    NoItem,
 }
 
 /// Fails the test when `message` contains `payload`.

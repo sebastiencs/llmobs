@@ -3,9 +3,6 @@
 //! One line per span, indented by depth. A cycle has no parent outside itself,
 //! so spans that the root walk never reaches are started in start-time order.
 //! The visited set stops the cycle and skips a repeated span id.
-//!
-//! E7 calls [`render`](render). Until then this module is only reached from tests.
-#![cfg_attr(not(test), allow(dead_code))]
 
 use std::collections::{HashMap, HashSet};
 

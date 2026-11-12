@@ -6,6 +6,7 @@
 //! `expr_offset` is a byte index into the original expression. One kibibyte
 //! is 1024 bytes.
 
+pub(crate) mod resolve;
 mod transcript;
 
 use std::collections::BTreeMap;
@@ -322,9 +323,6 @@ fn parse_quoted(body: &str, content_at: usize) -> Result<(String, usize), Mappin
 /// `messages` and `json` parse as JSON. Storage guarantees that text is valid
 /// JSON; a parse failure returns the raw string so a bad row still renders.
 /// `text` becomes a JSON string. A missing payload or format is absent.
-///
-/// E7 resolves payloads through this helper. Until then only the transcript calls it.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn decode_payload(
     payload: Option<&str>,
     format: Option<PayloadFormat>,

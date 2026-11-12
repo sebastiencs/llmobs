@@ -40,9 +40,6 @@ pub(crate) fn extract_text(value: &Value) -> String {
 /// `[audio]`, or `[file]`, a tool call is `tool_call name(arguments)`, and a
 /// tool result is `tool_result: ` plus the rendered response. Every other
 /// value, including an unknown message part, is compact JSON.
-///
-/// E8's formatter calls this. Until then only the transcript does.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn render_value(value: &Value) -> String {
     match value {
         Value::Null => String::new(),
@@ -57,7 +54,6 @@ pub(crate) fn render_value(value: &Value) -> String {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn render_messages(messages: &[Message]) -> String {
     messages
         .iter()
@@ -66,7 +62,6 @@ fn render_messages(messages: &[Message]) -> String {
         .join("\n")
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn render_message(message: &Message) -> String {
     let body = message
         .parts
@@ -77,7 +72,6 @@ fn render_message(message: &Message) -> String {
     format!("{}: {body}", message.role.as_str())
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn render_part(part: &Part) -> String {
     match part {
         Part::Text { content, .. } | Part::Reasoning { content, .. } => content.clone(),
@@ -96,7 +90,6 @@ fn render_part(part: &Part) -> String {
 }
 
 /// Image and audio keep their labels. Video and any other modality are `[file]`.
-#[cfg_attr(not(test), allow(dead_code))]
 fn media_placeholder(modality: &Option<Modality>) -> String {
     match modality {
         Some(Modality::Image) => "[image]",
@@ -106,7 +99,6 @@ fn media_placeholder(modality: &Option<Modality>) -> String {
     .to_owned()
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn compact_json(value: &Value) -> String {
     // `Value` contains only JSON, so compact serialization cannot fail.
     serde_json::to_string(value).unwrap_or_default()
