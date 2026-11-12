@@ -118,6 +118,8 @@ opentelemetry-proto = { version = "0.33.1", default-features = false, features =
     "with-serde",
 ] }
 regex = "1.13.1"
+# Normalized Levenshtein for the similarity check (D164). Unicode scalar values.
+strsim = "0.11.1"
 sha2 = "0.11.1"
 base64 = "0.23.1"
 # OpenAPI 3.1 schemas. `uuid` enables the `format: uuid` schema. Do not enable

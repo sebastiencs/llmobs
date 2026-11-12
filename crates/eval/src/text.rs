@@ -2,10 +2,6 @@
 //!
 //! Spec 06 § `check` defaults (D164). A string is kept. A messages array yields
 //! the text parts of its last assistant message. Anything else is compact JSON.
-//! The checks are the non-test callers; until they are wired through the
-//! dispatcher, the compiler only sees the unit tests.
-
-#![cfg_attr(not(test), allow(dead_code))]
 
 use llmobs_core::message::{Message, Part, Role};
 use serde_json::Value;

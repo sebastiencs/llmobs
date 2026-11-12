@@ -435,7 +435,10 @@ pub enum Check {
     },
     /// The output text parses as JSON.
     JsonValid,
-    /// The output validates against a JSON Schema. Compiled when the check runs.
+    /// The output validates against a JSON Schema.
+    ///
+    /// [`crate::check::compile_schema`] compiles it here and again when the check runs.
+    /// External `$ref`s are rejected; the compiler does not fetch them.
     JsonSchema {
         /// Schema document.
         schema: Value,
@@ -486,10 +489,16 @@ impl Check {
                 }
                 Ok(())
             }
-            Self::ExactMatch { .. }
-            | Self::JsonValid
-            | Self::JsonSchema { .. }
-            | Self::Levenshtein { .. } => Ok(()),
+            Self::JsonSchema { schema } => {
+                if crate::check::compile_schema(schema).is_err() {
+                    return Err(ConfigError::Invalid {
+                        field: "schema",
+                        reason: "invalid JSON schema",
+                    });
+                }
+                Ok(())
+            }
+            Self::ExactMatch { .. } | Self::JsonValid | Self::Levenshtein { .. } => Ok(()),
         }
     }
 }

@@ -2646,10 +2646,12 @@ name = "llmobs-eval"
 version = "0.0.0"
 dependencies = [
  "insta",
+ "jsonschema",
  "llmobs-core",
  "regex",
  "serde",
  "serde_json",
+ "strsim",
  "thiserror",
  "uuid",
 ]

@@ -63,7 +63,7 @@ impl ConfigError {
     }
 }
 
-/// A text check could not produce a score.
+/// A check could not produce a score.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CheckError {
     /// `output` or `expected` was absent and this check reads it.
@@ -77,6 +77,11 @@ pub enum CheckError {
     /// The pattern is omitted: it can be attacker-controlled text.
     #[error("invalid regular expression")]
     InvalidPattern,
+    /// The JSON Schema does not compile.
+    ///
+    /// The schema is omitted: a `$ref` URL or a schema string can carry payload text.
+    #[error("invalid JSON schema")]
+    InvalidSchema,
 }
 
 /// Fails the test when `message` contains `payload`.

@@ -10,8 +10,10 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+jsonschema.workspace = true
 llmobs-core.workspace = true
 regex.workspace = true
+strsim.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

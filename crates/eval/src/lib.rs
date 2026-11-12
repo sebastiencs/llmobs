@@ -9,7 +9,7 @@ mod error;
 mod secret;
 mod text;
 
-pub use check::CheckInput;
+pub use check::{CheckInput, CheckResult, run_check};
 pub use config::{
     Check, ContainsMode, Evaluator, EvaluatorConfig, JudgeConfig, JudgeOutput, OutputScore,
     WebhookConfig,
