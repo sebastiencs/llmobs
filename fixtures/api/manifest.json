@@ -8,6 +8,16 @@
     "file": "static/auth-config.json"
   },
   {
+    "operation_id": "get_invite_preview",
+    "path_params": {
+      "token": "EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXA"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/invite-preview.json"
+  },
+  {
     "operation_id": "get_me",
     "path_params": {},
     "query": {},
@@ -346,6 +356,16 @@
     "file": "static/api-keys.json"
   },
   {
+    "operation_id": "list_org_invites",
+    "path_params": {
+      "org": "acme"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/invites.json"
+  },
+  {
     "operation_id": "list_org_members",
     "path_params": {
       "org": "acme"
@@ -482,6 +502,16 @@
     "status": 200,
     "content_type": "application/json",
     "file": "static/me.json"
+  },
+  {
+    "operation_id": "post_org_invite",
+    "path_params": {
+      "org": "acme"
+    },
+    "query": {},
+    "status": 201,
+    "content_type": "application/json",
+    "file": "static/invite-created.json"
   },
   {
     "operation_id": "post_personal_token",

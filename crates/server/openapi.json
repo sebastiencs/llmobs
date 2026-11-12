@@ -28,6 +28,136 @@
         "security": []
       }
     },
+    "/api/auth/invites/{token}": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Preview an invitation",
+        "operationId": "get_invite_preview",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "Invitation token from the accept link.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The invitation, when it is pending and unexpired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitePreview"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/auth/invites/{token}/accept": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Accept an invitation",
+        "operationId": "post_invite_accept",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "Invitation token from the accept link.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The caller's membership in the org.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgMembership"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/api/auth/login": {
       "post": {
         "tags": [
@@ -1087,6 +1217,302 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/orgs/{org}/invites": {
+      "get": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "List pending invitations",
+        "operationId": "list_org_invites",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Org UUID or slug.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return (1–1000, default 50).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Limit",
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of pending invitations, ordered by email.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "Invite a member by email",
+        "operationId": "post_org_invite",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Org UUID or slug.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInviteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The invitation and its accept link.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedInvite"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/orgs/{org}/invites/{id}": {
+      "delete": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "Delete an invitation",
+        "operationId": "delete_org_invite",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Org UUID or slug.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Invitation id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The invitation is deleted."
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/v1/orgs/{org}/members": {
@@ -4845,6 +5271,25 @@
         },
         "additionalProperties": false
       },
+      "CreateInviteRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/orgs/{org}/invites`.",
+        "required": [
+          "email",
+          "role"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Address to invite."
+          },
+          "role": {
+            "$ref": "#/components/schemas/OrgRole",
+            "description": "Role granted on accept. Not above the caller's role."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateOrgRequest": {
         "type": "object",
         "description": "`POST /api/v1/orgs`.",
@@ -4960,6 +5405,24 @@
           "secret": {
             "type": "string",
             "description": "The bearer value. Shown only in this response."
+          }
+        }
+      },
+      "CreatedInvite": {
+        "type": "object",
+        "description": "`POST /api/v1/orgs/{org}/invites` returns 201.\n\n`accept_url` is the only response that contains the token.",
+        "required": [
+          "invite",
+          "accept_url"
+        ],
+        "properties": {
+          "accept_url": {
+            "type": "string",
+            "description": "`<public_url>/invite/<token>`."
+          },
+          "invite": {
+            "$ref": "#/components/schemas/Invite",
+            "description": "The pending invitation."
           }
         }
       },
@@ -5131,6 +5594,122 @@
           "signature": {
             "type": "string",
             "description": "Argument and return types, for example `score(name: string) -> float`."
+          }
+        }
+      },
+      "Invite": {
+        "type": "object",
+        "description": "One pending invitation.\n\n`GET /api/v1/orgs/{org}/invites` and the `invite` field of the create response.",
+        "required": [
+          "id",
+          "email",
+          "role",
+          "created_at",
+          "expires_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the invitation was created. JSON is RFC 3339."
+          },
+          "email": {
+            "type": "string",
+            "description": "Address the invitation was sent to."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the invitation stops working. JSON is RFC 3339."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Invitation id."
+          },
+          "invited_by": {
+            "$ref": "#/components/schemas/MemberUser",
+            "description": "Who sent it. Omitted when that user no longer exists."
+          },
+          "role": {
+            "$ref": "#/components/schemas/OrgRole",
+            "description": "Role granted on accept."
+          }
+        }
+      },
+      "InviteOrg": {
+        "type": "object",
+        "description": "Org named in an invitation preview. The id is not included.",
+        "required": [
+          "name",
+          "slug"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Display name."
+          },
+          "slug": {
+            "type": "string",
+            "description": "URL slug."
+          }
+        }
+      },
+      "InvitePage": {
+        "type": "object",
+        "description": "One page of results. `next_cursor` is null when there is no next page.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Invite"
+            },
+            "description": "Items in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
+      },
+      "InvitePreview": {
+        "type": "object",
+        "description": "`GET /api/auth/invites/{token}`.\n\nOnly the token holder sees this. `account_exists` tells the UI whether to\nshow login or sign-up.",
+        "required": [
+          "org",
+          "email",
+          "role",
+          "expires_at",
+          "account_exists"
+        ],
+        "properties": {
+          "account_exists": {
+            "type": "boolean",
+            "description": "Whether a user with this email already exists."
+          },
+          "email": {
+            "type": "string",
+            "description": "Address the invitation was sent to."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the invitation stops working. JSON is RFC 3339."
+          },
+          "org": {
+            "$ref": "#/components/schemas/InviteOrg",
+            "description": "The org the invitation joins."
+          },
+          "role": {
+            "$ref": "#/components/schemas/OrgRole",
+            "description": "Role granted on accept."
           }
         }
       },
@@ -6705,7 +7284,7 @@
       },
       "SignupRequest": {
         "type": "object",
-        "description": "`POST /api/auth/signup`. P20 adds `invite_token`.",
+        "description": "`POST /api/auth/signup`.",
         "required": [
           "email",
           "password"
@@ -6714,6 +7293,10 @@
           "email": {
             "type": "string",
             "description": "Email address."
+          },
+          "invite_token": {
+            "type": "string",
+            "description": "Invitation token. When set, sign-up joins that org and the address is already verified."
           },
           "name": {
             "type": "string",

@@ -15,6 +15,7 @@ use llmobs_server::api::account::{
     AuthConfig, Me, OrgMembership, OrgRole, Project, SetupResponse, SignupResponse,
 };
 use llmobs_server::api::common::Page;
+use llmobs_server::api::invites::{CreatedInvite, Invite, InvitePreview};
 use llmobs_server::api::keys::{ApiKey, CreatedApiKey, CreatedPersonalToken, PersonalToken};
 use llmobs_server::api::members::{OrgMember, ProjectMember};
 use llmobs_server::api::metrics::MetricsResponse;
@@ -67,6 +68,21 @@ fn params(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         .iter()
         .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
         .collect()
+}
+
+fn example_created(
+    operation_id: &str,
+    path_params: BTreeMap<String, String>,
+    file: &str,
+) -> Example {
+    Example {
+        operation_id: operation_id.to_owned(),
+        path_params,
+        query: BTreeMap::new(),
+        status: 201,
+        content_type: "application/json".to_owned(),
+        file: file.to_owned(),
+    }
 }
 
 fn example_status(operation_id: &str, file: &str, status: u16) -> Example {
@@ -372,6 +388,25 @@ fn build() -> Built {
             params(&[("org", "acme")]),
             BTreeMap::new(),
             "static/org-members.json",
+            "application/json",
+        ),
+        example(
+            "list_org_invites",
+            params(&[("org", "acme")]),
+            BTreeMap::new(),
+            "static/invites.json",
+            "application/json",
+        ),
+        example_created(
+            "post_org_invite",
+            params(&[("org", "acme")]),
+            "static/invite-created.json",
+        ),
+        example(
+            "get_invite_preview",
+            params(&[("token", "EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXA")]),
+            BTreeMap::new(),
+            "static/invite-preview.json",
             "application/json",
         ),
         example(
@@ -959,6 +994,9 @@ fn static_files_match_their_types() {
     roundtrip::<Page<OrgMembership>>("static/orgs.json");
     roundtrip::<OrgMembership>("static/org.json");
     roundtrip::<Page<OrgMember>>("static/org-members.json");
+    roundtrip::<Page<Invite>>("static/invites.json");
+    roundtrip::<CreatedInvite>("static/invite-created.json");
+    roundtrip::<InvitePreview>("static/invite-preview.json");
     roundtrip::<Page<ProjectMember>>("static/project-members.json");
     roundtrip::<Page<Project>>("static/projects.json");
     roundtrip::<Project>("static/project.json");
@@ -997,6 +1035,9 @@ fn generated_files_roundtrip() {
             | "list_orgs"
             | "get_org"
             | "list_org_members"
+            | "list_org_invites"
+            | "post_org_invite"
+            | "get_invite_preview"
             | "list_project_members"
             | "list_projects"
             | "get_project"

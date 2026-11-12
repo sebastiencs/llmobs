@@ -21,6 +21,8 @@ use crate::http::AppState;
 use crate::http::access::{Access, RouteDef};
 use crate::http::client_ip::ClientIp;
 use crate::http::error::{self, ApiError};
+use crate::meta::invites;
+use crate::meta::members;
 use crate::meta::orgs::orgs_of_user;
 use crate::meta::password_resets::{delete_user_resets, use_reset, valid_reset};
 use crate::meta::users::{self, UserRow, normalize_email};
@@ -352,6 +354,31 @@ fn invalid_link() -> ApiError {
     }
 }
 
+async fn pending_signup_invite(
+    state: &AppState,
+    token: &str,
+    email: &str,
+) -> Result<String, ApiError> {
+    if !is_opaque_token(token) {
+        return Err(field_error("invite_token", "invalid or expired invitation"));
+    }
+    let hash = hash_token(token);
+    let Some((invite, _)) =
+        invites::invite_by_hash(state.meta.reader(), &hash, state.clock.now_ns()).await?
+    else {
+        return Err(field_error("invite_token", "invalid or expired invitation"));
+    };
+    if invite.email != email {
+        return Err(field_error("email", "does not match the invitation"));
+    }
+    if domain_listed(&state.config.auth.enforce_sso_domains, email) {
+        return Err(ApiError::Forbidden {
+            code: ProblemCode::SsoRequired,
+        });
+    }
+    Ok(hash)
+}
+
 async fn signup(
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
@@ -370,28 +397,30 @@ async fn signup(
             code: ProblemCode::Forbidden,
         });
     }
-    match state.config.auth.signup {
-        SignupPolicy::Disabled => {
-            return Ok(forbidden(Some("sign-up is disabled")));
-        }
-        SignupPolicy::InviteOnly => {
-            return Ok(forbidden(Some("sign-up requires an invitation")));
-        }
-        SignupPolicy::Open => {}
+    if state.config.auth.signup == SignupPolicy::Disabled {
+        return Ok(forbidden(Some("sign-up is disabled")));
+    }
+    if body.invite_token.is_none() && state.config.auth.signup == SignupPolicy::InviteOnly {
+        return Ok(forbidden(Some("sign-up requires an invitation")));
     }
     let email = normalize_email(&body.email).map_err(|_| field_error("email", "invalid email"))?;
-    if !state.config.auth.signup_domains.is_empty()
-        && !domain_listed(&state.config.auth.signup_domains, &email)
-    {
-        return Err(ApiError::Forbidden {
-            code: ProblemCode::Forbidden,
-        });
-    }
-    if domain_listed(&state.config.auth.enforce_sso_domains, &email) {
-        return Err(ApiError::Forbidden {
-            code: ProblemCode::SsoRequired,
-        });
-    }
+    let invited_hash = if let Some(token) = body.invite_token.as_deref() {
+        Some(pending_signup_invite(&state, token, &email).await?)
+    } else {
+        if !state.config.auth.signup_domains.is_empty()
+            && !domain_listed(&state.config.auth.signup_domains, &email)
+        {
+            return Err(ApiError::Forbidden {
+                code: ProblemCode::Forbidden,
+            });
+        }
+        if domain_listed(&state.config.auth.enforce_sso_domains, &email) {
+            return Err(ApiError::Forbidden {
+                code: ProblemCode::SsoRequired,
+            });
+        }
+        None
+    };
     check_policy(&body.password, &email)
         .map_err(|error| field_error("password", &error.to_string()))?;
     let name = optional_name(body.name)?;
@@ -400,6 +429,50 @@ async fn signup(
         hasher.hash(&body.password).await.map_err(auth_error)?
     };
     let now = state.clock.now_ns();
+    if let Some(hash) = invited_hash {
+        let email_for_insert = email;
+        let name_for_insert = name;
+        let created = state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    let Some((pending, _)) = invites::invite_by_hash_tx(conn, &hash, now).await?
+                    else {
+                        return Ok(None);
+                    };
+                    if pending.email != email_for_insert {
+                        return Ok(None);
+                    }
+                    let user = users::insert_user(
+                        conn,
+                        users::NewUser {
+                            email: email_for_insert,
+                            name: name_for_insert,
+                            password_hash: Some(password_hash),
+                            email_verified_at: Some(now),
+                            is_instance_admin: false,
+                        },
+                        now,
+                    )
+                    .await?;
+                    members::add_org_member(conn, pending.org_id, user.id, pending.role, now)
+                        .await?;
+                    invites::mark_accepted(conn, pending.id, now).await?;
+                    Ok(Some(user))
+                })
+            })
+            .await?;
+        let Some(user) = created else {
+            return Err(field_error("invite_token", "invalid or expired invitation"));
+        };
+        let me = me_from(&state, &user).await?;
+        let cookie = session_cookie(&state, user.id, &headers, Some(ip)).await?;
+        let response = SignupResponse {
+            me: Some(me),
+            verification_required: false,
+        };
+        return Ok(json_cookie(StatusCode::CREATED, &response, cookie));
+    }
     let email_for_insert = email.clone();
     let name_for_insert = name.clone();
     let user = state
@@ -783,6 +856,7 @@ mod tests {
             email: email.to_owned(),
             password: password.to_owned(),
             name: name.map(str::to_owned),
+            invite_token: None,
         }
     }
 
@@ -1527,5 +1601,223 @@ mod tests {
         assert_eq!(response.status, 403);
         assert_eq!(response.problem().code, ProblemCode::Forbidden);
         assert!(response.problem().detail.is_none());
+    }
+
+    #[tokio::test]
+    async fn signup_with_an_invite_verifies_and_skips_the_domain_list() {
+        let app = TestApp::with_config(|config| {
+            config.auth.signup_domains = vec!["example.com".to_owned()];
+            config.auth.enforce_sso_domains = vec!["sso.example".to_owned()];
+        })
+        .await;
+        let (cookie, slug) = invite_owner(&app).await;
+        let invited = invite_of(&app, &cookie, &slug, "guest@other.test", "member").await;
+        let (created, logs) = capture_logs(async {
+            app.request(Method::POST, "/api/auth/signup")
+                .json(&serde_json::json!({
+                    "email": "guest@other.test",
+                    "password": PASSWORD,
+                    "invite_token": invited.token,
+                }))
+                .send()
+                .await
+        })
+        .await;
+        assert!(!logs.contains(&invited.token), "{logs}");
+        assert!(!logs.contains("guest@other.test"), "{logs}");
+        assert_eq!(created.status, 201, "{}", text(&created));
+        let response: SignupResponse = created.json();
+        assert!(!response.verification_required);
+        let me = response.me.unwrap();
+        assert_eq!(me.user.email, "guest@other.test");
+        assert_eq!(me.orgs.len(), 1);
+        assert_eq!(me.orgs[0].slug, slug);
+        assert_eq!(me.orgs[0].role, OrgRole::Member);
+        let stored = user_by_email(app.state.meta.reader(), "guest@other.test")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(stored.email_verified_at.is_some());
+        let spent = app
+            .request(Method::GET, &format!("/api/auth/invites/{}", invited.token))
+            .send()
+            .await;
+        assert_eq!(spent.status, 404);
+        app.state.clock.advance(Duration::from_secs(61));
+
+        let mismatch = invite_of(&app, &cookie, &slug, "second@other.test", "viewer").await;
+        let wrong = app
+            .request(Method::POST, "/api/auth/signup")
+            .json(&serde_json::json!({
+                "email": "someone@other.test",
+                "password": PASSWORD,
+                "invite_token": mismatch.token,
+            }))
+            .send()
+            .await;
+        assert_eq!(wrong.status, 400);
+        assert_eq!(wrong.problem().errors[0].field, "email");
+        assert_eq!(
+            wrong.problem().errors[0].message,
+            "does not match the invitation"
+        );
+        let still = app
+            .request(
+                Method::GET,
+                &format!("/api/auth/invites/{}", mismatch.token),
+            )
+            .send()
+            .await;
+        assert_eq!(still.status, 200);
+        app.state.clock.advance(Duration::from_secs(61));
+
+        let sso = invite_of(&app, &cookie, &slug, "ada@sso.example", "member").await;
+        let blocked = app
+            .request(Method::POST, "/api/auth/signup")
+            .json(&serde_json::json!({
+                "email": "ada@sso.example",
+                "password": PASSWORD,
+                "invite_token": sso.token,
+            }))
+            .send()
+            .await;
+        assert_eq!(blocked.status, 403);
+        assert_eq!(blocked.problem().code, ProblemCode::SsoRequired);
+        app.state.clock.advance(Duration::from_secs(61));
+
+        insert_account(&app, "taken@other.test", None, false).await;
+        let duplicate = invite_of(&app, &cookie, &slug, "taken@other.test", "member").await;
+        let conflict = app
+            .request(Method::POST, "/api/auth/signup")
+            .json(&serde_json::json!({
+                "email": "taken@other.test",
+                "password": PASSWORD,
+                "invite_token": duplicate.token,
+            }))
+            .send()
+            .await;
+        assert_eq!(conflict.status, 409);
+        let kept = app
+            .request(
+                Method::GET,
+                &format!("/api/auth/invites/{}", duplicate.token),
+            )
+            .send()
+            .await;
+        assert_eq!(kept.status, 200);
+
+        let closed =
+            TestApp::with_config(|config| config.auth.signup = SignupPolicy::Disabled).await;
+        let (closed_cookie, closed_slug) = invite_owner(&closed).await;
+        let closed_invite = invite_of(
+            &closed,
+            &closed_cookie,
+            &closed_slug,
+            "guest@other.test",
+            "member",
+        )
+        .await;
+        let refused = closed
+            .request(Method::POST, "/api/auth/signup")
+            .json(&serde_json::json!({
+                "email": "guest@other.test",
+                "password": PASSWORD,
+                "invite_token": closed_invite.token,
+            }))
+            .send()
+            .await;
+        assert_eq!(refused.status, 403);
+        assert_eq!(
+            refused.problem().detail.as_deref(),
+            Some("sign-up is disabled")
+        );
+        let unused = closed
+            .request(
+                Method::GET,
+                &format!("/api/auth/invites/{}", closed_invite.token),
+            )
+            .send()
+            .await;
+        assert_eq!(unused.status, 200);
+
+        let open = TestApp::with_config(|config| config.auth.signup = SignupPolicy::Open).await;
+        let bad = open
+            .request(Method::POST, "/api/auth/signup")
+            .json(&serde_json::json!({
+                "email": "ada@example.com",
+                "password": PASSWORD,
+                "invite_token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            }))
+            .send()
+            .await;
+        assert_eq!(bad.status, 400);
+        assert_eq!(bad.problem().errors[0].field, "invite_token");
+        assert_eq!(count_users(open.state.meta.reader()).await.unwrap(), 0);
+    }
+
+    async fn invite_owner(app: &TestApp) -> (String, String) {
+        let now = app.state.clock.now_ns();
+        let (user_id, slug) = app
+            .state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    let user = insert_user(
+                        conn,
+                        NewUser {
+                            email: "ada@example.com".to_owned(),
+                            name: None,
+                            password_hash: None,
+                            email_verified_at: Some(now),
+                            is_instance_admin: false,
+                        },
+                        now,
+                    )
+                    .await?;
+                    let org = insert_org_with_derived_slug(conn, "Acme", now).await?;
+                    add_org_member(conn, org.id, user.id, OrgRole::Owner, now).await?;
+                    Ok((user.id, org.slug))
+                })
+            })
+            .await
+            .unwrap();
+        let cookie = start_session(&app.state, user_id, None, None)
+            .await
+            .unwrap();
+        let pair = cookie
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        (pair, slug)
+    }
+
+    async fn invite_of(
+        app: &TestApp,
+        cookie: &str,
+        slug: &str,
+        email: &str,
+        role: &str,
+    ) -> PostedInvite {
+        let response = app
+            .request(Method::POST, &format!("/api/v1/orgs/{slug}/invites"))
+            .header("cookie", cookie)
+            .json(&serde_json::json!({ "email": email, "role": role }))
+            .send()
+            .await;
+        assert_eq!(response.status, 201, "{}", text(&response));
+        let created: crate::api::invites::CreatedInvite = response.json();
+        let token = created.accept_url.rsplit('/').next().unwrap().to_owned();
+        PostedInvite { token }
+    }
+
+    struct PostedInvite {
+        token: String,
+    }
+
+    fn text(response: &crate::test_support::TestResponse) -> String {
+        String::from_utf8_lossy(&response.body).into_owned()
     }
 }

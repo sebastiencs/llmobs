@@ -15,6 +15,12 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
     ("post", "/api/auth/login", "post_login"),
     ("post", "/api/auth/logout", "post_logout"),
     ("post", "/api/auth/signup", "post_signup"),
+    ("get", "/api/auth/invites/{token}", "get_invite_preview"),
+    (
+        "post",
+        "/api/auth/invites/{token}/accept",
+        "post_invite_accept",
+    ),
     ("get", "/api/auth/me", "get_me"),
     ("post", "/api/auth/password/reset", "post_password_reset"),
     ("patch", "/api/v1/me", "patch_me"),
@@ -41,6 +47,13 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
         "delete",
         "/api/v1/orgs/{org}/members/{user}",
         "delete_org_member",
+    ),
+    ("get", "/api/v1/orgs/{org}/invites", "list_org_invites"),
+    ("post", "/api/v1/orgs/{org}/invites", "post_org_invite"),
+    (
+        "delete",
+        "/api/v1/orgs/{org}/invites/{id}",
+        "delete_org_invite",
     ),
     ("get", "/api/v1/orgs/{org}/projects", "list_projects"),
     ("post", "/api/v1/orgs/{org}/projects", "post_project"),
@@ -146,6 +159,7 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
 
 const QUERY_OR_BODY: &[&str] = &[
     "list_org_members",
+    "list_org_invites",
     "list_project_members",
     "list_projects",
     "list_api_keys",
@@ -245,6 +259,7 @@ fn document_lint() {
                 | "post_logout"
                 | "post_signup"
                 | "post_password_reset"
+                | "get_invite_preview"
         ) {
             assert_eq!(operation_security.map(Vec::len), Some(0), "{id}");
         } else if matches!(
@@ -253,6 +268,9 @@ fn document_lint() {
                 | "post_me_password"
                 | "patch_org_member"
                 | "delete_org_member"
+                | "post_org_invite"
+                | "delete_org_invite"
+                | "post_invite_accept"
                 | "put_project_member"
                 | "delete_project_member"
                 | "list_api_keys"
@@ -302,10 +320,13 @@ fn document_lint() {
             || *id == "patch_project"
             || *id == "post_api_key"
             || *id == "delete_api_key"
+            || *id == "delete_org_invite"
             || *id == "delete_personal_token"
         {
             expected_errors.extend(["400", "401", "403", "404", "429"]);
-        } else if *id == "post_project" {
+        } else if *id == "get_invite_preview" {
+            expected_errors.extend(["404", "429"]);
+        } else if *id == "post_org_invite" || *id == "post_project" {
             expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
         } else if *id == "post_logout" {
             // The handler always answers 204. CSRF is the shared origin check.
@@ -383,6 +404,7 @@ fn document_lint() {
         ("ScorePage", "Score"),
         ("OrgPage", "OrgMembership"),
         ("OrgMemberPage", "OrgMember"),
+        ("InvitePage", "Invite"),
         ("ProjectMemberPage", "ProjectMember"),
         ("ProjectPage", "Project"),
         ("ApiKeyPage", "ApiKey"),
@@ -630,6 +652,7 @@ fn assert_nullability(schemas: &serde_json::Map<String, Value>) {
         "ScorePage",
         "OrgPage",
         "OrgMemberPage",
+        "InvitePage",
         "ProjectMemberPage",
         "ProjectPage",
         "ApiKeyPage",

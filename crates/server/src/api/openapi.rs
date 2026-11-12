@@ -29,6 +29,7 @@ use super::account::{
     SignupResponse, UpdateMeRequest, UpdateOrgRequest, UpdateProjectRequest, User,
 };
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
+use super::invites::{CreateInviteRequest, CreatedInvite, Invite, InvitePreview};
 use super::keys::{
     ApiKey as ProjectApiKey, CreateApiKeyRequest, CreatePersonalTokenRequest, CreatedApiKey,
     CreatedPersonalToken, PersonalToken,
@@ -89,6 +90,11 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<LoginRequest>();
     set.insert::<SignupRequest>();
     set.insert::<SignupResponse>();
+    set.insert::<Invite>();
+    set.insert::<CreateInviteRequest>();
+    set.insert::<CreatedInvite>();
+    set.insert::<InvitePreview>();
+    set.insert_page::<Invite>("InvitePage");
     set.insert::<ResetPasswordRequest>();
     set.insert::<UpdateMeRequest>();
     set.insert::<ChangePasswordRequest>();
@@ -478,6 +484,7 @@ fn tag(name: &str, description: &str) -> Tag {
 fn paths() -> Paths {
     let paths = PathsBuilder::new();
     let paths = auth_paths(paths);
+    let paths = invite_paths(paths);
     let paths = project_paths(paths);
     let paths = member_paths(paths);
     let paths = api_key_paths(paths);
@@ -580,12 +587,45 @@ fn auth_paths(paths: PathsBuilder) -> PathsBuilder {
             &[400, 401, 403, 429],
         ))
         .build();
+    let session = vec![SecurityRequirement::new("session", [] as [&str; 0])];
+    let preview = operation("get_invite_preview", "auth", "Preview an invitation")
+        .securities(Some(Vec::new()))
+        .parameters(Some(vec![path_string(
+            "token",
+            "Invitation token from the accept link.",
+        )]))
+        .responses(responses(
+            "200",
+            json_of::<InvitePreview>("The invitation, when it is pending and unexpired."),
+            &[404, 429],
+        ))
+        .build();
+    let accept = operation("post_invite_accept", "auth", "Accept an invitation")
+        .securities(Some(session))
+        .parameters(Some(vec![path_string(
+            "token",
+            "Invitation token from the accept link.",
+        )]))
+        .responses(responses(
+            "200",
+            json_of::<OrgMembership>("The caller's membership in the org."),
+            &[401, 403, 404, 429],
+        ))
+        .build();
     paths
         .path("/api/auth/config", PathItem::new(HttpMethod::Get, config))
         .path("/api/auth/setup", PathItem::new(HttpMethod::Post, setup))
         .path("/api/auth/login", PathItem::new(HttpMethod::Post, login))
         .path("/api/auth/logout", PathItem::new(HttpMethod::Post, logout))
         .path("/api/auth/signup", PathItem::new(HttpMethod::Post, signup))
+        .path(
+            "/api/auth/invites/{token}",
+            PathItem::new(HttpMethod::Get, preview),
+        )
+        .path(
+            "/api/auth/invites/{token}/accept",
+            PathItem::new(HttpMethod::Post, accept),
+        )
         .path(
             "/api/auth/password/reset",
             PathItem::new(HttpMethod::Post, reset),
@@ -596,6 +636,49 @@ fn auth_paths(paths: PathsBuilder) -> PathsBuilder {
             "/api/v1/me/password",
             PathItem::new(HttpMethod::Post, password),
         )
+}
+
+fn invite_paths(paths: PathsBuilder) -> PathsBuilder {
+    let session_only = vec![SecurityRequirement::new("session", [] as [&str; 0])];
+    let org_param = path_string("org", "Org UUID or slug.");
+    let list = operation("list_org_invites", "orgs", "List pending invitations")
+        .parameters(Some(with_query::<PageParams>(vec![org_param.clone()])))
+        .responses(responses(
+            "200",
+            json_named(
+                "InvitePage",
+                "One page of pending invitations, ordered by email.",
+            ),
+            QUERY_ERRORS,
+        ))
+        .build();
+    let create = operation("post_org_invite", "orgs", "Invite a member by email")
+        .securities(Some(session_only.clone()))
+        .parameters(Some(vec![org_param.clone()]))
+        .request_body(Some(json_body("CreateInviteRequest")))
+        .responses(responses(
+            "201",
+            json_of::<CreatedInvite>("The invitation and its accept link."),
+            &[400, 401, 403, 404, 409, 429],
+        ))
+        .build();
+    let delete = operation("delete_org_invite", "orgs", "Delete an invitation")
+        .securities(Some(session_only))
+        .parameters(Some(vec![org_param, path_uuid("id", "Invitation id.")]))
+        .responses(responses(
+            "204",
+            ResponseBuilder::new()
+                .description("The invitation is deleted.")
+                .build(),
+            &[400, 401, 403, 404, 429],
+        ))
+        .build();
+    let mut collection = PathItem::new(HttpMethod::Get, list);
+    collection.post = Some(create);
+    paths.path("/api/v1/orgs/{org}/invites", collection).path(
+        "/api/v1/orgs/{org}/invites/{id}",
+        PathItem::new(HttpMethod::Delete, delete),
+    )
 }
 
 fn project_paths(paths: PathsBuilder) -> PathsBuilder {

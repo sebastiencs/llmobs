@@ -18,7 +18,7 @@ use crate::meta::members::add_org_member;
 use crate::meta::users::set_instance_admin;
 use crate::test_support::{TestApp, TestResponse, capture_logs};
 
-/// 43 characters of the base64url alphabet. No route uses `{token}` yet.
+/// 43 characters of the base64url alphabet. Substituted for `{token}`.
 const TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 /// A provider id of the shape OAuth routes will take. No route uses it yet.
 const PROVIDER: &str = "google";

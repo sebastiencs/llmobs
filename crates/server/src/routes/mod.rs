@@ -3,6 +3,7 @@
 
 pub(crate) mod api_keys;
 pub(crate) mod auth;
+pub(crate) mod invites;
 pub(crate) mod me;
 pub(crate) mod members;
 pub(crate) mod orgs;

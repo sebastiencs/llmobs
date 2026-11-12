@@ -182,7 +182,7 @@ pub struct LoginRequest {
     pub password: String,
 }
 
-/// `POST /api/auth/signup`. P20 adds `invite_token`.
+/// `POST /api/auth/signup`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SignupRequest {
@@ -193,6 +193,9 @@ pub struct SignupRequest {
     /// Display name. Absent when the user does not set one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Invitation token. When set, sign-up joins that org and the address is already verified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invite_token: Option<String>,
 }
 
 /// `POST /api/auth/signup` returns 201.

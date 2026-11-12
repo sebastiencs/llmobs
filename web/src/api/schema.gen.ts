@@ -21,6 +21,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/invites/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview an invitation */
+        get: operations["get_invite_preview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/invites/{token}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept an invitation */
+        post: operations["post_invite_accept"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/login": {
         parameters: {
             query?: never;
@@ -243,6 +277,41 @@ export interface paths {
         head?: never;
         /** Rename an organization */
         patch: operations["patch_org"];
+        trace?: never;
+    };
+    "/api/v1/orgs/{org}/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List pending invitations */
+        get: operations["list_org_invites"];
+        put?: never;
+        /** Invite a member by email */
+        post: operations["post_org_invite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{org}/invites/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete an invitation */
+        delete: operations["delete_org_invite"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/orgs/{org}/members": {
@@ -850,6 +919,13 @@ export interface components {
             /** @description Secret keys default to ingest, read, and write. Public keys default to feedback. */
             scopes?: components["schemas"]["ApiKeyScope"][];
         };
+        /** @description `POST /api/v1/orgs/{org}/invites`. */
+        CreateInviteRequest: {
+            /** @description Address to invite. */
+            email: string;
+            /** @description Role granted on accept. Not above the caller's role. */
+            role: components["schemas"]["OrgRole"];
+        };
         /** @description `POST /api/v1/orgs`. */
         CreateOrgRequest: {
             /** @description Display name. Trimmed to 1–100 characters. */
@@ -901,6 +977,17 @@ export interface components {
             key: components["schemas"]["ApiKey"];
             /** @description The bearer value. Shown only in this response. */
             secret: string;
+        };
+        /**
+         * @description `POST /api/v1/orgs/{org}/invites` returns 201.
+         *
+         *     `accept_url` is the only response that contains the token.
+         */
+        CreatedInvite: {
+            /** @description `<public_url>/invite/<token>`. */
+            accept_url: string;
+            /** @description The pending invitation. */
+            invite: components["schemas"]["Invite"];
         };
         /** @description `POST /api/v1/me/tokens`. The response is the only place the secret appears. */
         CreatedPersonalToken: {
@@ -1001,6 +1088,69 @@ export interface components {
             name: string;
             /** @description Argument and return types, for example `score(name: string) -> float`. */
             signature: string;
+        };
+        /**
+         * @description One pending invitation.
+         *
+         *     `GET /api/v1/orgs/{org}/invites` and the `invite` field of the create response.
+         */
+        Invite: {
+            /**
+             * Format: date-time
+             * @description When the invitation was created. JSON is RFC 3339.
+             */
+            created_at: string;
+            /** @description Address the invitation was sent to. */
+            email: string;
+            /**
+             * Format: date-time
+             * @description When the invitation stops working. JSON is RFC 3339.
+             */
+            expires_at: string;
+            /**
+             * Format: uuid
+             * @description Invitation id.
+             */
+            id: string;
+            /** @description Who sent it. Omitted when that user no longer exists. */
+            invited_by?: components["schemas"]["MemberUser"];
+            /** @description Role granted on accept. */
+            role: components["schemas"]["OrgRole"];
+        };
+        /** @description Org named in an invitation preview. The id is not included. */
+        InviteOrg: {
+            /** @description Display name. */
+            name: string;
+            /** @description URL slug. */
+            slug: string;
+        };
+        /** @description One page of results. `next_cursor` is null when there is no next page. */
+        InvitePage: {
+            /** @description Items in this page. */
+            data: components["schemas"]["Invite"][];
+            /** @description Opaque cursor for the next page, or null when this is the last page. */
+            next_cursor: string | null;
+        };
+        /**
+         * @description `GET /api/auth/invites/{token}`.
+         *
+         *     Only the token holder sees this. `account_exists` tells the UI whether to
+         *     show login or sign-up.
+         */
+        InvitePreview: {
+            /** @description Whether a user with this email already exists. */
+            account_exists: boolean;
+            /** @description Address the invitation was sent to. */
+            email: string;
+            /**
+             * Format: date-time
+             * @description When the invitation stops working. JSON is RFC 3339.
+             */
+            expires_at: string;
+            /** @description The org the invitation joins. */
+            org: components["schemas"]["InviteOrg"];
+            /** @description Role granted on accept. */
+            role: components["schemas"]["OrgRole"];
         };
         /**
          * @description One headline number.
@@ -1803,10 +1953,12 @@ export interface components {
          * @enum {string}
          */
         SignupPolicy: "open" | "invite_only" | "disabled";
-        /** @description `POST /api/auth/signup`. P20 adds `invite_token`. */
+        /** @description `POST /api/auth/signup`. */
         SignupRequest: {
             /** @description Email address. */
             email: string;
+            /** @description Invitation token. When set, sign-up joins that org and the address is already verified. */
+            invite_token?: string;
             /** @description Display name. Absent when the user does not set one. */
             name?: string;
             /** @description Password. */
@@ -2500,6 +2652,106 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuthConfig"];
+                };
+            };
+        };
+    };
+    get_invite_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Invitation token from the accept link. */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The invitation, when it is pending and unexpired. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitePreview"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    post_invite_accept: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Invitation token from the accept link. */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's membership in the org. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgMembership"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -3334,6 +3586,228 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["OrgMembership"];
                 };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_org_invites: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of items to return (1–1000, default 50). */
+                limit?: components["schemas"]["Limit"];
+                /** @description Opaque cursor from a previous page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Org UUID or slug. */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of pending invitations, ordered by email. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitePage"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    post_org_invite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Org UUID or slug. */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInviteRequest"];
+            };
+        };
+        responses: {
+            /** @description The invitation and its accept link. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedInvite"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request conflicts with the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_org_invite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Org UUID or slug. */
+                org: string;
+                /** @description Invitation id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The invitation is deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description The request is malformed or a filter is invalid. */
             400: {

@@ -5,6 +5,7 @@
 
 pub mod account;
 pub mod common;
+pub mod invites;
 pub mod keys;
 pub mod members;
 pub mod metrics;
