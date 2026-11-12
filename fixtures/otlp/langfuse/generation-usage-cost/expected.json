@@ -20,6 +20,7 @@
       "cost_output": 2.0,
       "cost_total": 3.0,
       "cost_source": "reported",
+      "ttft_ns": 54000000,
       "request_params": "{\"max_tokens\":64,\"temperature\":0}",
       "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
       "input_format": "messages",

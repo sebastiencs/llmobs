@@ -729,7 +729,7 @@ fn take_instant(
         Ok(Some(instant)) => duration_since(instant, start_time),
         Ok(None) => Read::Skip,
         Err(InvalidNumber) => match as_str(value) {
-            Some(text) => match parse_rfc3339(text) {
+            Some(text) => match parse_rfc3339(&unquoted(text)) {
                 Ok(instant) => duration_since(instant, start_time),
                 Err(_) => Read::Skip,
             },
@@ -747,6 +747,17 @@ fn take_instant(
             None
         }
     }
+}
+
+/// The Langfuse SDK JSON-encodes its attribute values, so an instant may
+/// arrive as a JSON string literal (`"\"2025-01-01T00:00:00Z\""`).
+fn unquoted(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.starts_with('"')
+        && let Ok(inner) = serde_json::from_str::<String>(text)
+    {
+        return std::borrow::Cow::Owned(inner);
+    }
+    std::borrow::Cow::Borrowed(text)
 }
 
 fn read_nanos(value: &AnyValue) -> Read {
