@@ -37,6 +37,9 @@ const PROVIDER: &[Source] = &[
     span("ai.model.provider", Convention::Vercel),
 ];
 
+/// Vercel v7 `context` call option, recorded under `ai.settings.`.
+const VERCEL_CONTEXT: &str = "ai.settings.context.";
+
 const OPERATION: &[Source] = &[span("gen_ai.operation.name", Convention::Genai)];
 
 const SESSION_ID: &[Source] = &[
@@ -48,6 +51,7 @@ const SESSION_ID: &[Source] = &[
         Convention::Openllmetry,
     ),
     span("ai.telemetry.metadata.sessionId", Convention::Vercel),
+    span("ai.settings.context.sessionId", Convention::Vercel),
     span("langfuse.session.id", Convention::Langfuse),
     span(
         "lmnr.association.properties.session_id",
@@ -64,6 +68,7 @@ const USER_ID: &[Source] = &[
         Convention::Openllmetry,
     ),
     span("ai.telemetry.metadata.userId", Convention::Vercel),
+    span("ai.settings.context.userId", Convention::Vercel),
     span("langfuse.user.id", Convention::Langfuse),
     span("lmnr.association.properties.user_id", Convention::Laminar),
 ];
@@ -116,6 +121,8 @@ fn is_metadata_context_key(key: &str) -> bool {
         "ai.telemetry.metadata.sessionId"
             | "ai.telemetry.metadata.userId"
             | "ai.telemetry.metadata.tags"
+            | "ai.settings.context.sessionId"
+            | "ai.settings.context.userId"
             | "traceloop.association.properties.session_id"
             | "traceloop.association.properties.user_id"
     )
@@ -251,6 +258,10 @@ fn request_params(bag: &mut AttrBag<'_>, warnings: &mut Warnings) -> Option<Stri
     }
     expand_param_object(bag, "llm.invocation_parameters", &mut params);
     for key in prefixed(bag, "ai.settings.") {
+        // v7 runtime context is session, user, and metadata (D-B1-5).
+        if key.starts_with(VERCEL_CONTEXT) {
+            continue;
+        }
         let Some(name) = key.strip_prefix("ai.settings.") else {
             continue;
         };
@@ -333,6 +344,7 @@ fn metadata(bag: &mut AttrBag<'_>, warnings: &mut Warnings) -> BTreeMap<String, 
     sweep_prefix(bag, attr::METADATA_PREFIX, &mut metadata, warnings);
     expand_metadata_object(bag, "metadata", &mut metadata);
     sweep_prefix(bag, "ai.telemetry.metadata.", &mut metadata, warnings);
+    sweep_prefix(bag, VERCEL_CONTEXT, &mut metadata, warnings);
     function_id(bag, &mut metadata, warnings);
     sweep_prefix(
         bag,
