@@ -267,8 +267,12 @@ impl QueryContext {
             .collect()
     }
 
-    #[allow(dead_code)] // filter, SQL and read queries use this from Q7 on
-    pub(crate) fn session(&self) -> &SessionContext {
+    /// The session with the views registered.
+    ///
+    /// Reads and the SQL console go through [`Self::sql_json`] and the read
+    /// endpoints, which apply the sandbox. This accessor exists for the M3
+    /// benchmark (`tests/trace_bench.rs`) to run raw SQL and `EXPLAIN ANALYZE`.
+    pub fn session(&self) -> &SessionContext {
         &self.session
     }
 

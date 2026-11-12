@@ -215,6 +215,7 @@ pub struct TimeWindow { /* from inclusive, to exclusive, ns UTC */ }   // TimeWi
 impl QueryContext {
     pub fn new(source: ProjectQuery, window: Option<TimeWindow>) -> Result<QueryContext, RunError>;  // D101
     pub fn register_sqlite_view(&self, view: SqliteView, table: Arc<dyn TableProvider>) -> Result<(), RunError>;
+    pub fn session(&self) -> &SessionContext;            // M3 benchmark: raw SQL / EXPLAIN ANALYZE
 }
 pub enum ViewName { Traces, Spans, Sessions, Scores, ExperimentItems, DatasetItems }
 pub enum SqliteView { ExperimentItems, DatasetItems }
