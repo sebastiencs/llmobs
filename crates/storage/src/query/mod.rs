@@ -1098,6 +1098,7 @@ mod tests {
             min_ingest_time: min_time,
             max_ingest_time: max_time,
             fully_merged: false,
+            deletions_applied_seq: 0,
         }
     }
 
@@ -1108,6 +1109,7 @@ mod tests {
                 remove: Vec::new(),
                 flushed_seq: None,
                 sources: Vec::new(),
+                raise: Vec::new(),
             })
             .unwrap()
             .0

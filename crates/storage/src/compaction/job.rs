@@ -408,6 +408,7 @@ impl Compactor {
                 min_ingest_time: summary.min_ingest_time,
                 max_ingest_time: summary.max_ingest_time,
                 fully_merged,
+                deletions_applied_seq: 0,
             });
 
             if job.table == FileTable::Spans {
@@ -440,6 +441,7 @@ impl Compactor {
                     min_ingest_time: written.min_ingest_time,
                     max_ingest_time: written.max_ingest_time,
                     fully_merged,
+                    deletions_applied_seq: 0,
                 });
                 sources.push((traces_id, id));
             }
@@ -471,6 +473,7 @@ impl Compactor {
             remove,
             flushed_seq: None,
             sources,
+            raise: Vec::new(),
         };
         let published = Arc::clone(&self.published);
         self.committer
@@ -1162,6 +1165,7 @@ mod tests {
             ],
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         storage.commit_test_edit(&edit).await.unwrap();
 

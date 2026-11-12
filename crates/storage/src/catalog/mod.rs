@@ -123,6 +123,9 @@ pub(crate) struct FileMeta {
     pub(crate) max_ingest_time: i64,
     /// Every row in the file is a merged version.
     pub(crate) fully_merged: bool,
+    /// No row of a deletion with `deletion_seq` at or below this remains in the
+    /// file (spec 03 §7).
+    pub(crate) deletions_applied_seq: u64,
 }
 
 /// `spans`, `traces`, then `scores`, indexed by [`FileTable`] via [`file_index`].
@@ -204,6 +207,17 @@ impl Catalog {
                 }
             }
         }
+        for (id, seq) in &edit.raise {
+            // Before `add`: the SQL check rejects a raise of an added file
+            // before its row is inserted, and this keeps the two in step.
+            let replaced = replace_active(&mut tables, *id, |file| FileMeta {
+                deletions_applied_seq: *seq,
+                ..file.clone()
+            });
+            if !replaced {
+                return Err(CommitError::conflict("raised file is not active"));
+            }
+        }
         for file in &edit.add {
             insert_sorted(&mut tables, file.clone());
         }
@@ -241,6 +255,29 @@ pub(super) fn insert_sorted(tables: &mut Tables, file: FileMeta) {
     let key = (file.min_time, file.id);
     let position = files.partition_point(|existing| (existing.min_time, existing.id) < key);
     files.insert(position, Arc::new(file));
+}
+
+/// Replace the `Arc<FileMeta>` of the active file `id` in place, keeping its
+/// day's order. `false` when the id is not an active file.
+fn replace_active(tables: &mut Tables, id: FileId, f: impl FnOnce(&FileMeta) -> FileMeta) -> bool {
+    for table in tables.iter_mut() {
+        let Some((project, day)) = find_file(table, id) else {
+            continue;
+        };
+        let Some(days) = table.get_mut(&project) else {
+            continue;
+        };
+        let map = Arc::make_mut(days);
+        let Some(files) = map.get_mut(&day) else {
+            continue;
+        };
+        let Some(position) = files.iter().position(|file| file.id == id) else {
+            return false;
+        };
+        files[position] = Arc::new(f(&files[position]));
+        return true;
+    }
+    false
 }
 
 fn remove_active(tables: &mut Tables, id: FileId) -> Option<Arc<FileMeta>> {
@@ -311,6 +348,7 @@ mod tests {
             min_ingest_time: min_time,
             max_ingest_time: min_time,
             fully_merged: false,
+            deletions_applied_seq: 0,
         }
     }
 
@@ -321,6 +359,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         let (catalog, removed) = Catalog::empty().apply(&edit).unwrap();
         assert!(removed.is_empty());

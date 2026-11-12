@@ -307,6 +307,23 @@ impl CommitError {
     }
 }
 
+/// `register_deletion` or `deletion_status` failed.
+#[derive(Debug, thiserror::Error)]
+pub enum DeletionError {
+    /// The request is malformed. `reason` is static and never holds an id from the scope.
+    #[error("invalid deletion: {reason}")]
+    Invalid {
+        /// Static reason. Never a trace id, user id or session id.
+        reason: &'static str,
+    },
+    /// No deletion with this id was registered.
+    #[error("deletion not found")]
+    NotFound,
+    /// `catalog.db` failed.
+    #[error(transparent)]
+    Catalog(#[from] CatalogError),
+}
+
 /// An object-store read, write, or delete failed.
 ///
 /// `path` is an object key or a filesystem path. The message never includes

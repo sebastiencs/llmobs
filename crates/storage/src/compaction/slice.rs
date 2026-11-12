@@ -178,6 +178,7 @@ mod tests {
             min_ingest_time: written.min_ingest_time,
             max_ingest_time: written.max_ingest_time,
             fully_merged: false,
+            deletions_applied_seq: 0,
         }
     }
 

@@ -12,12 +12,17 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use llmobs_core::ids::ProjectId;
 use sqlx::{Connection, SqliteConnection};
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
-use super::db::{TableState, check_file_sources, load, open_catalog_db, parse_file_id};
+use super::db::{
+    TableState, check_file_sources, load, load_tombstones, open_catalog_db, parse_file_id,
+};
 use super::{Catalog, FileId, FileMeta, FileState, FileTable, table_index};
-use crate::error::{CatalogError, CommitError, GcError};
+use crate::deletion::{Deletion, DeletionScope, DeletionStatus, PendingDeletion, Tombstones};
+use crate::error::{CatalogError, CommitError, DeletionError, GcError};
 use crate::hooks::{HookPoint, Hooks};
 use crate::wal::Table;
 
@@ -35,12 +40,18 @@ pub(crate) struct CatalogEdit {
     /// The traces file must be in `add` with table `Traces`; the spans file
     /// must be in `add` with table `Spans` or already be an active `spans` row.
     pub sources: Vec<(FileId, FileId)>,
+    /// Files whose `deletions_applied_seq` rises to the given value: the rewriter
+    /// checked them and found no covered row. Each must be active and its stored
+    /// value lower than the new one.
+    pub raise: Vec<(FileId, u64)>,
 }
 
 struct CommitterInner {
     connection: SqliteConnection,
     catalog: Arc<Catalog>,
     flushed: [u64; 2],
+    /// The pending deletions as last committed (spec 03 §7).
+    tombstones: Arc<Tombstones>,
     hooks: Hooks,
     /// Files a commit removed, held until GC collects them.
     ///
@@ -62,16 +73,18 @@ impl std::fmt::Debug for Committer {
 }
 
 impl Committer {
-    /// Open `catalog.db`, migrate, and load the active files.
+    /// Open `catalog.db`, migrate, and load the active files and tombstones.
     pub(crate) async fn open(data_dir: &Path, hooks: Hooks) -> Result<Self, CatalogError> {
         let mut connection = open_catalog_db(data_dir).await?;
         let (catalog, state) = load(&mut connection).await?;
         check_file_sources(&mut connection).await?;
+        let tombstones = load_tombstones(&mut connection).await?;
         Ok(Self {
             inner: Mutex::new(CommitterInner {
                 connection,
                 catalog: Arc::new(catalog),
                 flushed: flushed_of(state),
+                tombstones: Arc::new(tombstones),
                 hooks,
                 retired: HashMap::new(),
             }),
@@ -86,6 +99,244 @@ impl Committer {
     /// Highest flushed WAL sequence for `table`. Missing row is `0`.
     pub(crate) async fn flushed_seq(&self, table: Table) -> u64 {
         self.inner.lock().await.flushed[table_index(table)]
+    }
+
+    /// The pending deletions as last committed.
+    pub(crate) async fn tombstones(&self) -> Arc<Tombstones> {
+        Arc::clone(&self.inner.lock().await.tombstones)
+    }
+
+    /// Stores `deletion` with the next `deletion_seq`, then calls `publish` with
+    /// the new tombstones before releasing the mutex. A known id changes nothing
+    /// and does not call `publish`.
+    ///
+    /// Validation runs before SQLite is touched, so an invalid request writes
+    /// nothing.
+    pub(crate) async fn register_deletion<F>(
+        &self,
+        deletion: &Deletion,
+        now: i64,
+        publish: F,
+    ) -> Result<Registered, DeletionError>
+    where
+        F: FnOnce(&Arc<Tombstones>),
+    {
+        let mut inner = self.inner.lock().await;
+        if deletion.cutoff <= 0 {
+            return Err(DeletionError::Invalid {
+                reason: "cutoff must be positive",
+            });
+        }
+        let (kind, trace_ids, users, sessions) = match &deletion.scope {
+            DeletionScope::Traces { trace_ids } => {
+                if trace_ids.is_empty() {
+                    return Err(DeletionError::Invalid {
+                        reason: "empty scope",
+                    });
+                }
+                (
+                    "traces",
+                    trace_ids.iter().map(|trace| *trace.as_bytes()).collect(),
+                    HashSet::new(),
+                    HashSet::new(),
+                )
+            }
+            DeletionScope::User {
+                user_id,
+                trace_ids,
+                session_ids,
+            } => {
+                if user_id.is_empty() {
+                    return Err(DeletionError::Invalid {
+                        reason: "empty user id",
+                    });
+                }
+                (
+                    "user",
+                    trace_ids.iter().map(|trace| *trace.as_bytes()).collect(),
+                    HashSet::from([user_id.clone()]),
+                    session_ids.iter().cloned().collect(),
+                )
+            }
+        };
+        let known: Option<i64> = sqlx::query_scalar("SELECT 1 FROM deletions WHERE id = ?")
+            .bind(deletion.id.to_string())
+            .fetch_optional(&mut inner.connection)
+            .await
+            .map_err(CatalogError::db)?;
+        if known.is_some() {
+            return Ok(Registered::Known);
+        }
+        let seq = inner.tombstones.known_seq() + 1;
+        // `known_seq` was read from an SQLite INTEGER, so only the `+ 1` above
+        // can overflow, and one deletion short of nine quintillion is out of
+        // reach. The error keeps the write from ever storing a wrapped value.
+        let stored_seq = i64::try_from(seq).map_err(|_| DeletionError::Invalid {
+            reason: "integer does not fit the catalog",
+        })?;
+        let pending = PendingDeletion {
+            id: deletion.id,
+            seq,
+            project: deletion.project,
+            cutoff: deletion.cutoff,
+            registered_at: now,
+            trace_ids,
+            users,
+            sessions,
+        };
+        // Production hooks are `Copy`. Tests share one value and have to clone it.
+        #[allow(clippy::clone_on_copy)]
+        let hooks = inner.hooks.clone();
+        let mut transaction = inner.connection.begin().await.map_err(CatalogError::db)?;
+        if let Err(error) = sqlx::query(
+            "INSERT INTO deletions (
+                id, deletion_seq, project_id, kind, cutoff, status, registered_at
+             ) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+        )
+        .bind(deletion.id.to_string())
+        .bind(stored_seq)
+        .bind(deletion.project.to_string())
+        .bind(kind)
+        .bind(deletion.cutoff)
+        .bind(now)
+        .execute(transaction.as_mut())
+        .await
+        .map_err(CatalogError::db)
+        {
+            let _ = transaction.rollback().await;
+            return Err(error.into());
+        }
+        for trace in &pending.trace_ids {
+            if let Err(error) =
+                sqlx::query("INSERT INTO deletion_traces (deletion_id, trace_id) VALUES (?, ?)")
+                    .bind(deletion.id.to_string())
+                    .bind(trace.as_slice())
+                    .execute(transaction.as_mut())
+                    .await
+                    .map_err(CatalogError::db)
+            {
+                let _ = transaction.rollback().await;
+                return Err(error.into());
+            }
+        }
+        for user in &pending.users {
+            if let Err(error) =
+                sqlx::query("INSERT INTO deletion_users (deletion_id, user_id) VALUES (?, ?)")
+                    .bind(deletion.id.to_string())
+                    .bind(user)
+                    .execute(transaction.as_mut())
+                    .await
+                    .map_err(CatalogError::db)
+            {
+                let _ = transaction.rollback().await;
+                return Err(error.into());
+            }
+        }
+        for session in &pending.sessions {
+            if let Err(error) =
+                sqlx::query("INSERT INTO deletion_sessions (deletion_id, session_id) VALUES (?, ?)")
+                    .bind(deletion.id.to_string())
+                    .bind(session)
+                    .execute(transaction.as_mut())
+                    .await
+                    .map_err(CatalogError::db)
+            {
+                let _ = transaction.rollback().await;
+                return Err(error.into());
+            }
+        }
+        hooks.pause(HookPoint::CatalogCommit);
+        if let Some(source) = hooks.fail(HookPoint::CatalogCommit) {
+            let _ = transaction.rollback().await;
+            return Err(DeletionError::Catalog(CatalogError::db(sqlx::Error::Io(
+                source,
+            ))));
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|source| DeletionError::Catalog(CatalogError::db(source)))?;
+        inner.tombstones = Arc::new(inner.tombstones.with(pending));
+        publish(&inner.tombstones);
+        Ok(Registered::New { seq })
+    }
+
+    /// Marks a pending deletion applied at `now`, then publishes the tombstones
+    /// without it. An id that is not pending is `Ok(false)` and does not call
+    /// `publish`.
+    ///
+    /// An applied request keeps only its id, project, kind, cut-off, sequence
+    /// and dates: the ids of the person are erased with the data (spec 03 §7);
+    /// the audit record is the server's `meta.db` row.
+    pub(crate) async fn mark_applied<F>(
+        &self,
+        project: ProjectId,
+        id: Uuid,
+        now: i64,
+        publish: F,
+    ) -> Result<bool, CatalogError>
+    where
+        F: FnOnce(&Arc<Tombstones>),
+    {
+        let mut inner = self.inner.lock().await;
+        let mut transaction = inner.connection.begin().await.map_err(CatalogError::db)?;
+        let updated = sqlx::query(
+            "UPDATE deletions SET status = 'applied', applied_at = ?
+             WHERE id = ? AND status = 'pending'",
+        )
+        .bind(now)
+        .bind(id.to_string())
+        .execute(transaction.as_mut())
+        .await
+        .map_err(CatalogError::db)?;
+        if updated.rows_affected() == 0 {
+            let _ = transaction.rollback().await;
+            return Ok(false);
+        }
+        for delete in [
+            "DELETE FROM deletion_traces WHERE deletion_id = ?",
+            "DELETE FROM deletion_users WHERE deletion_id = ?",
+            "DELETE FROM deletion_sessions WHERE deletion_id = ?",
+        ] {
+            if let Err(error) = sqlx::query(delete)
+                .bind(id.to_string())
+                .execute(transaction.as_mut())
+                .await
+                .map_err(CatalogError::db)
+            {
+                let _ = transaction.rollback().await;
+                return Err(error);
+            }
+        }
+        transaction.commit().await.map_err(CatalogError::db)?;
+        inner.tombstones = Arc::new(inner.tombstones.without(project, id));
+        publish(&inner.tombstones);
+        Ok(true)
+    }
+
+    /// `None` for an unknown id.
+    pub(crate) async fn deletion_status(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<DeletionStatus>, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        let row: Option<(String, Option<i64>)> =
+            sqlx::query_as("SELECT status, applied_at FROM deletions WHERE id = ?")
+                .bind(id.to_string())
+                .fetch_optional(&mut inner.connection)
+                .await
+                .map_err(CatalogError::db)?;
+        let Some((status, applied_at)) = row else {
+            return Ok(None);
+        };
+        match status.as_str() {
+            "pending" => Ok(Some(DeletionStatus::Pending)),
+            "applied" => Ok(Some(DeletionStatus::Applied {
+                applied_at: applied_at
+                    .ok_or_else(|| CatalogError::corrupt("invalid applied_at"))?,
+            })),
+            _ => Err(CatalogError::corrupt("invalid deletion status")),
+        }
     }
 
     /// Paths still in `staged_objects`, in path order.
@@ -375,6 +626,18 @@ impl Committer {
     }
 }
 
+/// What [`Committer::register_deletion`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Registered {
+    /// Stored with `seq`; the tombstones include it.
+    New {
+        /// The stored `deletion_seq`.
+        seq: u64,
+    },
+    /// The id was already stored. Nothing changed.
+    Known,
+}
+
 /// One `obsolete` row of `data_files`, named by [`Committer::obsolete_before`].
 pub(crate) struct ObsoleteFile {
     /// Primary key.
@@ -452,6 +715,42 @@ async fn write_edit(
         if current.as_deref() != Some(state.as_str()) {
             return Err(CommitError::conflict("file is not in the expected state"));
         }
+    }
+    let removed_ids: HashSet<&FileId> = edit.remove.iter().map(|(id, _)| id).collect();
+    for (id, _) in &edit.raise {
+        if removed_ids.contains(id) {
+            return Err(CommitError::conflict("raised file is also removed"));
+        }
+    }
+    for (id, sequence) in &edit.raise {
+        let current: Option<(String, i64)> =
+            sqlx::query_as("SELECT state, deletions_applied_seq FROM data_files WHERE id = ?")
+                .bind(id.to_string())
+                .fetch_optional(&mut *connection)
+                .await
+                .map_err(CommitError::db)?;
+        let Some((state, stored)) = current else {
+            return Err(CommitError::conflict("raised file is not active"));
+        };
+        if state != "active" {
+            return Err(CommitError::conflict("raised file is not active"));
+        }
+        let stored = u64::try_from(stored).map_err(|_| {
+            CommitError::conflict("deletion sequence is not greater than the stored value")
+        })?;
+        if stored >= *sequence {
+            return Err(CommitError::conflict(
+                "deletion sequence is not greater than the stored value",
+            ));
+        }
+        let stored_sequence = i64::try_from(*sequence)
+            .map_err(|_| CommitError::conflict("integer does not fit the catalog"))?;
+        sqlx::query("UPDATE data_files SET deletions_applied_seq = ? WHERE id = ?")
+            .bind(stored_sequence)
+            .bind(id.to_string())
+            .execute(&mut *connection)
+            .await
+            .map_err(CommitError::db)?;
     }
     if let Some((table, sequence)) = edit.flushed_seq {
         let stored: Option<i64> =
@@ -603,8 +902,8 @@ async fn insert_file(
         "INSERT INTO data_files (
             id, table_name, project_id, day, level, path, size_bytes, footer_size,
             row_count, min_time, max_time, min_ingest_time, max_ingest_time,
-            fully_merged, state, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
+            fully_merged, deletions_applied_seq, state, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
     )
     .bind(file.id.to_string())
     .bind(file.table.as_str())
@@ -620,6 +919,7 @@ async fn insert_file(
     .bind(file.min_ingest_time)
     .bind(file.max_ingest_time)
     .bind(i64::from(file.fully_merged))
+    .bind(fit_i64(file.deletions_applied_seq)?)
     .bind(created_at)
     .execute(&mut *connection)
     .await
@@ -637,7 +937,7 @@ mod tests {
     use std::sync::{Arc, Mutex, PoisonError};
 
     use chrono::NaiveDate;
-    use llmobs_core::ids::ProjectId;
+    use llmobs_core::ids::{ProjectId, TraceId};
     use sqlx::Row;
 
     use super::{load, open_catalog_db, *};
@@ -673,6 +973,7 @@ mod tests {
             min_ingest_time: min_time + 1,
             max_ingest_time: min_time + 11,
             fully_merged: table == FileTable::Scores,
+            deletions_applied_seq: 0,
         }
     }
 
@@ -752,7 +1053,7 @@ mod tests {
             .fetch_one(&mut again)
             .await
             .unwrap();
-        assert_eq!(migrations, 2);
+        assert_eq!(migrations, 3);
         let indexes: Vec<String> = sqlx::query_scalar(
             "SELECT name FROM sqlite_master
              WHERE type = 'index' AND name LIKE 'data_files_%'
@@ -765,14 +1066,14 @@ mod tests {
             indexes,
             vec!["data_files_gc".to_owned(), "data_files_lookup".to_owned()]
         );
-        let dropped: i64 = sqlx::query_scalar(
+        let deletions_applied: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM pragma_table_info('data_files')
              WHERE name = 'deletions_applied_seq'",
         )
         .fetch_one(&mut again)
         .await
         .unwrap();
-        assert_eq!(dropped, 0);
+        assert_eq!(deletions_applied, 1);
         let _ = connection;
     }
 
@@ -789,6 +1090,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: Some((Table::Spans, 4)),
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         committer
             .stage(
@@ -834,12 +1136,14 @@ mod tests {
                 remove: Vec::new(),
                 flushed_seq: None,
                 sources: Vec::new(),
+                raise: Vec::new(),
             },
             CatalogEdit {
                 add: vec![second],
                 remove: Vec::new(),
                 flushed_seq: None,
                 sources: Vec::new(),
+                raise: Vec::new(),
             },
         ] {
             committer.stage(&[edit.add[0].path.clone()]).await.unwrap();
@@ -853,6 +1157,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         committer.stage(&["right-again".to_owned()]).await.unwrap();
         let after = committer.commit(&edit, |_| {}).await.unwrap();
@@ -870,6 +1175,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         committer.stage(&["doomed".to_owned()]).await.unwrap();
         committer.commit(&edit, |_| {}).await.unwrap();
@@ -878,6 +1184,7 @@ mod tests {
             remove: vec![(id, FileState::Active)],
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         let published = committer.commit(&remove, |_| {}).await.unwrap();
         assert!(
@@ -913,6 +1220,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: Some((Table::Spans, 3)),
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         committer.commit(&added, |_| {}).await.unwrap();
         let before = committer.catalog().await;
@@ -922,6 +1230,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: Some((Table::Spans, 4)),
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         let error = committer.commit(&missing, |_| {}).await.unwrap_err();
         assert!(matches!(
@@ -936,6 +1245,7 @@ mod tests {
             remove: vec![(id, FileState::Obsolete)],
             flushed_seq: Some((Table::Spans, 4)),
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         let error = committer.commit(&wrong, |_| {}).await.unwrap_err();
         assert!(matches!(
@@ -951,6 +1261,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: Some((Table::Spans, 3)),
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         let error = committer.commit(&behind, |_| {}).await.unwrap_err();
         assert!(matches!(
@@ -992,6 +1303,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: Some((Table::Spans, 1)),
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         let before = committer.catalog().await;
         let error = committer.commit(&edit, |_| {}).await.unwrap_err();
@@ -1085,6 +1397,7 @@ mod tests {
                     remove: Vec::new(),
                     flushed_seq: None,
                     sources: Vec::new(),
+                    raise: Vec::new(),
                 };
                 committer
                     .commit(&edit, {
@@ -1146,6 +1459,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: None,
             sources: vec![(traces_id, spans_id)],
+            raise: Vec::new(),
         };
         committer
             .stage(&["spans/sourced".to_owned(), "traces/sourced".to_owned()])
@@ -1171,6 +1485,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         committer.stage(&["spans/active".to_owned()]).await.unwrap();
         committer.commit(&first, |_| {}).await.unwrap();
@@ -1182,6 +1497,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: None,
             sources: vec![(traces_id, spans_id)],
+            raise: Vec::new(),
         };
         committer
             .stage(&["traces/derived".to_owned()])
@@ -1236,6 +1552,7 @@ mod tests {
                     remove: Vec::new(),
                     flushed_seq: None,
                     sources,
+                    raise: Vec::new(),
                 },
                 |_| {},
             )
@@ -1261,6 +1578,7 @@ mod tests {
             remove: ids.iter().map(|id| (*id, FileState::Active)).collect(),
             flushed_seq: None,
             sources: vec![(traces_id, spans_id)],
+            raise: Vec::new(),
         };
         committer.commit(&edit, |_| {}).await.unwrap();
 
@@ -1301,6 +1619,7 @@ mod tests {
             remove: vec![(spans_one, FileState::Active)],
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         let error = committer.commit(&edit, |_| {}).await.unwrap_err();
         assert!(
@@ -1337,6 +1656,7 @@ mod tests {
             remove: vec![(traces_one, FileState::Active)],
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         let error = committer.commit(&edit, |_| {}).await.unwrap_err();
         assert!(
@@ -1370,6 +1690,7 @@ mod tests {
                 remove: Vec::new(),
                 flushed_seq: None,
                 sources: vec![(traces_id, unknown)],
+                raise: Vec::new(),
             };
             committer
                 .stage(&["traces/orphan".to_owned()])
@@ -1390,5 +1711,512 @@ mod tests {
                     .unwrap();
             assert_eq!(active, 0);
         }
+    }
+
+    /// The `Arc<FileMeta>` of `id` in `catalog`, to compare pointers across a
+    /// raise.
+    fn file_arc(catalog: &Catalog, id: FileId) -> Arc<FileMeta> {
+        catalog
+            .tables
+            .iter()
+            .flat_map(|table| table.values())
+            .flat_map(|days| days.values())
+            .flatten()
+            .find(|file| file.id == id)
+            .map(Arc::clone)
+            .unwrap()
+    }
+
+    fn trace_id(low: u8) -> TraceId {
+        let mut bytes = [0_u8; 16];
+        bytes[15] = low;
+        TraceId::from_bytes(bytes).unwrap()
+    }
+
+    fn deletion(id: Uuid, project: ProjectId, scope: DeletionScope) -> Deletion {
+        Deletion {
+            id,
+            project,
+            cutoff: 1_000,
+            scope,
+        }
+    }
+
+    #[tokio::test]
+    async fn deletions_applied_seq_round_trips_through_the_catalog() {
+        let (dir, committer) = opened().await;
+        let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000081");
+        let mut applied = file(FileTable::Spans, spans, day(1), 1, "spans/applied");
+        applied.deletions_applied_seq = 7;
+        committer
+            .stage(&["spans/applied".to_owned()])
+            .await
+            .unwrap();
+        let edit = CatalogEdit {
+            add: vec![applied],
+            remove: Vec::new(),
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: Vec::new(),
+        };
+        committer.commit(&edit, |_| {}).await.unwrap();
+
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let (loaded, _) = load(&mut connection).await.unwrap();
+        let files = loaded.test_files(FileTable::Spans);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].deletions_applied_seq, 7);
+    }
+
+    #[tokio::test]
+    async fn raising_an_active_file_updates_sqlite_and_the_catalog() {
+        let (dir, committer) = opened().await;
+        let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000082");
+        let raised = file(FileTable::Spans, spans, day(1), 1, "spans/raised");
+        let other = file(FileTable::Spans, spans, day(1), 2, "spans/other");
+        let raised_id = raised.id;
+        let other_id = other.id;
+        let edit = CatalogEdit {
+            add: vec![raised, other],
+            remove: Vec::new(),
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: Vec::new(),
+        };
+        committer
+            .stage(&["spans/raised".to_owned(), "spans/other".to_owned()])
+            .await
+            .unwrap();
+        committer.commit(&edit, |_| {}).await.unwrap();
+        let before = committer.catalog().await;
+        let raised_before = file_arc(&before, raised_id);
+        let other_before = file_arc(&before, other_id);
+
+        let raise = CatalogEdit {
+            add: Vec::new(),
+            remove: Vec::new(),
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: vec![(raised_id, 3)],
+        };
+        let published = committer.commit(&raise, |_| {}).await.unwrap();
+        let raised_after = file_arc(&published, raised_id);
+        assert_eq!(raised_after.deletions_applied_seq, 3);
+        assert!(!Arc::ptr_eq(&raised_before, &raised_after));
+        assert!(Arc::ptr_eq(&other_before, &file_arc(&published, other_id)));
+
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let sequences: Vec<(String, i64)> =
+            sqlx::query_as("SELECT path, deletions_applied_seq FROM data_files ORDER BY path")
+                .fetch_all(&mut connection)
+                .await
+                .unwrap();
+        assert_eq!(
+            sequences,
+            vec![
+                ("spans/other".to_owned(), 0),
+                ("spans/raised".to_owned(), 3),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn raise_conflicts_leave_everything_unchanged() {
+        let (dir, committer) = opened().await;
+        let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000083");
+        let raised = file(FileTable::Spans, spans, day(1), 1, "spans/raised");
+        let doomed = file(FileTable::Spans, spans, day(1), 2, "spans/doomed");
+        let raised_id = raised.id;
+        let doomed_id = doomed.id;
+        let edit = CatalogEdit {
+            add: vec![raised, doomed],
+            remove: Vec::new(),
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: Vec::new(),
+        };
+        committer
+            .stage(&["spans/raised".to_owned(), "spans/doomed".to_owned()])
+            .await
+            .unwrap();
+        committer.commit(&edit, |_| {}).await.unwrap();
+        let remove = CatalogEdit {
+            add: Vec::new(),
+            remove: vec![(doomed_id, FileState::Active)],
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: Vec::new(),
+        };
+        committer.commit(&remove, |_| {}).await.unwrap();
+        let before = committer.catalog().await;
+
+        // A stored value of 0 and a raise to 0: not greater.
+        let not_greater = CatalogEdit {
+            add: Vec::new(),
+            remove: Vec::new(),
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: vec![(raised_id, 0)],
+        };
+        let error = committer.commit(&not_greater, |_| {}).await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                CommitError::Conflict {
+                    reason: "deletion sequence is not greater than the stored value"
+                }
+            ),
+            "{error}"
+        );
+
+        let obsolete = CatalogEdit {
+            add: Vec::new(),
+            remove: Vec::new(),
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: vec![(doomed_id, 5)],
+        };
+        let error = committer.commit(&obsolete, |_| {}).await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                CommitError::Conflict {
+                    reason: "raised file is not active"
+                }
+            ),
+            "{error}"
+        );
+
+        let also_removed = CatalogEdit {
+            add: Vec::new(),
+            remove: vec![(raised_id, FileState::Active)],
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: vec![(raised_id, 5)],
+        };
+        let error = committer.commit(&also_removed, |_| {}).await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                CommitError::Conflict {
+                    reason: "raised file is also removed"
+                }
+            ),
+            "{error}"
+        );
+
+        assert!(Arc::ptr_eq(&before, &committer.catalog().await));
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let states: Vec<(String, String, i64)> = sqlx::query_as(
+            "SELECT path, state, deletions_applied_seq FROM data_files ORDER BY path",
+        )
+        .fetch_all(&mut connection)
+        .await
+        .unwrap();
+        assert_eq!(
+            states,
+            vec![
+                ("spans/doomed".to_owned(), "obsolete".to_owned(), 0),
+                ("spans/raised".to_owned(), "active".to_owned(), 0),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn registrations_take_the_next_seq_and_publish_the_tombstones() {
+        let (dir, committer) = opened().await;
+        let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000084");
+        let first_id = Uuid::now_v7();
+        let second_id = Uuid::now_v7();
+        let mut published: Vec<Arc<Tombstones>> = Vec::new();
+        let first = deletion(
+            first_id,
+            spans,
+            DeletionScope::Traces {
+                trace_ids: vec![trace_id(1)],
+            },
+        );
+        let second = deletion(
+            second_id,
+            spans,
+            DeletionScope::User {
+                user_id: "user".to_owned(),
+                trace_ids: vec![trace_id(2)],
+                session_ids: vec!["session".to_owned()],
+            },
+        );
+        let registered = committer
+            .register_deletion(&first, 100, |tombstones| {
+                published.push(Arc::clone(tombstones));
+            })
+            .await
+            .unwrap();
+        assert_eq!(registered, Registered::New { seq: 1 });
+        let registered = committer
+            .register_deletion(&second, 200, |tombstones| {
+                published.push(Arc::clone(tombstones));
+            })
+            .await
+            .unwrap();
+        assert_eq!(registered, Registered::New { seq: 2 });
+
+        assert_eq!(published.len(), 2);
+        assert_eq!(published[0].known_seq(), 1);
+        let after_second = &published[1];
+        assert_eq!(after_second.known_seq(), 2);
+        let pending = after_second.for_project(spans);
+        let ids: Vec<_> = pending.iter().map(|deletion| deletion.id).collect();
+        assert_eq!(ids, vec![first_id, second_id]);
+
+        let registered = committer
+            .register_deletion(&first, 300, |_| {
+                unreachable!("a known id does not publish");
+            })
+            .await
+            .unwrap();
+        assert_eq!(registered, Registered::Known);
+        assert_eq!(published.len(), 2);
+        assert_eq!(committer.tombstones().await.known_seq(), 2);
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM deletions")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(rows, 2);
+    }
+
+    #[tokio::test]
+    async fn invalid_requests_write_nothing() {
+        let (dir, committer) = opened().await;
+        let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000085");
+        let cases = [
+            (
+                Deletion {
+                    id: Uuid::now_v7(),
+                    project: spans,
+                    cutoff: 0,
+                    scope: DeletionScope::Traces {
+                        trace_ids: vec![trace_id(1)],
+                    },
+                },
+                "cutoff must be positive",
+            ),
+            (
+                deletion(
+                    Uuid::now_v7(),
+                    spans,
+                    DeletionScope::Traces { trace_ids: vec![] },
+                ),
+                "empty scope",
+            ),
+            (
+                deletion(
+                    Uuid::now_v7(),
+                    spans,
+                    DeletionScope::User {
+                        user_id: String::new(),
+                        trace_ids: vec![trace_id(1)],
+                        session_ids: vec!["session".to_owned()],
+                    },
+                ),
+                "empty user id",
+            ),
+        ];
+        for (request, reason) in cases {
+            let error = committer
+                .register_deletion(&request, 100, |_| {
+                    unreachable!("an invalid request does not publish");
+                })
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, DeletionError::Invalid { reason: got } if got == reason),
+                "{error}"
+            );
+        }
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM deletions")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(rows, 0);
+        assert_eq!(committer.tombstones().await.known_seq(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_commit_fault_rolls_back_a_registration() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks = Hooks::default();
+        let committer = Committer::open(dir.path(), hooks.clone()).await.unwrap();
+        let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000086");
+        let first = deletion(
+            Uuid::now_v7(),
+            spans,
+            DeletionScope::Traces {
+                trace_ids: vec![trace_id(1)],
+            },
+        );
+        committer
+            .register_deletion(&first, 100, |_| {})
+            .await
+            .unwrap();
+        let before = committer.tombstones().await;
+
+        let second = deletion(
+            Uuid::now_v7(),
+            spans,
+            DeletionScope::Traces {
+                trace_ids: vec![trace_id(2)],
+            },
+        );
+        hooks.arm_fail(HookPoint::CatalogCommit);
+        let error = committer
+            .register_deletion(&second, 200, |_| {
+                unreachable!("a failed registration does not publish");
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, DeletionError::Catalog(_)), "{error}");
+        let after = committer.tombstones().await;
+        assert_eq!(*after, *before);
+
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM deletions")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(rows, 1);
+
+        // The rolled-back sequence number was not consumed.
+        let retried = committer
+            .register_deletion(&second, 300, |_| {})
+            .await
+            .unwrap();
+        assert_eq!(retried, Registered::New { seq: 2 });
+    }
+
+    #[tokio::test]
+    async fn mark_applied_erases_the_scope_and_reload_keeps_the_rest() {
+        let (dir, committer) = opened().await;
+        let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000087");
+        let first_id = Uuid::now_v7();
+        let second_id = Uuid::now_v7();
+        let first = deletion(
+            first_id,
+            spans,
+            DeletionScope::Traces {
+                trace_ids: vec![trace_id(1), trace_id(2)],
+            },
+        );
+        let second = deletion(
+            second_id,
+            spans,
+            DeletionScope::User {
+                user_id: "user".to_owned(),
+                trace_ids: vec![trace_id(3)],
+                session_ids: vec!["session-a".to_owned(), "session-b".to_owned()],
+            },
+        );
+        committer
+            .register_deletion(&first, 100, |_| {})
+            .await
+            .unwrap();
+        committer
+            .register_deletion(&second, 200, |_| {})
+            .await
+            .unwrap();
+        assert!(
+            committer
+                .mark_applied(spans, first_id, 300, |_| {})
+                .await
+                .unwrap()
+        );
+
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let first_traces: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM deletion_traces WHERE deletion_id = ?")
+                .bind(first_id.to_string())
+                .fetch_one(&mut connection)
+                .await
+                .unwrap();
+        assert_eq!(first_traces, 0);
+        for (count_sql, expected) in [
+            (
+                "SELECT COUNT(*) FROM deletion_traces WHERE deletion_id = ?",
+                1,
+            ),
+            (
+                "SELECT COUNT(*) FROM deletion_users WHERE deletion_id = ?",
+                1,
+            ),
+            (
+                "SELECT COUNT(*) FROM deletion_sessions WHERE deletion_id = ?",
+                2,
+            ),
+        ] {
+            let count: i64 = sqlx::query_scalar(count_sql)
+                .bind(second_id.to_string())
+                .fetch_one(&mut connection)
+                .await
+                .unwrap();
+            assert_eq!(count, expected, "{count_sql}");
+        }
+        drop(connection);
+
+        let reopened = Committer::open(dir.path(), Hooks::default()).await.unwrap();
+        let tombstones = reopened.tombstones().await;
+        assert_eq!(tombstones.known_seq(), 2);
+        let pending = tombstones.for_project(spans);
+        assert_eq!(pending.len(), 1);
+        let deletion = &pending[0];
+        assert_eq!(deletion.id, second_id);
+        assert_eq!(deletion.trace_ids, HashSet::from([*trace_id(3).as_bytes()]));
+        assert_eq!(deletion.users, HashSet::from(["user".to_owned()]));
+        assert_eq!(
+            deletion.sessions,
+            HashSet::from(["session-a".to_owned(), "session-b".to_owned()])
+        );
+        assert_eq!(deletion.cutoff, 1_000);
+        assert_eq!(deletion.registered_at, 200);
+    }
+
+    #[tokio::test]
+    async fn deletion_status_reports_pending_applied_and_unknown() {
+        let (_dir, committer) = opened().await;
+        let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000088");
+        let id = Uuid::now_v7();
+        assert_eq!(committer.deletion_status(id).await.unwrap(), None);
+        let request = deletion(
+            id,
+            spans,
+            DeletionScope::Traces {
+                trace_ids: vec![trace_id(1)],
+            },
+        );
+        committer
+            .register_deletion(&request, 100, |_| {})
+            .await
+            .unwrap();
+        assert_eq!(
+            committer.deletion_status(id).await.unwrap(),
+            Some(DeletionStatus::Pending)
+        );
+        assert!(
+            committer
+                .mark_applied(spans, id, 5_000, |_| {})
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            committer.deletion_status(id).await.unwrap(),
+            Some(DeletionStatus::Applied { applied_at: 5_000 })
+        );
+        // An applied id is no longer pending: nothing to do, no publish.
+        assert!(
+            !committer
+                .mark_applied(spans, id, 6_000, |_| {})
+                .await
+                .unwrap()
+        );
     }
 }

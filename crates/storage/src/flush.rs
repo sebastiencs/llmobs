@@ -342,6 +342,7 @@ async fn flush_once(params: &FlushParams) -> Result<Option<u64>, FlushError> {
         remove: Vec::new(),
         flushed_seq: Some((params.table, max_seq)),
         sources,
+        raise: Vec::new(),
     };
     let published = Arc::clone(&params.published);
     let shared = Arc::clone(&params.shared);
@@ -521,6 +522,7 @@ fn prepared_file(
             min_ingest_time: written.min_ingest_time,
             max_ingest_time: written.max_ingest_time,
             fully_merged: false,
+            deletions_applied_seq: 0,
         },
         bytes: written.bytes,
     }

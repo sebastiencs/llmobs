@@ -42,6 +42,7 @@ pub(crate) mod catalog;
 mod compaction;
 pub mod config;
 pub(crate) mod dedup;
+pub(crate) mod deletion;
 pub mod error;
 mod filter;
 pub(crate) mod flush;
@@ -57,6 +58,7 @@ mod sql;
 mod views;
 
 pub use crate::compaction::job::CompactionReport;
+pub use crate::deletion::{Deletion, DeletionScope, DeletionStatus};
 pub use crate::error::CompactionError;
 pub use crate::gc::ObsoleteReport;
 pub use query_error::{InvalidQuery, Position, RunError};

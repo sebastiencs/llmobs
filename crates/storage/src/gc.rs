@@ -436,6 +436,7 @@ mod tests {
             min_ingest_time: 3,
             max_ingest_time: 4,
             fully_merged: false,
+            deletions_applied_seq: 0,
         }
     }
 
@@ -476,6 +477,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: None,
             sources: vec![(traces_id, spans_id)],
+            raise: Vec::new(),
         };
         f.committer
             .stage(&[spans_path.clone(), traces_path.clone()])
@@ -504,6 +506,7 @@ mod tests {
             ],
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         f.committer.commit(&remove, |_| {}).await.unwrap();
     }
@@ -523,6 +526,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         f.committer
             .stage(std::slice::from_ref(&path))
@@ -540,6 +544,7 @@ mod tests {
             remove: vec![(id, FileState::Active)],
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         f.committer.commit(&remove, |_| {}).await.unwrap();
         (id, path)
