@@ -59,7 +59,7 @@ Single tokio runtime. CPU-heavy work (Parquet encode, compaction, DataFusion exe
 
 ## Crate layout (monorepo)
 
-D52. The earlier split (`llmobs-query`, `llmobs-meta`, `llmobs-auth`, `llmobs-eval`, `llmobs-alerts`, `llmobs-mail`, `llmobs-api`, and a `crates/llmobs/` binary) is folded in as follows: query lives in `llmobs-storage`; meta, auth, eval, alerts, mail and api are modules of `llmobs-server`; the binary is `llmobs-cli`. `web/` is embedded into the binary by `llmobs-server` (`memory-serve`).
+D52. The earlier split (`llmobs-query`, `llmobs-meta`, `llmobs-auth`, `llmobs-alerts`, `llmobs-mail`, `llmobs-api`, and a `crates/llmobs/` binary) is folded in as follows: query lives in `llmobs-storage`; meta, auth, alerts, mail and api are modules of `llmobs-server`; evaluator execution is the `llmobs-eval` crate (D155); the binary is `llmobs-cli`. `web/` is embedded into the binary by `llmobs-server` (`memory-serve`).
 
 ```
 crates/
@@ -67,6 +67,8 @@ crates/
                              Arrow schemas + batch conversion, OpenAPI schemas,
                              no config (D59)                                          (spec 01)
   otel/      llmobs-otel     OTLP decode, normalization, media, truncation, cost      (spec 02)
+  eval/      llmobs-eval     evaluator execution: checks, mapping, templates, judges,
+                             webhooks, judge traces                                   (spec 06)
   storage/   llmobs-storage  WAL, memtable, Parquet, catalog, compaction, deletion,
                              DataFusion providers, filter DSL, SQL sandbox            (specs 03, 05)
   server/    llmobs-server   API, auth, metadata DB, evaluation, alerts, email, MCP   (specs 04, 06–09)
@@ -84,7 +86,8 @@ Dependency direction:
 
 - `core` depends on no workspace crate.
 - `otel` and `storage` depend only on `core`. They never depend on each other, so they can be built in parallel; `server` connects them.
-- `server` depends on `core`, `otel` and `storage`; `cli` depends on `server` and `core`.
+- `eval` depends on `core` and `otel`.
+- `server` depends on `core`, `otel`, `storage` and `eval`; `cli` depends on `server` and `core`.
 
 ## Spec-level choices (reviewed and accepted)
 

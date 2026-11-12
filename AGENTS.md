@@ -82,6 +82,8 @@ crates/
                              Arrow schemas + batch conversion, OpenAPI schemas,
                              no config (D59)                                          (spec 01)
   otel/      llmobs-otel     OTLP decode, normalization, media, truncation, cost      (spec 02)
+  eval/      llmobs-eval     evaluator execution: checks, mapping, templates, judges,
+                             webhooks, judge traces                                   (spec 06)
   storage/   llmobs-storage  WAL, memtable, Parquet, catalog (catalog.db), compaction,
                              deletion, DataFusion providers, filter DSL, SQL sandbox  (specs 03, 05)
   server/    llmobs-server   API, auth, metadata DB, evaluation, alerts, email, MCP   (specs 04, 06–09)
@@ -99,7 +101,8 @@ docs/                        decisions, specs, plans, research
 **Crate dependency graph (enforced):**
 - `core` depends on no workspace crate.
 - `otel` and `storage` depend only on `core`. **They never depend on each other**, so they can be built in parallel; `server` connects them.
-- `server` depends on `core`, `otel` and `storage`; `cli` depends on `server` and `core`.
+- `eval` depends on `core` and `otel`.
+- `server` depends on `core`, `otel`, `storage` and `eval`; `cli` depends on `server` and `core`.
 
 ## Parallel work and ownership
 
@@ -124,6 +127,7 @@ Run everything through `just`:
 | `just fmt` | format Rust, the web and TypeScript SDK (Biome), and the Python SDK (ruff) |
 | `just lint` | clippy, warnings as errors |
 | `just test` | all Rust tests |
+| `just eval-live` | opt-in live provider tests; ignored by `just check` (D167) |
 | `just deny` | supply-chain checks (advisories, bans, sources; licenses deferred, D57) |
 | `just deny-advisories` | RustSec advisories only |
 | `just assert-clean` | fail if the working tree changed; CI runs it after each job |

@@ -1,0 +1,37 @@
+---
+source: crates/eval/tests/openai.rs
+expression: "seen[0].body"
+---
+{
+  "model": "gpt-4o-mini",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Grade the answer."
+    }
+  ],
+  "max_completion_tokens": 1024,
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "judge_answer",
+      "strict": true,
+      "schema": {
+        "type": "object",
+        "properties": {
+          "explanation": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "explanation",
+          "value"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

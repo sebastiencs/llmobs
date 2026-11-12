@@ -1,0 +1,49 @@
+[package]
+name = "llmobs-eval"
+description = "Evaluator execution: checks, variable mapping, templates, LLM judges, webhooks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+autotests = false
+
+[[test]]
+name = "runner"
+path = "tests/runner.rs"
+
+[[test]]
+name = "live"
+path = "tests/live.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+bytes.workspace = true
+hex.workspace = true
+hmac.workspace = true
+jsonschema.workspace = true
+llmobs-core.workspace = true
+llmobs-otel.workspace = true
+opentelemetry-proto.workspace = true
+sha2.workspace = true
+tracing.workspace = true
+minijinja.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+strsim.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_json_path.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net"] }
+uuid.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+insta.workspace = true
+proptest = { workspace = true, default-features = false, features = ["std"] }
+# Integration tests name `Url` and JSON values directly.
+reqwest.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "time"] }

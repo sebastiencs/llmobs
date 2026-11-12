@@ -144,3 +144,42 @@ Already in the workspace: `serde`, `serde_json`, `thiserror`, `regex`, `jsonsche
 ## Sub-phase order
 
 E1 → E2 → … → E20, strictly in order. E12 and E13 are independent of each other. E20 must be the last, and must be done by a different model from the one that implemented E1–E19.
+
+## Review
+
+E20, 2026-11-12. Findings fixed here, each locked by a test:
+
+| # | Finding | Severity | Test |
+|---|---|---|---|
+| R1 | `JudgeError`'s derived `Debug` printed `provider_message`, so `{err:?}` (and `EvalError`, `EvalRun`) leaked the provider's text, which D160 says is never logged. `Debug` now prints its length. | Medium | `error::class_tests::debug_omits_the_provider_message`; the adapter tests' `assert_hidden` now checks `Debug` for every variant |
+| R2 | `WebhookConfig`'s derived `Debug` printed the URL path and query, header values and `secret_enc`; it reached `Evaluator`, `RunInput` and `WebhookCall`. `Debug` now prints the host, the header names and whether `secret_enc` is set. | Medium | `config::tests::debug_omits_prompts_header_values_url_paths_and_the_secret` |
+| R3 | Public payload holders derived `Debug`: `Variables`, `ItemData`, `TraceData` (spans), `EvalOutcome` (reason), `EvalRun` (judge trace), `JudgeConfig` (prompt), `JudgeConnection` (`base_url` path and query). They now print names, counts, lengths and the host. | Medium | `mapping::resolve::tests::debug_prints_names_and_counts_without_values`, `judge::tests::connection_debug_shows_the_host_only`, `runner::debug_of_the_input_and_the_run_holds_no_payload` |
+| R4 | A model name containing `\` escaped the Gemini path: the URL parser reads `\` as `/`, so `a\..\..\..\admin` became `/admin:generateContent` on the provider host. `\` and `%` are now rejected with `/`, `?` and `#` (03-judges.md lists only those three). | Medium | `judge::gemini::tests::rejects_a_model_that_would_leave_the_models_path`, `judge::openai::tests::rejects_model_names_that_cannot_be_sent` |
+| R5 | Label uniqueness folded only trim and case, while the answer parser also strips one trailing `.`: `["ok", "ok."]` was accepted and the second label could never match. Validation now uses the parser's normalization; `"."` is blank. | Low | `config::tests` (labels cases) |
+| R6 | Since E17 added `exchange`, E15's `webhook::call` only forwarded to it for tests, and `WebhookReply` duplicated `status`, `request_body` and `response_body` from `WebhookExchange` (two extra copies of up to 64 KiB). Both removed; `WebhookReply` is now `{ value, reason }`, which departs from the shape in 04-webhook-trace-runner.md. | Low | `webhook_tests` |
+
+Property tests added (`proptest`, 256 cases, `LLMOBS_PROPTEST_CASES` overrides): each adapter's response decoder, the provider error reader, the webhook score reader and the answer parser get arbitrary bytes, arbitrary JSON, shaped replies with arbitrary leaves, truncated JSON and nesting past serde's depth limit. They found no panic and no undocumented error kind. Strategies are in `tests/hostile.rs`.
+
+SSRF (`allow_private_network = false`): `localhost.`, `127.1`, `2130706433`, `0x7f000001`, `0.0.0.0`, `[::]`, `[::1]`, `[::ffff:127.0.0.1]` and `[64:ff9b::7f00:1]` are denied before connecting; the mock saw nothing. A zone id (`[fe80::1%25lo]`) is rejected by the URL parser. A 302 from the mock is returned as is (one request, not followed); the redirect from a public host was not live-tested. With all six `*_PROXY` variables set (in a child process), requests do not go through the proxy. No guard change was needed.
+
+Needs a decision:
+- **D166 edge ranges.** The guard allows `0.0.0.0/8` other than `0.0.0.0`, `240.0.0.0/4`, IPv4-compatible `::a.b.c.d`, `64:ff9b:1::/48` (local-use NAT64), `2002::/16` (6to4) and the deprecated `fec0::/10`. None reached the loopback mock; denying them is a one-line change each in `egress.rs`.
+- **D160 quota.** Pause on exhausted quota is detected only for OpenAI's `insufficient_quota` at 429. Anthropic's low-credit error is a 400 (permanent), and Gemini's `RESOURCE_EXHAUSTED` is a 429 (retryable, the same code as a rate limit).
+- **Webhook categorical output without `categories`** passes validation (E2 lists only the data types), but every response is then `unknown label`.
+- **Header precedence.** A judge's `extra_headers` replace the adapter's own headers (documented), including `content-type` and the auth header. Webhook headers are checked against the reserved names only by `validate()`, so a struct built without it can override `content-type`.
+- **D164 wording.** This README's D164 says an empty `values` list is invalid; spec 06 and the code compare with `expected` when both `value` and `values` are absent.
+
+Recorded, settled by earlier sub-phases and not changed:
+- Webhook status classes (E15) differ from D160: 408, 425, 429 and 5xx retry; 401, 403, 404 and 410 pause; 3xx and every other 4xx, 402 included, are permanent. Judges follow D160 (402 pause; 403 pause unless the type or code names a content filter).
+- D158 extra tolerance: the `score` and `reason` aliases, 0/1 as booleans, and one trailing `.` on labels (E9).
+- `anthropic-version: 2026-10-21`.
+- The experiment origin writes `llmobs.eval.experiment_id`, not the dataset item id.
+- The `llm` span input is the rendered template; prompt mode appends the schema inside the adapter.
+- A webhook child stores the response body only when the call returns a score; its HTTP attributes stay in `span.attributes`.
+- A successful run logs `error_class = none`.
+- `Adapter` and `StructuredOutput` have no public `FromStr`; `from_name` and `UnknownName` are crate-private.
+- The runner does not call `Evaluator::validate()`: a bad template is a `TemplateError`, a missing connection or webhook secret is `ConfigError` "invalid connection: required" / "invalid secret: required".
+- The Custom template is a numeric 0–1 starter named `score`.
+- `answer::scan_object` is O(n × 128) on text full of `{` (serde's depth limit), at most about 500 M steps on a 4 MiB answer. Not changed.
+
+Also checked, no finding: every error `Display` and both `tracing` calls (ids, kinds, counts and durations only); the limits (template 64 KiB and fuel, rendered prompt 2 MiB, expression 1 KiB, 32 variables, transcript 2 000 / 60 000, explanation and webhook reason 8 000, provider message 500, model 256 bytes, 20 webhook headers, judge 4 MiB and webhook 64 KiB responses), each already enforced and tested; the five prompts against E18's rules; the public API against E17's list plus E18's `JudgeTemplate` and `builtin_templates`.

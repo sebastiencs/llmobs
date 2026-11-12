@@ -156,7 +156,7 @@ Approved with this plan for the root `[workspace.dependencies]`. Each sub-phase 
 | # | To | Request | Needed by |
 |---|---|---|---|
 | R-C1 | C | Pages: `/setup?token=`, `/login` (with `?error=` codes from P24), `/signup` (with `?invite=`), `/invite/{token}`, `/reset?token=`, `/verify?token=`, `/account` (name, password, tokens), org settings (members, invites, projects), project settings (API keys, overrides), `/admin` (users, settings), and `/cli-auth?port=&state=`: after the user confirms, create a PAT named `CLI on <hostname>` (scopes `read, write`) and redirect to `http://127.0.0.1:<port>/callback?token=…&state=…`. The host is always `127.0.0.1`; only the port comes from the query, as an integer 1024–65535. | P12–P22 landed |
-| R-E1 | E | `instance_settings`, `LLMOBS_ENCRYPTION_KEY`, `secret.key`, the check value and `rotate-encryption-key` (D135). Use AES-256-GCM with AAD = `table:column:row_id`, not the row id alone (research G28). | E |
+| R-E1 | E | `instance_settings`, `LLMOBS_ENCRYPTION_KEY`, `secret.key`, the check value and `rotate-encryption-key` (D135). Use AES-256-GCM with AAD = `table:column:row_id`, not the row id alone (research G28). Moved to the Wave 2 eval server track by D156. | E |
 | R-S1 | later server tracks | Declare every route in D's table (D138). Add `ProjectPerm` variants with the spec 08 role row and their API key scope, and extend the generated authorization suite (P18) with a request body per new route if the default `{}` is rejected before enforcement. | Wave 2 |
 | R-S2 | GDPR deletion track | Project and org erasure, `deletions` tables, and user erasure; the "last owner" rule of D139 also guards org deletion. | later |
 

@@ -1,0 +1,8 @@
+---
+source: crates/eval/src/mapping/transcript.rs
+expression: "render(&[answer, tool, decide, agent])"
+---
+agent research: What is the weather in Paris? → It is 18°C and clear.
+  llm decide: user: What is the weather in Paris? → assistant: tool_call get_weather({"city":"Paris"})
+    tool get_weather: {"city":"Paris"} → 18°C and clear
+  llm answer: user: What is the weather in Paris? tool: tool_result: 18°C and clear → assistant: It is 18°C and clear.

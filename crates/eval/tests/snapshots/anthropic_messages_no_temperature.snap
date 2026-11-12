@@ -1,0 +1,35 @@
+---
+source: crates/eval/tests/anthropic.rs
+expression: "seen[0].body"
+---
+{
+  "model": "claude-sonnet-4-5",
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Grade the answer."
+    }
+  ],
+  "output_config": {
+    "format": {
+      "type": "json_schema",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "explanation": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "explanation",
+          "value"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

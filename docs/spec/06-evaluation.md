@@ -34,19 +34,24 @@ Stored in SQLite `evaluators` (04). Three kinds.
           | {"type": "categorical", "labels": ["correct", "partially_correct", "incorrect"],
              "label_values": {"correct": 1, "partially_correct": 0.5, "incorrect": 0}},
   "include_reason": true,
-  "temperature": 0, "max_output_tokens": 1024
+  // temperature is optional and unset by default
+  "max_output_tokens": 1024,
+  "timeout_ms": 60000
 }
 ```
 
 - Prompt templating: `minijinja` with the variables of the mapping (below); missing variables are an error at job time (`failed: missing variable x`).
-- Structured output per adapter: OpenAI-compatible `response_format: {type: json_schema, strict: true}`; Anthropic forced tool call (`tool_choice: {type: tool}`) with the schema as `input_schema`; Gemini `responseSchema`. Schema = `{"reason": string?, "value"|"label": …}` (reason first so the model reasons before answering). Fallback for providers without structured output: extract the first JSON object from text.
+- Structured output is a per-connection setting, `structured_output`: `native` (default), `tool` or `prompt` (D157). `native` is OpenAI-compatible `response_format: {type: "json_schema", strict: true}`, Anthropic `output_config.format` with a JSON schema, and Gemini `responseMimeType: "application/json"` with `responseJsonSchema`. `tool` is a forced tool or function call carrying the same schema; it is not the default, because newer Claude models refuse a forced `tool_choice`. `prompt` appends an instruction and the schema to the prompt and parses the text. There is no automatic downgrade and no cached capability state. A provider that rejects the mode returns a permanent error that names the setting to change.
+- The schema the model sees is an object with `explanation` (string, present only when `include_reason`) first, then `value` (number or boolean) or `label` (an enum of the labels) (D158). `additionalProperties` is false, every property is required, and there is no `minimum` or `maximum`; ranges are checked after parsing. The same parser reads every mode. It accepts a tool call's arguments, text that is one JSON object, text in a markdown fence, or the first complete JSON object in the text. It coerces `"0.8"` to 0.8 and `"true"` / `"false"` to booleans, joins an array explanation with newlines, and matches labels after trimming and case-folding. Unknown labels, out-of-range numbers, missing fields, an empty answer and a refusal are typed errors. The explanation becomes the score's `reason`. The field the model sees is never named `reasoning`.
+- Requests (D159): the OpenAI-compatible adapter uses Chat Completions (`POST {base_url}/chat/completions`, default base `https://api.openai.com/v1`) with `max_completion_tokens`. Anthropic uses Messages with `max_tokens`, which is required. Gemini uses `models/{model}:generateContent` with `maxOutputTokens`. The prompt is one user message. `temperature` is optional and unset by default; the built-in templates do not set it. `max_output_tokens` defaults to 1024. Timeouts are 10 s to connect and 60 s for the whole call (`timeout_ms` on the evaluator, at most 300 s). A response over 4 MiB is an error.
 - Result → score: numeric `value_num`; boolean 0/1; categorical `value_str` = label and `value_num` = `label_values[label]` when provided; `reason`.
-- **Judge traces** (same pattern as Langfuse, Opik, Phoenix): every evaluator execution (judge, check or webhook) is traced into the **user's project** through the internal ingestion path (spans built in-process and handed to the WAL, no HTTP), with:
+- **Judge traces** (same pattern as Langfuse, Opik, Phoenix): every evaluator execution (judge, check or webhook, success or failure) is traced into the **user's project** through the internal ingestion path (spans built in-process and handed to the WAL, no HTTP), with:
   - reserved `environment = "llmobs-eval"`;
-  - a root `evaluator` span named after the evaluator, with child `llm` span(s) for judge calls (full prompt, response, tokens, cost) or an `http` span for webhooks;
+  - a root `evaluator` span named after the evaluator; a judge adds one `llm` span (full prompt, response, tokens, cost); a webhook adds one child of kind `span` named `webhook` (there is no `http` span kind);
   - metadata `llmobs.eval.target_trace_id`, `llmobs.eval.target_span_id`, `llmobs.eval.rule_id` | `llmobs.eval.experiment_id`, `llmobs.eval.evaluator_id`.
+- The trace is built as an OTLP `ExportTraceServiceRequest` and passed through `llmobs_otel::normalize` with the caller's ingest context and price table, so previews, truncation, media extraction and cost match SDK spans (D161). The caller supplies the trace id (the job's, so a retry reuses it). Span ids are the first 8 bytes of SHA-256(trace id ‖ span index). `judge.cost_usd` is the `llm` span's `cost_total`; when the judge model has no price, the outcome says so.
 - The score links back: `metadata['judge.trace_id']`, plus the usage summary `judge.model`, `judge.input_tokens`, `judge.output_tokens`, `judge.cost_usd`, `judge.latency_ms` (so score lists show cost without opening the trace). `eval_jobs.cost_usd` and `usage_daily.judge_*` are updated too.
-- **Isolation of `llmobs-eval` traces:** never selected by online rules (no recursion); excluded by default from trace/span/session lists, user aggregates, the dashboard and alert queries (05, 07); visible with the "Show evaluation traces" toggle or an explicit `environment = 'llmobs-eval'` filter; the dashboard has a separate "Evaluation cost" series. The environment name is reserved: ingestion rejects it from external sources (rewritten to `llmobs-eval-external` with a warning attribute).
+- **Isolation of `llmobs-eval` traces:** never selected by online rules (no recursion); excluded by default from trace/span/session lists, user aggregates, the dashboard and alert queries (05, 07); visible with the "Show evaluation traces" toggle or an explicit `environment = 'llmobs-eval'` filter; the dashboard has a separate "Evaluation cost" series. The environment name is reserved: ingestion from external sources rewrites it to `llmobs-eval-external` with a warning attribute. The OTLP handler does the rewrite after normalization; evaluation spans are built in process and keep the name.
 - UI: "View judge trace" link on every evaluator-produced score; the evaluator test panel shows the same trace inline.
 
 ### `check` (built-in, pure Rust)
@@ -60,7 +65,9 @@ Stored in SQLite `evaluators` (04). Three kinds.
 | `json_schema` | `schema` | boolean, reason = first validation error |
 | `levenshtein` | `normalize: true` | numeric 0–1 similarity |
 
-Checks compare `output` against `expected` (or the param value). Text extraction rule: if a variable is a messages array, use the concatenated text of the last assistant message.
+Checks compare `output` against `expected` (or the param value).
+
+**Defaults** (D164). Text extraction: a string is used as is; a messages array yields the concatenated text parts of its last assistant message, or empty if there is none; any other JSON yields compact JSON; an absent value is an error. `exact_match` defaults to `case_sensitive` true and `trim` true. `contains` defaults to `case_sensitive` false and `mode` any; omitting both `value` and `values` compares the output with `expected`, and an empty needle string is invalid configuration. `regex` uses Rust regex syntax, searches anywhere, and rejects a pattern whose compiled size exceeds 1 MiB or that does not compile. `json_valid` requires the whole extracted text to parse as JSON; an output that is already a JSON object or array is valid. `json_schema` is Draft 2020-12; on failure the reason is the first error's instance path and keyword (for example `/answer: type`) and never the instance value. `levenshtein` is `1 − distance / max(len)` over Unicode scalar values, and 1.0 when both strings are empty; `normalize` defaults to true and then trims, case-folds and collapses whitespace runs on both sides before the distance.
 
 ### `webhook`
 
@@ -68,7 +75,7 @@ Checks compare `output` against `expected` (or the param value). Text extraction
 {"url": "https://…", "secret_enc": "…", "timeout_ms": 10000, "headers": {…}}
 ```
 
-Request: `POST url` with JSON `{evaluator: {id, name}, project_id, trace_id, span_id, variables: {…}}`, header `X-Llmobs-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, t + "." + body)>`. Response `200` JSON `{value?: number|boolean, label?: string, reason?: string}`; anything else = failure (retried).
+Request: `POST url` with `Content-Type: application/json`, the configured headers, and JSON `{evaluator: {id, name}, project_id, trace_id, span_id, variables: {…}}`. The signature header is `X-Llmobs-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret, t + "." + body)>` (D165). `timeout_ms` defaults to 10 000 and is at most 60 000. Redirects are not followed. A response body over 64 KiB is an error. A `200` whose JSON object `{value?: number|boolean, label?: string, reason?: string}` fits the output definition is a score. Any other status is classified by D160. A `200` with a body that is not that object is a permanent error.
 
 ## Variable mapping
 
@@ -76,23 +83,26 @@ Online rules and experiment evaluators map template variables to data:
 
 | Source expression | Meaning |
 |---|---|
-| `trace.input` / `trace.output` | root span (or first `llm` span if no root) input / output |
+| `trace.input` / `trace.output` | input / output of the trace root: the span with no parent, or the earliest such span if several; if there is no root, the first `llm` span |
 | `span.input` / `span.output` | the target span (span rules) |
-| `span[name="retrieve"].output` | first span in the trace with that name (trace rules) |
-| `trace.metadata.<key>`, `span.attributes.<key>` | metadata / attribute values |
-| `trace.transcript` | compact rendering of the whole trace: tree of `kind name: input → output` lines, each payload truncated to 2 000 chars, total capped at 60 000 chars — for agent-trajectory judges |
-| `expected` | dataset item `expected_output` (experiments only) |
-| `item.input`, `item.metadata.<k>` | dataset item fields (experiments only) |
+| `span[name="retrieve"].output` | first span with that name, by start time |
+| `span[kind="retriever"].output` | first span with that kind, by start time |
+| `trace.metadata.<key>`, `span.metadata.<key>`, `span.attributes.<key>` | metadata / attribute values |
+| `trace.transcript` | compact rendering of the whole trace, for agent-trajectory judges (rendering below) |
+| `expected` | dataset item `expected_output` (experiments only; absent without a dataset item) |
+| `item.input`, `item.metadata.<k>` | dataset item fields (experiments only; absent without a dataset item) |
 
-Any expression may end with a JSONPath suffix: `trace.output$.parts[0].content`. Implemented with `serde_json_path`.
+Any expression may end with an RFC 9535 JSONPath suffix (`trace.output$.parts[0].content`, through `serde_json_path`) and an optional trailing `?` that marks the variable optional (D162). Payloads decode by their format (`messages` and `json` as JSON, `text` as a string); metadata and attribute values are JSON-decoded. A JSONPath with no match is absent, one match is the value, and several matches are an array. An absent required variable is `missing variable <name>`. An absent optional variable renders as an empty string.
+
+**Rendering** (D163). Templates use `minijinja` with strict undefined (a missing variable is an error, never literal text), no auto-escaping, a fuel limit of 100 000 and a template limit of 64 KiB. In a prompt, a string renders as itself, null as an empty string, a messages array as one `role: text` line per message (non-text parts as `[image]`, `[audio]` or `[file]`, tool calls as `tool_call name(arguments)`), and any other JSON as compact JSON. Templates may index into JSON values (`{{ output.answer }}`). `trace.transcript` renders a tree of `kind name: input → output` lines, two spaces of indent per level, children in start-time order. Each payload is cut to 2 000 characters with `…`, and the whole rendering is cut to 60 000 characters with a final `[… n more spans]` line. Lengths are Unicode scalar values.
 
 ## Built-in judge templates
 
-Shipped as code in `llmobs-server`; "create from template" copies the prompt into a new evaluator the user can edit.
+Shipped as code in `llmobs-eval`; "create from template" copies the prompt into a new evaluator the user can edit.
 
 | Template | Variables | Output |
 |---|---|---|
-| Hallucination | `input`, `output`, `context` (default mapping: `span[kind="retriever"].output`, optional) | boolean (true = hallucinated) |
+| Hallucination | `input`, `output`, `context` (default mapping: `span[kind="retriever"].output?`) | boolean (true = hallucinated) |
 | Relevance | `input`, `output` | numeric 0–1 |
 | Toxicity | `output` | boolean |
 | Correctness | `input`, `output`, `expected` | categorical correct / partially_correct / incorrect (1 / 0.5 / 0) |
@@ -117,9 +127,9 @@ Shipped as code in `llmobs-server`; "create from template" copies the prompt int
 
 - Worker pool (`eval.workers`, default 16 concurrent jobs). Claim: `UPDATE eval_jobs SET status='running', lease_until=now+120s, attempts=attempts+1 WHERE id IN (SELECT id FROM eval_jobs WHERE status='queued' AND not_before<=now ORDER BY not_before LIMIT ?) RETURNING *`. Expired leases are re-queued at startup and every minute.
 - Job: fetch data (heavy columns via the query layer), resolve variables, run evaluator, write score, record cost, mark `done`.
-- Retries: provider 429/5xx/timeouts → backoff `min(2^attempts · 5 s, 10 min)`, max 6 attempts; 4xx and parse errors → `failed` immediately.
+- Retries: failures arrive classified by `llmobs-eval` as retryable, pause or permanent (D160). Retryable (timeout, connection error, 408, 425, 429, 5xx) uses backoff `min(2^attempts · 5 s, 10 min)`, max 6 attempts. Permanent (other 4xx, an unparsable or invalid answer, a refusal or content filter, a missing variable, a rejected mode) becomes `failed` immediately. A pause-class error is not retried.
 - **Budget:** before a judge call, estimate cost (prompt chars/4 × input price + max_output_tokens × output price). If `spent + estimate > budget_usd` for the current period, the rule is paused (`paused_reason='budget'`, UI banner, optional alert) and the job is dropped. Actual cost is added to `rule_spend` after the call. The rule resumes automatically at the next period.
-- **Error breaker:** if ≥ 50 % of the last 50 jobs of a rule failed, pause with `paused_reason='errors'`.
+- **Error breaker:** a pause-class error (401, 402, 403 that is not a content filter, 404, quota exhausted) pauses the rule at once with `paused_reason='errors'`. Otherwise, if ≥ 50 % of the last 50 jobs of a rule failed, pause with `paused_reason='errors'`.
 - **Rate limits per connection:** token bucket per `llm_connection` (configurable RPM, default 300) shared by all rules.
 - **Backfill:** "Run on existing data" (filter + time range, capped at 10 000 targets with a cost estimate shown first) enqueues jobs directly.
 
@@ -149,3 +159,7 @@ Client-side execution with the SDK (10); the server stores results and runs opti
 - Experiment page: table of items (input, expected, output, per-score values, latency, cost from the trace, link to trace); aggregates per score (mean, median, pass rate for booleans, distribution for categoricals); errors count.
 - Compare 2–4 experiments on the same dataset: aggregate deltas, per-item side by side with regressions highlighted (score dropped by > threshold or boolean flipped to fail).
 - API returns the same data for CI gating; the SDK exposes `result.summary()` and `result.assert_min("correctness", 0.8)` style helpers (10).
+
+## Library
+
+`llmobs-eval` implements evaluator execution, variable mapping, prompt templating and judge traces, and it has no database (D155). Given an evaluator, its variables or trace data, and a connection, it returns a score value and the normalized spans of the judge trace. The server track owns the job queue, the evaluation tables, secret encryption and the API handlers (D156).

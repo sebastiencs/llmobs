@@ -269,7 +269,7 @@ impl QueryContext {
 
     /// The session with the views registered.
     ///
-    /// **Trusted in-process capability (D155).** Reads and the SQL console go
+    /// **Trusted in-process capability (D168).** Reads and the SQL console go
     /// through `sql_json` / `sql_export` and the read endpoints, which apply the
     /// D96 SQL sandbox. This accessor bypasses that sandbox: it exists only for
     /// the M3 benchmark (`tests/trace_bench.rs`) to run raw SQL and
