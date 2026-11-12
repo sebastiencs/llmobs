@@ -89,6 +89,86 @@ pub(crate) fn traces_table(spans: &[Span]) -> Arc<MemTable> {
     mem_table(traces_schema(), batch)
 }
 
+/// One span of the fixed test project, with the other fields as `wal::spans_keyed`
+/// sets them.
+///
+/// `trace_id` is the 2 big-endian bytes of `trace + 1`, repeated 8 times;
+/// `span_id` is 8 bytes of `span + 1`. The `+ 1` keeps the ids from being all
+/// zero, which the id types reject. `trace` must be below `u16::MAX` and `span`
+/// below `u8::MAX`; the builder panics otherwise. A test that needs another
+/// field (`parent_span_id`, `input`) sets it on the returned `Span`.
+pub(crate) fn span_row(trace: u16, span: u8, start: i64, ingest: i64) -> Span {
+    assert!(trace < u16::MAX, "trace must be below u16::MAX");
+    assert!(span < u8::MAX, "span must be below u8::MAX");
+    let project_id: llmobs_core::ids::ProjectId =
+        "018f6b4e-7c1a-7c1a-8c1a-000000000001".parse().unwrap();
+    let mut trace_bytes = [0_u8; 16];
+    let pair = (trace + 1).to_be_bytes();
+    for chunk in trace_bytes.as_chunks_mut::<2>().0 {
+        chunk.copy_from_slice(&pair);
+    }
+    let span_bytes = [span + 1; 8];
+    Span {
+        project_id,
+        trace_id: TraceId::from_bytes(trace_bytes).unwrap(),
+        span_id: llmobs_core::ids::SpanId::from_bytes(span_bytes).unwrap(),
+        parent_span_id: None,
+        name: "root".to_owned(),
+        span_kind: SpanKind::Span,
+        start_time: start,
+        end_time: start.saturating_add(100),
+        status: SpanStatus::Ok,
+        status_message: None,
+        service_name: None,
+        session_id: None,
+        user_id: None,
+        environment: None,
+        release: None,
+        tags: Vec::new(),
+        metadata: BTreeMap::new(),
+        provider: None,
+        request_model: None,
+        response_model: None,
+        operation: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        cache_write_tokens: None,
+        reasoning_tokens: None,
+        total_tokens: None,
+        cost_input: None,
+        cost_output: None,
+        cost_total: None,
+        cost_source: None,
+        ttft_ns: None,
+        request_params: None,
+        input: None,
+        input_format: None,
+        output: None,
+        output_format: None,
+        input_preview: None,
+        output_preview: None,
+        system_instructions: None,
+        tool_definitions: None,
+        attributes: BTreeMap::new(),
+        resource_attributes: BTreeMap::new(),
+        scope_name: None,
+        scope_version: None,
+        events: Vec::new(),
+        links: Vec::new(),
+        media_refs: Vec::new(),
+        truncated: Vec::new(),
+        conventions: Vec::new(),
+        ingest_time: ingest,
+        schema_version: 1,
+    }
+}
+
+/// `spans_to_record_batch(spans)`, unwrapped.
+pub(crate) fn span_rows(spans: &[Span]) -> RecordBatch {
+    spans_to_record_batch(spans).unwrap_or_else(|error| panic!("spans batch: {error}"))
+}
+
 pub(crate) fn example_query() -> ProjectQuery {
     let spans = dataset_spans();
     let scores = dataset_scores();
