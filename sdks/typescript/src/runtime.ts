@@ -1,0 +1,221 @@
+/**
+ * The runtime: our own TracerProvider, its processor and the SDK lifecycle.
+ *
+ * `init()` resolves the config and installs one runtime per process (D-F-15);
+ * the provider is never registered as the global one (an opt-in global mode
+ * comes with T9). The OTel *context* is always the global one, so instrumentor
+ * spans nest under ours: every `Runtime.create` tries to register an
+ * `AsyncLocalStorageContextManager` and keeps whatever manager was already
+ * registered (D-F-4).
+ */
+
+import {
+  type TracerProvider as ApiTracerProvider,
+  context,
+  ProxyTracerProvider,
+  propagation,
+  type Tracer,
+  trace,
+} from "@opentelemetry/api";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { defaultResource, resourceFromAttributes } from "@opentelemetry/resources";
+import {
+  type IdGenerator,
+  ParentBasedSampler,
+  type SpanExporter,
+  type SpanProcessor,
+  TraceIdRatioBasedSampler,
+  TracerProvider,
+} from "@opentelemetry/sdk-trace";
+
+import { type Config, type LlmobsOptions, resolveConfig } from "./config.js";
+import { FetchTraceExporter } from "./exporter.js";
+import { VERSION } from "./index.js";
+import { debug, resetWarningsForTests, warnOnce } from "./log.js";
+import { LlmobsSpanProcessor } from "./processor.js";
+import { type FetchLike, runtimeGlobals } from "./web.js";
+
+export class Runtime {
+  readonly config: Config;
+  readonly provider: TracerProvider;
+  readonly ownsProvider: boolean;
+  readonly processor: LlmobsSpanProcessor;
+  readonly tracer: Tracer;
+  private shutDown = false;
+
+  private constructor(config: Config, provider: TracerProvider, processor: LlmobsSpanProcessor) {
+    this.config = config;
+    this.provider = provider;
+    // Own mode only until T9 adds the opt-in global mode.
+    this.ownsProvider = true;
+    this.processor = processor;
+    this.tracer = provider.getTracer("llmobs", VERSION);
+  }
+
+  static create(
+    config: Config,
+    seams?: { exporter?: SpanExporter; idGenerator?: IdGenerator; fetch?: FetchLike },
+  ): Runtime {
+    const exporter =
+      seams?.exporter ??
+      new FetchTraceExporter({
+        url: `${config.baseUrl}/v1/traces`,
+        apiKey: requireApiKey(config),
+        fetch: seams?.fetch,
+      });
+    const processor = new LlmobsSpanProcessor(exporter, {
+      environment: config.environment,
+      release: config.release,
+      defaultFilter: false,
+    });
+    const provider = new TracerProvider({
+      resource: defaultResource().merge(
+        resourceFromAttributes({
+          "telemetry.distro.name": "llmobs",
+          "telemetry.distro.version": VERSION,
+          ...(config.serviceName ? { "service.name": config.serviceName } : {}),
+        }),
+      ),
+      sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(config.sampleRate) }),
+      // Flattened instrumentor messages exceed OTel's default 128 (D-F-10).
+      spanLimits: { attributeCountLimit: 10_000 },
+      idGenerator: seams?.idGenerator,
+      spanProcessors: [processor],
+    });
+    registerContextManager();
+    return new Runtime(config, provider, processor);
+  }
+
+  /** Resolves when pending spans are exported or the export timeout expires. */
+  async flush(): Promise<void> {
+    await this.processor.forceFlush();
+  }
+
+  /** Idempotent; spans and scores after it are dropped. */
+  async shutdown(): Promise<void> {
+    if (this.shutDown) {
+      return;
+    }
+    this.shutDown = true;
+    try {
+      await this.flush();
+      await this.processor.shutdown();
+      if (this.ownsProvider) {
+        await this.provider.shutdown();
+      }
+    } catch (error) {
+      debug(`llmobs: shutdown failed: ${errorName(error)}`);
+    }
+  }
+}
+
+let activeRuntime: Runtime | undefined;
+let initCalled = false;
+// resetForTests never clears this: the listener stays for the process lifetime.
+let beforeExitRegistered = false;
+
+export function init(options?: LlmobsOptions): void {
+  if (initCalled) {
+    warnOnce("init-twice", "llmobs: init() was already called; this call is ignored");
+    return;
+  }
+  // Set before anything else, so whatever the first init() did (installed a
+  // runtime, ran disabled, missed its key, threw ConfigError), a second call
+  // only warns (D-F-15).
+  initCalled = true;
+  const config = resolveConfig(options);
+  if (!config.enabled) {
+    return;
+  }
+  try {
+    installRuntime(Runtime.create(config));
+  } catch (error) {
+    debug(`llmobs: runtime startup failed: ${errorName(error)}`);
+    return;
+  }
+  const process = runtimeGlobals().process;
+  if (!beforeExitRegistered && process?.once !== undefined) {
+    beforeExitRegistered = true;
+    process.once("beforeExit", () => void shutdown());
+  }
+}
+
+export function flush(): Promise<void> {
+  const runtime = activeRuntime;
+  if (runtime === undefined) {
+    return Promise.resolve();
+  }
+  return runtime.flush();
+}
+
+export function shutdown(): Promise<void> {
+  const current = activeRuntime;
+  if (current === undefined) {
+    return Promise.resolve();
+  }
+  return current.shutdown().then(() => {
+    if (activeRuntime === current) {
+      activeRuntime = undefined;
+    }
+  });
+}
+
+/** The provider in use; a no-op proxy when not running (spec 10 rule 1). */
+export function tracerProvider(): ApiTracerProvider {
+  const runtime = activeRuntime;
+  if (runtime === undefined) {
+    // A proxy without a delegate hands out no-op tracers.
+    return new ProxyTracerProvider();
+  }
+  return runtime.provider;
+}
+
+/** Our span processor, for apps that build their own OTel pipeline. */
+export function spanProcessor(): SpanProcessor | undefined {
+  return activeRuntime?.processor;
+}
+
+/** The running runtime, when one is installed. Internal. */
+export function currentRuntime(): Runtime | undefined {
+  return activeRuntime;
+}
+
+/** Install a runtime. Internal, and the test seam. */
+export function installRuntime(runtime: Runtime): void {
+  activeRuntime = runtime;
+}
+
+/** Shut down and forget everything but the beforeExit listener; tests only. */
+export async function resetForTests(): Promise<void> {
+  await shutdown();
+  context.disable();
+  trace.disable();
+  propagation.disable();
+  resetWarningsForTests();
+  initCalled = false;
+  // No instrument list to clear yet (T11 adds it).
+}
+
+function registerContextManager(): void {
+  const manager = new AsyncLocalStorageContextManager();
+  if (context.setGlobalContextManager(manager.enable())) {
+    return;
+  }
+  // Another manager is already registered (the app's, or ours from an earlier
+  // runtime). Keep it and drop ours; never disable the registered one. The
+  // API also logs a diag error about the duplicate attempt; that is expected.
+  manager.disable();
+}
+
+function requireApiKey(config: Config): string {
+  // Unreachable through init(): resolveConfig disables the config instead of
+  // returning an enabled one without a key.
+  if (config.apiKey === undefined) {
+    throw new Error("Runtime.create requires a config with an API key");
+  }
+  return config.apiKey;
+}
+
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
+}
