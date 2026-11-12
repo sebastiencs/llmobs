@@ -8,20 +8,22 @@ bucket `llmobs-cache`. The S3 endpoint and bucket are configured in
 
 In Cloudflare, open **R2 Object Storage → Manage R2 API Tokens** and create
 one token with **Object Read & Write** permission, scoped only to `llmobs-cache`.
-Store its credentials in these GitHub repository secrets:
+Store its credentials in the GitHub environment `cloudflare-r2` using these
+secret names:
 
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
 
 Save the generated **Access Key ID** and **Secret Access Key**, not the
 Cloudflare API token value. Add them under the GitHub repository's
-**Settings → Secrets and variables → Actions → Repository secrets**.
+**Settings → Environments → cloudflare-r2 → Environment secrets**. Both Rust
+compilation jobs select this environment to receive its secrets.
 Alternatively, from an authenticated GitHub CLI, run these commands and enter
 each value at its hidden prompt:
 
 ```sh
-gh secret set R2_ACCESS_KEY_ID --repo sebastiencs/llmobs
-gh secret set R2_SECRET_ACCESS_KEY --repo sebastiencs/llmobs
+gh secret set R2_ACCESS_KEY_ID --repo sebastiencs/llmobs --env cloudflare-r2
+gh secret set R2_SECRET_ACCESS_KEY --repo sebastiencs/llmobs --env cloudflare-r2
 ```
 
 ## Trusted runs
