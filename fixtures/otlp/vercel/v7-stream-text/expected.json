@@ -1,0 +1,130 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "f86e5c7754c9181e677e8720e4204a85",
+      "span_id": "13f9ecf35f8da464",
+      "name": "invoke_agent gpt-4o-mini-2024-07-18",
+      "span_kind": "agent",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.202000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "operation": "invoke_agent",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Describe the harbor in a few words.\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Clear skies over the harbor.\"}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "input_preview": "Describe the harbor in a few words.",
+      "output_preview": "Clear skies over the harbor.",
+      "attributes": {
+        "gen_ai.agent.name": "v7-stream-text",
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.response.finish_reasons": "[\"stop\"]",
+        "gen_ai.usage.cache_read.input_tokens": "0",
+        "gen_ai.usage.input_tokens": "20",
+        "gen_ai.usage.output_tokens": "8"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "nodejs",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "2.12.0"
+      },
+      "scope_name": "gen_ai",
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "f86e5c7754c9181e677e8720e4204a85",
+      "span_id": "380d862c550ff4b6",
+      "parent_span_id": "e8112ebd938c9ade",
+      "name": "chat gpt-4o-mini-2024-07-18",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.003000000Z",
+      "end_time": "2025-12-31T23:59:50.195000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "response_model": "gpt-4o-mini-2024-07-18",
+      "operation": "chat",
+      "input_tokens": 20,
+      "output_tokens": 8,
+      "cache_read_tokens": 0,
+      "total_tokens": 28,
+      "cost_input": 0.00002,
+      "cost_output": 0.000032,
+      "cost_total": 0.000052000000000000004,
+      "cost_source": "computed",
+      "ttft_ns": 157778394,
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Describe the harbor in a few words.\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Clear skies over the harbor.\"}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "input_preview": "Describe the harbor in a few words.",
+      "output_preview": "Clear skies over the harbor.",
+      "attributes": {
+        "gen_ai.client.operation.duration": "0.191433788",
+        "gen_ai.client.operation.time_per_output_chunk": "0.004438502999999988",
+        "gen_ai.client.operation.time_to_first_chunk": "0.15777839400000002",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.response.finish_reasons": "[\"stop\"]",
+        "gen_ai.response.id": "chatcmpl-capture-1",
+        "gen_ai.response.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.usage.cache_read.input_tokens": "0",
+        "gen_ai.usage.input_tokens": "20",
+        "gen_ai.usage.output_tokens": "8"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "nodejs",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "2.12.0"
+      },
+      "scope_name": "gen_ai",
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "f86e5c7754c9181e677e8720e4204a85",
+      "span_id": "e8112ebd938c9ade",
+      "parent_span_id": "13f9ecf35f8da464",
+      "name": "step 1",
+      "span_kind": "span",
+      "start_time": "2025-12-31T23:59:50.003000000Z",
+      "end_time": "2025-12-31T23:59:50.200000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "operation": "agent_step",
+      "attributes": {
+        "gen_ai.operation.name": "agent_step"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "nodejs",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "2.12.0"
+      },
+      "scope_name": "gen_ai",
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

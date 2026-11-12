@@ -47,12 +47,10 @@ fn run_case(case: &Case, bless: bool) -> Result<(), String> {
         PriceTable::new(load_prices()).map_err(|err| format!("{label}: prices.json: {err}"))?;
     let normalized = normalize(&request, &context_of(case)?, &prices);
     let actual = document(&normalized);
-    if bless {
-        let path = case.dir.join("expected.json");
-        fs::write(&path, canonical_json(&actual)).map_err(|err| format!("{label}: {err}"))?;
-        return Ok(());
-    }
     let Some(expected) = &case.expected else {
+        if bless {
+            return write_expected(case, &actual, &label);
+        }
         #[allow(clippy::print_stdout)]
         {
             println!("{}", awaiting_bless(&label));
@@ -73,6 +71,13 @@ fn run_case(case: &Case, bless: bool) -> Result<(), String> {
         ),
     ]));
     let diff = first_diff(&actual, &expected, &label);
+    // A matching case keeps its file, so float noise in costs never churns it.
+    if bless {
+        return match diff {
+            Some(_) => write_expected(case, &actual, &label),
+            None => Ok(()),
+        };
+    }
     let pending = PENDING.contains(&label.as_str());
     match (pending, diff) {
         (true, None) => Err(format!("{label}: remove it from PENDING")),
@@ -80,6 +85,11 @@ fn run_case(case: &Case, bless: bool) -> Result<(), String> {
         (false, Some(path)) => Err(path),
         (false, None) => Ok(()),
     }
+}
+
+fn write_expected(case: &Case, actual: &Value, label: &str) -> Result<(), String> {
+    let path = case.dir.join("expected.json");
+    fs::write(&path, canonical_json(actual)).map_err(|err| format!("{label}: {err}"))
 }
 
 fn awaiting_bless(label: &str) -> String {

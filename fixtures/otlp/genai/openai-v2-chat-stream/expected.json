@@ -1,0 +1,55 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "28ca5e27a1879788b6d396961bb11511",
+      "span_id": "512ddbb1e31547c9",
+      "name": "chat gpt-4o-mini-2024-07-18",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.168000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "response_model": "gpt-4o-mini-2024-07-18",
+      "operation": "chat",
+      "input_tokens": 20,
+      "output_tokens": 8,
+      "total_tokens": 28,
+      "cost_input": 0.00002,
+      "cost_output": 0.000032,
+      "cost_total": 0.000052000000000000004,
+      "cost_source": "computed",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Describe the harbor in a few words.\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Clear skies over the harbor.\"}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "input_preview": "Describe the harbor in a few words.",
+      "output_preview": "Clear skies over the harbor.",
+      "attributes": {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.response.id": "chatcmpl-capture-1",
+        "gen_ai.response.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.usage.input_tokens": "20",
+        "gen_ai.usage.output_tokens": "8"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "opentelemetry.util.genai.handler",
+      "scope_version": "1.1b0",
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

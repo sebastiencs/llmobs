@@ -1,0 +1,162 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "2d70096e9aac5acdec01e9229ccb8623",
+      "span_id": "5cb49bfec44dfdd2",
+      "parent_span_id": "a94fbcaab03c901f",
+      "name": "lookup_weather.task",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.063000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "session_id": "session-1",
+      "user_id": "user-1",
+      "metadata": {
+        "feature": "weather",
+        "workflow": "weather_report"
+      },
+      "input": "{\"args\":[],\"kwargs\":{}}",
+      "input_format": "json",
+      "output": "\"It is 18 \\u00b0C and sunny in Paris.\"",
+      "output_format": "text",
+      "input_preview": "{\"args\":[],\"kwargs\":{}}",
+      "output_preview": "\"It is 18 \\u00b0C and sunny in Paris.\"",
+      "attributes": {
+        "traceloop.association.properties.feature": "weather",
+        "traceloop.association.properties.session_id": "session-1",
+        "traceloop.association.properties.user_id": "user-1",
+        "traceloop.entity.name": "lookup_weather",
+        "traceloop.span.kind": "task",
+        "traceloop.workflow.name": "weather_report"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "traceloop.tracer",
+      "conventions": [
+        "openllmetry"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "2d70096e9aac5acdec01e9229ccb8623",
+      "span_id": "a94fbcaab03c901f",
+      "name": "weather_report.workflow",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.063000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "session_id": "session-1",
+      "user_id": "user-1",
+      "metadata": {
+        "feature": "weather",
+        "workflow": "weather_report"
+      },
+      "input": "{\"args\":[],\"kwargs\":{}}",
+      "input_format": "json",
+      "output": "\"It is 18 \\u00b0C and sunny in Paris.\"",
+      "output_format": "text",
+      "input_preview": "{\"args\":[],\"kwargs\":{}}",
+      "output_preview": "\"It is 18 \\u00b0C and sunny in Paris.\"",
+      "attributes": {
+        "traceloop.association.properties.feature": "weather",
+        "traceloop.association.properties.session_id": "session-1",
+        "traceloop.association.properties.user_id": "user-1",
+        "traceloop.entity.name": "weather_report",
+        "traceloop.span.kind": "workflow",
+        "traceloop.workflow.name": "weather_report"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "traceloop.tracer",
+      "conventions": [
+        "openllmetry"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "2d70096e9aac5acdec01e9229ccb8623",
+      "span_id": "1d7adc34bb087a2f",
+      "parent_span_id": "5cb49bfec44dfdd2",
+      "name": "openai.chat",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.021000000Z",
+      "end_time": "2025-12-31T23:59:50.061000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "session_id": "session-1",
+      "user_id": "user-1",
+      "metadata": {
+        "feature": "weather",
+        "workflow": "weather_report"
+      },
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "response_model": "gpt-4o-mini-2024-07-18",
+      "operation": "chat",
+      "input_tokens": 24,
+      "output_tokens": 12,
+      "cache_read_tokens": 8,
+      "reasoning_tokens": 0,
+      "total_tokens": 36,
+      "cost_input": 0.00002,
+      "cost_output": 0.000048,
+      "cost_total": 0.000068,
+      "cost_source": "computed",
+      "input": "[{\"role\":\"system\",\"parts\":[{\"type\":\"text\",\"content\":\"You are a weather assistant.\"}]},{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"It is 18 °C and sunny in Paris.\"}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "input_preview": "What's the weather in Paris?",
+      "output_preview": "It is 18 °C and sunny in Paris.",
+      "attributes": {
+        "gen_ai.is_streaming": "false",
+        "gen_ai.openai.api_base": "https://api.openai.com/v1/",
+        "gen_ai.openai.response.system_fingerprint": "fp_capture",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.response.finish_reasons": "[\"stop\"]",
+        "gen_ai.response.id": "chatcmpl-capture-1",
+        "gen_ai.response.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.usage.cache_read.input_tokens": "8",
+        "gen_ai.usage.input_tokens": "24",
+        "gen_ai.usage.output_tokens": "12",
+        "gen_ai.usage.reasoning_tokens": "0",
+        "gen_ai.usage.total_tokens": "36",
+        "traceloop.association.properties.feature": "weather",
+        "traceloop.association.properties.session_id": "session-1",
+        "traceloop.association.properties.user_id": "user-1",
+        "traceloop.entity.path": "lookup_weather",
+        "traceloop.workflow.name": "weather_report"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "opentelemetry.instrumentation.openai.v1",
+      "scope_version": "0.62.4",
+      "conventions": [
+        "genai",
+        "openllmetry"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

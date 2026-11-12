@@ -1,0 +1,63 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "af954fd056ae4434273b48f7a35ef754",
+      "span_id": "d715a6bfc708ae8a",
+      "name": "GenerateContent",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.049000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "provider": "google",
+      "request_model": "gemini-2.5-flash",
+      "input_tokens": 90,
+      "output_tokens": 15,
+      "cache_read_tokens": 40,
+      "total_tokens": 105,
+      "cost_source": "none",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Describe this square.\"},{\"type\":\"uri\",\"modality\":\"image\",\"mime_type\":\"image/png\",\"uri\":\"media://03a55c3a12e3f66e3b503323e7e5d672a44ac230e18ad8b81f6420a472bd566e\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"A flat blue square.\"}]}]",
+      "output_format": "messages",
+      "input_preview": "Describe this square.",
+      "output_preview": "A flat blue square.",
+      "attributes": {
+        "input.mime_type": "application/json",
+        "llm.finish_reason": "STOP",
+        "llm.model_name": "gemini-2.5-flash",
+        "llm.provider": "google",
+        "llm.token_count.completion": "15",
+        "llm.token_count.prompt": "90",
+        "llm.token_count.prompt_details.cache_read": "40",
+        "llm.token_count.total": "105",
+        "openinference.span.kind": "LLM",
+        "output.mime_type": "application/json"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.google_genai",
+      "scope_version": "1.5.0",
+      "media_refs": [
+        "03a55c3a12e3f66e3b503323e7e5d672a44ac230e18ad8b81f6420a472bd566e"
+      ],
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [
+    {
+      "sha256": "03a55c3a12e3f66e3b503323e7e5d672a44ac230e18ad8b81f6420a472bd566e",
+      "mime_type": "image/png",
+      "size_bytes": 179
+    }
+  ],
+  "rejected_spans": 0
+}

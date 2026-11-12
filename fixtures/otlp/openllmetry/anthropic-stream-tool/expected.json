@@ -1,0 +1,65 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "919c1bab62fa851ef2ec46001f8d79cc",
+      "span_id": "16109751cf7803a7",
+      "name": "anthropic.chat",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.207000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "provider": "anthropic",
+      "request_model": "claude-sonnet-4-5",
+      "response_model": "claude-sonnet-4-5",
+      "operation": "chat",
+      "input_tokens": 40,
+      "output_tokens": 19,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "total_tokens": 59,
+      "cost_input": 0.00012,
+      "cost_output": 0.000285,
+      "cost_total": 0.000405,
+      "cost_source": "computed",
+      "request_params": "{\"max_tokens\":64}",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"I'll check the weather.\"},{\"type\":\"tool_call\",\"id\":\"toolu_weather_1\",\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}],\"finish_reason\":\"tool_call\"}]",
+      "output_format": "messages",
+      "input_preview": "What's the weather in Paris?",
+      "output_preview": "I'll check the weather.",
+      "tool_definitions": "[{\"name\":\"get_weather\",\"description\":\"Look up the weather for a city.\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"]}}]",
+      "attributes": {
+        "gen_ai.is_streaming": "true",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "anthropic",
+        "gen_ai.request.max_tokens": "64",
+        "gen_ai.request.model": "claude-sonnet-4-5",
+        "gen_ai.response.finish_reasons": "[\"tool_call\"]",
+        "gen_ai.response.id": "msg_capture_1",
+        "gen_ai.response.model": "claude-sonnet-4-5",
+        "gen_ai.usage.cache_creation.input_tokens": "0",
+        "gen_ai.usage.cache_read.input_tokens": "0",
+        "gen_ai.usage.input_tokens": "40",
+        "gen_ai.usage.output_tokens": "19",
+        "gen_ai.usage.total_tokens": "59"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "opentelemetry.instrumentation.anthropic",
+      "scope_version": "0.62.4",
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

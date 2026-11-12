@@ -1,0 +1,64 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "4530775690d10cfa25ea93a0bcad7f50",
+      "span_id": "2d6d4dd0a9ec3cb9",
+      "name": "anthropic.chat",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.045000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "provider": "anthropic",
+      "request_model": "claude-sonnet-4-5",
+      "response_model": "claude-sonnet-4-5",
+      "operation": "chat",
+      "input_tokens": 2100,
+      "output_tokens": 40,
+      "cache_read_tokens": 1800,
+      "cache_write_tokens": 200,
+      "total_tokens": 2140,
+      "cost_input": 0.00159,
+      "cost_output": 0.0006,
+      "cost_total": 0.00219,
+      "cost_source": "computed",
+      "request_params": "{\"max_tokens\":64}",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"It is 18 °C and sunny in Paris.\"}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "input_preview": "What's the weather in Paris?",
+      "output_preview": "It is 18 °C and sunny in Paris.",
+      "system_instructions": "[{\"type\":\"text\",\"content\":\"You are a weather assistant.\"}]",
+      "attributes": {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "anthropic",
+        "gen_ai.request.max_tokens": "64",
+        "gen_ai.request.model": "claude-sonnet-4-5",
+        "gen_ai.response.finish_reasons": "[\"stop\"]",
+        "gen_ai.response.id": "msg_capture_1",
+        "gen_ai.response.model": "claude-sonnet-4-5",
+        "gen_ai.usage.cache_creation.input_tokens": "200",
+        "gen_ai.usage.cache_read.input_tokens": "1800",
+        "gen_ai.usage.input_tokens": "2100",
+        "gen_ai.usage.output_tokens": "40",
+        "gen_ai.usage.total_tokens": "2140"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "opentelemetry.instrumentation.anthropic",
+      "scope_version": "0.62.4",
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}
