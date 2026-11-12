@@ -1,0 +1,113 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "conformance"
+            }
+          },
+          {
+            "key": "telemetry.distro.name",
+            "value": {
+              "stringValue": "llmobs"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "llmobs",
+            "version": "0.0.0"
+          },
+          "spans": [
+            {
+              "traceId": "00000000000000000000000000000001",
+              "spanId": "0000000000000001",
+              "name": "answer",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590001000000",
+              "endTimeUnixNano": "1767225590999000000",
+              "attributes": [
+                {
+                  "key": "llmobs.input",
+                  "value": {
+                    "stringValue": "{\"question\":\"why?\"}"
+                  }
+                },
+                {
+                  "key": "llmobs.input.format",
+                  "value": {
+                    "stringValue": "json"
+                  }
+                },
+                {
+                  "key": "llmobs.output",
+                  "value": {
+                    "stringValue": "It is 42."
+                  }
+                },
+                {
+                  "key": "llmobs.output.format",
+                  "value": {
+                    "stringValue": "text"
+                  }
+                },
+                {
+                  "key": "llmobs.span.kind",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "00000000000000000000000000000001",
+              "spanId": "0000000000000002",
+              "parentSpanId": "0000000000000001",
+              "name": "retrieve",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590002000000",
+              "endTimeUnixNano": "1767225590998000000",
+              "attributes": [
+                {
+                  "key": "llmobs.input",
+                  "value": {
+                    "stringValue": "{\"question\":\"why?\"}"
+                  }
+                },
+                {
+                  "key": "llmobs.input.format",
+                  "value": {
+                    "stringValue": "json"
+                  }
+                },
+                {
+                  "key": "llmobs.output",
+                  "value": {
+                    "stringValue": "[{\"id\":\"d1\"}]"
+                  }
+                },
+                {
+                  "key": "llmobs.output.format",
+                  "value": {
+                    "stringValue": "json"
+                  }
+                },
+                {
+                  "key": "llmobs.span.kind",
+                  "value": {
+                    "stringValue": "retriever"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

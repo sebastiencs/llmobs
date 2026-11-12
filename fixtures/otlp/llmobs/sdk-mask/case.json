@@ -1,0 +1,11 @@
+{
+  "description": "A mask function replacing a whole equal string in the recorded input only.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "10 § Testing",
+    "10 § Recorded data",
+    "02 § Mapping tables / Span kind",
+    "02 § Input / output"
+  ],
+  "notes": "init(mask=redact); notify(\"alice@example.com\") with @observe(name=\"notify\")"
+}

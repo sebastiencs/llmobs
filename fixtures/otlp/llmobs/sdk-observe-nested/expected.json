@@ -1,0 +1,67 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "00000000000000000000000000000001",
+      "span_id": "0000000000000001",
+      "name": "answer",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.001000000Z",
+      "end_time": "2025-12-31T23:59:50.999000000Z",
+      "status": "unset",
+      "service_name": "conformance",
+      "input": "{\"question\":\"why?\"}",
+      "input_format": "json",
+      "output": "It is 42.",
+      "output_format": "text",
+      "input_preview": "{\"question\":\"why?\"}",
+      "output_preview": "It is 42.",
+      "attributes": {
+        "llmobs.span.kind": "chain"
+      },
+      "resource_attributes": {
+        "telemetry.distro.name": "llmobs"
+      },
+      "scope_name": "llmobs",
+      "scope_version": "0.0.0",
+      "conventions": [
+        "llmobs"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "00000000000000000000000000000001",
+      "span_id": "0000000000000002",
+      "parent_span_id": "0000000000000001",
+      "name": "retrieve",
+      "span_kind": "retriever",
+      "start_time": "2025-12-31T23:59:50.002000000Z",
+      "end_time": "2025-12-31T23:59:50.998000000Z",
+      "status": "unset",
+      "service_name": "conformance",
+      "input": "{\"question\":\"why?\"}",
+      "input_format": "json",
+      "output": "[{\"id\":\"d1\"}]",
+      "output_format": "json",
+      "input_preview": "{\"question\":\"why?\"}",
+      "output_preview": "[{\"id\":\"d1\"}]",
+      "attributes": {
+        "llmobs.span.kind": "retriever"
+      },
+      "resource_attributes": {
+        "telemetry.distro.name": "llmobs"
+      },
+      "scope_name": "llmobs",
+      "scope_version": "0.0.0",
+      "conventions": [
+        "llmobs"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

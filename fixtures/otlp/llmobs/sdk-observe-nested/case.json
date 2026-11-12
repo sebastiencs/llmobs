@@ -1,0 +1,11 @@
+{
+  "description": "An observe-wrapped function calling another observe-wrapped retriever function.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "10 § Testing",
+    "10 § Recorded data",
+    "02 § Mapping tables / Span kind",
+    "02 § Input / output"
+  ],
+  "notes": "answer(\"why?\") with @observe(name=\"answer\"); answer calls retrieve(question) with @observe(kind=\"retriever\", name=\"retrieve\")"
+}

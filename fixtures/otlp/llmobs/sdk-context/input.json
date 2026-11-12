@@ -1,0 +1,209 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "conformance"
+            }
+          },
+          {
+            "key": "telemetry.distro.name",
+            "value": {
+              "stringValue": "llmobs"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "llmobs",
+            "version": "0.0.0"
+          },
+          "spans": [
+            {
+              "traceId": "00000000000000000000000000000001",
+              "spanId": "0000000000000001",
+              "name": "turn",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590001000000",
+              "endTimeUnixNano": "1767225590999000000",
+              "attributes": [
+                {
+                  "key": "llmobs.environment",
+                  "value": {
+                    "stringValue": "staging"
+                  }
+                },
+                {
+                  "key": "llmobs.input",
+                  "value": {
+                    "stringValue": "{}"
+                  }
+                },
+                {
+                  "key": "llmobs.input.format",
+                  "value": {
+                    "stringValue": "json"
+                  }
+                },
+                {
+                  "key": "llmobs.metadata.plan",
+                  "value": {
+                    "stringValue": "pro"
+                  }
+                },
+                {
+                  "key": "llmobs.metadata.seats",
+                  "value": {
+                    "intValue": "3"
+                  }
+                },
+                {
+                  "key": "llmobs.output",
+                  "value": {
+                    "stringValue": "null"
+                  }
+                },
+                {
+                  "key": "llmobs.output.format",
+                  "value": {
+                    "stringValue": "json"
+                  }
+                },
+                {
+                  "key": "llmobs.release",
+                  "value": {
+                    "stringValue": "1.2.3"
+                  }
+                },
+                {
+                  "key": "llmobs.session.id",
+                  "value": {
+                    "stringValue": "chat-42"
+                  }
+                },
+                {
+                  "key": "llmobs.span.kind",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "llmobs.tags",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "beta"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "llmobs.user.id",
+                  "value": {
+                    "stringValue": "u-17"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "00000000000000000000000000000001",
+              "spanId": "0000000000000002",
+              "parentSpanId": "0000000000000001",
+              "name": "lookup",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590002000000",
+              "endTimeUnixNano": "1767225590998000000",
+              "attributes": [
+                {
+                  "key": "llmobs.environment",
+                  "value": {
+                    "stringValue": "staging"
+                  }
+                },
+                {
+                  "key": "llmobs.input",
+                  "value": {
+                    "stringValue": "{}"
+                  }
+                },
+                {
+                  "key": "llmobs.input.format",
+                  "value": {
+                    "stringValue": "json"
+                  }
+                },
+                {
+                  "key": "llmobs.metadata.plan",
+                  "value": {
+                    "stringValue": "pro"
+                  }
+                },
+                {
+                  "key": "llmobs.metadata.seats",
+                  "value": {
+                    "intValue": "3"
+                  }
+                },
+                {
+                  "key": "llmobs.output",
+                  "value": {
+                    "stringValue": "null"
+                  }
+                },
+                {
+                  "key": "llmobs.output.format",
+                  "value": {
+                    "stringValue": "json"
+                  }
+                },
+                {
+                  "key": "llmobs.release",
+                  "value": {
+                    "stringValue": "1.2.3"
+                  }
+                },
+                {
+                  "key": "llmobs.session.id",
+                  "value": {
+                    "stringValue": "chat-42"
+                  }
+                },
+                {
+                  "key": "llmobs.span.kind",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "llmobs.tags",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "beta"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "llmobs.user.id",
+                  "value": {
+                    "stringValue": "u-17"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

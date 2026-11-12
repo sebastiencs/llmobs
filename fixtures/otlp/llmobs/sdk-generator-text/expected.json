@@ -1,0 +1,36 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "00000000000000000000000000000001",
+      "span_id": "0000000000000001",
+      "name": "stream",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.001000000Z",
+      "end_time": "2025-12-31T23:59:50.999000000Z",
+      "status": "unset",
+      "service_name": "conformance",
+      "input": "{\"prompt\":\"hi\"}",
+      "input_format": "json",
+      "output": "Hello",
+      "output_format": "text",
+      "input_preview": "{\"prompt\":\"hi\"}",
+      "output_preview": "Hello",
+      "attributes": {
+        "llmobs.span.kind": "chain"
+      },
+      "resource_attributes": {
+        "telemetry.distro.name": "llmobs"
+      },
+      "scope_name": "llmobs",
+      "scope_version": "0.0.0",
+      "conventions": [
+        "llmobs"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

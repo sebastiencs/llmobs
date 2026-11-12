@@ -1,0 +1,84 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "conformance"
+            }
+          },
+          {
+            "key": "telemetry.distro.name",
+            "value": {
+              "stringValue": "llmobs"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "llmobs",
+            "version": "0.0.0"
+          },
+          "spans": [
+            {
+              "traceId": "00000000000000000000000000000001",
+              "spanId": "0000000000000001",
+              "name": "fails",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590001000000",
+              "endTimeUnixNano": "1767225590999000000",
+              "attributes": [
+                {
+                  "key": "llmobs.input",
+                  "value": {
+                    "stringValue": "{\"x\":1}"
+                  }
+                },
+                {
+                  "key": "llmobs.input.format",
+                  "value": {
+                    "stringValue": "json"
+                  }
+                },
+                {
+                  "key": "llmobs.span.kind",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1767225590999000000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "boom"
+                      }
+                    },
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "ScenarioError"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "code": 2,
+                "message": "ScenarioError: boom"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

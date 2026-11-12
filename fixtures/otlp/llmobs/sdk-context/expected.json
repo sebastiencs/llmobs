@@ -1,0 +1,103 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "00000000000000000000000000000001",
+      "span_id": "0000000000000001",
+      "name": "turn",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.001000000Z",
+      "end_time": "2025-12-31T23:59:50.999000000Z",
+      "status": "unset",
+      "service_name": "conformance",
+      "session_id": "chat-42",
+      "user_id": "u-17",
+      "environment": "staging",
+      "release": "1.2.3",
+      "tags": [
+        "beta"
+      ],
+      "metadata": {
+        "plan": "pro",
+        "seats": "3"
+      },
+      "input": "{}",
+      "input_format": "json",
+      "output": "null",
+      "output_format": "json",
+      "input_preview": "{}",
+      "output_preview": "null",
+      "attributes": {
+        "llmobs.environment": "staging",
+        "llmobs.metadata.plan": "pro",
+        "llmobs.metadata.seats": "3",
+        "llmobs.release": "1.2.3",
+        "llmobs.session.id": "chat-42",
+        "llmobs.span.kind": "chain",
+        "llmobs.tags": "[\"beta\"]",
+        "llmobs.user.id": "u-17"
+      },
+      "resource_attributes": {
+        "telemetry.distro.name": "llmobs"
+      },
+      "scope_name": "llmobs",
+      "scope_version": "0.0.0",
+      "conventions": [
+        "llmobs"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "00000000000000000000000000000001",
+      "span_id": "0000000000000002",
+      "parent_span_id": "0000000000000001",
+      "name": "lookup",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.002000000Z",
+      "end_time": "2025-12-31T23:59:50.998000000Z",
+      "status": "unset",
+      "service_name": "conformance",
+      "session_id": "chat-42",
+      "user_id": "u-17",
+      "environment": "staging",
+      "release": "1.2.3",
+      "tags": [
+        "beta"
+      ],
+      "metadata": {
+        "plan": "pro",
+        "seats": "3"
+      },
+      "input": "{}",
+      "input_format": "json",
+      "output": "null",
+      "output_format": "json",
+      "input_preview": "{}",
+      "output_preview": "null",
+      "attributes": {
+        "llmobs.environment": "staging",
+        "llmobs.metadata.plan": "pro",
+        "llmobs.metadata.seats": "3",
+        "llmobs.release": "1.2.3",
+        "llmobs.session.id": "chat-42",
+        "llmobs.span.kind": "chain",
+        "llmobs.tags": "[\"beta\"]",
+        "llmobs.user.id": "u-17"
+      },
+      "resource_attributes": {
+        "telemetry.distro.name": "llmobs"
+      },
+      "scope_name": "llmobs",
+      "scope_version": "0.0.0",
+      "conventions": [
+        "llmobs"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

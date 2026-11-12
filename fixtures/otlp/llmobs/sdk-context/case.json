@@ -1,0 +1,11 @@
+{
+  "description": "context() session, user, tags, and metadata stamped on nested observe spans with environment and release.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "10 § Testing",
+    "10 § Recorded data",
+    "02 § Context fields",
+    "02 § Input / output"
+  ],
+  "notes": "init(environment=\"staging\", release=\"1.2.3\"); with context(session_id=\"chat-42\", user_id=\"u-17\", tags=[\"beta\"], metadata={\"plan\": \"pro\", \"seats\": 3}): turn() with @observe(name=\"turn\") calls lookup() with @observe(name=\"lookup\")"
+}

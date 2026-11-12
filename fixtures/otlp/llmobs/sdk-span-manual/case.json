@@ -1,0 +1,12 @@
+{
+  "description": "A manual span() context manager with a reranker kind, output, and metadata.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "10 § Testing",
+    "10 § Recorded data",
+    "02 § Mapping tables / Span kind",
+    "02 § Input / output",
+    "02 § Context fields"
+  ],
+  "notes": "with span(\"rerank\", kind=\"reranker\", input=[\"a\", \"b\"]) as s: s.set_output([\"b\", \"a\"]); s.set_metadata(model=\"bge\")"
+}
