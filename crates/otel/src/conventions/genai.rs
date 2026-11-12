@@ -12,7 +12,8 @@ use serde_json::{Map, Value as Json};
 use super::{messages_from_value, present_json};
 use crate::convert::openai_messages;
 use crate::payload::{
-    Field, Io, KeyPattern, Payload, ReadContext, non_message_payload, tool_definitions,
+    Field, Io, KeyPattern, Payload, ReadContext, decode_json_text, non_message_payload,
+    tool_definitions,
 };
 use crate::value::as_str;
 use crate::warn::Warnings;
@@ -105,12 +106,66 @@ fn span_messages(ctx: &mut ReadContext<'_, '_>, key: &str) -> Option<(Payload, b
         return None;
     }
     let value = ctx.bag.take_payload(key)?;
-    Some(messages_from_value(value, ctx.warnings))
+    Some(genai_messages(value, ctx.warnings))
 }
 
 fn details_messages(ctx: &mut ReadContext<'_, '_>, key: &str) -> Option<(Payload, bool)> {
     let value = details_attr(ctx.events, key)?.clone();
-    Some(messages_from_value(&value, ctx.warnings))
+    Some(genai_messages(&value, ctx.warnings))
+}
+
+/// Canonical messages, or OpenAI chat messages when no element has `parts`.
+///
+/// Laminar writes OpenAI request messages and response `choices` under the
+/// GenAI keys (D-B1-3). A choice is `{message, finish_reason}`.
+fn genai_messages(value: &AnyValue, warnings: &mut Warnings) -> (Payload, bool) {
+    if let Some(json) = decode_json_text(value, warnings)
+        && let Some(items) = openai_shaped(&json)
+    {
+        let mut reasons = Vec::with_capacity(items.len());
+        let mut raw = Vec::with_capacity(items.len());
+        for item in items {
+            match item.get("message") {
+                Some(Json::Object(message)) => {
+                    // A response message lists every optional field, as null.
+                    let present = message
+                        .iter()
+                        .filter(|(_, value)| !value.is_null())
+                        .map(|(key, value)| (key.clone(), value.clone()));
+                    raw.push(Json::Object(present.collect()));
+                    reasons.push(item.get("finish_reason").and_then(Json::as_str));
+                }
+                _ => {
+                    raw.push(item.clone());
+                    reasons.push(None);
+                }
+            }
+        }
+        if let Ok(mut messages) = openai_messages(&Json::Array(raw)) {
+            for (message, reason) in messages.iter_mut().zip(reasons) {
+                if let Some(reason) = reason {
+                    message.finish_reason = Some(reason.to_owned());
+                }
+            }
+            return (Payload::Messages(messages), false);
+        }
+    }
+    messages_from_value(value, warnings)
+}
+
+/// The elements of a non-empty array of objects where none has `parts` and
+/// each has a string `role` or an object `message`.
+fn openai_shaped(json: &Json) -> Option<&Vec<Json>> {
+    let items = json.as_array()?;
+    let shaped = !items.is_empty()
+        && items.iter().all(|item| {
+            item.as_object().is_some_and(|object| {
+                !object.contains_key("parts")
+                    && (object.get("role").is_some_and(Json::is_string)
+                        || object.get("message").is_some_and(Json::is_object))
+            })
+        });
+    shaped.then_some(items)
 }
 
 fn instruction(ctx: &mut ReadContext<'_, '_>, key: &str) -> Option<Json> {

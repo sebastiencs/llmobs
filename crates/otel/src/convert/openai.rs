@@ -242,8 +242,11 @@ fn data_uri(url: &str) -> Option<(Option<String>, String)> {
 }
 
 fn tool_calls(value: Json) -> Vec<Part> {
-    let Json::Array(items) = value else {
-        return vec![Part::Unknown(value)];
+    let items = match value {
+        Json::Array(items) => items,
+        // OpenAI responses send `"tool_calls": null` when there are none.
+        Json::Null => return Vec::new(),
+        other => return vec![Part::Unknown(other)],
     };
     items.into_iter().map(tool_call).collect()
 }
