@@ -1,8 +1,8 @@
 """The llmobs span processor.
 
 Stamps the ``context()`` values, then the configured attributes, on span
-start, and batch-exports on end (spec 10 § Design rules 1, D-F-4, D-F-12).
-P8 adds the export filter to ``on_end``.
+start, and batch-exports on end through the export filter of D-F-5
+(spec 10 § Design rules 1, D-F-4, D-F-12).
 """
 
 import re
@@ -15,6 +15,7 @@ from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 
 from llmobs._context import current_values
+from llmobs._filter import default_filter
 from llmobs._log import logger
 from llmobs._serialize import attribute_value
 
@@ -52,8 +53,9 @@ def _baggage_string(key: str, ctx: Context | None) -> str | None:
 class LlmobsSpanProcessor(SpanProcessor):
     """Our span processor: stamp on start, batch-export on end.
 
-    Every span of our provider is exported in own-provider mode (D-F-5);
-    ``export_filter`` and ``default_filter`` are stored for P8's global mode.
+    Every span of our provider is exported in own-provider mode; an explicit
+    ``export_filter`` replaces that rule, and the ``default_filter`` of D-F-5
+    runs in global mode.
     """
 
     def __init__(
@@ -110,7 +112,20 @@ class LlmobsSpanProcessor(SpanProcessor):
             logger.debug("llmobs: could not stamp span attributes (%s)", type(error).__name__)
 
     def on_end(self, span: ReadableSpan) -> None:
-        self._batch.on_end(span)
+        if self._keep(span):
+            self._batch.on_end(span)
+
+    def _keep(self, span: ReadableSpan) -> bool:
+        """D-F-5: the configured filter decides; a raising filter exports."""
+        if self._export_filter is not None:
+            try:
+                return bool(self._export_filter(span))
+            except Exception as error:  # noqa: BLE001  # never raise into the app (spec 10 rule 4)
+                logger.debug("llmobs: export_filter raised %s; span exported", type(error).__name__)
+                return True
+        # Own-provider mode exports everything; the default filter runs only
+        # in global mode (D-F-4, D-F-5).
+        return not self._default_filter or default_filter(span)
 
     def force_flush(self, timeout_millis: int = 30_000) -> bool:
         return self._batch.force_flush(timeout_millis)

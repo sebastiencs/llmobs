@@ -10,6 +10,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from opentelemetry.sdk.trace import ReadableSpan
+
 from llmobs._log import warn_once
 
 _ENV_PREFIX = "LLMOBS_"
@@ -56,6 +58,8 @@ class Config:
     sample_rate: float
     instrument: tuple[str, ...]
     mask: Callable[[Any], Any] | None
+    use_global_provider: bool
+    export_filter: Callable[[ReadableSpan], bool] | None
 
 
 def resolve_config(
@@ -68,6 +72,8 @@ def resolve_config(
     sample_rate: float | int | None = None,
     instrument: Sequence[str] | None = None,
     mask: Callable[[Any], Any] | None = None,
+    use_global_provider: bool | None = None,
+    export_filter: Callable[[ReadableSpan], bool] | None = None,
     enabled: bool | None = None,
     env: Mapping[str, str] | None = None,
 ) -> Config:
@@ -99,6 +105,8 @@ def resolve_config(
         sample_rate=_resolve_sample_rate(sample_rate, source),
         instrument=_resolve_instrument(instrument),
         mask=_resolve_mask(mask),
+        use_global_provider=_resolve_use_global_provider(use_global_provider),
+        export_filter=_resolve_export_filter(export_filter),
     )
 
 
@@ -113,6 +121,8 @@ def _disabled() -> Config:
         sample_rate=1.0,
         instrument=(),
         mask=None,
+        use_global_provider=False,
+        export_filter=None,
     )
 
 
@@ -282,4 +292,22 @@ def _resolve_mask(value: object) -> Callable[[Any], Any] | None:
         return None
     if not callable(value):
         raise ConfigError("mask: must be callable")
+    return value
+
+
+def _resolve_use_global_provider(value: object) -> bool:
+    """D-F-4: no env var; the default is our own, never-registered provider."""
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ConfigError("use_global_provider: must be a boolean")
+    return value
+
+
+def _resolve_export_filter(value: object) -> Callable[[ReadableSpan], bool] | None:
+    """D-F-5: an explicit filter replaces the default rule in both provider modes."""
+    if value is None:
+        return None
+    if not callable(value):
+        raise ConfigError("export_filter: must be callable")
     return value

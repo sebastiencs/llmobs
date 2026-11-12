@@ -45,6 +45,8 @@ def test_defaults() -> None:
         sample_rate=1.0,
         instrument=(),
         mask=None,
+        use_global_provider=False,
+        export_filter=None,
     )
 
 
@@ -201,6 +203,8 @@ def test_disabled_env_skips_invalid_options() -> None:
         sample_rate=1.0,
         instrument=(),
         mask=None,
+        use_global_provider=False,
+        export_filter=None,
     )
 
 
@@ -288,6 +292,8 @@ def test_missing_api_key_warns_once_and_disables(
         sample_rate=1.0,
         instrument=(),
         mask=None,
+        use_global_provider=False,
+        export_filter=None,
     )
     warnings = [record for record in caplog.records if record.name == "llmobs"]
     assert len(warnings) == 1
@@ -438,6 +444,53 @@ def test_mask_must_be_callable() -> None:
     assert config.mask is mask
     with pytest.raises(ConfigError, match="mask: must be callable"):
         resolve_config(api_key=KEY, mask=1, env={})  # type: ignore[arg-type]
+
+
+def test_use_global_provider_defaults_to_false() -> None:
+    config = resolve_config(api_key=KEY, env={})
+    assert config.use_global_provider is False
+
+
+def test_use_global_provider_accepts_true() -> None:
+    config = resolve_config(api_key=KEY, use_global_provider=True, env={})
+    assert config.use_global_provider is True
+
+
+@pytest.mark.parametrize("value", ["yes", 1, "0"])
+def test_use_global_provider_rejects_non_bools(value: object) -> None:
+    with pytest.raises(ConfigError, match="use_global_provider: must be a boolean") as caught:
+        resolve_config(api_key=KEY, use_global_provider=value, env={})  # type: ignore[arg-type]
+    assert str(value) not in str(caught.value)
+
+
+def test_export_filter_defaults_to_none() -> None:
+    config = resolve_config(api_key=KEY, env={})
+    assert config.export_filter is None
+
+
+def test_export_filter_accepts_a_callable() -> None:
+    def keep(span: object) -> bool:
+        return True
+
+    config = resolve_config(api_key=KEY, export_filter=keep, env={})
+    assert config.export_filter is keep
+
+
+def test_export_filter_rejects_non_callables() -> None:
+    with pytest.raises(ConfigError, match="export_filter: must be callable") as caught:
+        resolve_config(api_key=KEY, export_filter=1, env={})  # type: ignore[arg-type]
+    assert "1" not in str(caught.value)
+
+
+def test_disabled_ignores_the_new_options() -> None:
+    config = resolve_config(
+        use_global_provider="yes",  # type: ignore[arg-type]
+        export_filter=1,  # type: ignore[arg-type]
+        env={ENV_ENABLED: "false"},
+    )
+    assert config.enabled is False
+    assert config.use_global_provider is False
+    assert config.export_filter is None
 
 
 def test_env_none_reads_os_environ(monkeypatch: pytest.MonkeyPatch) -> None:

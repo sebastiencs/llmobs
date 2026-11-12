@@ -1,7 +1,8 @@
 """The SDK runtime: ``init()``, the tracer provider, the exporter and the lifecycle.
 
-Own-provider mode only in this sub-phase (D-F-4): the provider is never
-registered globally. Global mode arrives with P8.
+Own-provider mode by default (D-F-4): the provider is never registered
+globally. With ``use_global_provider=True`` the runtime joins the global
+SDK provider when there is one, or registers its own.
 """
 
 import atexit
@@ -13,18 +14,25 @@ from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import SpanLimits, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter
 from opentelemetry.sdk.trace.id_generator import IdGenerator, RandomIdGenerator
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
-from opentelemetry.trace import NoOpTracerProvider
+from opentelemetry.trace import NoOpTracerProvider, ProxyTracerProvider
 
 from llmobs import __version__
 from llmobs._config import Config, resolve_config
 from llmobs._log import logger, reset_warnings, warn_once
+from llmobs._mask import MaskingExporter
 from llmobs._processor import LlmobsSpanProcessor
 
 _INIT_TWICE_WARNING = "llmobs: init() was already called; this call is ignored"
+_GLOBAL_SAMPLE_RATE_WARNING = (
+    "llmobs: sample_rate is ignored with use_global_provider=True and an existing provider"
+)
+_GLOBAL_PROVIDER_WARNING = (
+    "llmobs: the global tracer provider cannot take span processors; llmobs keeps its own provider"
+)
 
 
 @dataclass(slots=True)
@@ -46,7 +54,7 @@ class Runtime:
         exporter: SpanExporter | None = None,
         id_generator: IdGenerator | None = None,
     ) -> "Runtime":
-        """Build the own-provider runtime of D-F-4 (global mode arrives in P8)."""
+        """Build the runtime of D-F-4: our own provider, or the global one."""
         if exporter is None:
             exporter = OTLPSpanExporter(
                 endpoint=f"{config.base_url}/v1/traces",
@@ -54,29 +62,54 @@ class Runtime:
                 timeout=10,
                 compression=Compression.Gzip,
             )
+        if config.mask is not None or not config.capture_content:
+            exporter = MaskingExporter(
+                exporter, mask=config.mask, capture_content=config.capture_content
+            )
+        global_provider = trace.get_tracer_provider() if config.use_global_provider else None
+        # The default export filter runs only in global mode (D-F-5): own mode
+        # and the unsupported-provider branch export every span.
+        use_default_filter = isinstance(global_provider, (TracerProvider, ProxyTracerProvider))
+        provider: TracerProvider
+        if isinstance(global_provider, TracerProvider):
+            # D-F-4 branch 1: the app's SDK provider takes our processor. The
+            # app keeps ownership — and its sampler, hence the warning.
+            if config.sample_rate < 1:
+                warn_once("global-sample-rate", _GLOBAL_SAMPLE_RATE_WARNING)
+            provider = global_provider
+            owns_provider = False
+        else:
+            provider = TracerProvider(
+                resource=Resource.create(
+                    {
+                        "telemetry.distro.name": "llmobs",
+                        "telemetry.distro.version": __version__,
+                    }
+                ),
+                sampler=ParentBased(root=TraceIdRatioBased(config.sample_rate)),
+                span_limits=SpanLimits(max_span_attributes=10_000),
+                id_generator=id_generator or RandomIdGenerator(),
+            )
+            owns_provider = True
+            if isinstance(global_provider, ProxyTracerProvider):
+                # D-F-4 branch 2: nothing is registered yet; ours becomes the
+                # global provider.
+                trace.set_tracer_provider(provider)
+            elif global_provider is not None:
+                # D-F-4 branch 3: a non-SDK provider cannot take processors.
+                warn_once("global-provider-unsupported", _GLOBAL_PROVIDER_WARNING)
         processor = LlmobsSpanProcessor(
             exporter,
             environment=config.environment,
             release=config.release,
-            export_filter=None,
-            default_filter=False,
-        )
-        provider = TracerProvider(
-            resource=Resource.create(
-                {
-                    "telemetry.distro.name": "llmobs",
-                    "telemetry.distro.version": __version__,
-                }
-            ),
-            sampler=ParentBased(root=TraceIdRatioBased(config.sample_rate)),
-            span_limits=SpanLimits(max_span_attributes=10_000),
-            id_generator=id_generator or RandomIdGenerator(),
+            export_filter=config.export_filter,
+            default_filter=use_default_filter,
         )
         provider.add_span_processor(processor)
         return cls(
             config=config,
             provider=provider,
-            owns_provider=True,
+            owns_provider=owns_provider,
             processor=processor,
             tracer=provider.get_tracer("llmobs", __version__),
         )
@@ -85,7 +118,11 @@ class Runtime:
         return self.processor.force_flush(timeout_millis)
 
     def shutdown(self) -> None:
-        """Flush, then stop the processor and, when owned, the provider. Idempotent."""
+        """Flush, then stop the processor and, when owned, the provider. Idempotent.
+
+        In global mode with the app's provider (D-F-4 branch 1) only our
+        processor stops: the app owns the provider.
+        """
         if self._shutdown_done:
             return
         self._shutdown_done = True
@@ -110,6 +147,8 @@ def init(
     sample_rate: float | None = None,
     instrument: Sequence[str] | None = None,
     mask: Callable[[Any], Any] | None = None,
+    use_global_provider: bool | None = None,
+    export_filter: Callable[[ReadableSpan], bool] | None = None,
     enabled: bool | None = None,
 ) -> None:
     """Initialize the SDK, once per process (D-F-15).
@@ -131,6 +170,8 @@ def init(
         sample_rate=sample_rate,
         instrument=instrument,
         mask=mask,
+        use_global_provider=use_global_provider,
+        export_filter=export_filter,
         enabled=enabled,
     )
     if not config.enabled:
