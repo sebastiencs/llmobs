@@ -13,7 +13,7 @@ mod openai;
 use std::str::FromStr;
 use std::time::Duration;
 
-pub use answer::RawAnswer;
+pub use answer::{Answer, RawAnswer, parse_answer};
 use reqwest::Url;
 
 use crate::config::JudgeOutput;
@@ -59,13 +59,27 @@ impl FromStr for Adapter {
 
 /// How the provider is asked to fill the answer schema.
 ///
-/// `tool` and `prompt` arrive in E14. The default is native JSON schema.
+/// The default is native JSON schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StructuredOutput {
     /// Provider-native structured output.
     #[default]
     Native,
+    /// A forced `submit_judgement` tool call.
+    Tool,
+    /// The schema is appended to the prompt.
+    Prompt,
 }
+
+/// Name of the tool forced in [`StructuredOutput::Tool`].
+pub(crate) const JUDGEMENT_TOOL: &str = "submit_judgement";
+
+/// Description sent with [`JUDGEMENT_TOOL`].
+pub(crate) const JUDGEMENT_DESCRIPTION: &str = "Submit your judgement.";
+
+/// Instruction appended in [`StructuredOutput::Prompt`], before the schema.
+pub(crate) const PROMPT_INSTRUCTION: &str =
+    "Reply with one JSON object and nothing else. It must match this JSON Schema:";
 
 impl StructuredOutput {
     /// The stored connection value.
@@ -73,6 +87,8 @@ impl StructuredOutput {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Native => "native",
+            Self::Tool => "tool",
+            Self::Prompt => "prompt",
         }
     }
 }
@@ -83,6 +99,8 @@ impl FromStr for StructuredOutput {
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         match text {
             "native" => Ok(Self::Native),
+            "tool" => Ok(Self::Tool),
+            "prompt" => Ok(Self::Prompt),
             _ => Err(UnknownName),
         }
     }
@@ -116,7 +134,7 @@ pub struct JudgeConnection {
     /// The same header name replaces the earlier value. Values are redacted in
     /// [`Debug`](std::fmt::Debug).
     pub extra_headers: Vec<(String, Secret)>,
-    /// Structured-output mode. Only native is implemented.
+    /// Structured-output mode.
     pub structured_output: StructuredOutput,
 }
 
@@ -150,6 +168,30 @@ impl std::fmt::Debug for JudgeCall<'_> {
             .field("max_output_tokens", &self.max_output_tokens)
             .field("timeout", &self.timeout)
             .finish()
+    }
+}
+
+/// The user message for this mode.
+///
+/// Prompt mode appends [`PROMPT_INSTRUCTION`] after a blank line, then the
+/// pretty-printed answer schema. Native and tool modes send the prompt as is.
+pub(crate) fn user_message(
+    mode: StructuredOutput,
+    call: &JudgeCall<'_>,
+) -> Result<String, JudgeError> {
+    match mode {
+        StructuredOutput::Native | StructuredOutput::Tool => Ok(call.prompt.to_owned()),
+        StructuredOutput::Prompt => {
+            let schema = serde_json::to_string_pretty(&answer::answer_schema(
+                call.output,
+                call.include_reason,
+            ))
+            .map_err(|_| JudgeError::InvalidRequest)?;
+            Ok(format!(
+                "{prompt}\n\n{PROMPT_INSTRUCTION}\n{schema}",
+                prompt = call.prompt
+            ))
+        }
     }
 }
 
@@ -278,7 +320,43 @@ mod tests {
         );
         assert_eq!(StructuredOutput::default(), StructuredOutput::Native);
         assert_eq!(StructuredOutput::Native.as_str(), "native");
-        assert!("tool".parse::<StructuredOutput>().is_err());
-        assert!("prompt".parse::<StructuredOutput>().is_err());
+        assert_eq!(
+            "tool".parse::<StructuredOutput>(),
+            Ok(StructuredOutput::Tool)
+        );
+        assert_eq!(StructuredOutput::Tool.as_str(), "tool");
+        assert_eq!(
+            "prompt".parse::<StructuredOutput>(),
+            Ok(StructuredOutput::Prompt)
+        );
+        assert_eq!(StructuredOutput::Prompt.as_str(), "prompt");
+        assert!("Tool".parse::<StructuredOutput>().is_err());
+    }
+
+    #[test]
+    fn prompt_mode_appends_the_schema_after_a_blank_line() {
+        let output = crate::config::JudgeOutput::Boolean;
+        let call = super::JudgeCall {
+            model: "m",
+            prompt: "Grade.",
+            output: &output,
+            include_reason: false,
+            temperature: None,
+            max_output_tokens: 1,
+            timeout: std::time::Duration::from_secs(1),
+        };
+        let text = super::user_message(StructuredOutput::Prompt, &call).expect("prompt");
+        assert_eq!(
+            text,
+            "Grade.\n\nReply with one JSON object and nothing else. It must match this JSON Schema:\n{\n  \"type\": \"object\",\n  \"properties\": {\n    \"value\": {\n      \"type\": \"boolean\"\n    }\n  },\n  \"required\": [\n    \"value\"\n  ],\n  \"additionalProperties\": false\n}"
+        );
+        assert_eq!(
+            super::user_message(StructuredOutput::Native, &call).expect("native"),
+            "Grade."
+        );
+        assert_eq!(
+            super::user_message(StructuredOutput::Tool, &call).expect("tool"),
+            "Grade."
+        );
     }
 }

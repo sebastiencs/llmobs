@@ -1,4 +1,4 @@
-//! Gemini `generateContent`, native JSON schema mode.
+//! Gemini `generateContent`.
 //!
 //! The base URL is the host (`https://generativelanguage.googleapis.com`). The
 //! model is a path segment, `v1beta/models/{model}:generateContent`. The API key
@@ -11,8 +11,9 @@ use serde_json::{Map, Value};
 use super::answer::answer_schema;
 use super::http::provider_error;
 use super::{
-    Adapter, JudgeCall, JudgeConnection, JudgeReply, JudgeUsage, RESPONSE_MAX_BYTES, RawAnswer,
-    StructuredOutput, endpoint, validate_model,
+    Adapter, JUDGEMENT_DESCRIPTION, JUDGEMENT_TOOL, JudgeCall, JudgeConnection, JudgeReply,
+    JudgeUsage, RESPONSE_MAX_BYTES, RawAnswer, StructuredOutput, endpoint, user_message,
+    validate_model,
 };
 use crate::egress::{EgressClient, EgressRequest};
 use crate::error::JudgeError;
@@ -35,9 +36,7 @@ pub(crate) async fn complete(
 ) -> Result<JudgeReply, JudgeError> {
     let url = generate_content_url(conn.base_url.as_ref(), call.model)?;
     let headers = headers(conn)?;
-    let body = match conn.structured_output {
-        StructuredOutput::Native => request_body(call)?,
-    };
+    let body = request_body(conn.structured_output, call)?;
     let response = client
         .post(EgressRequest {
             url: &url,
@@ -50,6 +49,7 @@ pub(crate) async fn complete(
     if response.status.as_u16() != 200 {
         return Err(provider_error(
             Adapter::Gemini,
+            conn.structured_output,
             response.status.as_u16(),
             &response.body,
         ));
@@ -88,7 +88,7 @@ fn header_value(value: &Secret) -> Result<HeaderValue, JudgeError> {
     HeaderValue::from_bytes(value.expose().as_bytes()).map_err(|_| JudgeError::InvalidHeader)
 }
 
-fn request_body(call: &JudgeCall<'_>) -> Result<Vec<u8>, JudgeError> {
+fn request_body(mode: StructuredOutput, call: &JudgeCall<'_>) -> Result<Vec<u8>, JudgeError> {
     let mut generation = Map::new();
     generation.insert(
         "maxOutputTokens".to_owned(),
@@ -102,23 +102,46 @@ fn request_body(call: &JudgeCall<'_>) -> Result<Vec<u8>, JudgeError> {
                 .ok_or(JudgeError::InvalidRequest)?,
         );
     }
-    generation.insert(
-        "responseMimeType".to_owned(),
-        Value::String("application/json".to_owned()),
-    );
-    generation.insert(
-        "responseJsonSchema".to_owned(),
-        answer_schema(call.output, call.include_reason),
-    );
+    if mode == StructuredOutput::Native {
+        generation.insert(
+            "responseMimeType".to_owned(),
+            Value::String("application/json".to_owned()),
+        );
+        generation.insert(
+            "responseJsonSchema".to_owned(),
+            answer_schema(call.output, call.include_reason),
+        );
+    }
     let mut body = Map::new();
     body.insert(
         "contents".to_owned(),
         serde_json::json!([{
             "role": "user",
-            "parts": [{ "text": call.prompt }]
+            "parts": [{ "text": user_message(mode, call)? }]
         }]),
     );
     body.insert("generationConfig".to_owned(), Value::Object(generation));
+    if mode == StructuredOutput::Tool {
+        body.insert(
+            "tools".to_owned(),
+            serde_json::json!([{
+                "functionDeclarations": [{
+                    "name": JUDGEMENT_TOOL,
+                    "description": JUDGEMENT_DESCRIPTION,
+                    "parametersJsonSchema": answer_schema(call.output, call.include_reason),
+                }]
+            }]),
+        );
+        body.insert(
+            "toolConfig".to_owned(),
+            serde_json::json!({
+                "functionCallingConfig": {
+                    "mode": "ANY",
+                    "allowedFunctionNames": [JUDGEMENT_TOOL],
+                }
+            }),
+        );
+    }
     serde_json::to_vec(&Value::Object(body)).map_err(|_| JudgeError::InvalidRequest)
 }
 

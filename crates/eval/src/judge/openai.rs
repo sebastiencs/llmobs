@@ -1,4 +1,4 @@
-//! OpenAI-compatible Chat Completions, native JSON schema mode.
+//! OpenAI-compatible Chat Completions.
 //!
 //! The base URL includes the version (`https://api.openai.com/v1`). Compatible
 //! servers use the same path.
@@ -9,8 +9,9 @@ use serde_json::{Map, Value};
 use super::answer::answer_schema;
 use super::http::provider_error;
 use super::{
-    Adapter, JudgeCall, JudgeConnection, JudgeReply, JudgeUsage, RESPONSE_MAX_BYTES, RawAnswer,
-    StructuredOutput, endpoint, validate_model,
+    Adapter, JUDGEMENT_DESCRIPTION, JUDGEMENT_TOOL, JudgeCall, JudgeConnection, JudgeReply,
+    JudgeUsage, RESPONSE_MAX_BYTES, RawAnswer, StructuredOutput, endpoint, user_message,
+    validate_model,
 };
 use crate::egress::{EgressClient, EgressRequest};
 use crate::error::JudgeError;
@@ -26,9 +27,7 @@ pub(crate) async fn complete(
     validate_model(call.model)?;
     let url = endpoint(conn.base_url.as_ref(), DEFAULT_BASE, "chat/completions")?;
     let headers = headers(conn)?;
-    let body = match conn.structured_output {
-        StructuredOutput::Native => request_body(call)?,
-    };
+    let body = request_body(conn.structured_output, call)?;
     let response = client
         .post(EgressRequest {
             url: &url,
@@ -41,6 +40,7 @@ pub(crate) async fn complete(
     if response.status.as_u16() != 200 {
         return Err(provider_error(
             Adapter::OpenAi,
+            conn.structured_output,
             response.status.as_u16(),
             &response.body,
         ));
@@ -83,12 +83,12 @@ fn header_bytes(bytes: &[u8]) -> Result<HeaderValue, JudgeError> {
     HeaderValue::from_bytes(bytes).map_err(|_| JudgeError::InvalidHeader)
 }
 
-fn request_body(call: &JudgeCall<'_>) -> Result<Vec<u8>, JudgeError> {
+fn request_body(mode: StructuredOutput, call: &JudgeCall<'_>) -> Result<Vec<u8>, JudgeError> {
     let mut body = Map::new();
     body.insert("model".to_owned(), Value::String(call.model.to_owned()));
     body.insert(
         "messages".to_owned(),
-        serde_json::json!([{ "role": "user", "content": call.prompt }]),
+        serde_json::json!([{ "role": "user", "content": user_message(mode, call)? }]),
     );
     body.insert(
         "max_completion_tokens".to_owned(),
@@ -102,17 +102,44 @@ fn request_body(call: &JudgeCall<'_>) -> Result<Vec<u8>, JudgeError> {
                 .ok_or(JudgeError::InvalidRequest)?,
         );
     }
-    body.insert(
-        "response_format".to_owned(),
-        serde_json::json!({
-            "type": "json_schema",
-            "json_schema": {
-                "name": "judge_answer",
-                "strict": true,
-                "schema": answer_schema(call.output, call.include_reason),
-            }
-        }),
-    );
+    let schema = answer_schema(call.output, call.include_reason);
+    match mode {
+        StructuredOutput::Native => {
+            body.insert(
+                "response_format".to_owned(),
+                serde_json::json!({
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "judge_answer",
+                        "strict": true,
+                        "schema": schema,
+                    }
+                }),
+            );
+        }
+        StructuredOutput::Tool => {
+            body.insert(
+                "tools".to_owned(),
+                serde_json::json!([{
+                    "type": "function",
+                    "function": {
+                        "name": JUDGEMENT_TOOL,
+                        "description": JUDGEMENT_DESCRIPTION,
+                        "parameters": schema,
+                        "strict": true,
+                    }
+                }]),
+            );
+            body.insert(
+                "tool_choice".to_owned(),
+                serde_json::json!({
+                    "type": "function",
+                    "function": {"name": JUDGEMENT_TOOL}
+                }),
+            );
+        }
+        StructuredOutput::Prompt => {}
+    }
     serde_json::to_vec(&Value::Object(body)).map_err(|_| JudgeError::InvalidRequest)
 }
 
@@ -134,6 +161,21 @@ fn parse_completion(body: &[u8]) -> Result<JudgeReply, JudgeError> {
         Some("content_filter") => return Err(JudgeError::ContentFiltered),
         _ => {}
     }
+    let usage = usage_of(value.get("usage"));
+    let response_model = value
+        .get("model")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    if let Some(arguments) = tool_arguments(message)? {
+        let object = arguments.as_object().cloned().ok_or(JudgeError::NotJson)?;
+        let output_text = serde_json::to_string(&arguments).map_err(|_| JudgeError::NotJson)?;
+        return Ok(JudgeReply {
+            answer: RawAnswer::Object(object),
+            output_text,
+            usage,
+            response_model,
+        });
+    }
     let content = message
         .get("content")
         .and_then(Value::as_str)
@@ -141,12 +183,31 @@ fn parse_completion(body: &[u8]) -> Result<JudgeReply, JudgeError> {
     Ok(JudgeReply {
         answer: RawAnswer::Text(content.to_owned()),
         output_text: content.to_owned(),
-        usage: usage_of(value.get("usage")),
-        response_model: value
-            .get("model")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
+        usage,
+        response_model,
     })
+}
+
+/// `tool_calls[0].function.arguments` parsed as a JSON object.
+///
+/// An empty `tool_calls` array is no tool call. A call whose arguments are
+/// missing, not JSON, or not an object is [`JudgeError::NotJson`].
+fn tool_arguments(message: &Value) -> Result<Option<Value>, JudgeError> {
+    let Some(calls) = message.get("tool_calls").and_then(Value::as_array) else {
+        return Ok(None);
+    };
+    let Some(call) = calls.first() else {
+        return Ok(None);
+    };
+    let arguments = call
+        .pointer("/function/arguments")
+        .and_then(Value::as_str)
+        .ok_or(JudgeError::NotJson)?;
+    let value: Value = serde_json::from_str(arguments).map_err(|_| JudgeError::NotJson)?;
+    if !value.is_object() {
+        return Err(JudgeError::NotJson);
+    }
+    Ok(Some(value))
 }
 
 fn usage_of(usage: Option<&Value>) -> JudgeUsage {

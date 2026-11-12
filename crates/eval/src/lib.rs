@@ -23,8 +23,8 @@ pub use error::{
     CheckError, ConfigError, EgressError, ErrorClass, JudgeError, MappingError, TemplateError,
 };
 pub use judge::{
-    Adapter, JudgeCall, JudgeConnection, JudgeReply, JudgeUsage, RawAnswer, StructuredOutput,
-    UnknownName, call,
+    Adapter, Answer, JudgeCall, JudgeConnection, JudgeReply, JudgeUsage, RawAnswer,
+    StructuredOutput, UnknownName, call, parse_answer,
 };
 pub use mapping::resolve::{ItemData, TraceData, Variables, resolve};
 pub use mapping::{Expr, VariableMapping};

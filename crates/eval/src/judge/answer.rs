@@ -25,7 +25,7 @@ pub enum RawAnswer {
 
 /// A score value and the optional explanation that becomes the score's reason.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Answer {
+pub struct Answer {
     /// The score, using the label spelling stored on the evaluator.
     pub value: ScoreValue,
     /// At most 8 000 characters. Absent when the judge does not ask for one.
@@ -81,7 +81,7 @@ fn json_type(kind: &str) -> Value {
 /// Returns [`JudgeError`] when the reply has no object, or the score field is
 /// missing, the wrong type, out of range, or not one of the configured labels.
 /// The message names the field and the configured bounds, never the answer.
-pub(crate) fn parse_answer(
+pub fn parse_answer(
     raw: RawAnswer,
     output: &JudgeOutput,
     include_reason: bool,

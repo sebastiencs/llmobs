@@ -5,8 +5,11 @@
 
 use serde_json::Value;
 
-use super::Adapter;
+use super::{Adapter, StructuredOutput};
 use crate::error::{ErrorClass, JudgeError};
+
+/// Shown when native or tool mode is rejected. Prompt mode does not set it.
+const STRUCTURED_OUTPUT_HINT: &str = "The model may not support this structured_output mode; try \"tool\" or \"prompt\" on the connection.";
 
 const TOKEN_MAX_CHARS: usize = 64;
 const MESSAGE_MAX_CHARS: usize = 500;
@@ -15,20 +18,41 @@ const MESSAGE_MAX_CHARS: usize = 500;
 ///
 /// Unparsable bodies leave the type, code, and message empty. The message is
 /// cut to 500 Unicode scalar values and is not included in the error's `Display`.
-pub(crate) fn provider_error(adapter: Adapter, status: u16, body: &[u8]) -> JudgeError {
+pub(crate) fn provider_error(
+    adapter: Adapter,
+    mode: StructuredOutput,
+    status: u16,
+    body: &[u8],
+) -> JudgeError {
     let (provider_type, provider_code, provider_message) = match adapter {
         Adapter::OpenAi | Adapter::Anthropic => error_object(body),
         Adapter::Gemini => gemini_error(body),
     };
     let class = classify(status, provider_type.as_deref(), provider_code.as_deref());
+    let hint = structured_output_hint(adapter, mode, status, provider_code.as_deref());
     JudgeError::Provider {
         status,
         class,
         provider_type,
         provider_code,
         provider_message,
-        hint: None,
+        hint,
     }
+}
+
+/// A 400, or Gemini `INVALID_ARGUMENT` at any status, in native or tool mode.
+fn structured_output_hint(
+    adapter: Adapter,
+    mode: StructuredOutput,
+    status: u16,
+    provider_code: Option<&str>,
+) -> Option<&'static str> {
+    if !matches!(mode, StructuredOutput::Native | StructuredOutput::Tool) {
+        return None;
+    }
+    let rejected =
+        status == 400 || (adapter == Adapter::Gemini && provider_code == Some("INVALID_ARGUMENT"));
+    rejected.then_some(STRUCTURED_OUTPUT_HINT)
 }
 
 fn error_object(body: &[u8]) -> (Option<String>, Option<String>, Option<String>) {
@@ -120,12 +144,13 @@ fn mentions_content_filter(value: Option<&str>) -> bool {
 mod tests {
     use super::provider_error;
     use crate::error::{ErrorClass, JudgeError};
-    use crate::judge::Adapter;
+    use crate::judge::{Adapter, StructuredOutput};
     use serde_json::json;
 
     fn error(status: u16, body: &serde_json::Value) -> JudgeError {
         provider_error(
             Adapter::OpenAi,
+            StructuredOutput::Prompt,
             status,
             &serde_json::to_vec(body).expect("body"),
         )
@@ -253,7 +278,12 @@ mod tests {
         assert!(kept.ends_with('Y'));
         assert!(!kept.contains('Z'));
 
-        let err = provider_error(Adapter::OpenAi, 500, b"SECRET-PAYLOAD");
+        let err = provider_error(
+            Adapter::OpenAi,
+            StructuredOutput::Prompt,
+            500,
+            b"SECRET-PAYLOAD",
+        );
         let JudgeError::Provider {
             provider_type,
             provider_code,
@@ -291,6 +321,7 @@ mod tests {
         });
         let err = provider_error(
             Adapter::Anthropic,
+            StructuredOutput::Prompt,
             529,
             &serde_json::to_vec(&body).expect("body"),
         );
@@ -323,6 +354,7 @@ mod tests {
         });
         let err = provider_error(
             Adapter::Gemini,
+            StructuredOutput::Prompt,
             429,
             &serde_json::to_vec(&body).expect("body"),
         );
@@ -344,7 +376,12 @@ mod tests {
         assert!(!err.to_string().contains("SECRET-PAYLOAD"));
         assert!(!err.to_string().contains("RESOURCE_EXHAUSTED"));
 
-        let err = provider_error(Adapter::Gemini, 500, b"SECRET-PAYLOAD");
+        let err = provider_error(
+            Adapter::Gemini,
+            StructuredOutput::Prompt,
+            500,
+            b"SECRET-PAYLOAD",
+        );
         let JudgeError::Provider {
             provider_type,
             provider_code,
@@ -360,5 +397,42 @@ mod tests {
         assert_eq!(provider_message, &None);
         assert_eq!(class, &ErrorClass::Retryable);
         assert!(!err.to_string().contains("SECRET-PAYLOAD"));
+    }
+
+    #[test]
+    fn hints_when_native_or_tool_mode_is_rejected() {
+        let body =
+            serde_json::to_vec(&json!({"error": {"message": "SECRET-PAYLOAD"}})).expect("body");
+        for mode in [StructuredOutput::Native, StructuredOutput::Tool] {
+            let err = provider_error(Adapter::OpenAi, mode, 400, &body);
+            let JudgeError::Provider { hint, .. } = &err else {
+                panic!("provider error");
+            };
+            assert_eq!(hint, &Some(super::STRUCTURED_OUTPUT_HINT));
+            assert_eq!(err.to_string(), "provider status 400");
+            assert!(!err.to_string().contains("SECRET-PAYLOAD"));
+            assert!(!err.to_string().contains("structured_output"));
+        }
+        let err = provider_error(Adapter::Anthropic, StructuredOutput::Prompt, 400, &body);
+        let JudgeError::Provider { hint, .. } = &err else {
+            panic!("provider error");
+        };
+        assert_eq!(hint, &None);
+
+        let gemini = serde_json::to_vec(&json!({
+            "error": {"code": 403, "status": "INVALID_ARGUMENT", "message": "SECRET-PAYLOAD"}
+        }))
+        .expect("body");
+        let err = provider_error(Adapter::Gemini, StructuredOutput::Tool, 403, &gemini);
+        let JudgeError::Provider { hint, class, .. } = &err else {
+            panic!("provider error");
+        };
+        assert_eq!(hint, &Some(super::STRUCTURED_OUTPUT_HINT));
+        assert_eq!(class, &ErrorClass::Pause);
+        let err = provider_error(Adapter::Gemini, StructuredOutput::Prompt, 400, &gemini);
+        let JudgeError::Provider { hint, .. } = &err else {
+            panic!("provider error");
+        };
+        assert_eq!(hint, &None);
     }
 }

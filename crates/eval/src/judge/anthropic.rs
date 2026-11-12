@@ -1,4 +1,4 @@
-//! Anthropic Messages, native JSON schema mode.
+//! Anthropic Messages.
 //!
 //! The base URL is the host (`https://api.anthropic.com`). The request path is
 //! `v1/messages`. Structured outputs are sent as `output_config.format` and do
@@ -11,8 +11,9 @@ use serde_json::{Map, Value};
 use super::answer::answer_schema;
 use super::http::provider_error;
 use super::{
-    Adapter, JudgeCall, JudgeConnection, JudgeReply, JudgeUsage, RESPONSE_MAX_BYTES, RawAnswer,
-    StructuredOutput, endpoint, validate_model,
+    Adapter, JUDGEMENT_DESCRIPTION, JUDGEMENT_TOOL, JudgeCall, JudgeConnection, JudgeReply,
+    JudgeUsage, RESPONSE_MAX_BYTES, RawAnswer, StructuredOutput, endpoint, user_message,
+    validate_model,
 };
 use crate::egress::{EgressClient, EgressRequest};
 use crate::error::JudgeError;
@@ -29,9 +30,7 @@ pub(crate) async fn complete(
     validate_model(call.model)?;
     let url = endpoint(conn.base_url.as_ref(), DEFAULT_BASE, "v1/messages")?;
     let headers = headers(conn)?;
-    let body = match conn.structured_output {
-        StructuredOutput::Native => request_body(call)?,
-    };
+    let body = request_body(conn.structured_output, call)?;
     let response = client
         .post(EgressRequest {
             url: &url,
@@ -44,6 +43,7 @@ pub(crate) async fn complete(
     if response.status.as_u16() != 200 {
         return Err(provider_error(
             Adapter::Anthropic,
+            conn.structured_output,
             response.status.as_u16(),
             &response.body,
         ));
@@ -80,13 +80,13 @@ fn header_value(value: &Secret) -> Result<HeaderValue, JudgeError> {
     HeaderValue::from_bytes(value.expose().as_bytes()).map_err(|_| JudgeError::InvalidHeader)
 }
 
-fn request_body(call: &JudgeCall<'_>) -> Result<Vec<u8>, JudgeError> {
+fn request_body(mode: StructuredOutput, call: &JudgeCall<'_>) -> Result<Vec<u8>, JudgeError> {
     let mut body = Map::new();
     body.insert("model".to_owned(), Value::String(call.model.to_owned()));
     body.insert("max_tokens".to_owned(), Value::from(call.max_output_tokens));
     body.insert(
         "messages".to_owned(),
-        serde_json::json!([{ "role": "user", "content": call.prompt }]),
+        serde_json::json!([{ "role": "user", "content": user_message(mode, call)? }]),
     );
     if let Some(temperature) = call.temperature {
         body.insert(
@@ -96,15 +96,35 @@ fn request_body(call: &JudgeCall<'_>) -> Result<Vec<u8>, JudgeError> {
                 .ok_or(JudgeError::InvalidRequest)?,
         );
     }
-    body.insert(
-        "output_config".to_owned(),
-        serde_json::json!({
-            "format": {
-                "type": "json_schema",
-                "schema": answer_schema(call.output, call.include_reason),
-            }
-        }),
-    );
+    let schema = answer_schema(call.output, call.include_reason);
+    match mode {
+        StructuredOutput::Native => {
+            body.insert(
+                "output_config".to_owned(),
+                serde_json::json!({
+                    "format": {
+                        "type": "json_schema",
+                        "schema": schema,
+                    }
+                }),
+            );
+        }
+        StructuredOutput::Tool => {
+            body.insert(
+                "tools".to_owned(),
+                serde_json::json!([{
+                    "name": JUDGEMENT_TOOL,
+                    "description": JUDGEMENT_DESCRIPTION,
+                    "input_schema": schema,
+                }]),
+            );
+            body.insert(
+                "tool_choice".to_owned(),
+                serde_json::json!({"type": "tool", "name": JUDGEMENT_TOOL}),
+            );
+        }
+        StructuredOutput::Prompt => {}
+    }
     serde_json::to_vec(&Value::Object(body)).map_err(|_| JudgeError::InvalidRequest)
 }
 

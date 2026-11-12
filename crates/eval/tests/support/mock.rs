@@ -37,6 +37,9 @@ pub(crate) struct RecordedRequest {
     #[allow(dead_code)]
     pub(crate) query: Option<String>,
     /// Request headers.
+    ///
+    /// Read by the adapter tests. The mode tests leave the field unread.
+    #[allow(dead_code)]
     pub(crate) headers: HeaderMap,
     /// Parsed JSON body, or `Null` when the body was not JSON.
     pub(crate) body: Value,
@@ -44,6 +47,9 @@ pub(crate) struct RecordedRequest {
 
 impl RecordedRequest {
     /// The header value, when it is valid UTF-8.
+    ///
+    /// Read by the adapter tests. The mode tests leave it unread.
+    #[allow(dead_code)]
     #[must_use]
     pub(crate) fn header(&self, name: &str) -> Option<&str> {
         self.headers.get(name).and_then(|value| value.to_str().ok())
