@@ -1,0 +1,36 @@
+---
+source: crates/eval/tests/gemini.rs
+expression: "seen[0].body"
+---
+{
+  "contents": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "text": "Grade the answer."
+        }
+      ]
+    }
+  ],
+  "generationConfig": {
+    "maxOutputTokens": 1024,
+    "responseMimeType": "application/json",
+    "responseJsonSchema": {
+      "type": "object",
+      "properties": {
+        "explanation": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "explanation",
+        "value"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

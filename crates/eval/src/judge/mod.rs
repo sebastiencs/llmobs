@@ -1,11 +1,12 @@
 //! LLM judge calls.
 //!
-//! E11 is the OpenAI-compatible adapter and E12 is Anthropic. Gemini arrives in E13.
+//! E11 is the OpenAI-compatible adapter, E12 is Anthropic, and E13 is Gemini.
 
 // `parse_answer` is first called by the runner in E17.
 #[cfg_attr(not(test), allow(dead_code))]
 mod answer;
 mod anthropic;
+mod gemini;
 mod http;
 mod openai;
 
@@ -21,14 +22,14 @@ use crate::error::JudgeError;
 use crate::secret::Secret;
 
 /// Which provider API a connection calls.
-///
-/// Gemini is added with its adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Adapter {
     /// OpenAI Chat Completions, including compatible servers.
     OpenAi,
     /// Anthropic Messages.
     Anthropic,
+    /// Gemini `generateContent`.
+    Gemini,
 }
 
 impl Adapter {
@@ -38,6 +39,7 @@ impl Adapter {
         match self {
             Self::OpenAi => "openai",
             Self::Anthropic => "anthropic",
+            Self::Gemini => "gemini",
         }
     }
 }
@@ -49,6 +51,7 @@ impl FromStr for Adapter {
         match text {
             "openai" => Ok(Self::OpenAi),
             "anthropic" => Ok(Self::Anthropic),
+            "gemini" => Ok(Self::Gemini),
             _ => Err(UnknownName),
         }
     }
@@ -195,6 +198,7 @@ pub async fn call(
     match conn.adapter {
         Adapter::OpenAi => openai::complete(client, conn, call).await,
         Adapter::Anthropic => anthropic::complete(client, conn, call).await,
+        Adapter::Gemini => gemini::complete(client, conn, call).await,
     }
 }
 
@@ -258,9 +262,11 @@ mod tests {
         assert_eq!(Adapter::OpenAi.as_str(), "openai");
         assert_eq!("anthropic".parse::<Adapter>(), Ok(Adapter::Anthropic));
         assert_eq!(Adapter::Anthropic.as_str(), "anthropic");
-        let err = "gemini/SECRET-PAYLOAD"
+        assert_eq!("gemini".parse::<Adapter>(), Ok(Adapter::Gemini));
+        assert_eq!(Adapter::Gemini.as_str(), "gemini");
+        let err = "vertex/SECRET-PAYLOAD"
             .parse::<Adapter>()
-            .expect_err("gemini arrives in E13");
+            .expect_err("unknown adapter");
         assert_eq!(err, UnknownName);
         assert_eq!(err.to_string(), "unknown name");
         assert!(!err.to_string().contains("SECRET-PAYLOAD"));

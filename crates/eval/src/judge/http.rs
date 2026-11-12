@@ -1,8 +1,7 @@
 //! Provider status classification (D160).
 //!
-//! OpenAI and Anthropic both put `type`, `code`, and `message` on an `error`
-//! object. Gemini's object is read when that adapter arrives; the class rules
-//! already accept its codes.
+//! OpenAI and Anthropic put `type`, `code`, and `message` on an `error` object.
+//! Gemini puts a numeric `code`, a named `status`, and `message` on that object.
 
 use serde_json::Value;
 
@@ -19,6 +18,7 @@ const MESSAGE_MAX_CHARS: usize = 500;
 pub(crate) fn provider_error(adapter: Adapter, status: u16, body: &[u8]) -> JudgeError {
     let (provider_type, provider_code, provider_message) = match adapter {
         Adapter::OpenAi | Adapter::Anthropic => error_object(body),
+        Adapter::Gemini => gemini_error(body),
     };
     let class = classify(status, provider_type.as_deref(), provider_code.as_deref());
     JudgeError::Provider {
@@ -41,6 +41,22 @@ fn error_object(body: &[u8]) -> (Option<String>, Option<String>, Option<String>)
     (
         provider_token(error.get("type").and_then(Value::as_str)),
         provider_token(error.get("code").and_then(Value::as_str)),
+        provider_message(error.get("message").and_then(Value::as_str)),
+    )
+}
+
+/// Gemini's `error.code` is the HTTP status, already stored on the error.
+/// `error.status` is the named code (`RESOURCE_EXHAUSTED`).
+fn gemini_error(body: &[u8]) -> (Option<String>, Option<String>, Option<String>) {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return (None, None, None);
+    };
+    let Some(error) = value.get("error").and_then(Value::as_object) else {
+        return (None, None, None);
+    };
+    (
+        None,
+        provider_token(error.get("status").and_then(Value::as_str)),
         provider_message(error.get("message").and_then(Value::as_str)),
     )
 }
@@ -293,6 +309,56 @@ mod tests {
         assert_eq!(provider_message.as_deref(), Some("SECRET-PAYLOAD"));
         assert_eq!(class, &ErrorClass::Retryable);
         assert_eq!(err.to_string(), "provider status 529");
+        assert!(!err.to_string().contains("SECRET-PAYLOAD"));
+    }
+
+    #[test]
+    fn reads_a_gemini_error_status() {
+        let body = json!({
+            "error": {
+                "code": 429,
+                "message": "SECRET-PAYLOAD",
+                "status": "RESOURCE_EXHAUSTED"
+            }
+        });
+        let err = provider_error(
+            Adapter::Gemini,
+            429,
+            &serde_json::to_vec(&body).expect("body"),
+        );
+        let JudgeError::Provider {
+            provider_type,
+            provider_code,
+            provider_message,
+            class,
+            ..
+        } = &err
+        else {
+            panic!("provider error");
+        };
+        assert_eq!(provider_type, &None);
+        assert_eq!(provider_code.as_deref(), Some("RESOURCE_EXHAUSTED"));
+        assert_eq!(provider_message.as_deref(), Some("SECRET-PAYLOAD"));
+        assert_eq!(class, &ErrorClass::Retryable);
+        assert_eq!(err.to_string(), "provider status 429");
+        assert!(!err.to_string().contains("SECRET-PAYLOAD"));
+        assert!(!err.to_string().contains("RESOURCE_EXHAUSTED"));
+
+        let err = provider_error(Adapter::Gemini, 500, b"SECRET-PAYLOAD");
+        let JudgeError::Provider {
+            provider_type,
+            provider_code,
+            provider_message,
+            class,
+            ..
+        } = &err
+        else {
+            panic!("provider error");
+        };
+        assert_eq!(provider_type, &None);
+        assert_eq!(provider_code, &None);
+        assert_eq!(provider_message, &None);
+        assert_eq!(class, &ErrorClass::Retryable);
         assert!(!err.to_string().contains("SECRET-PAYLOAD"));
     }
 }

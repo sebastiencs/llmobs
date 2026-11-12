@@ -31,6 +31,11 @@ pub(crate) struct MockReply {
 pub(crate) struct RecordedRequest {
     /// Path only, without the query.
     pub(crate) path: String,
+    /// Query string, without `?`. `None` when the request had none.
+    ///
+    /// Read by the Gemini tests. The other adapter crates leave it unread.
+    #[allow(dead_code)]
+    pub(crate) query: Option<String>,
     /// Request headers.
     pub(crate) headers: HeaderMap,
     /// Parsed JSON body, or `Null` when the body was not JSON.
@@ -117,6 +122,7 @@ async fn handle(State(app): State<App>, uri: Uri, headers: HeaderMap, body: Byte
     let parsed = serde_json::from_slice(&body).unwrap_or(Value::Null);
     app.seen.lock().expect("seen").push(RecordedRequest {
         path: uri.path().to_owned(),
+        query: uri.query().map(str::to_owned),
         headers,
         body: parsed,
     });
