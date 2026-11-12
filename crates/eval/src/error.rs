@@ -1,8 +1,8 @@
-//! Configuration and check errors.
+//! Configuration, check, and mapping errors.
 //!
-//! Messages name the evaluator kind, the field, the missing variable, or serde's
-//! error category with its line and column. They never quote prompt text, check
-//! inputs, patterns, header values, URLs, or other payload.
+//! Messages name the evaluator kind, the field, the variable, the byte offset, or
+//! serde's error category with its line and column. They never quote prompt text,
+//! check inputs, patterns, header values, URLs, expression text, or other payload.
 
 use llmobs_core::enums::ScoreDataType;
 use serde_json::error::Category;
@@ -82,6 +82,44 @@ pub enum CheckError {
     /// The schema is omitted: a `$ref` URL or a schema string can carry payload text.
     #[error("invalid JSON schema")]
     InvalidSchema,
+}
+
+/// A mapping document or one of its expressions broke a rule.
+///
+/// [`Syntax`](MappingError::Syntax) names a byte offset and a static reason. The
+/// expression text stays on [`crate::Expr`] for the caller; it is not repeated here.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum MappingError {
+    /// The expression does not match the mapping grammar.
+    #[error("invalid expression at {expr_offset}: {reason}")]
+    Syntax {
+        /// Byte offset into the expression.
+        expr_offset: usize,
+        /// Static description. Never a slice of the expression.
+        reason: &'static str,
+    },
+    /// A variable name or its JSON value is not usable.
+    #[error("invalid variable `{name}`: {reason}")]
+    Variable {
+        /// The object key from the mapping document.
+        name: String,
+        /// Static description.
+        reason: &'static str,
+    },
+    /// One variable's expression failed to parse.
+    #[error("variable `{name}`: {source}")]
+    InVariable {
+        /// The object key from the mapping document.
+        name: String,
+        /// The expression error.
+        source: Box<MappingError>,
+    },
+    /// The mapping JSON is not an object.
+    #[error("mapping must be a JSON object")]
+    NotAnObject,
+    /// The mapping has more than 32 variables.
+    #[error("mapping has more than 32 variables")]
+    TooMany,
 }
 
 /// Fails the test when `message` contains `payload`.

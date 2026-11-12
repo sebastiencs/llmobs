@@ -6,6 +6,7 @@
 mod check;
 mod config;
 mod error;
+mod mapping;
 mod secret;
 mod text;
 
@@ -14,5 +15,6 @@ pub use config::{
     Check, ContainsMode, Evaluator, EvaluatorConfig, JudgeConfig, JudgeOutput, OutputScore,
     WebhookConfig,
 };
-pub use error::{CheckError, ConfigError};
+pub use error::{CheckError, ConfigError, MappingError};
+pub use mapping::{Expr, VariableMapping};
 pub use secret::Secret;
