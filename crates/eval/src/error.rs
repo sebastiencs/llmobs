@@ -1,9 +1,9 @@
 //! Configuration, check, mapping, template, judge, and egress errors.
 //!
 //! Messages name the evaluator kind, the field, the variable, the expression, the
-//! byte offset, the host, or serde's error category with its line and column.
-//! They never quote prompt text, check inputs, patterns, header values, URL paths
-//! or queries, judge answers, or other payload.
+//! byte offset, the host, the provider status, or serde's error category with its
+//! line and column. They never quote prompt text, check inputs, patterns, header
+//! values, URL paths or queries, judge answers, provider messages, or other payload.
 
 use llmobs_core::enums::ScoreDataType;
 use serde_json::error::Category;
@@ -178,9 +178,21 @@ pub enum TemplateError {
     },
 }
 
-/// A judge answer could not be turned into a score.
+/// How the eval queue should treat one failure (D160).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorClass {
+    /// Timeouts, connection failures, 408, 425, 429, and 5xx.
+    Retryable,
+    /// Authentication, quota, and a 403 that is not a content filter.
+    Pause,
+    /// Other 4xx, bad answers, refusals, and content filters.
+    Permanent,
+}
+
+/// A judge answer could not be turned into a score, or the provider call failed.
 ///
-/// No variant stores the answer text or the rejected value.
+/// No variant stores the prompt or the answer text. [`Self::Provider`] keeps the
+/// provider message for the UI and leaves it out of [`Display`](std::fmt::Display).
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum JudgeError {
     /// The model returned only whitespace.
@@ -215,6 +227,87 @@ pub enum JudgeError {
     /// A categorical answer matches none of the configured labels.
     #[error("unknown label")]
     UnknownLabel,
+    /// The model name cannot be placed in a URL or a request body.
+    #[error("invalid model name")]
+    InvalidModel,
+    /// An extra header name or value is not a valid HTTP header.
+    ///
+    /// The name and value are omitted.
+    #[error("invalid header")]
+    InvalidHeader,
+    /// The request body could not be encoded.
+    #[error("invalid request")]
+    InvalidRequest,
+    /// The model refused the prompt. The refusal text is discarded.
+    #[error("model refused")]
+    Refused,
+    /// The provider omitted the answer because of a content filter.
+    #[error("content filtered")]
+    ContentFiltered,
+    /// The provider stopped because the completion cap was reached.
+    #[error("response truncated")]
+    Truncated,
+    /// The provider returned a non-success status.
+    ///
+    /// `provider_message` is kept for the UI and is not part of [`Display`](std::fmt::Display).
+    #[error("provider status {status}")]
+    Provider {
+        /// HTTP status code.
+        status: u16,
+        /// Class derived from the status and the provider's type or code.
+        class: ErrorClass,
+        /// Provider error type, when it is a short token.
+        provider_type: Option<String>,
+        /// Provider error code, when it is a short token.
+        provider_code: Option<String>,
+        /// Provider error message, cut to 500 characters. Never logged.
+        provider_message: Option<String>,
+        /// Optional hint for the UI. Set by later modes.
+        hint: Option<&'static str>,
+    },
+    /// The HTTP client failed before a provider status was available.
+    #[error(transparent)]
+    Transport(#[from] EgressError),
+}
+
+impl EgressError {
+    /// Class for the eval queue. Timeouts and connection failures are retryable.
+    #[must_use]
+    pub fn class(&self) -> ErrorClass {
+        match self {
+            Self::Timeout | Self::Connect => ErrorClass::Retryable,
+            Self::Scheme | Self::Denied { .. } | Self::Request | Self::TooLarge { .. } => {
+                ErrorClass::Permanent
+            }
+        }
+    }
+}
+
+impl JudgeError {
+    /// Class for the eval queue (D160).
+    ///
+    /// Parse failures, refusals, content filters, and truncated answers are permanent.
+    /// [`Self::Provider`] returns the class stored when the status was read.
+    #[must_use]
+    pub fn class(&self) -> ErrorClass {
+        match self {
+            Self::Provider { class, .. } => *class,
+            Self::Transport(error) => error.class(),
+            Self::EmptyAnswer
+            | Self::NotJson
+            | Self::NotAnObject
+            | Self::MissingField { .. }
+            | Self::WrongType { .. }
+            | Self::OutOfRange { .. }
+            | Self::UnknownLabel
+            | Self::InvalidModel
+            | Self::InvalidHeader
+            | Self::InvalidRequest
+            | Self::Refused
+            | Self::ContentFiltered
+            | Self::Truncated => ErrorClass::Permanent,
+        }
+    }
 }
 
 /// An outbound judge or webhook call was refused or failed.
@@ -255,4 +348,41 @@ pub(crate) fn assert_no_payload(message: &str, payload: &str) {
         !message.contains(payload),
         "error text contains the planted payload"
     );
+}
+
+#[cfg(test)]
+mod class_tests {
+    use super::{EgressError, ErrorClass, JudgeError};
+
+    #[test]
+    fn classes_match_d160() {
+        assert_eq!(EgressError::Timeout.class(), ErrorClass::Retryable);
+        assert_eq!(EgressError::Connect.class(), ErrorClass::Retryable);
+        assert_eq!(EgressError::Scheme.class(), ErrorClass::Permanent);
+        assert_eq!(EgressError::Request.class(), ErrorClass::Permanent);
+        assert_eq!(
+            EgressError::TooLarge { limit: 4 }.class(),
+            ErrorClass::Permanent
+        );
+        assert_eq!(
+            EgressError::Denied {
+                host: "127.0.0.1".to_owned()
+            }
+            .class(),
+            ErrorClass::Permanent
+        );
+        assert_eq!(
+            JudgeError::Transport(EgressError::Connect).class(),
+            ErrorClass::Retryable
+        );
+        assert_eq!(JudgeError::Refused.class(), ErrorClass::Permanent);
+        assert_eq!(JudgeError::ContentFiltered.class(), ErrorClass::Permanent);
+        assert_eq!(JudgeError::Truncated.class(), ErrorClass::Permanent);
+        assert_eq!(JudgeError::InvalidModel.class(), ErrorClass::Permanent);
+        assert_eq!(JudgeError::EmptyAnswer.class(), ErrorClass::Permanent);
+        assert_eq!(
+            JudgeError::OutOfRange { min: 0.0, max: 1.0 }.class(),
+            ErrorClass::Permanent
+        );
+    }
 }

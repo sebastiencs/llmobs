@@ -27,4 +27,7 @@ uuid.workspace = true
 [dev-dependencies]
 axum.workspace = true
 insta.workspace = true
+# Integration tests name `Url` and JSON values directly.
+reqwest.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "time"] }

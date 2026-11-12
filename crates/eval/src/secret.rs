@@ -6,7 +6,7 @@
 use std::fmt;
 
 /// A secret string whose [`Debug`] output is `Secret([redacted])`.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Secret(String);
 
 impl Secret {

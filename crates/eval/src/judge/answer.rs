@@ -16,7 +16,7 @@ const EXPLANATION_CHARS: usize = 8_000;
 
 /// What an adapter received: tool-call arguments, or message text.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum RawAnswer {
+pub enum RawAnswer {
     /// A tool call's arguments, already a JSON object.
     Object(Map<String, Value>),
     /// Message text, which may wrap the object in prose or a fence.
