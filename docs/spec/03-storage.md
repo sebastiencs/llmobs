@@ -16,7 +16,7 @@ Configuration keys named in this spec (`wal.sync`, `flush.max_bytes`, …) live 
   wal/
     spans/00000000000000000042.wal
     scores/00000000000000000007.wal
-  tmp/                    query spill files
+  tmp/                    query spill files; tmp/compaction/ holds S3-mode compaction outputs being written
   cache/                  S3 read cache (§6), only with an S3 object store
   objects/                only when object store = local
     tables/<table>/project=<project_id>/day=<YYYY-MM-DD>/<level>-<uuidv7>.parquet
@@ -236,25 +236,36 @@ If a precondition fails, the transaction rolls back and the job gets a conflict:
 
 ## 5. Compaction
 
-Runs in a background task with bounded parallelism (`compaction.threads`, default `cores / 4`).
+A background task runs a **compaction pass** every `compaction.interval` (default 30 s). A pass looks at every `(table, project, day)` partition of `spans` and `scores` in the current catalog, picks at most one job per partition, and runs the jobs with at most `compaction.threads` (default `max(1, cores / 4)`) at a time. `traces` files are never compacted on their own: they follow their `spans` files (below).
 
-**Policy, per `(table, project, day)` partition:**
-- *L0 merge*: when the partition has ≥ 8 L0 files, or ≥ 512 MiB of L0, or its newest L0 file is older than 10 min. Inputs are all L0 files of the partition, plus an L1 file only if the merged output would be at least `compaction.size_ratio` (default 4) times that L1 file. A partition with one big L1 file and a trickle of L0 files therefore gets a second L1 file instead of rewriting the big one every few minutes. Inputs are merged in time order and the output is cut into L1 files of about `compaction.target_file_size` (default 512 MiB), each covering a contiguous time slice that does not overlap its neighbours; rows inside each output file are sorted by the table's sort order. (For `spans`, slice boundaries come from the input files' time ranges and a `start_time` histogram; each slice is then a k-way merge of the inputs' sorted runs by `trace_id, start_time`. A trace crossing a slice boundary is split across two files, which is fine.)
-- *Day close*: once the day has ended plus `compaction.close_delay` (default 2 h), the partition is rewritten into a minimal set. `spans` are fully merged when their total is at most `compaction.target_file_size`, otherwise only the L0 files are merged. `traces` are rebuilt from all of the partition's `spans` files, one partial per trace, `fully_merged = true`. `scores` are fully merged. A new L0 file in a closed day (late data) triggers another day close after `compaction.close_delay`.
+Times below are wall-clock nanoseconds (`now`). A file's age is `now` minus its `max_ingest_time`.
+
+**Policy, per partition.** A partition with any file claimed by a running job gets no job.
+- *Day close* is due when `now ≥ end of the partition day + compaction.close_delay` (default 2 h), the partition is not closed, and its newest L0 file, if any, is at least `compaction.close_delay` old. A partition is **closed** when:
+  - `spans`: it has no L0 file, and either it has at most one file or its files total more than `compaction.target_file_size` (default 512 MiB);
+  - `scores`: every file has `fully_merged = true`.
+
+  The day close job takes every file of the partition when their total is at most `compaction.target_file_size`, and for `scores` always. Otherwise (`spans` only) it takes only the L0 files. The outputs of a `spans` job that took every file of the partition, and of a `scores` day close, have `fully_merged = true`. A `scores` L0 merge never does, since it keeps deleted versions. A new L0 file in a closed day (late data) makes it not closed, so another day close runs after `compaction.close_delay`.
+- *L0 merge*, when no day close is due: when the partition has at least `compaction.l0_files` (default 8) L0 files, or at least `compaction.l0_bytes` (default 512 MiB) of L0, or at least two L0 files and the newest is at least `compaction.l0_age` (default 10 min) old. Inputs are all L0 files of the partition plus L1 files chosen by the **size ratio**: take the L1 files in increasing size order, and add each one while the output so far (the summed size of the inputs chosen) is at least `compaction.size_ratio` (default 4) times its size; stop at the first that fails. A partition with one big L1 file and a trickle of L0 files therefore gets a second L1 file instead of rewriting the big one every few minutes. A job needs at least two input files.
+
+**Slicing.** A job's output is cut into `n = max(1, ceil(input bytes / compaction.target_file_size))` L1 files, each holding one contiguous range of the table's time column (`start_time` for `spans`, `created_at` for `scores`). The boundaries are the time values at ranks `⌊len × i / n⌋` (i = 1 … n − 1) of the sorted time values of all input rows; equal boundaries collapse into one. A slice holds the rows with `lower ≤ time < upper`; the first slice has no lower bound and the last no upper bound. Each slice is a streaming k-way merge of the inputs' sorted runs (`spans`: `trace_id, start_time`; `scores`: `created_at`), filtered to the slice. A trace crossing a slice boundary is split across two files, which is fine.
 
 **During a merge:**
-- `spans`: duplicate `(trace_id, span_id)` rows are collapsed, keeping the greatest `ingest_time`.
-- `traces`: never merged on their own. The `traces` files derived from the `spans` inputs (§3) are replaced in the same commit by partials recomputed from the `spans` outputs. A trace whose spans end up in one file has `partial_count = 1`.
-- `scores`: last-writer-wins on `score_id` by `updated_at`. Rows with `deleted = true` are dropped **only during a day-close rewrite**, since that is the only time every version of the score is guaranteed to be among the inputs.
-- Tombstones (§7) are applied to every table. Outputs record the highest `deletion_seq` known when the job started.
+- `spans`: duplicate `(trace_id, span_id)` rows within a slice are collapsed, keeping the greatest `ingest_time` (the later row on a tie), as at flush. Two copies of a span whose `start_time`s fall in different slices both stay.
+- `traces`: each `spans` output gets its own `traces` output, computed from exactly its rows by the merge operator (one partial per trace, D152), at the same level and with the same `fully_merged`. The `traces` files derived from the `spans` inputs (§3) are removed in the same commit. A day that fully merges therefore ends with one `traces` file and `partial_count = 1` for every trace; a bigger day has one partial per trace and `spans` file the trace reaches (D-A1-1).
+- `scores`: last-writer-wins on `score_id`, keeping the greatest `(updated_at, ingest_time)` (the later row on a tie), as the `scores` view does. Rows with `deleted = true` are dropped **only by a day close**, which always takes every file of the partition: every version of a score shares its `created_at`, so they are all among the inputs.
+- Tombstones (§7) are applied to every table, and outputs record the highest `deletion_seq` known when the job started (M5).
 
 **Resources:**
-- A merge streams its inputs (one batch per input at a time) instead of sorting a whole slice in memory. Merge memory across running merges is capped by `compaction.max_memory` (default 1 GiB).
-- In local mode a merge first reserves its estimated output size (the sum of its input sizes) against free disk, and waits if it doesn't fit. Flushes don't reserve.
+- A merge streams its inputs (one batch per input at a time) instead of sorting a whole slice in memory. Merge memory across running jobs is capped by `compaction.max_memory` (default 1 GiB), a DataFusion memory pool of its own.
+- Each `spans` and `scores` output is written while it is merged, into a temp file, then published durably. On local disk the temp file sits in the target directory and is synced and renamed like any object write. With S3 it is `<data_dir>/tmp/compaction/<uuidv7>.parquet`, uploaded, then removed. `traces` outputs are small and are built in memory (D-A1-2).
+- Reserving disk before a merge is part of the disk-full handling of §10, not of compaction (D-A1-2).
 
-**Commit:** one catalog edit (§4) adds the outputs and marks the inputs `obsolete` with `obsoleted_at = now`. GC physically deletes an obsolete object once no `ReadState` still references it (reference counts on `FileMeta`) **and** `gc.grace` (default 5 min, at least the longest query timeout) has passed, which also covers restarts, when the counts are lost.
+**Commit:** one catalog edit (§4) adds the outputs (`spans` with their `traces`, or `scores`) and the `file_sources` rows of the new pairs, and marks the inputs and the `traces` files derived from them `obsolete` with `obsoleted_at` = the committer's wall clock at commit. Shutdown stops compaction between slices or before a commit, never inside one. The committer refuses an edit that removes a `spans` file without its active `traces` file, or a `traces` file without every one of its sources.
 
-**Crash safety:** an output written but never committed is still in `staged_objects`. GC deletes staged objects older than 1 h and their rows, so the bucket is never listed. In local mode, startup also removes leftover temp files.
+**GC of obsolete files.** Every 10 min, GC deletes an obsolete object and then its `data_files` row (its `file_sources` rows go with it), once `obsoleted_at + gc.grace ≤ now` (`gc.grace`, default 5 min, at least the longest query timeout) **and** no `ReadState` of this process still references the file (reference counts on `FileMeta`). After a restart the counts are gone and the grace alone decides.
+
+**Crash safety:** an output written but never committed is still in `staged_objects`. GC deletes staged objects older than 1 h and their rows, so the bucket is never listed. Startup removes leftover temp files: in the object directories in local mode, and in `<data_dir>/tmp/compaction/` in S3 mode. A job interrupted by a crash or a conflict is redone by a later pass.
 
 ## 6. Query path
 
@@ -390,7 +401,7 @@ Media blobs live under `media/<project_id>/<sha256>` in the object store; their 
 
 | Situation | Behaviour |
 |---|---|
-| Free disk under `storage.min_free_bytes` (default 2 GiB) | ingestion answers 503; compaction keeps running (it reclaims space) within its disk reservation (§5) |
+| Free disk under `storage.min_free_bytes` (default 2 GiB) | ingestion answers 503; compaction keeps running (it reclaims space). In local mode a compaction job first reserves its estimated output size (the sum of its input sizes) against free disk, and waits while it doesn't fit; flushes don't reserve (§5, D-A1-2, implemented with the rest of this row in M6) |
 | WAL write or fsync error | pending and new appends fail with `WalFailed` (503), health reports it, restart required (§1) |
 | Object store errors during flush | retry after 1 s, doubling up to 60 s (§2), while the memtable keeps the data and backpressure applies past the hard limit |
 | Ambiguous upload (error reported, object may exist) | retried under a new name; the old one is collected from `staged_objects` (§2) |
