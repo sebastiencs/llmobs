@@ -2642,6 +2642,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "llmobs-eval"
+version = "0.0.0"
+dependencies = [
+ "insta",
+ "llmobs-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "llmobs-otel"
 version = "0.0.0"
 dependencies = [

@@ -34,6 +34,7 @@ inefficient_to_string = "warn"
 [workspace.dependencies]
 # workspace crates
 llmobs-core = { path = "crates/core" }
+llmobs-eval = { path = "crates/eval" }
 llmobs-otel = { path = "crates/otel" }
 llmobs-storage = { path = "crates/storage" }
 llmobs-server = { path = "crates/server" }
