@@ -18,6 +18,10 @@
       "types": "./dist/anthropic.d.ts",
       "default": "./dist/anthropic.js"
     },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "default": "./dist/browser.js"
+    },
     "./langchain": {
       "types": "./dist/langchain.d.ts",
       "default": "./dist/langchain.js"

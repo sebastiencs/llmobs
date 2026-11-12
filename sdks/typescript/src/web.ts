@@ -93,3 +93,24 @@ export function utf8Decode(bytes: Uint8Array): string {
   }
   return new TextDecoder().decode(bytes);
 }
+
+const BRACKET_HOST = /^\[[0-9A-Fa-f:.]+\](?::[0-9]*)?$/;
+
+/** `http(s)://` plus a host. No DOM `URL` in this build. */
+export function hasHttpAuthority(value: string): boolean {
+  const match = /^(https?):\/\/([^/?#]+)/i.exec(value);
+  const authority = match?.[2];
+  if (authority === undefined || authority === "") {
+    return false;
+  }
+  const at = authority.lastIndexOf("@");
+  const host = at === -1 ? authority : authority.slice(at + 1);
+  if (host.startsWith("[")) {
+    return BRACKET_HOST.test(host);
+  }
+  if (host.includes("[") || host.includes("]")) {
+    return false;
+  }
+  const name = host.split(":", 1)[0];
+  return name !== undefined && name !== "";
+}

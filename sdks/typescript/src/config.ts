@@ -9,7 +9,7 @@ import type { ReadableSpan } from "@opentelemetry/sdk-trace";
 
 import type { Instrumentation } from "./instrument.js";
 import { warnOnce } from "./log.js";
-import { runtimeGlobals } from "./web.js";
+import { hasHttpAuthority, runtimeGlobals } from "./web.js";
 
 const ENV_PREFIX = "LLMOBS_";
 const ENV_API_KEY = `${ENV_PREFIX}API_KEY`;
@@ -235,7 +235,6 @@ function resolveBaseUrl(value: unknown, source: Env): string {
 }
 
 const SAMPLE_RATE_ENV = /^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$/;
-const BRACKET_HOST = /^\[[0-9A-Fa-f:.]+\](?::[0-9]*)?$/;
 
 function checkBaseUrl(value: unknown, name: string): string {
   if (typeof value !== "string" || !hasHttpAuthority(value)) {
@@ -250,25 +249,6 @@ function checkBaseUrl(value: unknown, name: string): string {
     throw new ConfigError(name, "must not include a query or fragment");
   }
   return value.replace(/\/+$/, "");
-}
-
-/** `http(s)://` plus a host. No DOM `URL` in this build. */
-function hasHttpAuthority(value: string): boolean {
-  const match = /^(https?):\/\/([^/?#]+)/i.exec(value);
-  const authority = match?.[2];
-  if (authority === undefined || authority === "") {
-    return false;
-  }
-  const at = authority.lastIndexOf("@");
-  const host = at === -1 ? authority : authority.slice(at + 1);
-  if (host.startsWith("[")) {
-    return BRACKET_HOST.test(host);
-  }
-  if (host.includes("[") || host.includes("]")) {
-    return false;
-  }
-  const name = host.split(":", 1)[0];
-  return name !== undefined && name !== "";
 }
 
 function resolveEnvironment(value: unknown, source: Env): string | undefined {
