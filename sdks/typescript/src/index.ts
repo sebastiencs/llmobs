@@ -1,5 +1,11 @@
 export { ConfigError, type LlmobsOptions } from "./config.js";
 export { type ContextOptions, withContext } from "./context.js";
+export {
+  type LlmSpanHandle,
+  type LlmSpanOptions,
+  type Usage,
+  withLlmSpan,
+} from "./llm.js";
 export { flush, init, shutdown, spanProcessor, tracerProvider } from "./runtime.js";
 export {
   currentSpanId,
