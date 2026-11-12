@@ -7,6 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use arrow::error::ArrowError;
+use uuid::Uuid;
 
 /// A `[storage]` value failed a parse or a bound check.
 ///
@@ -204,7 +205,8 @@ impl WalError {
 
 /// Opening or reading `catalog.db` failed.
 ///
-/// `what` is a static description. The message never includes a cell value.
+/// `Corrupt` uses a static description; `SourcesInvariant` names the offending
+/// file id. Neither carries row content, attribute values or secrets.
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
     /// The database file could not be opened.
@@ -235,6 +237,12 @@ pub enum CatalogError {
     Corrupt {
         /// Static description, for example `unknown table_name`.
         what: &'static str,
+    },
+    /// Spec 03 §3's `file_sources` invariant failed for one file.
+    #[error("catalog file_sources invariant: file {file}")]
+    SourcesInvariant {
+        /// The offending `data_files.id`.
+        file: Uuid,
     },
 }
 

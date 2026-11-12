@@ -129,7 +129,7 @@ A failure in steps 2–5 keeps `frozen` and retries that same view under new fil
 | Statistics | page-level for all scalar columns |
 | Dictionary | on for dictionary-typed columns; off for `input`, `output`, `attributes` |
 | Bloom filters | `trace_id`, `session_id`, `user_id` (fpp 0.01) on `spans`; `trace_id`, `session_id`, `user_id` on `traces`; `trace_id`, `score_id` on `scores` |
-| Sort order (within a file) | `spans`: `trace_id, start_time` · `traces`: `start_time` · `scores`: `created_at` (declared in file metadata so DataFusion can exploit it; declared only because the writer sorted) |
+| Sort order (within a file) | `spans`: `trace_id, start_time` · `traces`: `start_time, trace_id` (the `trace_id` tie-break makes files byte-identical across runs) · `scores`: `created_at` (declared in file metadata so DataFusion can exploit it; declared only because the writer sorted) |
 | Time slicing (across files) | every file covers a contiguous `[min_time, max_time]` slice; see below |
 | KV metadata | `llmobs.table`, `llmobs.schema_version`, `llmobs.level`, `llmobs.min_time`, `llmobs.max_time`, `llmobs.min_ingest_time`, `llmobs.max_ingest_time` |
 

@@ -15,7 +15,7 @@ use sqlx::{Connection, SqliteConnection};
 use tokio::sync::Mutex;
 
 use super::db::{TableState, load, open_catalog_db};
-use super::{Catalog, FileId, FileMeta, FileState, table_index};
+use super::{Catalog, FileId, FileMeta, FileState, FileTable, table_index};
 use crate::error::{CatalogError, CommitError, GcError};
 use crate::hooks::{HookPoint, Hooks};
 use crate::wal::Table;
@@ -29,6 +29,11 @@ pub(crate) struct CatalogEdit {
     pub remove: Vec<(FileId, FileState)>,
     /// Compare-and-set. `Some` must be greater than the stored sequence.
     pub flushed_seq: Option<(Table, u64)>,
+    /// `(traces file, spans file)` pairs for `file_sources` (D88).
+    ///
+    /// The traces file must be in `add` with table `Traces`; the spans file
+    /// must be in `add` with table `Spans` or already be an active `spans` row.
+    pub sources: Vec<(FileId, FileId)>,
 }
 
 struct CommitterInner {
@@ -298,12 +303,52 @@ async fn write_edit(
             ));
         }
     }
+    for (traces, spans) in &edit.sources {
+        let traces_added = edit
+            .add
+            .iter()
+            .any(|file| file.id == *traces && file.table == FileTable::Traces);
+        if !traces_added {
+            return Err(CommitError::conflict(
+                "source traces file is not added as a traces file",
+            ));
+        }
+        let spans_added = edit
+            .add
+            .iter()
+            .any(|file| file.id == *spans && file.table == FileTable::Spans);
+        if spans_added {
+            continue;
+        }
+        let current: Option<(String, String)> =
+            sqlx::query_as("SELECT table_name, state FROM data_files WHERE id = ?")
+                .bind(spans.to_string())
+                .fetch_optional(&mut *connection)
+                .await
+                .map_err(CommitError::db)?;
+        match current {
+            Some((table, state)) if table == "spans" && state == "active" => {}
+            _ => {
+                return Err(CommitError::conflict(
+                    "source spans file is not an active spans file",
+                ));
+            }
+        }
+    }
 
     let created_at = now_ns();
     for file in &edit.add {
         insert_file(connection, file, created_at).await?;
         sqlx::query("DELETE FROM staged_objects WHERE path = ?")
             .bind(&file.path)
+            .execute(&mut *connection)
+            .await
+            .map_err(CommitError::db)?;
+    }
+    for (traces, spans) in &edit.sources {
+        sqlx::query("INSERT INTO file_sources (traces_file_id, spans_file_id) VALUES (?, ?)")
+            .bind(traces.to_string())
+            .bind(spans.to_string())
             .execute(&mut *connection)
             .await
             .map_err(CommitError::db)?;
@@ -348,7 +393,7 @@ async fn insert_file(
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
     )
     .bind(file.id.to_string())
-    .bind(file.table.name())
+    .bind(file.table.as_str())
     .bind(file.project.to_string())
     .bind(file.day.format("%Y-%m-%d").to_string())
     .bind(i64::from(file.level))
@@ -393,7 +438,7 @@ mod tests {
     }
 
     fn file(
-        table: Table,
+        table: FileTable,
         project: ProjectId,
         day: NaiveDate,
         min_time: i64,
@@ -404,7 +449,7 @@ mod tests {
             table,
             project,
             day,
-            level: if table == Table::Scores { 1 } else { 0 },
+            level: if table == FileTable::Scores { 1 } else { 0 },
             path: path.to_owned(),
             size: 128,
             footer_size: 16,
@@ -413,7 +458,7 @@ mod tests {
             max_time: min_time + 10,
             min_ingest_time: min_time + 1,
             max_ingest_time: min_time + 11,
-            fully_merged: table == Table::Scores,
+            fully_merged: table == FileTable::Scores,
         }
     }
 
@@ -465,7 +510,7 @@ mod tests {
             .fetch_one(&mut again)
             .await
             .unwrap();
-        assert_eq!(migrations, 1);
+        assert_eq!(migrations, 2);
         let indexes: Vec<String> = sqlx::query_scalar(
             "SELECT name FROM sqlite_master
              WHERE type = 'index' AND name LIKE 'data_files_%'
@@ -494,13 +539,14 @@ mod tests {
         let (dir, committer) = opened().await;
         let spans_project = project("018f6b4e-7c1a-7c1a-8c1a-000000000001");
         let scores_project = project("018f6b4e-7c1a-7c1a-8c1a-000000000002");
-        let later = file(Table::Spans, spans_project, day(2), 20, "spans/later");
-        let earlier = file(Table::Spans, spans_project, day(2), 10, "spans/earlier");
-        let scores = file(Table::Scores, scores_project, day(3), 5, "scores/one");
+        let later = file(FileTable::Spans, spans_project, day(2), 20, "spans/later");
+        let earlier = file(FileTable::Spans, spans_project, day(2), 10, "spans/earlier");
+        let scores = file(FileTable::Scores, scores_project, day(3), 5, "scores/one");
         let edit = CatalogEdit {
             add: vec![later, earlier, scores],
             remove: Vec::new(),
             flushed_seq: Some((Table::Spans, 4)),
+            sources: Vec::new(),
         };
         committer
             .stage(
@@ -514,13 +560,13 @@ mod tests {
             .unwrap();
         let published = committer.commit(&edit, |_| {}).await.unwrap();
         let times: Vec<_> = published
-            .files(Table::Spans, spans_project, day(2)..=day(2))
+            .files(FileTable::Spans, spans_project, day(2)..=day(2))
             .map(|file| file.min_time)
             .collect();
         assert_eq!(times, vec![10, 20]);
         assert_eq!(
             published
-                .files(Table::Scores, scores_project, day(3)..=day(3))
+                .files(FileTable::Scores, scores_project, day(3)..=day(3))
                 .count(),
             1
         );
@@ -538,18 +584,20 @@ mod tests {
         let (_dir, committer) = opened().await;
         let left = project("018f6b4e-7c1a-7c1a-8c1a-000000000011");
         let right = project("018f6b4e-7c1a-7c1a-8c1a-000000000012");
-        let first = file(Table::Spans, left, day(1), 1, "left");
-        let second = file(Table::Spans, right, day(1), 1, "right");
+        let first = file(FileTable::Spans, left, day(1), 1, "left");
+        let second = file(FileTable::Spans, right, day(1), 1, "right");
         for edit in [
             CatalogEdit {
                 add: vec![first],
                 remove: Vec::new(),
                 flushed_seq: None,
+                sources: Vec::new(),
             },
             CatalogEdit {
                 add: vec![second],
                 remove: Vec::new(),
                 flushed_seq: None,
+                sources: Vec::new(),
             },
         ] {
             committer.stage(&[edit.add[0].path.clone()]).await.unwrap();
@@ -557,11 +605,12 @@ mod tests {
         }
         let before = committer.catalog().await;
         let left_map = Arc::clone(before.tables[0].get(&left).unwrap());
-        let extra = file(Table::Spans, right, day(2), 2, "right-again");
+        let extra = file(FileTable::Spans, right, day(2), 2, "right-again");
         let edit = CatalogEdit {
             add: vec![extra],
             remove: Vec::new(),
             flushed_seq: None,
+            sources: Vec::new(),
         };
         committer.stage(&["right-again".to_owned()]).await.unwrap();
         let after = committer.commit(&edit, |_| {}).await.unwrap();
@@ -572,12 +621,13 @@ mod tests {
     async fn remove_marks_the_file_obsolete() {
         let (dir, committer) = opened().await;
         let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000021");
-        let meta = file(Table::Spans, spans, day(1), 1, "doomed");
+        let meta = file(FileTable::Spans, spans, day(1), 1, "doomed");
         let id = meta.id;
         let edit = CatalogEdit {
             add: vec![meta],
             remove: Vec::new(),
             flushed_seq: None,
+            sources: Vec::new(),
         };
         committer.stage(&["doomed".to_owned()]).await.unwrap();
         committer.commit(&edit, |_| {}).await.unwrap();
@@ -585,11 +635,12 @@ mod tests {
             add: Vec::new(),
             remove: vec![(id, FileState::Active)],
             flushed_seq: None,
+            sources: Vec::new(),
         };
         let published = committer.commit(&remove, |_| {}).await.unwrap();
         assert!(
             published
-                .files(Table::Spans, spans, day(1)..=day(1))
+                .files(FileTable::Spans, spans, day(1)..=day(1))
                 .next()
                 .is_none()
         );
@@ -612,21 +663,23 @@ mod tests {
     async fn conflicts_roll_back_and_leave_memory_unchanged() {
         let (dir, committer) = opened().await;
         let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000031");
-        let kept = file(Table::Spans, spans, day(1), 1, "kept");
+        let kept = file(FileTable::Spans, spans, day(1), 1, "kept");
         let id = kept.id;
         committer.stage(&["kept".to_owned()]).await.unwrap();
         let added = CatalogEdit {
             add: vec![kept],
             remove: Vec::new(),
             flushed_seq: Some((Table::Spans, 3)),
+            sources: Vec::new(),
         };
         committer.commit(&added, |_| {}).await.unwrap();
         let before = committer.catalog().await;
 
         let missing = CatalogEdit {
-            add: vec![file(Table::Spans, spans, day(1), 2, "missing")],
+            add: vec![file(FileTable::Spans, spans, day(1), 2, "missing")],
             remove: Vec::new(),
             flushed_seq: Some((Table::Spans, 4)),
+            sources: Vec::new(),
         };
         let error = committer.commit(&missing, |_| {}).await.unwrap_err();
         assert!(matches!(
@@ -640,6 +693,7 @@ mod tests {
             add: Vec::new(),
             remove: vec![(id, FileState::Obsolete)],
             flushed_seq: Some((Table::Spans, 4)),
+            sources: Vec::new(),
         };
         let error = committer.commit(&wrong, |_| {}).await.unwrap_err();
         assert!(matches!(
@@ -654,6 +708,7 @@ mod tests {
             add: Vec::new(),
             remove: Vec::new(),
             flushed_seq: Some((Table::Spans, 3)),
+            sources: Vec::new(),
         };
         let error = committer.commit(&behind, |_| {}).await.unwrap_err();
         assert!(matches!(
@@ -687,13 +742,14 @@ mod tests {
         let hooks = Hooks::default();
         let committer = Committer::open(dir.path(), hooks.clone()).await.unwrap();
         let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000041");
-        let meta = file(Table::Spans, spans, day(1), 1, "faulty");
+        let meta = file(FileTable::Spans, spans, day(1), 1, "faulty");
         committer.stage(&["faulty".to_owned()]).await.unwrap();
         hooks.arm_fail(HookPoint::CatalogCommit);
         let edit = CatalogEdit {
             add: vec![meta],
             remove: Vec::new(),
             flushed_seq: Some((Table::Spans, 1)),
+            sources: Vec::new(),
         };
         let before = committer.catalog().await;
         let error = committer.commit(&edit, |_| {}).await.unwrap_err();
@@ -774,7 +830,7 @@ mod tests {
             tasks.push(tokio::spawn(async move {
                 let path = format!("objects/{index}");
                 let meta = file(
-                    Table::Spans,
+                    FileTable::Spans,
                     project("018f6b4e-7c1a-7c1a-8c1a-000000000061"),
                     day(1 + index),
                     i64::from(index),
@@ -786,6 +842,7 @@ mod tests {
                     add: vec![meta],
                     remove: Vec::new(),
                     flushed_seq: None,
+                    sources: Vec::new(),
                 };
                 committer
                     .commit(&edit, {
@@ -825,5 +882,117 @@ mod tests {
         let mut connection = open_catalog_db(dir.path()).await.unwrap();
         let (loaded, _) = load(&mut connection).await.unwrap();
         assert_eq!(ids(&loaded), expected);
+    }
+
+    async fn sources(connection: &mut SqliteConnection) -> Vec<(String, String)> {
+        sqlx::query_as("SELECT traces_file_id, spans_file_id FROM file_sources")
+            .fetch_all(&mut *connection)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_commit_with_sources_inserts_its_rows() {
+        let (dir, committer) = opened().await;
+        let project = project("018f6b4e-7c1a-7c1a-8c1a-000000000071");
+        let spans = file(FileTable::Spans, project, day(1), 1, "spans/sourced");
+        let traces = file(FileTable::Traces, project, day(1), 1, "traces/sourced");
+        let spans_id = spans.id;
+        let traces_id = traces.id;
+        let edit = CatalogEdit {
+            add: vec![spans, traces],
+            remove: Vec::new(),
+            flushed_seq: None,
+            sources: vec![(traces_id, spans_id)],
+        };
+        committer
+            .stage(&["spans/sourced".to_owned(), "traces/sourced".to_owned()])
+            .await
+            .unwrap();
+        committer.commit(&edit, |_| {}).await.unwrap();
+
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        assert_eq!(
+            sources(&mut connection).await,
+            vec![(traces_id.to_string(), spans_id.to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_source_can_point_at_an_already_active_spans_file() {
+        let (dir, committer) = opened().await;
+        let project = project("018f6b4e-7c1a-7c1a-8c1a-000000000072");
+        let spans = file(FileTable::Spans, project, day(1), 1, "spans/active");
+        let spans_id = spans.id;
+        let first = CatalogEdit {
+            add: vec![spans],
+            remove: Vec::new(),
+            flushed_seq: None,
+            sources: Vec::new(),
+        };
+        committer.stage(&["spans/active".to_owned()]).await.unwrap();
+        committer.commit(&first, |_| {}).await.unwrap();
+
+        let traces = file(FileTable::Traces, project, day(1), 1, "traces/derived");
+        let traces_id = traces.id;
+        let second = CatalogEdit {
+            add: vec![traces],
+            remove: Vec::new(),
+            flushed_seq: None,
+            sources: vec![(traces_id, spans_id)],
+        };
+        committer
+            .stage(&["traces/derived".to_owned()])
+            .await
+            .unwrap();
+        committer.commit(&second, |_| {}).await.unwrap();
+
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        assert_eq!(
+            sources(&mut connection).await,
+            vec![(traces_id.to_string(), spans_id.to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn sources_with_unknown_files_are_conflicts() {
+        for (traces_in_add, reason) in [
+            (true, "source spans file is not an active spans file"),
+            (false, "source traces file is not added as a traces file"),
+        ] {
+            let (dir, committer) = opened().await;
+            let project = project("018f6b4e-7c1a-7c1a-8c1a-000000000073");
+            let traces = file(FileTable::Traces, project, day(1), 1, "traces/orphan");
+            let traces_id = traces.id;
+            let unknown = FileId::new_v7();
+            let edit = CatalogEdit {
+                add: if traces_in_add {
+                    vec![traces]
+                } else {
+                    Vec::new()
+                },
+                remove: Vec::new(),
+                flushed_seq: None,
+                sources: vec![(traces_id, unknown)],
+            };
+            committer
+                .stage(&["traces/orphan".to_owned()])
+                .await
+                .unwrap();
+            let error = committer.commit(&edit, |_| {}).await.unwrap_err();
+            assert!(
+                matches!(error, CommitError::Conflict { reason: got } if got == reason),
+                "{error}"
+            );
+
+            let mut connection = open_catalog_db(dir.path()).await.unwrap();
+            assert!(sources(&mut connection).await.is_empty());
+            let active: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM data_files WHERE state = 'active'")
+                    .fetch_one(&mut connection)
+                    .await
+                    .unwrap();
+            assert_eq!(active, 0);
+        }
     }
 }

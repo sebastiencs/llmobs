@@ -27,11 +27,11 @@ use object_store::prefix::PrefixStore;
 use object_store::{MultipartUpload, ObjectStore, ObjectStoreExt, PutPayload};
 use uuid::Uuid;
 
-use crate::catalog::FileId;
+use crate::catalog::{FileId, FileTable};
 use crate::config::{ObjectStoreUrl, S3Config, StorageConfig};
 use crate::error::ObjectError;
 use crate::hooks::{HookPoint, Hooks};
-use crate::wal::{self, Table};
+use crate::wal;
 
 /// DataFusion keys a registered store by scheme, host, and port. The path is
 /// not part of that key, and [`RegisteredUrl::parse`] rejects any path other
@@ -125,7 +125,7 @@ impl Objects {
     ///
     /// This is the only path formatter. `level` is `0` or `1`.
     pub(crate) fn table_file_path(
-        table: Table,
+        table: FileTable,
         project: ProjectId,
         day: NaiveDate,
         level: u8,
@@ -133,7 +133,7 @@ impl Objects {
         let id = FileId::new_v7();
         let path = format!(
             "tables/{}/project={project}/day={}/{level}-{id}.parquet",
-            table.name(),
+            table.as_str(),
             day.format("%Y-%m-%d"),
         );
         (path, id)
@@ -493,6 +493,7 @@ mod tests {
     use object_store::memory::InMemory;
 
     use super::{MULTIPART_PART, OBJECT_STORE_URL, SINGLE_PUT_MAX, is_temp_name};
+    use crate::catalog::FileTable;
     use crate::config::{
         FlushConfig, MemtableConfig, ObjectStoreUrl, QueryConfig, S3Config, StorageConfig,
         WalConfig,
@@ -501,7 +502,6 @@ mod tests {
     use crate::hooks::{HookPoint, Hooks};
     use crate::objects::Objects;
     use crate::test_support::{FaultKind, FaultStore};
-    use crate::wal::Table;
 
     fn local_config(dir: &std::path::Path) -> StorageConfig {
         StorageConfig {
@@ -560,7 +560,7 @@ mod tests {
         let objects = Objects::new(&local_config(dir.path()), hooks.clone())
             .await
             .unwrap();
-        let (key, id) = Objects::table_file_path(Table::Spans, project(), day(), 0);
+        let (key, id) = Objects::table_file_path(FileTable::Spans, project(), day(), 0);
         let bytes = Bytes::from_static(b"parquet-bytes");
         objects.put_durable(&key, bytes.clone()).await.unwrap();
 
@@ -603,7 +603,7 @@ mod tests {
                 .await
                 .unwrap();
             hooks.arm_fail(point);
-            let (key, _) = Objects::table_file_path(Table::Scores, project(), day(), 1);
+            let (key, _) = Objects::table_file_path(FileTable::Scores, project(), day(), 1);
             let error = objects
                 .put_durable(&key, Bytes::from_static(b"nope"))
                 .await
@@ -700,8 +700,8 @@ mod tests {
 
     #[test]
     fn table_file_path_matches_the_layout_and_is_unique() {
-        let (first, first_id) = Objects::table_file_path(Table::Spans, project(), day(), 0);
-        let (second, second_id) = Objects::table_file_path(Table::Spans, project(), day(), 0);
+        let (first, first_id) = Objects::table_file_path(FileTable::Spans, project(), day(), 0);
+        let (second, second_id) = Objects::table_file_path(FileTable::Spans, project(), day(), 0);
         assert_ne!(first_id, second_id);
         assert_ne!(first, second);
         assert_eq!(
@@ -711,7 +711,7 @@ mod tests {
                 project()
             )
         );
-        let (scores, score_id) = Objects::table_file_path(Table::Scores, project(), day(), 1);
+        let (scores, score_id) = Objects::table_file_path(FileTable::Scores, project(), day(), 1);
         assert_eq!(
             scores,
             format!(
@@ -737,7 +737,7 @@ mod tests {
                 "{key:?} -> {error}"
             );
         }
-        let (key, _) = Objects::table_file_path(Table::Spans, project(), day(), 0);
+        let (key, _) = Objects::table_file_path(FileTable::Spans, project(), day(), 0);
         objects
             .put_durable(&key, Bytes::from_static(b"keep"))
             .await

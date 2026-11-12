@@ -19,7 +19,7 @@ use bytes::Bytes;
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
 
-use crate::catalog::{Catalog, CatalogEdit, Committer, FileMeta};
+use crate::catalog::{Catalog, CatalogEdit, Committer, FileMeta, FileTable};
 use crate::error::FlushError;
 use crate::hooks::{HookPoint, Hooks};
 use crate::memtable::{FrozenView, MemBatch, Memtable};
@@ -311,6 +311,7 @@ async fn flush_once(params: &FlushParams) -> Result<Option<u64>, FlushError> {
         add: prepared.into_iter().map(|file| file.meta).collect(),
         remove: Vec::new(),
         flushed_seq: Some((params.table, max_seq)),
+        sources: Vec::new(),
     };
     let published = Arc::clone(&params.published);
     let shared = Arc::clone(&params.shared);
@@ -376,6 +377,7 @@ fn publish_flush(
 }
 
 fn prepare(table: Table, view: &FrozenView) -> Result<Vec<PreparedFile>, FlushError> {
+    let file_table = FileTable::from(table);
     let mut files = Vec::new();
     for (key, batches) in view.partitions.iter() {
         if batches.is_empty() {
@@ -384,22 +386,22 @@ fn prepare(table: Table, view: &FrozenView) -> Result<Vec<PreparedFile>, FlushEr
         let written = match table {
             Table::Spans => {
                 let batch = dedup_spans(batches)?;
-                write_file(table, 0, &[Arc::new(batch)]).map_err(FlushError::prepare)?
+                write_file(file_table, 0, &[Arc::new(batch)]).map_err(FlushError::prepare)?
             }
             Table::Scores => {
                 let refs: Vec<Arc<RecordBatch>> = batches
                     .iter()
                     .map(|batch| Arc::clone(&batch.batch))
                     .collect();
-                write_file(table, 0, &refs).map_err(FlushError::prepare)?
+                write_file(file_table, 0, &refs).map_err(FlushError::prepare)?
             }
         };
-        let (path, id) = Objects::table_file_path(table, key.project, key.day, 0);
+        let (path, id) = Objects::table_file_path(file_table, key.project, key.day, 0);
         let size = u64::try_from(written.bytes.len()).unwrap_or(u64::MAX);
         files.push(PreparedFile {
             meta: FileMeta {
                 id,
-                table,
+                table: file_table,
                 project: key.project,
                 day: key.day,
                 level: 0,

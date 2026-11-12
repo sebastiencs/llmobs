@@ -506,7 +506,10 @@ impl Storage {
     /// Active catalog files for `table`.
     #[cfg(test)]
     fn catalog_files(&self, table: Table) -> Vec<Arc<catalog::FileMeta>> {
-        self.published.load().catalog.test_files(table)
+        self.published
+            .load()
+            .catalog
+            .test_files(catalog::FileTable::from(table))
     }
 
     /// Rows in the active catalog files of `table`.

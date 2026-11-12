@@ -33,7 +33,7 @@ use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_datasource::source::DataSourceExec;
 use llmobs_core::ids::ProjectId;
 
-use crate::catalog::{Catalog, FileMeta};
+use crate::catalog::{Catalog, FileMeta, FileTable};
 use crate::memtable::{MemBatch, MemSnapshot};
 use crate::objects::OBJECT_STORE_URL;
 use crate::wal::Table;
@@ -319,7 +319,7 @@ pub(crate) fn overlapping_files(
         return Vec::new();
     }
     catalog
-        .files(table, project, day_range(&bounds))
+        .files(FileTable::from(table), project, day_range(&bounds))
         .filter(|file| file_overlaps(file, &bounds))
         .cloned()
         .collect()
