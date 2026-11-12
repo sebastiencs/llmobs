@@ -12,6 +12,7 @@
       "service_name": "capture-app",
       "provider": "anthropic",
       "request_model": "claude-sonnet-4-5",
+      "response_model": "claude-sonnet-4-5",
       "input_tokens": 2100,
       "output_tokens": 40,
       "cache_read_tokens": 1800,

@@ -27,6 +27,7 @@ const REQUEST_MODEL: &[Source] = &[
 const RESPONSE_MODEL: &[Source] = &[
     span("gen_ai.response.model", Convention::Genai),
     span("ai.response.model", Convention::Vercel),
+    span("llm.response.model_name", Convention::Openinference),
 ];
 
 const PROVIDER: &[Source] = &[
