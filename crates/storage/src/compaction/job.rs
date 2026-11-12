@@ -1397,4 +1397,91 @@ mod tests {
     fn hex_noise(seed: u64, width: usize) -> HexNoise {
         HexNoise { state: seed, width }
     }
+
+    /// The M4 exit criterion: a day of steady ingest is rewritten once by the
+    /// L0 merges and once by the day close, and never again.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn write_amplification_of_a_synthetic_day() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_in(dir.path(), quiet_compaction(8), Duration::from_secs(3_600));
+        config.compaction.target_file_size = bytesize::ByteSize::mib(64);
+        config.compaction.l0_bytes = bytesize::ByteSize::mib(64);
+        let wa_policy = policy(8, 64 * 1024 * 1024);
+        let mut storage = Storage::open(config.clone()).await.unwrap();
+
+        // Day D in 48 half-hour steps. Each step appends 40 traces × 10 spans
+        // with 200 hex characters of input per span, so the files are not
+        // mostly Parquet overhead.
+        let mut noise = hex_noise(1, 200);
+        let mut flushed = 0_u64;
+        let mut rewritten = 0_u64;
+        for step in 0..48_u16 {
+            let step_start = at(0, 0, 0) + i64::from(step) * 1_800 * 1_000_000_000;
+            let mut spans = Vec::with_capacity(400);
+            for trace in 0..40_u16 {
+                for span in 0..10_u8 {
+                    // 400 spans spread over the half hour, 4.5 s apart, so the
+                    // newest row of a step is seconds old when it compacts.
+                    let start =
+                        step_start + (i64::from(trace) * 10 + i64::from(span)) * 4_500_000_000;
+                    let mut row = span_row(step * 40 + trace, span, start, start + 1_000_000_000);
+                    row.input = Some(noise.next().unwrap_or_default());
+                    spans.push(row);
+                }
+            }
+            storage = flush_cycle(&config, storage, span_rows(&spans)).await;
+            storage.set_policy(wa_policy);
+            // L0 files accumulate between merges; this step's file is the
+            // newest by `max_ingest_time`.
+            let new_file = storage
+                .catalog_files(crate::wal::Table::Spans)
+                .into_iter()
+                .filter(|file| file.level == 0)
+                .max_by_key(|file| file.max_ingest_time)
+                .expect("an L0 file per step");
+            flushed = flushed.saturating_add(new_file.size);
+
+            let now = step_start + 1_800 * 1_000_000_000 + 1_000_000_000;
+            let report = storage.compact(now).await.unwrap();
+            assert_eq!(report.failed, 0, "{report:?}");
+            rewritten = rewritten.saturating_add(report.spans_output_bytes);
+        }
+
+        let l1_before_close = storage
+            .catalog_files(crate::wal::Table::Spans)
+            .into_iter()
+            .filter(|file| file.level == 1)
+            .count();
+        // One day close of every L1 file.
+        let close_at = midnight(day().succ_opt().unwrap()) + (2 * 3_600) * 1_000_000_000 + 1;
+        for _ in 0..10 {
+            let report = storage.compact(close_at).await.unwrap();
+            assert_eq!(report.failed, 0, "{report:?}");
+            rewritten = rewritten.saturating_add(report.spans_output_bytes);
+            if report.jobs == 0 {
+                break;
+            }
+        }
+
+        let files = storage.catalog_files(crate::wal::Table::Spans);
+        let wa = rewritten as f64 / flushed as f64;
+        println!(
+            "write amplification: flushed {flushed} B, rewritten {rewritten} B, wa {wa:.2}, \
+             L1 files before close {l1_before_close}, spans files after {}",
+            files.len()
+        );
+        assert_eq!(l1_before_close, 6);
+        assert!(wa <= 3.0, "write amplification {wa:.2} exceeds 3");
+        assert_eq!(files.len(), 1, "exactly one spans file remains");
+        assert_eq!(files[0].level, 1);
+        assert!(files[0].fully_merged);
+
+        let spans = spans_rows(&storage).await;
+        assert_eq!(spans.len(), 48 * 400, "every span present once");
+        let mut seen = std::collections::HashSet::new();
+        for row in &spans {
+            assert!(seen.insert(row.clone()), "a span appears twice: {row:?}");
+        }
+        storage.shutdown().await.unwrap();
+    }
 }
