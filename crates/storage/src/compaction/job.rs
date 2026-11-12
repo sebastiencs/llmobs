@@ -1325,6 +1325,10 @@ mod tests {
         assert!(files.iter().any(|file| file.level == 0), "{files:?}");
         let spans = spans_rows(&storage).await;
         assert_eq!(spans.len(), 3, "{spans:?}");
+        let mut seen = std::collections::HashSet::new();
+        for row in &spans {
+            assert!(seen.insert(row.clone()), "a span appears twice: {row:?}");
+        }
         Arc::try_unwrap(storage)
             .unwrap_or_else(|_| panic!("storage still shared"))
             .shutdown()
@@ -1406,7 +1410,7 @@ mod tests {
         let mut config = config_in(dir.path(), quiet_compaction(8), Duration::from_secs(3_600));
         config.compaction.target_file_size = bytesize::ByteSize::mib(64);
         config.compaction.l0_bytes = bytesize::ByteSize::mib(64);
-        let wa_policy = policy(8, 64 * 1024 * 1024);
+        let wa_policy = Policy::from(&config.compaction);
         let mut storage = Storage::open(config.clone()).await.unwrap();
 
         // Day D in 48 half-hour steps. Each step appends 40 traces × 10 spans

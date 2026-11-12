@@ -15,6 +15,8 @@ One day (2026-03-05) of steady ingest under the default policy shape:
 - Each step: restart (flushing one L0 spans file, its size added to `flushed`),
   then one pass at the end of the half hour + 1 s (`spans_output_bytes` added to
   `rewritten`).
+- Both counters count spans bytes only: `traces` outputs are excluded on both
+  sides.
 - Policy: `target_file_size` 64 MiB, `size_ratio` 4, `l0_files` 8, `l0_bytes`
   64 MiB, `l0_age` 10 min, `close_delay` 2 h. The day totals a few MiB, far
   below the target, so the day close takes the whole partition.
@@ -31,8 +33,12 @@ From `cargo test -p llmobs-storage write_amplification -- --nocapture`:
 write amplification: flushed 3131358 B, rewritten 4857589 B, wa 1.55, L1 files before close 6, spans files after 1
 ```
 
-wa 1.55 ≤ 3, below the expected ~2: merged files compress a little better than
-the flush outputs, so the rewritten bytes are smaller than the flushed bytes.
+wa 1.55 ≤ 3, below the expected ~2: each rewrite writes fewer bytes than it
+reads. An L0 merge turns 521,916 B into 423,144 B (−19 %), mostly per-file
+Parquet footer/metadata overhead — 12,766 B of each 65,236 B L0 file, seven
+dropped per merge. The day close turns 2,539,436 B into 2,318,153 B (−9 %) as
+the 48 L0 files have become 6 L1 files and then 1, which also compresses its
+19,200 rows better than the six smaller files did.
 
 ## Machine
 

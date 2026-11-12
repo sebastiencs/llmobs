@@ -270,7 +270,7 @@ fn crash_recovery() {
             status.code().is_none(),
             "crash child exited {status} at iteration {run}, seed {seed}"
         );
-        let check = runtime.block_on(check_dir(dir.path(), &before, flushed));
+        let check = runtime.block_on(check_dir(dir.path(), &before, flushed, false));
         match check {
             Ok(next) => flushed = next,
             Err(error) => panic!("crash harness failed at iteration {run}, seed {seed}: {error}"),
@@ -346,8 +346,20 @@ fn complete_acks(path: &Path) -> Vec<Ack> {
         .collect()
 }
 
-async fn check_dir(dir: &Path, before: &[Ack], previous: (u64, u64)) -> Result<(u64, u64), String> {
-    let storage = Storage::open(child_config(dir))
+/// `quiet` opens with `quiet_child_config`, for checks over an already
+/// quiesced directory where the background compaction task must stay idle.
+async fn check_dir(
+    dir: &Path,
+    before: &[Ack],
+    previous: (u64, u64),
+    quiet: bool,
+) -> Result<(u64, u64), String> {
+    let config = if quiet {
+        quiet_child_config(dir)
+    } else {
+        child_config(dir)
+    };
+    let storage = Storage::open(config)
         .await
         .map_err(|error| error.to_string())?;
     let stored = stored_rows(
@@ -706,7 +718,14 @@ async fn finish_compaction(dir: &Path, flushed: (u64, u64)) -> Result<(), String
         .await
         .map_err(|error| error.to_string())?;
     for _ in 0..20 {
-        if storage.compact(now_ns()).await.unwrap_or_default().jobs == 0 {
+        let report = storage
+            .compact(now_ns())
+            .await
+            .map_err(|error| error.to_string())?;
+        if report.failed > 0 {
+            return Err(format!("{} compaction job(s) failed", report.failed));
+        }
+        if report.jobs == 0 {
             break;
         }
     }
@@ -718,11 +737,17 @@ async fn finish_compaction(dir: &Path, flushed: (u64, u64)) -> Result<(), String
         .collect_staged(Duration::ZERO)
         .await
         .map_err(|error| error.to_string())?;
-    // Release the directory before `check_dir` opens it again.
+    // Stop the tasks cleanly, then release the directory before `check_dir`
+    // opens it again.
+    storage
+        .shutdown()
+        .await
+        .map_err(|error| error.to_string())?;
     drop(storage);
     // `check_dir` re-runs every invariant over the quiesced directory,
-    // `check_source_pair` included.
-    check_dir(dir, &[], flushed).await?;
+    // `check_source_pair` included. The quiet config keeps the background
+    // compaction task idle during the checks.
+    check_dir(dir, &[], flushed, true).await?;
 
     let mut connection = SqliteConnectOptions::new()
         .filename(dir.join("catalog.db"))

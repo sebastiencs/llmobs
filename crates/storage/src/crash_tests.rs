@@ -172,6 +172,24 @@ fn expected_ids() -> Vec<Vec<u8>> {
     ids
 }
 
+/// The sorted span ids `compaction_child` appends in its step 1: the same
+/// `span_row` calls, so the expectation cannot drift from what it writes.
+fn compaction_span_ids() -> Vec<Vec<u8>> {
+    let mut ids = Vec::new();
+    for index in 0..3_u8 {
+        for span in [index * 2, index * 2 + 1] {
+            ids.push(
+                crate::test_support::span_row(0, span, 0, 0)
+                    .span_id
+                    .as_bytes()
+                    .to_vec(),
+            );
+        }
+    }
+    ids.sort();
+    ids
+}
+
 async fn stored_ids(storage: &crate::Storage) -> Vec<Vec<u8>> {
     let query = storage.query(project(), Default::default()).unwrap();
     let ctx = SessionContext::new_with_config_rt(
@@ -377,12 +395,14 @@ async fn every_compaction_hook_aborts_safely() {
             .await
             .unwrap_or_else(|error| panic!("{name}: reopen failed: {error}"));
         let ids = stored_ids(&storage).await;
-        assert_eq!(ids.len(), 6, "{name}: acknowledged rows");
+        assert_eq!(ids, compaction_span_ids(), "{name}: acknowledged rows");
         objects_match_catalog(&storage, dir.path());
 
         // Redo the interrupted work, then collect everything it left.
-        for _ in 0..5 {
-            if storage.compact(crash_at(12, 0)).await.unwrap().jobs == 0 {
+        for pass in 0..5 {
+            let report = storage.compact(crash_at(12, 0)).await.unwrap();
+            assert_eq!(report.failed, 0, "{name}: pass {pass} failed a job");
+            if report.jobs == 0 {
                 break;
             }
         }
@@ -390,12 +410,16 @@ async fn every_compaction_hook_aborts_safely() {
         storage.collect_staged(Duration::ZERO).await.unwrap();
 
         let ids = stored_ids(&storage).await;
-        assert_eq!(ids.len(), 6, "{name}: rows after the redo");
+        assert_eq!(ids, compaction_span_ids(), "{name}: rows after the redo");
         let spans_files = storage.catalog_files(Table::Spans);
         assert_eq!(spans_files.len(), 1, "{name}: one spans file");
         assert_eq!(spans_files[0].level, 1, "{name}: the spans file is level 1");
-        let traces_files = storage.catalog_paths(crate::catalog::FileTable::Traces);
+        let traces_files = storage.catalog_files(crate::catalog::FileTable::Traces);
         assert_eq!(traces_files.len(), 1, "{name}: one traces file");
+        assert_eq!(
+            traces_files[0].level, 1,
+            "{name}: the traces file is level 1"
+        );
         storage.shutdown().await.unwrap();
         drop(storage);
 

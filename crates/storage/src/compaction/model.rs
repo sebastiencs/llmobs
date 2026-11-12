@@ -218,7 +218,9 @@ async fn run_case(ops: Vec<Op>) {
         .saturating_add(close_delay)
         .saturating_add(1_000_000);
     for _ in 0..10 {
-        if storage.compact(clock).await.unwrap().jobs == 0 {
+        let report = storage.compact(clock).await.unwrap();
+        assert_eq!(report.failed, 0, "a compaction job failed");
+        if report.jobs == 0 {
             break;
         }
     }

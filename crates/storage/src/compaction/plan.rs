@@ -422,40 +422,46 @@ mod tests {
     #[test]
     fn the_size_ratio_keeps_big_l1_files_out() {
         // Two aged L0 files summing 40, plus L1 files.
-        let aged = || {
-            let mut files: Vec<FileMeta> = (0..2)
-                .map(|_| meta(FileTable::Spans, day(), 0, 20, minutes_ago(30), false))
-                .collect();
-            files.push(meta(FileTable::Spans, day(), 1, 5, 0, false));
-            files.push(meta(FileTable::Spans, day(), 1, 10, 0, false));
-            files.push(meta(FileTable::Spans, day(), 1, 20, 0, false));
+        let mut files: Vec<FileMeta> = (0..2)
+            .map(|_| meta(FileTable::Spans, day(), 0, 20, minutes_ago(30), false))
+            .collect();
+        files.push(meta(FileTable::Spans, day(), 1, 5, 0, false));
+        files.push(meta(FileTable::Spans, day(), 1, 10, 0, false));
+        files.push(meta(FileTable::Spans, day(), 1, 20, 0, false));
+        let l1_of = |size: u64| {
             files
+                .iter()
+                .find(|file| file.level == 1 && file.size == size)
+                .unwrap()
+                .id
         };
 
-        let files = aged();
-        let ids: HashSet<_> = files.iter().map(|file| file.id).collect();
-        let built = catalog(&files);
-        let jobs = plan(&built, &HashSet::new(), &policy(), noon());
+        let jobs = plan(&catalog(&files), &HashSet::new(), &policy(), noon());
         assert_eq!(kinds(&jobs), vec![JobKind::L0Merge]);
         let input_ids: HashSet<_> = jobs[0].inputs.iter().map(|file| file.id).collect();
         assert_eq!(input_ids.len(), 4, "L0 + L1 of 5 + L1 of 10");
-        assert!(
-            !input_ids.contains(
-                &files
-                    .iter()
-                    .find(|f| f.size == 20 && f.level == 1)
-                    .unwrap()
-                    .id
-            )
-        );
-        assert_eq!(input_ids.intersection(&ids).count(), 4);
+        assert!(input_ids.contains(&l1_of(5)), "the L1 of 5 is an input");
+        assert!(input_ids.contains(&l1_of(10)), "the L1 of 10 is an input");
+        assert!(!input_ids.contains(&l1_of(20)), "the L1 of 20 stays out");
 
-        // The same sizes in a different insert order: the walk is by size.
-        let mut shuffled = aged();
-        shuffled.reverse();
-        let jobs = plan(&catalog(&shuffled), &HashSet::new(), &policy(), noon());
+        // The catalog walks a partition in `(min_time, id)` order, which with
+        // fresh v7 ids is creation order: the L1 of 20 sorts before the L1 of 5.
+        // The policy must still check the 5 first: out = 40 >= 4 x 5, so it is
+        // added (out = 45); then 45 < 4 x 20 = 80, so the 20 stays out.
+        let mut files: Vec<FileMeta> = (0..2)
+            .map(|_| meta(FileTable::Spans, day(), 0, 20, minutes_ago(30), false))
+            .collect();
+        let big = meta(FileTable::Spans, day(), 1, 20, 0, false);
+        let small = meta(FileTable::Spans, day(), 1, 5, 0, false);
+        let (big_id, small_id) = (big.id, small.id);
+        files.push(big);
+        files.push(small);
+        let jobs = plan(&catalog(&files), &HashSet::new(), &policy(), noon());
+        assert_eq!(kinds(&jobs), vec![JobKind::L0Merge]);
         let input_ids: HashSet<_> = jobs[0].inputs.iter().map(|file| file.id).collect();
-        assert_eq!(input_ids.len(), 4);
+        assert_eq!(input_ids.len(), 3, "L0 + the L1 of 5 only");
+        assert!(input_ids.contains(&small_id), "the L1 of 5 is an input");
+        assert!(!input_ids.contains(&big_id), "the L1 of 20 stays out");
     }
 
     #[test]

@@ -643,13 +643,13 @@ impl Storage {
             .sum()
     }
 
-    /// Active catalog files for `table`.
+    /// Active catalog files for `table`, including `traces`.
     #[cfg(test)]
-    pub(crate) fn catalog_files(&self, table: Table) -> Vec<Arc<catalog::FileMeta>> {
-        self.published
-            .load()
-            .catalog
-            .test_files(catalog::FileTable::from(table))
+    pub(crate) fn catalog_files(
+        &self,
+        table: impl Into<catalog::FileTable>,
+    ) -> Vec<Arc<catalog::FileMeta>> {
+        self.published.load().catalog.test_files(table.into())
     }
 
     /// Paths of the active files of a file table, including `traces`.
