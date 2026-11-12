@@ -17,10 +17,38 @@ utoipa.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+figment.workspace = true
+ipnet.workspace = true
+url.workspace = true
+lettre.workspace = true
+minijinja.workspace = true
+thiserror.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+axum.workspace = true
+axum-extra.workspace = true
+tracing.workspace = true
+serde_path_to_error.workspace = true
+serde_urlencoded.workspace = true
+unicode-normalization.workspace = true
+argon2.workspace = true
+rand.workspace = true
+subtle.workspace = true
+sha2.workspace = true
+base64.workspace = true
+openidconnect.workspace = true
+oauth2.workspace = true
+reqwest.workspace = true
+hmac.workspace = true
 
 [dev-dependencies]
+bytesize.workspace = true
+tower.workspace = true
+tracing-subscriber.workspace = true
 insta.workspace = true
+tempfile.workspace = true
 jsonschema.workspace = true
-serde_urlencoded.workspace = true
 sha2.workspace = true
 strum.workspace = true
+# Mock IdP signatures. `pkcs1v15` is the RS256 signer. `rand_core` 0.10 matches workspace `rand` 0.10.
+rsa = { workspace = true, features = ["pkcs1v15"] }

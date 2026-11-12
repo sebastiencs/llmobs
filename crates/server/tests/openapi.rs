@@ -10,10 +10,112 @@ use serde_json::Value;
 use llmobs_server::api::openapi::openapi;
 
 const OPERATIONS: &[(&str, &str, &str)] = &[
+    (
+        "get",
+        "/api/auth/authorize/{provider}",
+        "get_oauth_authorize",
+    ),
+    ("get", "/api/auth/callback/{provider}", "get_oauth_callback"),
     ("get", "/api/auth/config", "get_auth_config"),
+    ("post", "/api/auth/setup", "post_setup"),
+    ("post", "/api/auth/login", "post_login"),
+    ("post", "/api/auth/logout", "post_logout"),
+    ("post", "/api/auth/signup", "post_signup"),
+    ("get", "/api/auth/invites/{token}", "get_invite_preview"),
+    (
+        "post",
+        "/api/auth/invites/{token}/accept",
+        "post_invite_accept",
+    ),
+    ("get", "/api/v1/admin/users", "list_admin_users"),
+    ("post", "/api/v1/admin/users", "post_admin_user"),
+    ("patch", "/api/v1/admin/users/{id}", "patch_admin_user"),
+    (
+        "post",
+        "/api/v1/admin/users/{id}/reset-link",
+        "post_admin_user_reset_link",
+    ),
+    ("get", "/api/v1/admin/settings", "get_admin_settings"),
+    (
+        "post",
+        "/api/v1/admin/settings/test-email",
+        "post_admin_settings_test_email",
+    ),
     ("get", "/api/auth/me", "get_me"),
+    ("post", "/api/auth/password/forgot", "post_password_forgot"),
+    ("post", "/api/auth/password/reset", "post_password_reset"),
+    ("post", "/api/auth/email/verify", "post_email_verify"),
+    (
+        "post",
+        "/api/auth/email/verify/resend",
+        "post_email_verify_resend",
+    ),
+    ("patch", "/api/v1/me", "patch_me"),
+    ("post", "/api/v1/me/password", "post_me_password"),
+    ("get", "/api/v1/me/tokens", "list_personal_tokens"),
+    ("post", "/api/v1/me/tokens", "post_personal_token"),
+    (
+        "delete",
+        "/api/v1/me/tokens/current",
+        "delete_current_token",
+    ),
+    ("delete", "/api/v1/me/tokens/{id}", "delete_personal_token"),
+    ("get", "/api/v1/orgs", "list_orgs"),
+    ("post", "/api/v1/orgs", "post_org"),
+    ("get", "/api/v1/orgs/{org}", "get_org"),
+    ("patch", "/api/v1/orgs/{org}", "patch_org"),
+    ("get", "/api/v1/orgs/{org}/members", "list_org_members"),
+    (
+        "patch",
+        "/api/v1/orgs/{org}/members/{user}",
+        "patch_org_member",
+    ),
+    (
+        "delete",
+        "/api/v1/orgs/{org}/members/{user}",
+        "delete_org_member",
+    ),
+    ("get", "/api/v1/orgs/{org}/invites", "list_org_invites"),
+    ("post", "/api/v1/orgs/{org}/invites", "post_org_invite"),
+    (
+        "delete",
+        "/api/v1/orgs/{org}/invites/{id}",
+        "delete_org_invite",
+    ),
     ("get", "/api/v1/orgs/{org}/projects", "list_projects"),
+    ("post", "/api/v1/orgs/{org}/projects", "post_project"),
     ("get", "/api/v1/projects/{project}", "get_project"),
+    ("patch", "/api/v1/projects/{project}", "patch_project"),
+    (
+        "get",
+        "/api/v1/projects/{project}/api-keys",
+        "list_api_keys",
+    ),
+    (
+        "post",
+        "/api/v1/projects/{project}/api-keys",
+        "post_api_key",
+    ),
+    (
+        "delete",
+        "/api/v1/projects/{project}/api-keys/{id}",
+        "delete_api_key",
+    ),
+    (
+        "get",
+        "/api/v1/projects/{project}/members",
+        "list_project_members",
+    ),
+    (
+        "put",
+        "/api/v1/projects/{project}/members/{user}",
+        "put_project_member",
+    ),
+    (
+        "delete",
+        "/api/v1/projects/{project}/members/{user}",
+        "delete_project_member",
+    ),
     ("get", "/api/v1/projects/{project}/traces", "list_traces"),
     (
         "get",
@@ -83,7 +185,12 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
 ];
 
 const QUERY_OR_BODY: &[&str] = &[
+    "list_org_members",
+    "list_org_invites",
+    "list_project_members",
     "list_projects",
+    "list_api_keys",
+    "list_personal_tokens",
     "list_traces",
     "stream_traces",
     "get_trace",
@@ -100,7 +207,9 @@ const QUERY_OR_BODY: &[&str] = &[
 ];
 
 const TAGS: &[&str] = &[
+    "admin",
     "auth",
+    "orgs",
     "projects",
     "traces",
     "spans",
@@ -155,11 +264,7 @@ fn document_lint() {
 
     let security = document["security"].as_array().expect("security");
     assert_eq!(security.len(), 2);
-    assert!(
-        security
-            .iter()
-            .any(|item| item.get("session_cookie").is_some())
-    );
+    assert!(security.iter().any(|item| item.get("session").is_some()));
     assert!(security.iter().any(|item| item.get("bearer").is_some()));
 
     for (method, path, id) in &found {
@@ -174,8 +279,50 @@ fn document_lint() {
         );
 
         let operation_security = operation.get("security").and_then(Value::as_array);
-        if *id == "get_auth_config" {
+        if matches!(
+            *id,
+            "get_auth_config"
+                | "get_oauth_authorize"
+                | "get_oauth_callback"
+                | "post_setup"
+                | "post_login"
+                | "post_logout"
+                | "post_signup"
+                | "post_password_forgot"
+                | "post_password_reset"
+                | "post_email_verify"
+                | "post_email_verify_resend"
+                | "get_invite_preview"
+        ) {
             assert_eq!(operation_security.map(Vec::len), Some(0), "{id}");
+        } else if matches!(
+            *id,
+            "patch_me"
+                | "post_me_password"
+                | "patch_org_member"
+                | "delete_org_member"
+                | "post_org_invite"
+                | "delete_org_invite"
+                | "post_invite_accept"
+                | "put_project_member"
+                | "delete_project_member"
+                | "list_api_keys"
+                | "post_api_key"
+                | "delete_api_key"
+                | "list_personal_tokens"
+                | "post_personal_token"
+                | "delete_personal_token"
+                | "list_admin_users"
+                | "post_admin_user"
+                | "patch_admin_user"
+                | "post_admin_user_reset_link"
+                | "get_admin_settings"
+                | "post_admin_settings_test_email"
+        ) {
+            let security = operation_security.unwrap_or_else(|| panic!("{id}"));
+            assert_eq!(security.len(), 1, "{id}");
+            assert!(security[0].get("session").is_some(), "{id}");
+            assert!(security[0].get("bearer").is_none(), "{id}");
         } else {
             assert!(operation_security.is_none(), "{id} overrides security");
         }
@@ -190,6 +337,54 @@ fn document_lint() {
         let mut expected_errors = BTreeSet::new();
         if *id == "get_me" {
             expected_errors.extend(["401", "429"]);
+        } else if *id == "get_oauth_authorize" {
+            expected_errors.extend(["404"]);
+        } else if *id == "get_oauth_callback" {
+            // Failure is a redirect, not a problem response.
+        } else if *id == "post_setup" || *id == "post_signup" {
+            expected_errors.extend(["400", "403", "409", "429"]);
+        } else if *id == "post_login" {
+            expected_errors.extend(["401", "403", "429"]);
+        } else if *id == "post_password_reset" || *id == "post_password_forgot" {
+            expected_errors.extend(["400", "403", "429"]);
+        } else if *id == "post_email_verify" {
+            expected_errors.extend(["400"]);
+        } else if *id == "post_email_verify_resend" {
+            expected_errors.extend(["400", "429"]);
+        } else if *id == "patch_me" {
+            expected_errors.extend(["400", "401", "403"]);
+        } else if *id == "post_me_password" || *id == "post_personal_token" {
+            expected_errors.extend(["400", "401", "403", "429"]);
+        } else if *id == "list_orgs" {
+            expected_errors.extend(["400", "401", "429"]);
+        } else if *id == "post_org" {
+            expected_errors.extend(["400", "401", "409", "429"]);
+        } else if *id == "patch_org_member" || *id == "delete_org_member" {
+            expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
+        } else if *id == "put_project_member"
+            || *id == "delete_project_member"
+            || *id == "patch_org"
+            || *id == "patch_project"
+            || *id == "post_api_key"
+            || *id == "delete_api_key"
+            || *id == "delete_org_invite"
+            || *id == "delete_personal_token"
+        {
+            expected_errors.extend(["400", "401", "403", "404", "429"]);
+        } else if *id == "get_invite_preview" {
+            expected_errors.extend(["404", "429"]);
+        } else if *id == "post_org_invite" || *id == "post_project" {
+            expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
+        } else if *id == "list_admin_users" || *id == "post_admin_settings_test_email" {
+            expected_errors.extend(["400", "401", "403", "429"]);
+        } else if *id == "get_admin_settings" {
+            expected_errors.extend(["401", "403", "429"]);
+        } else if *id == "post_admin_user" {
+            expected_errors.extend(["400", "401", "403", "409", "429"]);
+        } else if *id == "patch_admin_user" || *id == "post_admin_user_reset_link" {
+            expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
+        } else if *id == "post_logout" {
+            // The handler always answers 204. CSRF is the shared origin check.
         } else if *id == "get_media" {
             expected_errors.extend(["401", "403", "404", "416", "429"]);
         } else if *id != "get_auth_config" && QUERY_OR_BODY.contains(id) {
@@ -262,7 +457,14 @@ fn document_lint() {
         ("SessionPage", "SessionSummary"),
         ("EndUserPage", "EndUserSummary"),
         ("ScorePage", "Score"),
+        ("OrgPage", "OrgMembership"),
+        ("OrgMemberPage", "OrgMember"),
+        ("InvitePage", "Invite"),
+        ("AdminUserPage", "AdminUser"),
+        ("ProjectMemberPage", "ProjectMember"),
         ("ProjectPage", "Project"),
+        ("ApiKeyPage", "ApiKey"),
+        ("PersonalTokenPage", "PersonalToken"),
         ("SavedViewPage", "SavedView"),
     ];
     for (page, item) in pages {
@@ -504,7 +706,14 @@ fn assert_nullability(schemas: &serde_json::Map<String, Value>) {
         "SessionPage",
         "EndUserPage",
         "ScorePage",
+        "OrgPage",
+        "OrgMemberPage",
+        "InvitePage",
+        "AdminUserPage",
+        "ProjectMemberPage",
         "ProjectPage",
+        "ApiKeyPage",
+        "PersonalTokenPage",
         "SavedViewPage",
     ];
     let expected: BTreeSet<String> = pages

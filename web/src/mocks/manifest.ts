@@ -53,8 +53,9 @@ function loadOperations(
     if (!operation) {
       throw new Error(`manifest: ${row.operationId} is missing from openapi.json`);
     }
+    // POST examples document a response. The mock only serves GET.
     if (operation.method !== "get") {
-      throw new Error(`manifest: ${row.operationId} is not a GET`);
+      continue;
     }
     const entries = grouped.get(row.operationId) ?? [];
     entries.push(entryFromRow(row, json, media));

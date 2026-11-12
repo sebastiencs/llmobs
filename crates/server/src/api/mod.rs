@@ -4,7 +4,11 @@
 //! The generated contract file is `crates/server/openapi.json`.
 
 pub mod account;
+pub mod admin;
 pub mod common;
+pub mod invites;
+pub mod keys;
+pub mod members;
 pub mod metrics;
 pub mod openapi;
 pub mod payload;

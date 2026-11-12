@@ -1,20 +1,47 @@
 import mswPackage from "msw/package.json";
 import { expect, it } from "vitest";
+import openapiDocument from "../../../crates/server/openapi.json";
 import manifest from "../../../fixtures/api/manifest.json";
 import workerSource from "../../msw/mockServiceWorker.js?raw";
 import { sortBySpecificity } from "./handlers";
 import { type MockEntry, type MockOperation, operations } from "./manifest";
 
-it("maps every manifest entry to a GET operation", () => {
+it("maps every GET manifest entry to a handler", () => {
   const ids = new Set(operations.map((operation) => operation.operationId));
-  for (const entry of manifest) {
+  const gets = manifest.filter((entry) => methodOf(entry.operation_id) === "get");
+  for (const entry of gets) {
     expect(ids.has(entry.operation_id), entry.operation_id).toBe(true);
+  }
+  for (const entry of manifest) {
+    if (methodOf(entry.operation_id) !== "get") {
+      expect(ids.has(entry.operation_id), entry.operation_id).toBe(false);
+    }
   }
   expect(operations.every((operation) => operation.method === "get")).toBe(true);
   expect(operations.reduce((sum, operation) => sum + operation.entries.length, 0)).toBe(
-    manifest.length,
+    gets.length,
   );
 });
+
+function methodOf(operationId: string): string | undefined {
+  const paths = openapiDocument.paths;
+  for (const item of Object.values(paths)) {
+    if (item === undefined) {
+      continue;
+    }
+    for (const [method, operation] of Object.entries(item)) {
+      if (
+        operation !== undefined &&
+        typeof operation === "object" &&
+        "operationId" in operation &&
+        operation.operationId === operationId
+      ) {
+        return method;
+      }
+    }
+  }
+  return undefined;
+}
 
 it("serves every manifest entry", async () => {
   for (const operation of operations) {

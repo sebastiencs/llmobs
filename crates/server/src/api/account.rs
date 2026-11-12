@@ -3,6 +3,7 @@
 //! Spec 08 § Sign-up policy and § Authorization, spec 09 § Endpoints.
 
 use llmobs_core::ids::{OrgId, ProjectId};
+use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -123,15 +124,202 @@ pub struct Project {
     pub slug: String,
     /// Display name.
     pub name: String,
-    /// Retention in days. Omitted when the project uses the default.
+    /// Days to keep data. Omitted when data is kept forever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retention_days: Option<u32>,
-    /// The caller's effective role on this project.
-    pub role: OrgRole,
+    /// The caller's effective role. Omitted when the caller is an API key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<OrgRole>,
     /// Creation time, nanoseconds since the Unix epoch. JSON is RFC 3339.
     #[serde(with = "llmobs_core::time_serde")]
     #[schema(value_type = String, format = DateTime)]
     pub created_at: i64,
+}
+
+/// `POST /api/auth/setup`. The token is the one logged at startup (D144).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetupRequest {
+    /// The setup token from the startup log.
+    pub setup_token: String,
+    /// Email address of the first admin.
+    pub email: String,
+    /// Password of the first admin.
+    pub password: String,
+    /// Display name. Absent when the admin does not set one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Name of the first organization.
+    pub org_name: String,
+    /// Name of the first project.
+    pub project_name: String,
+}
+
+/// The first admin, org, project, and the secret key shown once.
+///
+/// `POST /api/auth/setup` returns 201. `secret_key` is not stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SetupResponse {
+    /// The instance admin.
+    pub user: User,
+    /// The org, with the owner role.
+    pub org: OrgMembership,
+    /// The project, with the owner role.
+    pub project: Project,
+    /// Secret API key. Shown once.
+    pub secret_key: String,
+    /// Type prefix plus the first 6 characters of the key tail.
+    pub secret_key_prefix: String,
+}
+
+/// `POST /api/auth/login`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LoginRequest {
+    /// Email address.
+    pub email: String,
+    /// Password.
+    pub password: String,
+}
+
+/// `POST /api/auth/signup`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SignupRequest {
+    /// Email address.
+    pub email: String,
+    /// Password.
+    pub password: String,
+    /// Display name. Absent when the user does not set one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Invitation token. When set, sign-up joins that org and the address is already verified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invite_token: Option<String>,
+}
+
+/// `POST /api/auth/signup` returns 201.
+///
+/// `me` is present when a session was started.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SignupResponse {
+    /// The new user and their orgs, when a session was started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub me: Option<Me>,
+    /// The account cannot sign in until the email is verified.
+    pub verification_required: bool,
+}
+
+/// `POST /api/auth/password/reset`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResetPasswordRequest {
+    /// The token from the reset link.
+    pub token: String,
+    /// The new password.
+    pub password: String,
+}
+
+/// `POST /api/auth/password/forgot`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ForgotPasswordRequest {
+    /// Email address.
+    pub email: String,
+}
+
+/// `POST /api/auth/email/verify`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VerifyEmailRequest {
+    /// The token from the verification link.
+    pub token: String,
+}
+
+/// `POST /api/auth/email/verify/resend`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResendVerificationRequest {
+    /// Email address.
+    pub email: String,
+}
+
+/// `PATCH /api/v1/me`.
+///
+/// A missing `name` and JSON null both clear the display name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateMeRequest {
+    /// Display name. Null or omitted clears it. A present value is trimmed to 1–100 characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// `POST /api/v1/orgs`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateOrgRequest {
+    /// Display name. Trimmed to 1–100 characters.
+    pub name: String,
+    /// URL slug. Absent derives one from the name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+}
+
+/// `PATCH /api/v1/orgs/{org}`. The slug does not change.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateOrgRequest {
+    /// Display name. Trimmed to 1–100 characters.
+    pub name: String,
+}
+
+/// `POST /api/v1/orgs/{org}/projects`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateProjectRequest {
+    /// Display name. Trimmed to 1–100 characters.
+    pub name: String,
+    /// URL slug. Absent derives one from the name. Project slugs are not reserved words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+    /// Days to keep data, from 1 to 36500. Absent keeps data forever.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retention_days: Option<u32>,
+}
+
+/// `PATCH /api/v1/projects/{project}`.
+///
+/// `retention_days: null` keeps data forever. Omitting the field leaves retention unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateProjectRequest {
+    /// Display name. Absent leaves the name unchanged. A present value is trimmed to 1–100 characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Days to keep data, from 1 to 36500. Null keeps data forever. Absent leaves retention unchanged.
+    #[serde(default, deserialize_with = "optional_retention")]
+    #[schema(value_type = Option<u32>)]
+    pub retention_days: Option<Option<u32>>,
+}
+
+/// Present JSON is `Some(value)`, including null. An absent field stays the default `None`.
+fn optional_retention<'de, D>(deserializer: D) -> Result<Option<Option<u32>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Some(Option::<u32>::deserialize(deserializer)?))
+}
+
+/// `POST /api/v1/me/password`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChangePasswordRequest {
+    /// The current password. Required when the account has one, and absent when it does not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_password: Option<String>,
+    /// The replacement password.
+    pub new_password: String,
 }
 
 #[cfg(test)]
@@ -219,7 +407,7 @@ mod tests {
             slug: "support-bot".to_owned(),
             name: "Support bot".to_owned(),
             retention_days: Some(30),
-            role: OrgRole::Owner,
+            role: Some(OrgRole::Owner),
             created_at: CREATED_AT,
         };
         let unnamed = User {

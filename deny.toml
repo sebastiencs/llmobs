@@ -10,6 +10,9 @@ ignore = [
     # object_store 0.13's aws feature requires quick-xml ^0.39. The fixes are 0.41.
     { id = "RUSTSEC-2026-0194", reason = "object_store 0.13 requires quick-xml ^0.39; the fix is quick-xml 0.41" },
     { id = "RUSTSEC-2026-0195", reason = "object_store 0.13 requires quick-xml ^0.39; the fix is quick-xml 0.41" },
+    # openidconnect 4.1.0 requires rsa ^0.9. The Marvin fix is rsa 0.10, which that crate does not accept.
+    # The mock IdP signs with rsa 0.10. openidconnect uses the 0.9 copy to verify signatures.
+    { id = "RUSTSEC-2023-0071", reason = "openidconnect 4.1.0 requires rsa ^0.9; the Marvin fix is rsa 0.10, which that crate does not accept" },
 ]
 
 [licenses]

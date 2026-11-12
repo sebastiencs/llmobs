@@ -1,6 +1,6 @@
-//! The OpenAPI document for the 22 read-API operations.
+//! The OpenAPI document.
 //!
-//! Spec 09. Handlers are not implemented yet; this module is the contract.
+//! Spec 09. `just openapi` writes `crates/server/openapi.json`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -23,8 +23,23 @@ use utoipa::openapi::tag::{Tag, TagBuilder};
 use utoipa::openapi::{Content, InfoBuilder, OpenApi, OpenApiBuilder, Ref, RefOr, Required};
 use utoipa::{IntoParams, PartialSchema, ToSchema};
 
-use super::account::{AuthConfig, Me, Project};
+use super::account::{
+    AuthConfig, ChangePasswordRequest, CreateOrgRequest, CreateProjectRequest,
+    ForgotPasswordRequest, LoginRequest, Me, OrgMembership, Project, ResendVerificationRequest,
+    ResetPasswordRequest, SetupRequest, SetupResponse, SignupRequest, SignupResponse,
+    UpdateMeRequest, UpdateOrgRequest, UpdateProjectRequest, User, VerifyEmailRequest,
+};
+use super::admin::{
+    AdminResetLink, AdminSettings, AdminUser, CreateAdminUserRequest, CreatedAdminUser,
+    UpdateAdminUserRequest,
+};
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
+use super::invites::{CreateInviteRequest, CreatedInvite, Invite, InvitePreview};
+use super::keys::{
+    ApiKey as ProjectApiKey, CreateApiKeyRequest, CreatePersonalTokenRequest, CreatedApiKey,
+    CreatedPersonalToken, PersonalToken,
+};
+use super::members::{OrgMember, ProjectMember, SetProjectOverrideRequest, UpdateOrgMemberRequest};
 use super::metrics::{MetricsBucket, MetricsGroupBy, MetricsParams, MetricsResponse};
 use super::saved_views::{CreateSavedView, SavedView, SavedViewListParams, UpdateSavedView};
 use super::schema::SchemaResponse;
@@ -75,8 +90,47 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<MetricsBucket>();
     set.insert::<MetricsGroupBy>();
     set.insert::<AuthConfig>();
+    set.insert::<SetupRequest>();
+    set.insert::<SetupResponse>();
+    set.insert::<LoginRequest>();
+    set.insert::<SignupRequest>();
+    set.insert::<SignupResponse>();
+    set.insert::<Invite>();
+    set.insert::<CreateInviteRequest>();
+    set.insert::<CreatedInvite>();
+    set.insert::<InvitePreview>();
+    set.insert_page::<Invite>("InvitePage");
+    set.insert::<ResetPasswordRequest>();
+    set.insert::<ForgotPasswordRequest>();
+    set.insert::<VerifyEmailRequest>();
+    set.insert::<ResendVerificationRequest>();
+    set.insert::<UpdateMeRequest>();
+    set.insert::<ChangePasswordRequest>();
     set.insert::<Me>();
+    set.insert::<User>();
+    set.insert::<AdminUser>();
+    set.insert_page::<AdminUser>("AdminUserPage");
+    set.insert::<CreateAdminUserRequest>();
+    set.insert::<CreatedAdminUser>();
+    set.insert::<UpdateAdminUserRequest>();
+    set.insert::<AdminResetLink>();
+    set.insert::<AdminSettings>();
+    set.insert::<OrgMembership>();
+    set.insert::<CreateOrgRequest>();
+    set.insert::<UpdateOrgRequest>();
+    set.insert::<CreateProjectRequest>();
+    set.insert::<UpdateProjectRequest>();
+    set.insert::<OrgMember>();
+    set.insert::<UpdateOrgMemberRequest>();
+    set.insert::<ProjectMember>();
+    set.insert::<SetProjectOverrideRequest>();
     set.insert::<Project>();
+    set.insert::<ProjectApiKey>();
+    set.insert::<CreatedApiKey>();
+    set.insert::<CreateApiKeyRequest>();
+    set.insert::<PersonalToken>();
+    set.insert::<CreatedPersonalToken>();
+    set.insert::<CreatePersonalTokenRequest>();
     set.insert::<TraceSummary>();
     set.insert::<SpanSummary>();
     set.insert::<TraceDetail>();
@@ -96,7 +150,12 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert_page::<SessionSummary>("SessionPage");
     set.insert_page::<EndUserSummary>("EndUserPage");
     set.insert_page::<Score>("ScorePage");
+    set.insert_page::<OrgMembership>("OrgPage");
+    set.insert_page::<OrgMember>("OrgMemberPage");
+    set.insert_page::<ProjectMember>("ProjectMemberPage");
     set.insert_page::<Project>("ProjectPage");
+    set.insert_page::<ProjectApiKey>("ApiKeyPage");
+    set.insert_page::<PersonalToken>("PersonalTokenPage");
     set.insert_page::<SavedView>("SavedViewPage");
     set
 }
@@ -160,7 +219,15 @@ pub fn openapi() -> OpenApi {
                 .build(),
         )
         .tags(Some([
-            tag("auth", "Login methods and the current user."),
+            tag(
+                "auth",
+                "Login, logout, sign-up, password reset, the current user, and first-run setup.",
+            ),
+            tag(
+                "admin",
+                "Instance administrators: accounts and the effective settings.",
+            ),
+            tag("orgs", "Organizations the caller belongs to."),
             tag("projects", "Projects the caller can see."),
             tag("traces", "Trace list, detail, and live streams."),
             tag("spans", "Span list and detail."),
@@ -174,7 +241,7 @@ pub fn openapi() -> OpenApi {
         ]))
         .components(Some(components(&schemas)))
         .security(Some([
-            SecurityRequirement::new("session_cookie", [] as [&str; 0]),
+            SecurityRequirement::new("session", [] as [&str; 0]),
             SecurityRequirement::new("bearer", [] as [&str; 0]),
         ]))
         .paths(paths())
@@ -406,7 +473,7 @@ fn components(schemas: &SchemaSet) -> Components {
     ComponentsBuilder::new()
         .schemas_from_iter(schemas.schemas.clone())
         .security_scheme(
-            "session_cookie",
+            "session",
             SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::with_description(
                 COOKIE_NAME,
                 "Browser session cookie.",
@@ -436,7 +503,12 @@ fn tag(name: &str, description: &str) -> Tag {
 fn paths() -> Paths {
     let paths = PathsBuilder::new();
     let paths = auth_paths(paths);
+    let paths = admin_paths(paths);
+    let paths = invite_paths(paths);
     let paths = project_paths(paths);
+    let paths = member_paths(paths);
+    let paths = api_key_paths(paths);
+    let paths = token_paths(paths);
     let paths = trace_paths(paths);
     let paths = session_paths(paths);
     let paths = score_paths(paths);
@@ -444,13 +516,214 @@ fn paths() -> Paths {
     media_paths(paths).build()
 }
 
+fn admin_paths(paths: PathsBuilder) -> PathsBuilder {
+    let session = Some(vec![SecurityRequirement::new("session", [] as [&str; 0])]);
+    let list = operation("list_admin_users", "admin", "List accounts")
+        .securities(session.clone())
+        .parameters(Some(with_query::<PageParams>(Vec::new())))
+        .responses(responses(
+            "200",
+            json_named("AdminUserPage", "One page of accounts, ordered by email."),
+            &[400, 401, 403, 429],
+        ))
+        .build();
+    let create = operation("post_admin_user", "admin", "Create an account")
+        .securities(session.clone())
+        .request_body(Some(json_body("CreateAdminUserRequest")))
+        .responses(responses(
+            "201",
+            json_of::<CreatedAdminUser>(
+                "The account, already verified, and a one-hour link that sets its password.",
+            ),
+            &[400, 401, 403, 409, 429],
+        ))
+        .build();
+    let update = operation("patch_admin_user", "admin", "Disable or demote an account")
+        .securities(session.clone())
+        .parameters(Some(vec![path_string("id", "User id.")]))
+        .request_body(Some(json_body("UpdateAdminUserRequest")))
+        .responses(responses(
+            "200",
+            json_of::<AdminUser>("The account."),
+            &[400, 401, 403, 404, 409, 429],
+        ))
+        .build();
+    let reset = operation(
+        "post_admin_user_reset_link",
+        "admin",
+        "Mint a password reset link",
+    )
+    .securities(session.clone())
+    .parameters(Some(vec![path_string("id", "User id.")]))
+    .responses(responses(
+        "200",
+        json_of::<AdminResetLink>("A one-hour link that sets the password."),
+        &[400, 401, 403, 404, 409, 429],
+    ))
+    .build();
+    let settings = operation("get_admin_settings", "admin", "Read the instance settings")
+        .securities(session.clone())
+        .responses(responses(
+            "200",
+            json_of::<AdminSettings>("The effective settings. No secret is included."),
+            &[401, 403, 429],
+        ))
+        .build();
+    let test_email = operation(
+        "post_admin_settings_test_email",
+        "admin",
+        "Send a test email to yourself",
+    )
+    .securities(session)
+    .responses(responses(
+        "204",
+        ResponseBuilder::new()
+            .description("The test message was accepted by the SMTP server.")
+            .build(),
+        &[400, 401, 403, 429, 503],
+    ))
+    .build();
+    let mut users = PathItem::new(HttpMethod::Get, list);
+    users.post = Some(create);
+    paths
+        .path("/api/v1/admin/users", users)
+        .path(
+            "/api/v1/admin/users/{id}",
+            PathItem::new(HttpMethod::Patch, update),
+        )
+        .path(
+            "/api/v1/admin/users/{id}/reset-link",
+            PathItem::new(HttpMethod::Post, reset),
+        )
+        .path(
+            "/api/v1/admin/settings",
+            PathItem::new(HttpMethod::Get, settings),
+        )
+        .path(
+            "/api/v1/admin/settings/test-email",
+            PathItem::new(HttpMethod::Post, test_email),
+        )
+}
+
 fn auth_paths(paths: PathsBuilder) -> PathsBuilder {
+    let authorize = operation(
+        "get_oauth_authorize",
+        "auth",
+        "Start an OAuth or OIDC login",
+    )
+    .description(Some(
+        "Redirects to the provider and sets the `llmobs_oauth` cookie. `redirect` is kept when it \
+         starts with `/`, does not start with `//` or `/\\`, is at most 1024 bytes, and contains \
+         no ASCII control character. Otherwise the browser returns to `/`. An unknown provider is \
+         404. When metadata cannot be loaded, the response redirects to \
+         `/login?error=provider_unavailable` and sets no cookie.",
+    ))
+    .securities(Some(Vec::new()))
+    .parameters(Some(vec![
+        path_string(
+            "provider",
+            "Provider id: `github`, `google`, or `oidc:<name>`.",
+        ),
+        query_string(
+            "redirect",
+            "Relative path to open after a successful login.",
+            false,
+        ),
+        query_string(
+            "setup_token",
+            "First-run setup token. Stored in the login cookie and accepted only while no user exists.",
+            false,
+        ),
+    ]))
+    .responses(responses(
+        "302",
+        redirect_to("Redirect to the provider, or to `/login?error=provider_unavailable`."),
+        &[404],
+    ))
+    .build();
+    let callback = operation(
+        "get_oauth_callback",
+        "auth",
+        "Finish an OAuth or OIDC login",
+    )
+    .description(Some(
+        "Clears the login cookie. Success sets the session cookie and redirects to the saved \
+         relative path. Failure redirects to `/login?error=<code>`. Codes: `invalid_state`, \
+         `provider_error`, `provider_unavailable`, `email_not_verified`, `domain_not_allowed`, \
+         `signup_closed`, `account_disabled`, `link_refused`, `setup_required`.",
+    ))
+    .securities(Some(Vec::new()))
+    .parameters(Some(vec![
+        path_string(
+            "provider",
+            "Provider id: `github`, `google`, or `oidc:<name>`.",
+        ),
+        query_string("code", "Authorization code from the provider.", false),
+        query_string(
+            "state",
+            "State value from the authorization redirect.",
+            false,
+        ),
+        query_string(
+            "error",
+            "Error code from the provider, when it refused the login.",
+            false,
+        ),
+    ]))
+    .responses(responses(
+        "302",
+        redirect_to(
+            "Redirect to the saved path, or to `/login?error=<code>` (`invalid_state`, \
+             `provider_error`, `provider_unavailable`, `email_not_verified`, \
+             `domain_not_allowed`, `signup_closed`, `account_disabled`, `link_refused`, \
+             `setup_required`).",
+        ),
+        &[],
+    ))
+    .build();
     let config = operation("get_auth_config", "auth", "Get the auth config")
         .securities(Some(Vec::new()))
         .responses(responses(
             "200",
             json_of::<AuthConfig>("Login methods the UI should offer."),
             &[],
+        ))
+        .build();
+    let setup = operation("post_setup", "auth", "Create the first admin")
+        .securities(Some(Vec::new()))
+        .request_body(Some(json_body("SetupRequest")))
+        .responses(responses(
+            "201",
+            json_of::<SetupResponse>("The admin, org, project, and secret key shown once."),
+            &[400, 403, 409, 429],
+        ))
+        .build();
+    let login = operation("post_login", "auth", "Log in with a password")
+        .securities(Some(Vec::new()))
+        .request_body(Some(json_body("LoginRequest")))
+        .responses(responses(
+            "200",
+            json_of::<Me>("The signed-in user and org memberships."),
+            &[401, 403, 429],
+        ))
+        .build();
+    let logout = operation("post_logout", "auth", "Log out")
+        .securities(Some(Vec::new()))
+        .responses(responses(
+            "204",
+            ResponseBuilder::new()
+                .description("The session is deleted and the cookie is cleared.")
+                .build(),
+            &[],
+        ))
+        .build();
+    let signup = operation("post_signup", "auth", "Create an account")
+        .securities(Some(Vec::new()))
+        .request_body(Some(json_body("SignupRequest")))
+        .responses(responses(
+            "201",
+            json_of::<SignupResponse>("The new account, or a verification requirement."),
+            &[400, 403, 409, 429],
         ))
         .build();
     let me = operation("get_me", "auth", "Get the current user")
@@ -460,12 +733,231 @@ fn auth_paths(paths: PathsBuilder) -> PathsBuilder {
             &[401, 429],
         ))
         .build();
+    let forgot = operation("post_password_forgot", "auth", "Request a password reset")
+        .securities(Some(Vec::new()))
+        .request_body(Some(json_body("ForgotPasswordRequest")))
+        .responses(responses(
+            "204",
+            ResponseBuilder::new()
+                .description(
+                    "Accepted. A reset message is sent only when that address can receive one.",
+                )
+                .build(),
+            &[400, 403, 429],
+        ))
+        .build();
+    let reset = operation(
+        "post_password_reset",
+        "auth",
+        "Set a password from a reset link",
+    )
+    .securities(Some(Vec::new()))
+    .request_body(Some(json_body("ResetPasswordRequest")))
+    .responses(responses(
+        "204",
+        ResponseBuilder::new()
+            .description("The password is updated and every web session is deleted.")
+            .build(),
+        &[400, 403, 429],
+    ))
+    .build();
+    let verify = operation("post_email_verify", "auth", "Verify an email address")
+        .securities(Some(Vec::new()))
+        .request_body(Some(json_body("VerifyEmailRequest")))
+        .responses(responses(
+            "204",
+            ResponseBuilder::new()
+                .description("The email address is verified.")
+                .build(),
+            &[400],
+        ))
+        .build();
+    let resend = operation(
+        "post_email_verify_resend",
+        "auth",
+        "Resend an email verification",
+    )
+    .securities(Some(Vec::new()))
+    .request_body(Some(json_body("ResendVerificationRequest")))
+    .responses(responses(
+        "204",
+        ResponseBuilder::new()
+            .description("Accepted. A verification message is sent only for an unverified account.")
+            .build(),
+        &[400, 429],
+    ))
+    .build();
+    let session_only = vec![SecurityRequirement::new("session", [] as [&str; 0])];
+    let patch_me = operation("patch_me", "auth", "Change the display name")
+        .securities(Some(session_only.clone()))
+        .request_body(Some(json_body("UpdateMeRequest")))
+        .responses(responses(
+            "200",
+            json_of::<User>("The updated user."),
+            &[400, 401, 403],
+        ))
+        .build();
+    let password = operation("post_me_password", "auth", "Change the password")
+        .securities(Some(session_only))
+        .request_body(Some(json_body("ChangePasswordRequest")))
+        .responses(responses(
+            "204",
+            ResponseBuilder::new()
+                .description(
+                    "The password is updated. Other web sessions and personal access tokens are revoked.",
+                )
+                .build(),
+            &[400, 401, 403, 429],
+        ))
+        .build();
+    let session = vec![SecurityRequirement::new("session", [] as [&str; 0])];
+    let preview = operation("get_invite_preview", "auth", "Preview an invitation")
+        .securities(Some(Vec::new()))
+        .parameters(Some(vec![path_string(
+            "token",
+            "Invitation token from the accept link.",
+        )]))
+        .responses(responses(
+            "200",
+            json_of::<InvitePreview>("The invitation, when it is pending and unexpired."),
+            &[404, 429],
+        ))
+        .build();
+    let accept = operation("post_invite_accept", "auth", "Accept an invitation")
+        .securities(Some(session))
+        .parameters(Some(vec![path_string(
+            "token",
+            "Invitation token from the accept link.",
+        )]))
+        .responses(responses(
+            "200",
+            json_of::<OrgMembership>("The caller's membership in the org."),
+            &[401, 403, 404, 429],
+        ))
+        .build();
     paths
+        .path(
+            "/api/auth/authorize/{provider}",
+            PathItem::new(HttpMethod::Get, authorize),
+        )
+        .path(
+            "/api/auth/callback/{provider}",
+            PathItem::new(HttpMethod::Get, callback),
+        )
         .path("/api/auth/config", PathItem::new(HttpMethod::Get, config))
+        .path("/api/auth/setup", PathItem::new(HttpMethod::Post, setup))
+        .path("/api/auth/login", PathItem::new(HttpMethod::Post, login))
+        .path("/api/auth/logout", PathItem::new(HttpMethod::Post, logout))
+        .path("/api/auth/signup", PathItem::new(HttpMethod::Post, signup))
+        .path(
+            "/api/auth/invites/{token}",
+            PathItem::new(HttpMethod::Get, preview),
+        )
+        .path(
+            "/api/auth/invites/{token}/accept",
+            PathItem::new(HttpMethod::Post, accept),
+        )
+        .path(
+            "/api/auth/password/forgot",
+            PathItem::new(HttpMethod::Post, forgot),
+        )
+        .path(
+            "/api/auth/password/reset",
+            PathItem::new(HttpMethod::Post, reset),
+        )
+        .path(
+            "/api/auth/email/verify",
+            PathItem::new(HttpMethod::Post, verify),
+        )
+        .path(
+            "/api/auth/email/verify/resend",
+            PathItem::new(HttpMethod::Post, resend),
+        )
         .path("/api/auth/me", PathItem::new(HttpMethod::Get, me))
+        .path("/api/v1/me", PathItem::new(HttpMethod::Patch, patch_me))
+        .path(
+            "/api/v1/me/password",
+            PathItem::new(HttpMethod::Post, password),
+        )
+}
+
+fn invite_paths(paths: PathsBuilder) -> PathsBuilder {
+    let session_only = vec![SecurityRequirement::new("session", [] as [&str; 0])];
+    let org_param = path_string("org", "Org UUID or slug.");
+    let list = operation("list_org_invites", "orgs", "List pending invitations")
+        .parameters(Some(with_query::<PageParams>(vec![org_param.clone()])))
+        .responses(responses(
+            "200",
+            json_named(
+                "InvitePage",
+                "One page of pending invitations, ordered by email.",
+            ),
+            QUERY_ERRORS,
+        ))
+        .build();
+    let create = operation("post_org_invite", "orgs", "Invite a member by email")
+        .securities(Some(session_only.clone()))
+        .parameters(Some(vec![org_param.clone()]))
+        .request_body(Some(json_body("CreateInviteRequest")))
+        .responses(responses(
+            "201",
+            json_of::<CreatedInvite>("The invitation and its accept link."),
+            &[400, 401, 403, 404, 409, 429],
+        ))
+        .build();
+    let delete = operation("delete_org_invite", "orgs", "Delete an invitation")
+        .securities(Some(session_only))
+        .parameters(Some(vec![org_param, path_uuid("id", "Invitation id.")]))
+        .responses(responses(
+            "204",
+            ResponseBuilder::new()
+                .description("The invitation is deleted.")
+                .build(),
+            &[400, 401, 403, 404, 429],
+        ))
+        .build();
+    let mut collection = PathItem::new(HttpMethod::Get, list);
+    collection.post = Some(create);
+    paths.path("/api/v1/orgs/{org}/invites", collection).path(
+        "/api/v1/orgs/{org}/invites/{id}",
+        PathItem::new(HttpMethod::Delete, delete),
+    )
 }
 
 fn project_paths(paths: PathsBuilder) -> PathsBuilder {
+    let list_orgs = operation("list_orgs", "orgs", "List organizations")
+        .parameters(Some(with_query::<PageParams>(Vec::new())))
+        .responses(responses(
+            "200",
+            json_named("OrgPage", "One page of organizations."),
+            &[400, 401, 429],
+        ))
+        .build();
+    let post_org = operation("post_org", "orgs", "Create an organization")
+        .request_body(Some(json_body("CreateOrgRequest")))
+        .responses(responses(
+            "201",
+            json_of::<OrgMembership>("The new organization. The caller is its owner."),
+            &[400, 401, 409, 429],
+        ))
+        .build();
+    let get_org = operation("get_org", "orgs", "Get an organization")
+        .parameters(Some(vec![path_string("org", "Org UUID or slug.")]))
+        .responses(responses(
+            "200",
+            json_of::<OrgMembership>("The organization and the caller's role."),
+            AUTH_ERRORS,
+        ))
+        .build();
+    let patch_org = operation("patch_org", "orgs", "Rename an organization")
+        .parameters(Some(vec![path_string("org", "Org UUID or slug.")]))
+        .request_body(Some(json_body("UpdateOrgRequest")))
+        .responses(responses(
+            "200",
+            json_of::<OrgMembership>("The organization. The slug is unchanged."),
+            &[400, 401, 403, 404, 429],
+        ))
+        .build();
     let list = operation("list_projects", "projects", "List projects")
         .parameters(Some(with_query::<PageParams>(vec![path_string(
             "org",
@@ -477,6 +969,15 @@ fn project_paths(paths: PathsBuilder) -> PathsBuilder {
             QUERY_ERRORS,
         ))
         .build();
+    let post_project = operation("post_project", "projects", "Create a project")
+        .parameters(Some(vec![path_string("org", "Org UUID or slug.")]))
+        .request_body(Some(json_body("CreateProjectRequest")))
+        .responses(responses(
+            "201",
+            json_of::<Project>("The new project."),
+            &[400, 401, 403, 404, 409, 429],
+        ))
+        .build();
     let get = operation("get_project", "projects", "Get a project")
         .parameters(Some(vec![project_param()]))
         .responses(responses(
@@ -485,14 +986,243 @@ fn project_paths(paths: PathsBuilder) -> PathsBuilder {
             AUTH_ERRORS,
         ))
         .build();
+    let patch_project = operation("patch_project", "projects", "Update a project")
+        .parameters(Some(vec![project_param()]))
+        .request_body(Some(json_body("UpdateProjectRequest")))
+        .responses(responses(
+            "200",
+            json_of::<Project>("The project."),
+            &[400, 401, 403, 404, 429],
+        ))
+        .build();
+    let mut orgs = PathItem::new(HttpMethod::Get, list_orgs);
+    orgs.post = Some(post_org);
+    let mut org = PathItem::new(HttpMethod::Get, get_org);
+    org.patch = Some(patch_org);
+    let mut projects = PathItem::new(HttpMethod::Get, list);
+    projects.post = Some(post_project);
+    let mut project = PathItem::new(HttpMethod::Get, get);
+    project.patch = Some(patch_project);
+    paths
+        .path("/api/v1/orgs", orgs)
+        .path("/api/v1/orgs/{org}", org)
+        .path("/api/v1/orgs/{org}/projects", projects)
+        .path("/api/v1/projects/{project}", project)
+}
+
+fn member_paths(paths: PathsBuilder) -> PathsBuilder {
+    let session_only = vec![SecurityRequirement::new("session", [] as [&str; 0])];
+    let org_param = path_string("org", "Org UUID or slug.");
+    let user_param = path_uuid("user", "User id.");
+    let list_orgs = operation("list_org_members", "orgs", "List organization members")
+        .parameters(Some(with_query::<PageParams>(vec![org_param.clone()])))
+        .responses(responses(
+            "200",
+            json_named("OrgMemberPage", "One page of members, ordered by email."),
+            QUERY_ERRORS,
+        ))
+        .build();
+    let patch_org = operation("patch_org_member", "orgs", "Change an organization role")
+        .securities(Some(session_only.clone()))
+        .parameters(Some(vec![org_param, user_param.clone()]))
+        .request_body(Some(json_body("UpdateOrgMemberRequest")))
+        .responses(responses(
+            "200",
+            json_of::<OrgMember>("The member."),
+            &[400, 401, 403, 404, 409, 429],
+        ))
+        .build();
+    let delete_org = operation("delete_org_member", "orgs", "Remove an organization member")
+        .securities(Some(session_only.clone()))
+        .parameters(Some(vec![
+            path_string("org", "Org UUID or slug."),
+            user_param.clone(),
+        ]))
+        .responses(responses(
+            "204",
+            ResponseBuilder::new()
+                .description("The member and their project overrides in this org are removed.")
+                .build(),
+            &[400, 401, 403, 404, 409, 429],
+        ))
+        .build();
+    let list_projects = operation("list_project_members", "projects", "List project members")
+        .parameters(Some(with_query::<PageParams>(vec![project_param()])))
+        .responses(responses(
+            "200",
+            json_named(
+                "ProjectMemberPage",
+                "One page of org members and their effective project role, ordered by email.",
+            ),
+            QUERY_ERRORS,
+        ))
+        .build();
+    let put_project = operation(
+        "put_project_member",
+        "projects",
+        "Set a project role override",
+    )
+    .securities(Some(session_only.clone()))
+    .parameters(Some(vec![project_param(), user_param.clone()]))
+    .request_body(Some(json_body("SetProjectOverrideRequest")))
+    .responses(responses(
+        "200",
+        json_of::<ProjectMember>("The member on this project."),
+        &[400, 401, 403, 404, 429],
+    ))
+    .build();
+    let delete_project = operation(
+        "delete_project_member",
+        "projects",
+        "Remove a project role override",
+    )
+    .securities(Some(session_only))
+    .parameters(Some(vec![project_param(), user_param]))
+    .responses(responses(
+        "204",
+        ResponseBuilder::new()
+            .description("The override is removed. Also returned when there was none.")
+            .build(),
+        &[400, 401, 403, 404, 429],
+    ))
+    .build();
+    let mut org_member = PathItem::new(HttpMethod::Patch, patch_org);
+    org_member.delete = Some(delete_org);
     paths
         .path(
-            "/api/v1/orgs/{org}/projects",
-            PathItem::new(HttpMethod::Get, list),
+            "/api/v1/orgs/{org}/members",
+            PathItem::new(HttpMethod::Get, list_orgs),
+        )
+        .path("/api/v1/orgs/{org}/members/{user}", org_member)
+        .path(
+            "/api/v1/projects/{project}/members",
+            PathItem::new(HttpMethod::Get, list_projects),
         )
         .path(
-            "/api/v1/projects/{project}",
-            PathItem::new(HttpMethod::Get, get),
+            "/api/v1/projects/{project}/members/{user}",
+            PathItem::new(HttpMethod::Put, put_project),
+        )
+        .path(
+            "/api/v1/projects/{project}/members/{user}",
+            PathItem::new(HttpMethod::Delete, delete_project),
+        )
+}
+
+fn api_key_paths(paths: PathsBuilder) -> PathsBuilder {
+    let session_only = vec![SecurityRequirement::new("session", [] as [&str; 0])];
+    let list = operation("list_api_keys", "projects", "List API keys")
+        .securities(Some(session_only.clone()))
+        .parameters(Some(with_query::<PageParams>(vec![project_param()])))
+        .responses(responses(
+            "200",
+            json_named(
+                "ApiKeyPage",
+                "One page of API keys, newest first. The secret is not included.",
+            ),
+            QUERY_ERRORS,
+        ))
+        .build();
+    let create = operation("post_api_key", "projects", "Create an API key")
+        .securities(Some(session_only.clone()))
+        .parameters(Some(vec![project_param()]))
+        .request_body(Some(json_body("CreateApiKeyRequest")))
+        .responses(responses(
+            "201",
+            json_of::<CreatedApiKey>("The key and its secret. The secret is shown only here."),
+            &[400, 401, 403, 404, 429],
+        ))
+        .build();
+    let delete = operation("delete_api_key", "projects", "Revoke an API key")
+        .securities(Some(session_only))
+        .parameters(Some(vec![project_param(), path_uuid("id", "API key id.")]))
+        .responses(responses(
+            "204",
+            ResponseBuilder::new()
+                .description("The key is revoked.")
+                .build(),
+            &[400, 401, 403, 404, 429],
+        ))
+        .build();
+    let mut keys = PathItem::new(HttpMethod::Get, list);
+    keys.post = Some(create);
+    paths
+        .path("/api/v1/projects/{project}/api-keys", keys)
+        .path(
+            "/api/v1/projects/{project}/api-keys/{id}",
+            PathItem::new(HttpMethod::Delete, delete),
+        )
+}
+
+fn token_paths(paths: PathsBuilder) -> PathsBuilder {
+    let session_only = vec![SecurityRequirement::new("session", [] as [&str; 0])];
+    let list = operation(
+        "list_personal_tokens",
+        "auth",
+        "List personal access tokens",
+    )
+    .securities(Some(session_only.clone()))
+    .parameters(Some(with_query::<PageParams>(Vec::new())))
+    .responses(responses(
+        "200",
+        json_named(
+            "PersonalTokenPage",
+            "One page of personal access tokens, newest first. The secret is not included.",
+        ),
+        QUERY_ERRORS,
+    ))
+    .build();
+    let create = operation(
+        "post_personal_token",
+        "auth",
+        "Create a personal access token",
+    )
+    .securities(Some(session_only.clone()))
+    .request_body(Some(json_body("CreatePersonalTokenRequest")))
+    .responses(responses(
+        "201",
+        json_of::<CreatedPersonalToken>("The token and its secret. The secret is shown only here."),
+        &[400, 401, 403, 429],
+    ))
+    .build();
+    let delete_one = operation(
+        "delete_personal_token",
+        "auth",
+        "Revoke a personal access token",
+    )
+    .securities(Some(session_only))
+    .parameters(Some(vec![path_uuid("id", "Personal access token id.")]))
+    .responses(responses(
+        "204",
+        ResponseBuilder::new()
+            .description("The token is revoked.")
+            .build(),
+        &[400, 401, 403, 404, 429],
+    ))
+    .build();
+    let delete_current = operation(
+        "delete_current_token",
+        "auth",
+        "Revoke the current personal access token",
+    )
+    .responses(responses(
+        "204",
+        ResponseBuilder::new()
+            .description("The token that authenticated this request is revoked.")
+            .build(),
+        AUTH_ERRORS,
+    ))
+    .build();
+    let mut tokens = PathItem::new(HttpMethod::Get, list);
+    tokens.post = Some(create);
+    paths
+        .path("/api/v1/me/tokens", tokens)
+        .path(
+            "/api/v1/me/tokens/current",
+            PathItem::new(HttpMethod::Delete, delete_current),
+        )
+        .path(
+            "/api/v1/me/tokens/{id}",
+            PathItem::new(HttpMethod::Delete, delete_one),
         )
 }
 
@@ -822,6 +1552,24 @@ fn path_string(name: &str, description: &str) -> Parameter {
         .build()
 }
 
+fn query_string(name: &str, description: &str, required: bool) -> Parameter {
+    ParameterBuilder::new()
+        .name(name)
+        .parameter_in(ParameterIn::Query)
+        .required(if required {
+            Required::True
+        } else {
+            Required::False
+        })
+        .description(Some(description))
+        .schema(Some(string_schema()))
+        .build()
+}
+
+fn redirect_to(description: &str) -> Response {
+    ResponseBuilder::new().description(description).build()
+}
+
 fn path_ref(name: &str, schema_name: &str, description: &str) -> Parameter {
     ParameterBuilder::new()
         .name(name)
@@ -952,8 +1700,10 @@ fn problem(code: u16) -> Response {
         401 => "No credentials, or the credentials are invalid.",
         403 => "The credentials do not allow this operation.",
         404 => "The resource does not exist.",
+        409 => "The request conflicts with the current state.",
         416 => "The Range header does not overlap the blob.",
         429 => "Too many requests.",
+        503 => "The SMTP server could not be reached or refused the message.",
         _ => "Request failed.",
     };
     ResponseBuilder::new()

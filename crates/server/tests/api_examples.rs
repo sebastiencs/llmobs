@@ -11,8 +11,14 @@ use llmobs_core::ids::{SpanId, TraceId};
 use llmobs_core::message::{Message, Part};
 use llmobs_core::score::{Score, ScoreTarget, ScoreValue};
 use llmobs_core::span::Span;
-use llmobs_server::api::account::{AuthConfig, Me, OrgRole, Project};
+use llmobs_server::api::account::{
+    AuthConfig, Me, OrgMembership, OrgRole, Project, SetupResponse, SignupResponse,
+};
+use llmobs_server::api::admin::{AdminSettings, AdminUser, CreatedAdminUser};
 use llmobs_server::api::common::Page;
+use llmobs_server::api::invites::{CreatedInvite, Invite, InvitePreview};
+use llmobs_server::api::keys::{ApiKey, CreatedApiKey, CreatedPersonalToken, PersonalToken};
+use llmobs_server::api::members::{OrgMember, ProjectMember};
 use llmobs_server::api::metrics::MetricsResponse;
 use llmobs_server::api::openapi::openapi;
 use llmobs_server::api::payload::Payload;
@@ -63,6 +69,32 @@ fn params(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         .iter()
         .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
         .collect()
+}
+
+fn example_created(
+    operation_id: &str,
+    path_params: BTreeMap<String, String>,
+    file: &str,
+) -> Example {
+    Example {
+        operation_id: operation_id.to_owned(),
+        path_params,
+        query: BTreeMap::new(),
+        status: 201,
+        content_type: "application/json".to_owned(),
+        file: file.to_owned(),
+    }
+}
+
+fn example_status(operation_id: &str, file: &str, status: u16) -> Example {
+    Example {
+        operation_id: operation_id.to_owned(),
+        path_params: BTreeMap::new(),
+        query: BTreeMap::new(),
+        status,
+        content_type: "application/json".to_owned(),
+        file: file.to_owned(),
+    }
 }
 
 fn example(
@@ -316,17 +348,92 @@ fn build() -> Built {
 
     manifest.extend([
         example(
+            "list_admin_users",
+            BTreeMap::new(),
+            BTreeMap::new(),
+            "static/admin-users.json",
+            "application/json",
+        ),
+        example_created(
+            "post_admin_user",
+            BTreeMap::new(),
+            "static/admin-user-created.json",
+        ),
+        example(
+            "get_admin_settings",
+            BTreeMap::new(),
+            BTreeMap::new(),
+            "static/admin-settings.json",
+            "application/json",
+        ),
+        example(
             "get_auth_config",
             BTreeMap::new(),
             BTreeMap::new(),
             "static/auth-config.json",
             "application/json",
         ),
+        example_status("post_setup", "static/setup-response.json", 201),
+        example(
+            "post_login",
+            BTreeMap::new(),
+            BTreeMap::new(),
+            "static/me.json",
+            "application/json",
+        ),
+        example_status("post_signup", "static/signup-response.json", 201),
         example(
             "get_me",
             BTreeMap::new(),
             BTreeMap::new(),
             "static/me.json",
+            "application/json",
+        ),
+        example(
+            "list_orgs",
+            BTreeMap::new(),
+            BTreeMap::new(),
+            "static/orgs.json",
+            "application/json",
+        ),
+        example(
+            "get_org",
+            params(&[("org", "acme")]),
+            BTreeMap::new(),
+            "static/org.json",
+            "application/json",
+        ),
+        example(
+            "list_org_members",
+            params(&[("org", "acme")]),
+            BTreeMap::new(),
+            "static/org-members.json",
+            "application/json",
+        ),
+        example(
+            "list_org_invites",
+            params(&[("org", "acme")]),
+            BTreeMap::new(),
+            "static/invites.json",
+            "application/json",
+        ),
+        example_created(
+            "post_org_invite",
+            params(&[("org", "acme")]),
+            "static/invite-created.json",
+        ),
+        example(
+            "get_invite_preview",
+            params(&[("token", "EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXA")]),
+            BTreeMap::new(),
+            "static/invite-preview.json",
+            "application/json",
+        ),
+        example(
+            "list_project_members",
+            BTreeMap::new(),
+            BTreeMap::new(),
+            "static/project-members.json",
             "application/json",
         ),
         example(
@@ -342,6 +449,26 @@ fn build() -> Built {
             BTreeMap::new(),
             "static/project.json",
             "application/json",
+        ),
+        example(
+            "list_api_keys",
+            BTreeMap::new(),
+            BTreeMap::new(),
+            "static/api-keys.json",
+            "application/json",
+        ),
+        example_status("post_api_key", "static/api-key-created.json", 201),
+        example(
+            "list_personal_tokens",
+            BTreeMap::new(),
+            BTreeMap::new(),
+            "static/personal-tokens.json",
+            "application/json",
+        ),
+        example_status(
+            "post_personal_token",
+            "static/personal-token-created.json",
+            201,
         ),
         example(
             "get_schema",
@@ -720,7 +847,7 @@ fn contract_document() -> PathBuf {
 const OPENAPI_URI: &str = "urn:llmobs:openapi";
 
 fn schema_pointer(document: &Value, entry: &Example, failures: &mut Vec<String>) -> Option<String> {
-    let Some((path, operation)) = operation_at(document, &entry.operation_id) else {
+    let Some((path, method, operation)) = operation_at(document, &entry.operation_id) else {
         failures.push(format!(
             "{}: operation {} is missing",
             entry.file, entry.operation_id
@@ -736,20 +863,28 @@ fn schema_pointer(document: &Value, entry: &Example, failures: &mut Vec<String>)
         ));
         return None;
     }
+    let path = uri_escape(&pointer_token(&path));
+    let method = uri_escape(&pointer_token(&method));
+    let status = uri_escape(&pointer_token(&status));
+    let content = uri_escape(&pointer_token(&entry.content_type));
     Some(format!(
-        "/paths/{}/get/responses/{}/content/{}/schema",
-        uri_escape(&pointer_token(&path)),
-        uri_escape(&pointer_token(&status)),
-        uri_escape(&pointer_token(&entry.content_type))
+        "/paths/{path}/{method}/responses/{status}/content/{content}/schema"
     ))
 }
 
-fn operation_at(document: &Value, operation_id: &str) -> Option<(String, Value)> {
+fn operation_at(document: &Value, operation_id: &str) -> Option<(String, String, Value)> {
     let paths = document.get("paths")?.as_object()?;
     for (path, item) in paths {
-        let operation = &item["get"];
-        if operation["operationId"] == operation_id {
-            return Some((path.clone(), operation.clone()));
+        let Some(item) = item.as_object() else {
+            continue;
+        };
+        for method in ["get", "post", "put", "patch", "delete", "head"] {
+            let Some(operation) = item.get(method) else {
+                continue;
+            };
+            if operation["operationId"] == operation_id {
+                return Some((path.clone(), method.to_owned(), operation.clone()));
+            }
         }
     }
     None
@@ -758,9 +893,21 @@ fn operation_at(document: &Value, operation_id: &str) -> Option<(String, Value)>
 fn get_operation<'a>(document: &'a Value, operation_id: &str) -> Option<(&'a Value, &'a Value)> {
     let paths = document.get("paths")?.as_object()?;
     for item in paths.values() {
-        let operation = &item["get"];
-        if operation["operationId"] == operation_id {
+        if let Some(operation) = method_operation(item, operation_id) {
             return Some((item, operation));
+        }
+    }
+    None
+}
+
+fn method_operation<'a>(item: &'a Value, operation_id: &str) -> Option<&'a Value> {
+    let item = item.as_object()?;
+    for method in ["get", "post", "put", "patch", "delete", "head"] {
+        let Some(operation) = item.get(method) else {
+            continue;
+        };
+        if operation["operationId"] == operation_id {
+            return Some(operation);
         }
     }
     None
@@ -861,9 +1008,25 @@ fn collect_names(dir: &Path, prefix: &str, files: &mut Vec<String>) {
 #[test]
 fn static_files_match_their_types() {
     roundtrip::<AuthConfig>("static/auth-config.json");
+    roundtrip::<SetupResponse>("static/setup-response.json");
+    roundtrip::<SignupResponse>("static/signup-response.json");
     roundtrip::<Me>("static/me.json");
+    roundtrip::<Page<OrgMembership>>("static/orgs.json");
+    roundtrip::<OrgMembership>("static/org.json");
+    roundtrip::<Page<OrgMember>>("static/org-members.json");
+    roundtrip::<Page<Invite>>("static/invites.json");
+    roundtrip::<Page<AdminUser>>("static/admin-users.json");
+    roundtrip::<CreatedAdminUser>("static/admin-user-created.json");
+    roundtrip::<AdminSettings>("static/admin-settings.json");
+    roundtrip::<CreatedInvite>("static/invite-created.json");
+    roundtrip::<InvitePreview>("static/invite-preview.json");
+    roundtrip::<Page<ProjectMember>>("static/project-members.json");
     roundtrip::<Page<Project>>("static/projects.json");
     roundtrip::<Project>("static/project.json");
+    roundtrip::<Page<ApiKey>>("static/api-keys.json");
+    roundtrip::<CreatedApiKey>("static/api-key-created.json");
+    roundtrip::<Page<PersonalToken>>("static/personal-tokens.json");
+    roundtrip::<CreatedPersonalToken>("static/personal-token-created.json");
     roundtrip::<SchemaResponse>("static/schema.json");
     roundtrip::<Page<SavedView>>("static/saved-views.json");
     roundtrip::<MetricsResponse>("static/metrics.json");
@@ -886,8 +1049,30 @@ fn generated_files_roundtrip() {
             "list_users" => roundtrip::<Page<EndUserSummary>>(&example.file),
             "get_user" => roundtrip::<EndUserDetail>(&example.file),
             "list_scores" => roundtrip::<Page<Score>>(&example.file),
-            "get_auth_config" | "get_me" | "list_projects" | "get_project" | "get_schema"
-            | "list_saved_views" | "get_metrics" => {}
+            "list_api_keys" => roundtrip::<Page<ApiKey>>(&example.file),
+            "post_api_key" => roundtrip::<CreatedApiKey>(&example.file),
+            "list_personal_tokens" => roundtrip::<Page<PersonalToken>>(&example.file),
+            "post_personal_token" => roundtrip::<CreatedPersonalToken>(&example.file),
+            "get_auth_config"
+            | "get_me"
+            | "list_orgs"
+            | "get_org"
+            | "list_org_members"
+            | "list_org_invites"
+            | "post_org_invite"
+            | "get_invite_preview"
+            | "list_project_members"
+            | "list_projects"
+            | "get_project"
+            | "get_schema"
+            | "list_saved_views"
+            | "get_metrics"
+            | "post_setup"
+            | "post_login"
+            | "post_signup"
+            | "list_admin_users"
+            | "post_admin_user"
+            | "get_admin_settings" => {}
             other => panic!("{other} has no round-trip"),
         }
     }
@@ -914,7 +1099,13 @@ fn manifest_covers_the_read_operations() {
                 .as_str()
                 .unwrap_or_else(|| panic!("operation id"));
             known.insert(id.to_owned());
-            if method == "get" && id != "stream_traces" && id != "stream_trace" {
+            // Streams and the OAuth redirects have no JSON body to fixture.
+            if method == "get"
+                && id != "stream_traces"
+                && id != "stream_trace"
+                && id != "get_oauth_authorize"
+                && id != "get_oauth_callback"
+            {
                 gets.insert(id.to_owned());
             }
         }
@@ -1021,10 +1212,9 @@ fn dataset_is_consistent() {
         .collect();
     assert_eq!(ids, vec![PROJECT, PROJECT_PLAYGROUND]);
     assert!(
-        projects
-            .data
-            .iter()
-            .all(|project| project.org_id.to_string() == ORG && project.role == OrgRole::Owner)
+        projects.data.iter().all(
+            |project| project.org_id.to_string() == ORG && project.role == Some(OrgRole::Owner)
+        )
     );
     let me: Me = read_json(&dir.join("static/me.json"));
     assert_eq!(me.user.id.to_string(), USER);

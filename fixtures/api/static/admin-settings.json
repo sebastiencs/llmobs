@@ -1,0 +1,20 @@
+{
+  "public_url": "http://localhost:8080",
+  "signup": "invite_only",
+  "signup_domains": [],
+  "password_enabled": true,
+  "email_verification_required": false,
+  "enforce_sso_domains": [],
+  "smtp_enabled": false,
+  "providers": [
+    {
+      "id": "github",
+      "display_name": "GitHub"
+    },
+    {
+      "id": "oidc:okta",
+      "display_name": "Okta"
+    }
+  ],
+  "trusted_proxies": []
+}

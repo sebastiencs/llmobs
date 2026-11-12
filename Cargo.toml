@@ -87,6 +87,41 @@ tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "ti
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 thiserror = "2.0"
+# Server config (spec 12). `env` is enabled because `LLMOBS_*` is an env source;
+# the loader builds that source from an explicit map so tests do not touch the
+# process environment. `toml` reads `llmobs.toml`.
+figment = { version = "0.10.19", features = ["toml", "env"] }
+# `trusted_proxies` CIDRs (D142).
+ipnet = { version = "2.12.2", features = ["serde"] }
+# `public_url` parsing. Already in `Cargo.lock` (2.5.8).
+url = "2.5.8"
+# SMTP (spec 08). Default features include `native-tls`; rustls only.
+# `hostname` is the EHLO and generated `Message-ID` domain.
+lettre = { version = "0.11.23", default-features = false, features = [
+    "builder",
+    "hostname",
+    "smtp-transport",
+    "tokio1-rustls-tls",
+] }
+# Email templates (spec 08). `.html` names auto-escape.
+minijinja = "3.1.0"
+# HTTP router (P4). No `tracing` feature: axum's span would record the URI (D150).
+# `matched-path` is the route template request logs use.
+axum = { version = "0.8.9", default-features = false, features = [
+    "http1",
+    "json",
+    "matched-path",
+    "query",
+    "tokio",
+] }
+# `ServiceExt::oneshot` for HTTP tests (D151).
+tower = { version = "0.5.3", default-features = false, features = ["util"] }
+# Session cookie parsing (P9). Default features stay off so `axum/tracing` is not enabled (D150).
+axum-extra = { version = "0.12.6", default-features = false, features = ["cookie"] }
+# Field path of a JSON or query error, without the rejected value (P4).
+serde_path_to_error = "0.1.20"
+# Email normalization: trim, NFC, lowercase (P6, D136).
+unicode-normalization = "0.1.26"
 # DataFusion 55's `TableProvider` is an `#[async_trait]` trait.
 async-trait = "0.1.92"
 hex = "0.4.3"
@@ -119,6 +154,24 @@ opentelemetry-proto = { version = "0.33.1", default-features = false, features =
 regex = "1.13.1"
 sha2 = "0.11.1"
 base64 = "0.23.1"
+# Password hashing (D143). Defaults include `alloc`, `getrandom`, and `password-hash`.
+argon2 = "0.6.0"
+# OS CSPRNG for keys and salts (`SysRng`). Already resolved in `Cargo.lock`.
+rand = "0.10.3"
+# CLI credentials directory (P17).
+dirs = "7.0.0"
+# CLI credentials file (P17). Figment still uses toml 0.8.
+toml = "1.2.1"
+# CLI login and logout (P17). `openidconnect` uses this pin.
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json"] }
+# OIDC discovery and id_token checks (D148). Same reqwest and rustls backend as `reqwest`.
+openidconnect = { version = "4.1.0", default-features = false, features = ["reqwest", "rustls-tls"] }
+# GitHub's OAuth 2 flow. Same HTTP backend as `openidconnect`.
+oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest", "rustls-tls"] }
+# HMAC-SHA256 for the OAuth state cookie (P24). RustCrypto 0.13, matching `sha2` 0.11.
+hmac = "0.13.0"
+# Constant-time compare of token hashes.
+subtle = "2.6.1"
 # OpenAPI 3.1 schemas. `uuid` enables the `format: uuid` schema. Do not enable
 # `preserve_order` or `preserve_path_order`: default `BTreeMap`s keep the document sorted.
 utoipa = { version = "6.0.0", features = ["uuid"] }
@@ -127,12 +180,11 @@ serde_urlencoded = "0.7.1"
 tempfile = "3.27.0"
 # OTLP property tests in llmobs-otel. MSRV 1.88. Tests enable `std` only.
 proptest = "1.12.0"
-# Capture mock. Default features serve HTTP/1.1 JSON and SSE.
-axum = "0.8.9"
-# axum 0.8.9's body trait. The streaming mock implements it; axum does not re-export `Frame`.
+# Mock identity-provider RS256 keys (tests only). `rand_core` 0.10 matches workspace `rand`.
+rsa = { version = "0.10.0", features = ["pkcs1v15"] }
+# axum 0.8.9's body trait. The capture mock's stream implements it; axum does not re-export `Frame`.
 http-body = "1.1.0"
-# Dev-dependencies of llmobs-capture, for `oneshot` tests of the axum apps.
-tower = "0.5.3"
+# Dev-dependency of llmobs-capture, for `oneshot` tests of the axum apps.
 http-body-util = "0.1.5"
 
 [profile.dev]

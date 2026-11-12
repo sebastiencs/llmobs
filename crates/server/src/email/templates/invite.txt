@@ -1,0 +1,7 @@
+{%- if inviter_name -%}
+{{ inviter_name }} invited you to join {{ org_name }} on {{ product }} as {{ role }}.
+{%- else -%}
+You are invited to join {{ org_name }} on {{ product }} as {{ role }}.
+{%- endif %}
+Accept the invitation:
+{{ url }}
