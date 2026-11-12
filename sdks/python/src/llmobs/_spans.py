@@ -1,7 +1,8 @@
 """Manual spans and ``observe`` (plan F § P5, spec 10).
 
 ``span()`` is a sync and async context manager, ``observe`` wraps functions
-and coroutine functions (generators arrive with P6). Payloads are masked
+and coroutine functions, and generator functions (detected at decoration
+time) through the wrappers of ``_generators`` (P6). Payloads are masked
 then serialized (§ Serialization, D-F-6, D-F-10), inputs follow D-F-11, and
 errors are recorded as one ``exception`` event with the status set to error
 (§ Errors). Nothing raises into the app after ``init()`` except an invalid
@@ -64,12 +65,24 @@ def _check_kind(kind: SpanKind) -> None:
         raise ValueError(_KIND_ERROR)
 
 
+def _serialize_payload(value: object) -> tuple[str, str] | None:
+    """Mask and serialize one payload value; ``None`` on failure (never raises)."""
+    try:
+        pair = serialize(apply(value))
+    except Exception as error:  # noqa: BLE001  # never raise into the app (spec 10 rule 4)
+        logger.debug("llmobs: could not serialize the payload (%s)", type(error).__name__)
+        return None
+    return pair[0], pair[1]
+
+
 def _record_payload(otel_span: trace_api.Span, which: str, value: object) -> None:
     """Mask, serialize and set ``llmobs.<which>`` with its format; never raises."""
+    serialized = _serialize_payload(value)
+    if serialized is None:
+        return
     try:
-        text, fmt = serialize(apply(value))
-        otel_span.set_attribute(f"llmobs.{which}", text)
-        otel_span.set_attribute(f"llmobs.{which}.format", fmt)
+        otel_span.set_attribute(f"llmobs.{which}", serialized[0])
+        otel_span.set_attribute(f"llmobs.{which}.format", serialized[1])
     except Exception as error:  # noqa: BLE001  # never raise into the app (spec 10 rule 4)
         logger.debug("llmobs: could not record the %s (%s)", which, type(error).__name__)
 
@@ -421,13 +434,42 @@ def _wrap(
     kind: SpanKind,
     capture_input: bool,
     capture_output: bool,
+    reduce_output: Callable[[list[object]], object] | None,
 ) -> Callable[P, R]:
-    """Build the traced wrapper of ``func`` (sync and coroutine functions, P5)."""
+    """Build the traced wrapper of ``func`` (functions, coroutine functions,
+    generators and async generators, P5-P6).
+    """
     span_name = _span_name(func, name)
     try:
         signature = inspect.signature(func)
     except (TypeError, ValueError):
         signature = None
+    if inspect.isgeneratorfunction(func) or inspect.isasyncgenfunction(func):
+        # Imported here: _generators builds on this module's helpers. The
+        # is*function checks narrow func's return type, so the R-typed view
+        # of the same callable is passed through a cast.
+        from llmobs._generators import _wrap_async_generator, _wrap_generator
+
+        traced = cast("Callable[P, R]", func)
+        if inspect.isasyncgenfunction(func):
+            return _wrap_async_generator(
+                traced,
+                signature,
+                span_name=span_name,
+                kind=kind,
+                capture_input=capture_input,
+                capture_output=capture_output,
+                reduce_output=reduce_output,
+            )
+        return _wrap_generator(
+            traced,
+            signature,
+            span_name=span_name,
+            kind=kind,
+            capture_input=capture_input,
+            capture_output=capture_output,
+            reduce_output=reduce_output,
+        )
     if inspect.iscoroutinefunction(func):
         # For a coroutine function R binds to Coroutine[Any, Any, X], so the
         # async wrapper (Callable[P, Coroutine[Any, Any, X]]) is a Callable[P, R].
@@ -461,6 +503,7 @@ def observe(
     kind: SpanKind = ...,
     capture_input: bool = ...,
     capture_output: bool = ...,
+    reduce_output: Callable[[list[object]], object] | None = ...,
 ) -> Callable[P, R]: ...
 
 
@@ -473,6 +516,7 @@ def observe(
     kind: SpanKind = ...,
     capture_input: bool = ...,
     capture_output: bool = ...,
+    reduce_output: Callable[[list[object]], object] | None = ...,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
 
@@ -484,11 +528,17 @@ def observe(
     kind: SpanKind = "chain",
     capture_input: bool = True,
     capture_output: bool = True,
+    reduce_output: Callable[[list[object]], object] | None = None,
 ) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
-    """Trace a function or a coroutine function as one span (spec 10, D-F-11).
+    """Trace a function, coroutine function, generator or async generator as
+    one span (spec 10, D-F-11).
 
     ``@observe`` keeps the function's qualname and the default kind; the
-    factory form ``@observe(name=..., kind=...)`` overrides them. An invalid
+    factory form ``@observe(name=..., kind=...)`` overrides them. Generator
+    functions are detected at decoration time; their span starts at the
+    generator's first step, and ``reduce_output`` (accepted on every
+    function, used only for generator functions) records its result on the
+    items instead of the joined-text / JSON-list default. An invalid
     ``kind`` raises ``ValueError`` now, at decoration time. Every other
     failure after ``init()`` is a no-op, and without a running runtime the
     function is called unchanged: the runtime is checked at call time, so a
@@ -503,6 +553,7 @@ def observe(
             kind=kind,
             capture_input=capture_input,
             capture_output=capture_output,
+            reduce_output=reduce_output,
         )
 
     if func is None:

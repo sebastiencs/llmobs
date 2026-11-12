@@ -1,4 +1,4 @@
-"""Tests for ``observe`` on functions and coroutines (plan F § P5)."""
+"""Tests for ``observe`` on functions and coroutines (plan F § P5, P6)."""
 
 import asyncio
 import inspect
@@ -445,3 +445,43 @@ def test_wraps_keeps_function_metadata() -> None:
     assert documented.__name__ == "documented"
     assert documented.__qualname__ == ("test_wraps_keeps_function_metadata.<locals>.documented")
     assert documented.__doc__ == "Doc."
+
+
+def test_plain_function_returning_generator_not_traced(memory: Memory, spans: Spans) -> None:
+    exporter, start = memory
+    start()
+
+    def numbers() -> Iterator[int]:
+        yield 1
+        yield 2
+
+    @llmobs.observe(name="factory")
+    def factory() -> Iterator[int]:
+        return numbers()
+
+    generator = factory()
+    assert list(generator) == [1, 2]  # returned untouched, consumed by the caller
+    [span] = spans(exporter)
+    attributes = attrs(span)
+    assert attributes["llmobs.input"] == "{}"
+    assert "llmobs.output" not in attributes
+
+
+def test_reduce_output_ignored_for_plain_functions(memory: Memory, spans: Spans) -> None:
+    exporter, start = memory
+    start()
+
+    @llmobs.observe(name="plain", reduce_output=lambda items: "reduced")
+    def plain(x: int) -> int:
+        return x
+
+    async def coro(x: int) -> int:
+        return x
+
+    traced_coro = llmobs.observe(name="coro", reduce_output=lambda items: "reduced")(coro)
+    assert plain(2) == 2
+    assert asyncio.run(traced_coro(3)) == 3
+    finished = spans(exporter)
+    names = {span.name: span for span in finished}
+    assert attrs(names["plain"])["llmobs.output"] == "2"
+    assert attrs(names["coro"])["llmobs.output"] == "3"
