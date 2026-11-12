@@ -36,6 +36,7 @@ import { VERSION } from "./index.js";
 import { debug, resetWarningsForTests, warnOnce } from "./log.js";
 import { MaskingExporter } from "./mask.js";
 import { LlmobsSpanProcessor } from "./processor.js";
+import { ScoreQueue } from "./scores.js";
 import { type FetchLike, runtimeGlobals } from "./web.js";
 
 export class Runtime {
@@ -43,22 +44,38 @@ export class Runtime {
   readonly provider: TracerProvider;
   readonly ownsProvider: boolean;
   readonly processor: LlmobsSpanProcessor;
+  /** The background score queue (§ Score request). */
+  readonly scores: ScoreQueue;
   readonly tracer: Tracer;
   private shutDown = false;
 
-  private constructor(config: Config, provider: TracerProvider, processor: LlmobsSpanProcessor) {
+  private constructor(
+    config: Config,
+    provider: TracerProvider,
+    processor: LlmobsSpanProcessor,
+    scores: ScoreQueue,
+  ) {
     this.config = config;
     this.provider = provider;
     // Always true: OTel JS providers cannot take processors after
     // construction, so even global mode builds a provider of our own (D-F-4).
     this.ownsProvider = true;
     this.processor = processor;
+    this.scores = scores;
     this.tracer = provider.getTracer("llmobs", VERSION);
   }
 
   static create(
     config: Config,
-    seams?: { exporter?: SpanExporter; idGenerator?: IdGenerator; fetch?: FetchLike },
+    seams?: {
+      exporter?: SpanExporter;
+      idGenerator?: IdGenerator;
+      fetch?: FetchLike;
+      /** Passed to the score queue together with `fetch`. */
+      scoreSleep?: (ms: number) => Promise<void>;
+      /** Tests inject a clock for the queue's once-a-minute drop warning. */
+      scoreNow?: () => number;
+    },
   ): Runtime {
     // D-F-4: in global mode we register our provider as the global one when no
     // app provider is set; otherwise one warning and we stay private.
@@ -77,6 +94,13 @@ export class Runtime {
         apiKey: requireApiKey(config),
         fetch: seams?.fetch,
       });
+    const scores = new ScoreQueue({
+      url: `${config.baseUrl}/api/v1/scores`,
+      apiKey: requireApiKey(config),
+      fetch: seams?.fetch,
+      sleep: seams?.scoreSleep,
+      now: seams?.scoreNow,
+    });
     // The export-time masking pass exists only with a mask or capture off
     // (D-F-6); otherwise spans reach the exporter untouched.
     const exporter =
@@ -111,12 +135,12 @@ export class Runtime {
       trace.setGlobalTracerProvider(provider);
     }
     registerContextManager();
-    return new Runtime(config, provider, processor);
+    return new Runtime(config, provider, processor, scores);
   }
 
-  /** Resolves when pending spans are exported or the export timeout expires. */
+  /** Resolves when pending spans and scores are exported. */
   async flush(): Promise<void> {
-    await this.processor.forceFlush();
+    await Promise.all([this.processor.forceFlush(), this.scores.flush()]);
   }
 
   /** Idempotent; spans and scores after it are dropped. */
@@ -128,6 +152,7 @@ export class Runtime {
     try {
       await this.flush();
       await this.processor.shutdown();
+      await this.scores.shutdown();
       if (this.ownsProvider) {
         await this.provider.shutdown();
       }
