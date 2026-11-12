@@ -120,7 +120,7 @@
       "output_format": "messages",
       "input_preview": "What's the weather in Paris?",
       "system_instructions": "[{\"type\":\"text\",\"content\":\"Use get_weather for weather questions.\\n\\nYou are an agent. Your internal name is \\\"weather_agent\\\".\"}]",
-      "tool_definitions": "[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Return the weather for a city.\"}]",
+      "tool_definitions": "[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Return the weather for a city.\",\"parameters\":{\"properties\":{\"city\":{\"title\":\"City\",\"type\":\"string\"}},\"required\":[\"city\"],\"title\":\"get_weatherParams\",\"type\":\"object\"}}]",
       "attributes": {
         "gcp.vertex.agent.event_id": "capture-2",
         "gcp.vertex.agent.invocation_id": "invocation-1",
@@ -256,7 +256,7 @@
       "output_format": "messages",
       "output_preview": "It is 18 °C and sunny in Paris.",
       "system_instructions": "[{\"type\":\"text\",\"content\":\"Use get_weather for weather questions.\\n\\nYou are an agent. Your internal name is \\\"weather_agent\\\".\"}]",
-      "tool_definitions": "[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Return the weather for a city.\"}]",
+      "tool_definitions": "[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Return the weather for a city.\",\"parameters\":{\"properties\":{\"city\":{\"title\":\"City\",\"type\":\"string\"}},\"required\":[\"city\"],\"title\":\"get_weatherParams\",\"type\":\"object\"}}]",
       "attributes": {
         "gcp.vertex.agent.event_id": "capture-6",
         "gcp.vertex.agent.invocation_id": "invocation-1",
