@@ -1,0 +1,25 @@
+{
+  "description": "Vercel AI SDK v7 generateText with one tool and two Responses API steps.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "ai",
+    "instrumentation_version": "7.0.162",
+    "language": "typescript",
+    "libraries": {
+      "@ai-sdk/openai": "4.0.108",
+      "@ai-sdk/otel": "1.0.162",
+      "@opentelemetry/api": "1.9.0",
+      "@opentelemetry/sdk-trace-node": "2.12.0",
+      "ai": "7.0.162"
+    },
+    "captured_at": "2026-11-11T12:27:56Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "ai 7.0.162 does not emit spans. Spans come from @ai-sdk/otel OpenTelemetry, passed on telemetry.integrations, with runtimeContext enabled. runtimeContext holds sessionId, userId, and feature, recorded as ai.settings.context.*. Six spans: invoke_agent, two chat steps, two agent_step spans, and execute_tool. The agent span's input is the sum of the steps, 213, with cache_read 64. Each chat span keeps its own input, 82 then 131. functionId is not an attribute. providerMetadata and the ai.usage.* detail attributes are off by default."
+}

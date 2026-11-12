@@ -1,0 +1,24 @@
+{
+  "description": "One streamed OpenAI chat answer with usage, traced by OpenInference.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "OpenInference records message content by default: TraceConfig hide_inputs and hide_outputs are false, and this scenario sets no content-capture environment variable. The client sets stream_options.include_usage. The mock waits 120 ms before the first chunk and splits the answer into 4 chunks. The span has one event, First Token Stream Event, with no attributes; there is no timing attribute. Prompt and completion counts are copied. Zero audio, reasoning, and cache_read detail counts are written. llm.finish_reason is span-level only. Covers D113 (event-based TTFT).",
+  "instrumentation": "openinference-instrumentation-openai",
+  "libraries": ["openai", "openinference-instrumentation-openai", "opentelemetry-sdk"],
+  "turns": [
+    {
+      "api": "openai.chat",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": { "text": "Clear skies over the harbor." },
+      "finish": "stop",
+      "usage": { "input": 20, "output": 8 },
+      "ttft_ms": 120,
+      "chunks": 4
+    }
+  ]
+}

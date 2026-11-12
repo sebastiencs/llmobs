@@ -1,0 +1,24 @@
+{
+  "description": "Vercel AI SDK v6 streamText of one OpenAI chat answer with usage.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "ai",
+    "instrumentation_version": "6.0.322",
+    "language": "typescript",
+    "libraries": {
+      "@ai-sdk/openai": "3.0.136",
+      "@opentelemetry/api": "1.9.0",
+      "@opentelemetry/sdk-trace-node": "2.12.0",
+      "ai": "6.0.322"
+    },
+    "captured_at": "2026-11-11T12:27:54Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Telemetry is enabled on the call through experimental_telemetry. recordInputs and recordOutputs stay at their defaults, which record message content on spans. The model is openai.chat. The provider sets stream_options.include_usage. The mock waits 120 ms before the first chunk and splits the answer into 4 chunks. Two spans: streamText and doStream. Token counts are copied, with inputTokenDetails and cachedInputTokens written as 0. The doStream span measures ai.response.msToFirstChunk, ai.response.msToFinish, and ai.response.avgOutputTokensPerSecond. ai.stream.msToFirstChunk is absent. ai.response.timestamp is the mock created_at, 2026-01-01T00:00:00.000Z."
+}

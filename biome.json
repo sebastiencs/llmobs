@@ -9,6 +9,7 @@
     "includes": [
       "web/**",
       "sdks/typescript/**",
+      "tools/capture/ts/**",
       "!**/dist",
       "!**/node_modules",
       "!web/src/api/schema.gen.ts",

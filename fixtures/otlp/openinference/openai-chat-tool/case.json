@@ -1,0 +1,23 @@
+{
+  "description": "OpenAI chat completion with one tool call, then an answer, traced by OpenInference.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "openinference-instrumentation-openai",
+    "instrumentation_version": "0.1.69",
+    "language": "python",
+    "libraries": {
+      "openai": "3.45.0",
+      "openinference-instrumentation-openai": "0.1.69",
+      "opentelemetry-sdk": "1.45.2"
+    },
+    "captured_at": "2026-11-11T10:45:41Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "OpenInference records message content by default: TraceConfig hide_inputs and hide_outputs are false, and this scenario sets no content-capture environment variable. The second turn's usage includes cache_read 64."
+}

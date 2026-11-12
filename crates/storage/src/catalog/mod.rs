@@ -21,6 +21,36 @@ use uuid::Uuid;
 use crate::error::CommitError;
 use crate::wal::Table;
 
+/// A table that has Parquet files.
+///
+/// Unlike [`Table`], this has a slot for `traces`, which has files but no WAL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileTable {
+    Spans,
+    Traces,
+    Scores,
+}
+
+impl FileTable {
+    /// The `data_files.table_name` value and the `tables/<table>/` path segment.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Spans => "spans",
+            Self::Traces => "traces",
+            Self::Scores => "scores",
+        }
+    }
+}
+
+impl From<Table> for FileTable {
+    fn from(table: Table) -> Self {
+        match table {
+            Table::Spans => Self::Spans,
+            Table::Scores => Self::Scores,
+        }
+    }
+}
+
 /// One Parquet object. The inner UUID is the `data_files.id` primary key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct FileId(pub(crate) Uuid);
@@ -67,8 +97,8 @@ impl FileState {
 pub(crate) struct FileMeta {
     /// Primary key.
     pub(crate) id: FileId,
-    /// `spans` or `scores`.
-    pub(crate) table: Table,
+    /// The table this file belongs to.
+    pub(crate) table: FileTable,
     /// Owning project.
     pub(crate) project: ProjectId,
     /// Partition day.
@@ -95,9 +125,9 @@ pub(crate) struct FileMeta {
     pub(crate) fully_merged: bool,
 }
 
-/// `spans` then `scores`.
+/// `spans`, `traces`, then `scores`, indexed by [`FileTable`] via [`file_index`].
 pub(super) type ProjectDays = Arc<BTreeMap<NaiveDate, Vec<Arc<FileMeta>>>>;
-pub(super) type Tables = [BTreeMap<ProjectId, ProjectDays>; 2];
+pub(super) type Tables = [BTreeMap<ProjectId, ProjectDays>; 3];
 
 /// Active files. Immutable once published: a commit builds a new value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,14 +140,14 @@ impl Catalog {
     /// No files.
     pub(crate) fn empty() -> Self {
         Self {
-            tables: [BTreeMap::new(), BTreeMap::new()],
+            tables: [BTreeMap::new(), BTreeMap::new(), BTreeMap::new()],
         }
     }
 
     /// Every active file of `table`, in project then day order.
     #[cfg(test)]
-    pub(crate) fn test_files(&self, table: Table) -> Vec<Arc<FileMeta>> {
-        self.tables[table_index(table)]
+    pub(crate) fn test_files(&self, table: FileTable) -> Vec<Arc<FileMeta>> {
+        self.tables[file_index(table)]
             .values()
             .flat_map(|days| days.values())
             .flatten()
@@ -125,17 +155,25 @@ impl Catalog {
             .collect()
     }
 
+    /// Every active file of `table`, across projects and days, in key order.
+    pub(crate) fn files_all(&self, table: FileTable) -> impl Iterator<Item = &Arc<FileMeta>> {
+        self.tables[file_index(table)]
+            .values()
+            .flat_map(|days| days.values())
+            .flatten()
+    }
+
     /// Files for `project` on the inclusive day range, in `(min_time, id)` order.
     ///
     /// A reversed range yields nothing.
     pub(crate) fn files(
         &self,
-        table: Table,
+        table: FileTable,
         project: ProjectId,
         days: RangeInclusive<NaiveDate>,
     ) -> impl Iterator<Item = &Arc<FileMeta>> {
         let project_days = (days.start() <= days.end())
-            .then(|| self.tables[table_index(table)].get(&project))
+            .then(|| self.tables[file_index(table)].get(&project))
             .flatten();
         project_days.into_iter().flat_map(move |days_map| {
             days_map
@@ -162,6 +200,9 @@ impl Catalog {
     }
 }
 
+/// Index into the WAL-sized arrays (`flushed`, `replayed`): one slot per WAL.
+///
+/// Do not use this for [`Tables`], which has a slot per file table.
 pub(super) fn table_index(table: Table) -> usize {
     match table {
         Table::Spans => 0,
@@ -169,8 +210,19 @@ pub(super) fn table_index(table: Table) -> usize {
     }
 }
 
+/// Index into [`Tables`]: one slot per file table, `traces` included.
+///
+/// Do not use this for the WAL-sized arrays; those use [`table_index`].
+pub(super) fn file_index(table: FileTable) -> usize {
+    match table {
+        FileTable::Spans => 0,
+        FileTable::Traces => 1,
+        FileTable::Scores => 2,
+    }
+}
+
 pub(super) fn insert_sorted(tables: &mut Tables, file: FileMeta) {
-    let days = tables[table_index(file.table)]
+    let days = tables[file_index(file.table)]
         .entry(file.project)
         .or_insert_with(|| Arc::new(BTreeMap::new()));
     let map = Arc::make_mut(days);
@@ -233,7 +285,7 @@ mod tests {
     fn file(min_time: i64, day: NaiveDate) -> FileMeta {
         FileMeta {
             id: FileId::new_v7(),
-            table: Table::Spans,
+            table: FileTable::Spans,
             project: project(),
             day,
             level: 0,
@@ -255,21 +307,22 @@ mod tests {
             add: vec![file(20, day(2)), file(10, day(2)), file(5, day(3))],
             remove: Vec::new(),
             flushed_seq: None,
+            sources: Vec::new(),
         };
         let catalog = Catalog::empty().apply(&edit).unwrap();
         let ids: Vec<_> = catalog
-            .files(Table::Spans, project(), day(2)..=day(2))
+            .files(FileTable::Spans, project(), day(2)..=day(2))
             .map(|file| file.min_time)
             .collect();
         assert_eq!(ids, vec![10, 20]);
         let across: Vec<_> = catalog
-            .files(Table::Spans, project(), day(2)..=day(3))
+            .files(FileTable::Spans, project(), day(2)..=day(3))
             .map(|file| file.min_time)
             .collect();
         assert_eq!(across, vec![10, 20, 5]);
         assert_eq!(
             catalog
-                .files(Table::Spans, project(), day(3)..=day(2))
+                .files(FileTable::Spans, project(), day(3)..=day(2))
                 .count(),
             0
         );

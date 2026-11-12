@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const distDir = fileURLToPath(new URL("../dist/", import.meta.url));
 const problems = [];
-const needles = ["ada@example.com", "fixtures/api", "setupWorker"];
+const needles = ["ada@example.com", "fixtures/api", "setupWorker", "mulberry32"];
 
 let files = [];
 try {

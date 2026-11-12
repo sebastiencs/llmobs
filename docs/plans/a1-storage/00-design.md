@@ -17,7 +17,10 @@ Top-level design of the storage track (Wave 1, track A1). It settles what specs 
 | D83 | **Storage owns its catalog.** `llmobs-storage` keeps its tables in `<data_dir>/catalog.db`, with its own migrations and its own writer connection (`synchronous=FULL`). The server's `meta.db` keeps deletion requests (audit, cascades) and hands them to storage, idempotently by deletion id. Backups cover both files. | User |
 | D84 | **Files stay per `(project, partition day)`.** A flush writes its files in parallel and commits them in one catalog transaction. Compaction's size-ratio rule bounds the number of small files. | User |
 | D85 | **Spans with absurd start times are rejected** at normalization: before 2000-01-01, before `ingest_time − retention_days`, or more than 1 day after `ingest_time`. They count in `partial_success.rejected_spans`. | User |
-| D86 | **A trace lives in one day.** Spans and trace partials are partitioned by the trace's **anchor day**, the partition day of its first partial, instead of their own start day. The anchor differs from a row's own UTC day by at most one day, so day pruning uses one day of slack. Retention and compaction then treat a trace that crosses midnight as one unit. Revisited in the M3 plan: it may be dropped (§ Trace anchor › Exit ramp). | User |
+| D86 | **A trace lives in one day.** Spans and trace partials are partitioned by the trace's **anchor day**, the partition day of its first partial, instead of their own start day. The anchor differs from a row's own UTC day by at most one day, so day pruning uses one day of slack. Retention and compaction then treat a trace that crosses midnight as one unit. Kept in the M3 plan after S1 measured the rebuild (§ Trace anchor › Exit ramp). | User |
+| D152 | **Trace merge operator.** Spec 01's merge is written once, in Rust (`partials.rs`), for flush, memtable partials, queries and compaction. The `traces` provider takes every filter as exact and merges only the columns a query needs. | S1 |
+| D153 | **Trace list fast path.** A physical optimizer rule, passed to A2's session through `ProjectQuery`, turns `ORDER BY start_time DESC, trace_id DESC LIMIT k` over the `traces` scan into a two-phase scan of widening slices. | S1 |
+| D154 | **Lookup hint.** `QueryOptions { around }` narrows a `trace_id` lookup to files within ±1 day. | A2 boundary |
 | D87 | **Durability and commit protocol.** A file is durable (fsynced file and directory on local disk; completed PUT on S3) before any catalog row makes it active. Catalog commits are serialized and compare-and-set on their input files. Obsolete files are deleted only when no read snapshot references them. Details in § Durability and § Commit protocol. | Research G1–G4, G8–G10, G20 |
 | D88 | **`traces` files are derived from `spans` files.** Every `traces` file records the `spans` files it was computed from. Whatever replaces a `spans` file (compaction, deletion rewrite) recomputes the `traces` files derived from it. Duplicate spans therefore stop inflating trace totals once their spans are compacted, and deletion never needs separate logic for `traces`. | Research G17 |
 
@@ -69,8 +72,7 @@ impl Storage {
 
     /// The project's providers, all bound to one read snapshot. No session is built:
     /// the query layer registers its views on `runtime` (D89, D91).
-    /// `traces` is an empty table until M3.
-    pub fn query(&self, project: ProjectId) -> Result<ProjectQuery, QueryError>;
+    pub fn query(&self, project: ProjectId, options: QueryOptions) -> Result<ProjectQuery, QueryError>;
 
     /// Idempotent by `deletion.id`. Rows in scope are hidden from every query once this returns.
     pub async fn register_deletion(&self, deletion: Deletion) -> Result<(), DeletionError>;
@@ -99,15 +101,22 @@ impl Storage {
 
 pub struct ProjectQuery {
     pub spans: Arc<dyn TableProvider>,   // stored schema, binary ids, project_id included
-    pub traces: Arc<dyn TableProvider>,  // empty MemTable until M3
+    pub traces: Arc<dyn TableProvider>,  // merged partials (D152)
     pub scores: Arc<dyn TableProvider>,  // stored schema; latest live row per score_id
     pub runtime: Arc<RuntimeEnv>,        // object store and metadata cache; default memory pool until M6
     pub target_partitions: NonZeroUsize,
+    /// Physical optimizer rules the session must append: the trace list fast path (D153).
+    pub optimizer_rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct QueryOptions {
+    pub around: Option<i64>,             // `?around=` for single-trace lookups, ns (D154)
 }
 ```
 
 - `StorageConfig` is the storage section of the server config (D59). It is `serde` with `deny_unknown_fields`, and its defaults are the values in spec 03. The fields that exist after M2 are listed in § Configuration; later milestones add theirs when they are implemented.
-- `ProjectQuery` is what `query` returns. A2 builds the session from `runtime` and `target_partitions` and does not look inside the providers (D91).
+- `ProjectQuery` is what `query` returns. A2 builds the session from `runtime`, `target_partitions` and `optimizer_rules`, and does not look inside the providers or the rules (D91, D153).
 - `GcError` is public because `collect_staged` returns it. The other storage errors stay public as well (`OpenError`, `AppendError`, `QueryError`, `StorageError`, and the catalog, object and WAL enums the library already exposes).
 - `register_deletion`, `deletion_status`, `apply_retention`, `drop_project`, `put_media` and `get_media` are the later-milestone surface. They are not implemented.
 - `AppendReceipt { seq, rows }`.
@@ -133,10 +142,10 @@ crates/storage/src/
   flush.rs          frozen memtable → files → catalog edit
   objects.rs        object store access: durable local writes (G1), S3 via object_store, parallel uploads
   parquet.rs        writer properties per table (spec 03 §3), footer/statistics capture
-  partials.rs       trace partials from span batches (spec 01 merge rules, G18 ordering)
+  partials.rs       the trace merge operator: spans → partial, partials → trace (spec 01, D152)
   catalog/          catalog.db migrations, rows, in-memory catalog, committer, edits
   snapshot.rs       ReadState: catalog + memtable + tombstones, published atomically
-  query/            SessionContext setup, SpansProvider, TracesProvider, ScoresProvider,
+  query/            SpansProvider, TracesProvider and TracesExec, TraceListRule, ScoresProvider,
                     TombstoneFilterExec, memory pool and admission, metadata and S3 read caches
   compaction.rs     L0 merge, day close, size-ratio rule, traces rebuild
   deletion.rs       tombstones, rewriter, deletion sequence
@@ -199,14 +208,15 @@ The committer applies it only if every precondition holds. Otherwise it rolls ba
 A trace is anchored to the partition day of its **first partial**, the first time a flush writes rows for it. Later rows of the same trace go to that day if their own UTC day is within one day of it. Otherwise they go to their own day, as the fallback.
 
 Only traces near midnight need remembering. A row whose own day equals its trace's anchor day needs no lookup. The anchor matters only for a trace whose rows straddle a day boundary, and with `trace_lookback` = 1 h those rows start within an hour of midnight. So `anchor.rs` keeps:
-- a map `trace_id → anchor day` for every partial whose rows start within `anchor.window` (default = `trace_lookback`, 1 h) of a day boundary, on either side;
-- entries are dropped `2 × anchor.window` after the boundary.
+- a map `(project_id, trace_id) → anchor day` for every trace with a row starting within `anchor.window` (default = `trace_lookback`, 1 h) of a UTC midnight, on either side;
+- each entry's deadline is the flush's largest `ingest_time` + `2 × anchor.window`; entries whose deadline the clock (largest `ingest_time` committed) has passed are dropped. Expiry therefore runs on ingest time, not event age, so backfills anchor like live data;
+- assignment is per row: a row goes to the anchor day when its own day is at most one day away, otherwise to its own day.
 
-That is about 1/12 of a day's traces, held for about 2 h. At startup the map is rebuilt from:
-- the WAL replay;
-- the `trace_id` column of the `traces` files whose time range touches the current boundary window.
+That is about 1/12 of a day's traces, held for about 2 h of ingest time. At startup the map is rebuilt from the active `traces` files whose `max_ingest_time` is within `2 × anchor.window` of the clock, reading only the row groups whose `last_ingest_time` statistics reach that window and only rows with `last_ingest_time` in it and `start_time` near midnight. WAL-replayed rows need no rebuild: they get their anchor when they flush.
 
-Rows in a partition whose day differs from their own start day are normal rows. Files still record their real `min_time`/`max_time`. Day pruning (spec 03 §6 step 1) widens the day range by one day on each side, and file pruning by `min_time`/`max_time` stays exact.
+A trace with no row near midnight before a flush, and rows past midnight later, gets an entry only from its later rows (e.g. rows at 22:00 flushed, then rows at 00:30): its earlier rows stay in the earlier day. The anchor guarantees one day only for traces whose rows reach the window before midnight.
+
+Rows in a partition whose day differs from their own start day are normal rows. Files still record their real `min_time`/`max_time`. Day pruning (spec 03 §6 step 1) widens the day range by one day on each side, and file pruning by `min_time`/`max_time` stays exact. Memtable pruning stays exact.
 
 The partition key is `(project_id, anchor day)` for `spans` and `traces`; `scores` keep the day of `created_at`.
 
@@ -229,17 +239,36 @@ Both would be documented limits.
 - the flush asks it for one partition day per trace;
 - nothing else (catalog, compaction, deletion) knows anchors exist, apart from the one day of slack in day pruning.
 
-The M3 plan decides, with the S1 results and the cost of the anchor's startup rebuild in hand. If the anchor is dropped, D86 is reversed in `docs/mvp-decisions.md`, with the reason.
+**Decided in M3: kept.** S1b measured the rebuild at 51 ms and 4 MB on 5 million traces, reading only the row groups within the window. The exit stays cheap for the same reasons, should a later milestone find the anchor costly.
 
 ## Trace partials and the `traces` view
 
 - **Partials come from spans** (D88). A flush computes one partial per `(trace, file)` from the span rows it writes. Each `traces` file records its source `spans` files in `file_sources`. Compaction and the rewriter replace a set of `spans` files together with every `traces` file derived from them, and recompute those partials from the new `spans` files.
 - **Day close** rebuilds the partition's `traces` from all of its `spans` files: one partial per trace (anchored traces make this the whole trace), `fully_merged = true`.
-- **Deterministic merges.** "First non-null" and root selection order by `(start_time, span_id)` in partials and at merge time (G18). Spec 01's merge table gets this rule.
+- **Deterministic merges.** "First non-null" and root selection order by `(start_time, span_id)` inside a partial. Across partials, the root partial comes first, then `start_time` order, and partials tied on `start_time` contribute their smallest value (G18, spec 01 § Order).
+- **One merge implementation** (D152). `partials.rs` builds partials from spans and merges partials. Flush, memtable partials, queries and compaction all call it.
 - **Duplicates.** A flush drops duplicate `(trace_id, span_id)` rows within the frozen memtable, keeping the greatest `ingest_time`. Duplicates across flushes remain until compaction merges the files. Until then the read-time merge counts them twice. This is documented: it is bounded by the L0 lifetime, about 10 min.
 - **Window.** Partials are scanned on `[a − trace_lookback, b + trace_lookback]`, merged, and the merged `start_time` is filtered to `[a, b]` (G15).
-- **Pushdown.** Only `start_time` ranges and `trace_id` equality / `IN` are pushed into the partial scan. Every other filter applies after the merge (G16). The "latest N" fast path (spec 03 §6) stays, with the same post-merge filter.
-- **Memtable partials** are computed on the fly from all memtable span batches of the project whose time range overlaps the padded window, not only those inside it.
+- **Pushdown.** The provider takes every filter as exact. Only `start_time` ranges and `trace_id` equality / `IN` prune the partial scan. Every filter is evaluated after the merge (G16).
+- **Latest N** (D153). A physical optimizer rule recognises the trace list's sort and limit. The scan reads disjoint slices back from the newest time, ranks in each slice on the filter's columns only, and fully merges only the `k` rows it returns.
+- **Memtable partials** are computed from all memtable span batches of the project whose time range overlaps the padded window, not only those inside it. Each batch's partials are computed once and cached with the batch.
+
+## S1 outcome
+
+S1 (`02-s1-trace-list-benchmark.md`) and its corrected rerun (`04-s1b-trace-list-rerun.md`) are in `docs/research/storage/traces-benchmark.md`.
+
+The first run's wrong latest-N answers came from a generator artifact. The rerun's findings:
+- **A 7-day SQL merge is far off.** A plain `GROUP BY trace_id` over 7 days takes 13.7 s and 11 GiB.
+- **Windows are fast but not fast enough.** A 15-minute window takes 205 ms. The time grows with the number of traces merged, not with the bytes read: about 4.7 s for 24 h, because every trace in the window builds every column through ordered `first_value` and list-union aggregates.
+- **The window limit is small.** On a deliberately harsh delay mix, 3 of the 50 latest traces were late partials of traces whose root was outside the 1 h pad.
+- **Point lookups and the dashboard meet their targets** as SQL: Q4b 123 ms, Q5 669 ms.
+- **The anchor rebuild is cheap:** 51 ms and 4 MB.
+
+M3 follows the "custom merge operator" outcome, in the cheapest form the numbers allow:
+- a hand-written merge of only the needed columns (D152);
+- a two-phase latest-N (D153).
+
+The ignored benchmark of M3.8 checks S1's targets on the real engine.
 
 ## Trace-list spike (S1)
 
@@ -354,7 +383,7 @@ Present after M2:
 - `memtable`: `hard_limit`;
 - `query`: `target_partitions` (default: the process parallelism), `metadata_cache_bytes` (default 512 MiB).
 
-Later milestones add, when they implement them: `min_free_bytes`; `compaction.*`; `query.max_memory_total`, `query.max_memory`, `query.read_cache_bytes`, `query.trace_lookback`, `query.admission_wait`; `gc.grace`; `deletion.max_delay`; `anchor.window`.
+Later milestones add, when they implement them: `min_free_bytes`; `compaction.*`; `query.max_memory_total`, `query.max_memory`, `query.read_cache_bytes`, `query.admission_wait`; `gc.grace`; `deletion.max_delay`. M3 adds `query.trace_lookback` (default 1 h) and `anchor.window` (default: `trace_lookback`).
 
 ## Testing
 
@@ -384,7 +413,7 @@ Each milestone ends merged, with `just check` green, and gets its own implementa
 | S1 | **Trace-list benchmark (spike).** Throwaway prototype, run alongside M1, see § Trace-list spike. | Results in `docs/research/storage/traces-benchmark.md` and a go / change decision on the `traces` design, before the M3 plan is written. | — |
 | M1 | **Walking skeleton.** `Storage::open`/`append_*`/`query`/`shutdown`; WAL (records, group commit, segments, replay, error poisoning); memtable without flush; `SpansProvider` and `ScoresProvider` over the memtable; crash harness and pause points. | Appended spans are queryable through `Storage::query`. Kill -9 at any point loses no acknowledged row. The WAL failure tests pass. | — |
 | M2 | **Flush and catalog.** `catalog.db` with migrations and the committer; durable local writes and S3 uploads; Parquet writer settings; flush with staged rows, `flushed_seq` and WAL truncation; providers over files plus memtable; metadata cache; staged-row GC. | Data survives restart after flush. Crash tests cover every flush step. A query during a flush sees each row once (pause-point test). Works against local disk and an S3-compatible store (MinIO in a test, if available). | M1 |
-| M3 | **Traces.** Partials, `file_sources`, the anchor (D86, unless dropped: § Trace anchor › Exit ramp), `TracesProvider` (window, pushdown rule, latest-N fast path, single-trace lookup with bloom filters and `?around=`), duplicate drop at flush. | Golden tests on the traces view: late partials, midnight crossing, duplicates, filters that only pass after the merge. The S1 latency targets hold on the real implementation. | M2, S1 |
+| M3 | **Traces.** Plans `05-m3a-traces-write.md` and `06-m3b-traces-read.md`. The merge operator (D152), partials at flush, `file_sources`, the anchor (D86), `TracesProvider` (window, exact filters, latest-N rule and two-phase list mode D153, single-trace lookup with bloom filters and `QueryOptions::around` D154), the S1-shaped benchmark. The duplicate drop at flush already landed in M2. | Golden tests on the traces view: late partials, midnight crossing, duplicates, filters that only pass after the merge. The S1 latency targets hold on the real implementation. | M2, S1 |
 | M4 | **Compaction and GC.** L0 merge with the size ratio, day close, streaming merge with a memory cap, disk reservation, traces rebuild from spans, obsolete-file GC with reference counts. | Write amplification measured on a synthetic day stays bounded. Crash and race tests (compaction vs query, vs flush). | M3 (traces rebuild); spans/scores parts could start after M2 |
 | M5 | **Deletion, retention, project drop, media.** Tombstones and `TombstoneFilterExec`, `deletion_seq` bookkeeping, rewriter, `apply_retention`, `drop_project`, media blobs and GC. | Deleted rows vanish from queries at once and from files within `deletion.max_delay`. The race test "compaction started before a deletion commits after it" keeps the rows gone. | M2 (deletion of spans/scores); M3 for traces |
 | M6 | **Resources and hardening.** Process-wide memory pool and admission, disk-full behaviour, quarantine of corrupt files, the S3 read cache (§ Query resources), benchmarks. | Benchmarks recorded against spec 03's capacity check, on local disk and on S3 with a warm and a cold cache. Disk-full and corrupt-file tests. | M2 |
@@ -437,7 +466,7 @@ Each milestone ends merged, with `just check` green, and gets its own implementa
 Answered in M2:
 
 - DataFusion 55's file metadata cache does **not** include bloom-filter bitsets. It caches footers and page indexes (column and offset indexes) up to `query.metadata_cache_bytes`. Bloom pruning still runs: the bitset is read from the object. No custom reader factory was written (§ Query resources).
-- MinIO is not part of CI (D119). S3 coverage there is `FaultStore` around `InMemory`. `crates/storage/tests/s3.rs` runs when `LLMOBS_TEST_S3_ENDPOINT` is set. The M2 run could not pull an image: Docker Hub, quay.io and ghcr.io all denied `minio/minio`.
+- A real S3 server is not part of CI (D119). S3 coverage there is `FaultStore` around `InMemory`. `crates/storage/tests/s3.rs` runs when `LLMOBS_TEST_S3_ENDPOINT` is set. The `minio/minio` image is no longer published, so the test's doc comment uses Versity Gateway (`versity/versitygw:v1.11.0`). After M2 merged, the test passed against it, including a multipart upload.
 
 Still open:
 

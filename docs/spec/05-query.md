@@ -59,7 +59,7 @@ Parsed with `sqlparser::Parser::parse_expr` (DataFusion dialect), then validated
 
 ### UI builder
 
-The visual builder produces the same text expression (each chip = one conjunct); the text field and chips are two views of the same AST. Unsupported (hand-written) expressions are shown as a single raw chip.
+The filter text is the truth (D129, spec 11 § Filter bar). One editor holds the DSL. A client parser splits top-level `AND` conjuncts and recognises simple shapes as editable chips; anything else is a raw chip. The server stays the validator.
 
 ### Saved views
 

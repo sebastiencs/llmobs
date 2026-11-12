@@ -1,0 +1,32 @@
+{
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "packageManager": "pnpm@11.28.10",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ai-v5": "npm:ai@5.0.285",
+    "@ai-sdk/openai-v5": "npm:@ai-sdk/openai@2.0.140",
+    "@ai-sdk/anthropic-v5": "npm:@ai-sdk/anthropic@2.0.112",
+    "ai-v6": "npm:ai@6.0.322",
+    "@ai-sdk/openai-v6": "npm:@ai-sdk/openai@3.0.136",
+    "@ai-sdk/anthropic-v6": "npm:@ai-sdk/anthropic@3.0.138",
+    "ai-v7": "npm:ai@7.0.162",
+    "@ai-sdk/openai-v7": "npm:@ai-sdk/openai@4.0.108",
+    "@ai-sdk/anthropic-v7": "npm:@ai-sdk/anthropic@4.0.96",
+    "@ai-sdk/otel-v7": "npm:@ai-sdk/otel@1.0.162",
+    "@opentelemetry/api": "1.9.0",
+    "@opentelemetry/sdk-trace-node": "2.12.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "0.223.0",
+    "@opentelemetry/resources": "2.12.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "26.6.6"
+  }
+}

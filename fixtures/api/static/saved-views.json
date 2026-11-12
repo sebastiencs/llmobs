@@ -6,7 +6,7 @@
       "name": "Errors",
       "state": {
         "filter": "status = 'error'",
-        "time_range": "last_24h"
+        "range": "24h"
       },
       "owner_user_id": "01900000-0000-7000-8000-000000000100",
       "shared": true,

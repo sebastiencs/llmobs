@@ -67,9 +67,10 @@ If the code has to deviate from the spec, update the spec **in the same change**
 - Normalization uses golden fixtures in `fixtures/otlp/`.
 - Storage needs crash-recovery and concurrency tests.
 - `LLMOBS_CRASH_ITERATIONS=N just test` runs the storage crash harness longer (default 25).
-- `LLMOBS_TEST_S3_ENDPOINT` (with `LLMOBS_TEST_S3_BUCKET` and the `AWS_*` credentials) runs the storage MinIO test (D119).
+- `LLMOBS_TEST_S3_ENDPOINT` (with `LLMOBS_TEST_S3_BUCKET` and the `AWS_*` credentials) runs the storage S3 test against a real S3-compatible server; `crates/storage/tests/s3.rs` shows how to start one (D119).
 - Tests cover the current behaviour only.
 - UI tests use the MSW mocks from `fixtures/api/`; a page test overrides an endpoint with `server.use` instead of mocking modules.
+- Captured OTLP fixtures are recorded with `just capture` (tools/capture) and never edited by hand; `just check-capture` before committing one.
 
 **Reference implementations.** The competitors' source code is checked out in `/home/sebastien/github/{lmnr,phoenix,langfuse,langwatch,helicone,opik,mlflow}`. Read it to compare designs and learn from their mistakes. Never copy code from it.
 
@@ -91,6 +92,7 @@ sdks/typescript/             TypeScript SDK (pnpm)                              
 fixtures/otlp/               OTLP fixtures shared by Rust golden tests and SDK tests  (spec 02 § Testing)
 fixtures/api/                example API responses (UI mocks), checked against the server types (spec 09)
 tools/                       dev tools (fixture capture, benchmarks); not shipped
+tools/capture/               fixture capture: mock provider, OTLP receiver, scenarios (B2)
 docs/                        decisions, specs, plans, research
 ```
 
@@ -131,6 +133,9 @@ Run everything through `just`:
 | `just web-dev` | web dev server with the API mocked from `fixtures/api` |
 | `just web-dev-server` | web dev server proxied at the real API |
 | `just run <args>` | run the `llmobs` binary |
+| `just capture <group>/<case>` | record an OTLP fixture from a scenario, e.g. `just capture openinference/openai-chat-tool` |
+| `just capture-all` | recapture every scenario |
+| `just check-capture` | lint and type-check the capture scenarios, then recapture every scenario and compare (timing excluded) |
 
 Required tools:
 - `rustup` (the toolchain is pinned in `rust-toolchain.toml`)

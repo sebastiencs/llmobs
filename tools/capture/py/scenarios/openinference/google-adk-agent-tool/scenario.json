@@ -1,0 +1,47 @@
+{
+  "description": "The Google ADK weather agent traced by OpenInference's ADK instrumentation.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage"
+  ],
+  "notes": "openinference-instrumentation-google-adk 1.1.0 over google-adk 2.14.0. The runner sets GOOGLE_API_KEY, so the Gemini client uses the API-key path and does not probe the metadata server. Gemini.base_url is the mock. Cloud Trace export is started only by the ADK CLI server, which this scenario does not run. ADK_EXPERIMENTAL_TELEMETRY is false. ADK_TELEMETRY_SCHEMA_VERSION_OPT_IN is 1. ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS is true. GoogleADKInstrumentor is attached to the capture tracer provider and is the only scope. It suppresses invoke_agent and generate_content. The tree is invocation, then agent_run, then call_llm and execute_tool. call_llm and execute_tool keep gcp.vertex.agent.* and also carry OpenInference input, output, and llm attributes. Token counts match agent-tool. The user-agent inside llm.invocation_parameters includes the interpreter version. Event timestamps inside OpenInference output values come from set_time_provider, a clock that starts at 1767225590 and steps by one millisecond. Event ids come from set_id_provider, a counter of capture-N. The session id is session-1 and the user id is user-1.",
+  "instrumentation": "openinference-instrumentation-google-adk",
+  "libraries": [
+    "google-adk",
+    "google-genai",
+    "openinference-instrumentation-google-adk",
+    "opentelemetry-sdk"
+  ],
+  "env": {
+    "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "true",
+    "ADK_TELEMETRY_SCHEMA_VERSION_OPT_IN": "1",
+    "ADK_EXPERIMENTAL_TELEMETRY": "false"
+  },
+  "turns": [
+    {
+      "api": "gemini.generate_content",
+      "model": "gemini-2.5-flash",
+      "message": {
+        "text": null,
+        "tool_calls": [
+          {
+            "id": "call_weather_1",
+            "name": "get_weather",
+            "arguments": { "city": "Paris" }
+          }
+        ]
+      },
+      "finish": "tool_calls",
+      "usage": { "input": 40, "output": 12 }
+    },
+    {
+      "api": "gemini.generate_content",
+      "model": "gemini-2.5-flash",
+      "message": { "text": "It is 18 °C and sunny in Paris." },
+      "finish": "stop",
+      "usage": { "input": 58, "output": 16 }
+    }
+  ]
+}

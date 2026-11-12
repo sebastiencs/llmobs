@@ -1,0 +1,1252 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.45.2"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "capture-app"
+            }
+          }
+        ],
+        "droppedAttributesCount": 0,
+        "entityRefs": []
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "opentelemetry.instrumentation.langchain",
+            "version": "0.62.4",
+            "attributes": [],
+            "droppedAttributesCount": 0
+          },
+          "spans": [
+            {
+              "traceId": "764e9363f97559d4bd1e102f3f4ba29e",
+              "spanId": "8771755696e85858",
+              "traceState": "",
+              "parentSpanId": "",
+              "flags": 256,
+              "name": "invoke_agent LangGraph",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225590086000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "langgraph"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "invoke_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "LangGraph"
+                  }
+                },
+                {
+                  "key": "gen_ai.workflow.nodes",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "model"
+                        },
+                        {
+                          "stringValue": "tools"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.workflow.edges",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "model -> tools"
+                        },
+                        {
+                          "stringValue": "tools -> model"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "764e9363f97559d4bd1e102f3f4ba29e",
+              "spanId": "7a1bcf7b2462aa1d",
+              "traceState": "",
+              "parentSpanId": "8771755696e85858",
+              "flags": 256,
+              "name": "LangGraph.workflow",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590001000000",
+              "endTimeUnixNano": "1767225590086000000",
+              "attributes": [
+                {
+                  "key": "traceloop.workflow.name",
+                  "value": {
+                    "stringValue": "LangGraph"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.path",
+                  "value": {
+                    "stringValue": ""
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.ls_integration",
+                  "value": {
+                    "stringValue": "langchain_create_agent"
+                  }
+                },
+                {
+                  "key": "traceloop.span.kind",
+                  "value": {
+                    "stringValue": "workflow"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.name",
+                  "value": {
+                    "stringValue": "LangGraph"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "langgraph"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "invoke_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "LangGraph"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.id",
+                  "value": {
+                    "stringValue": "00000000-0000-0000-0000-000000000003"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.input",
+                  "value": {
+                    "stringValue": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What's the weather in Paris?\", \"type\": \"human\", \"id\": \"msg_user\"}}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"langchain_create_agent\"}, \"kwargs\": {\"name\": \"LangGraph\"}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.input",
+                  "value": {
+                    "stringValue": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What's the weather in Paris?\", \"type\": \"human\", \"id\": \"msg_user\"}}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"langchain_create_agent\"}, \"kwargs\": {\"name\": \"LangGraph\"}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.status",
+                  "value": {
+                    "stringValue": "success"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.output",
+                  "value": {
+                    "stringValue": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What's the weather in Paris?\", \"type\": \"human\", \"id\": \"msg_user\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 17, \"prompt_tokens\": 82, \"total_tokens\": 99, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": null, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null}}, \"model_provider\": \"openai\", \"model_name\": \"gpt-4o-mini-2024-07-18\", \"system_fingerprint\": \"fp_capture\", \"id\": \"chatcmpl-capture-1\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"id\": \"lc_run--00000000-0000-0000-0000-000000000008-0\", \"tool_calls\": [{\"name\": \"get_weather\", \"args\": {\"city\": \"Paris\"}, \"id\": \"call_weather_1\", \"type\": \"tool_call\"}], \"usage_metadata\": {\"input_tokens\": 82, \"output_tokens\": 17, \"total_tokens\": 99, \"input_token_details\": {\"audio\": 0, \"cache_read\": 0}, \"output_token_details\": {\"audio\": 0, \"reasoning\": 0}}, \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"temperature_c\\\": 18, \\\"conditions\\\": \\\"sunny\\\", \\\"city\\\": \\\"Paris\\\"}\", \"type\": \"tool\", \"name\": \"get_weather\", \"id\": \"00000000-0000-0000-0000-00000000000d\", \"tool_call_id\": \"call_weather_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"It is 18 °C and sunny in Paris.\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 12, \"prompt_tokens\": 131, \"total_tokens\": 143, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": null, \"cached_tokens\": 64, \"image_tokens\": null, \"text_tokens\": null}}, \"model_provider\": \"openai\", \"model_name\": \"gpt-4o-mini-2024-07-18\", \"system_fingerprint\": \"fp_capture\", \"id\": \"chatcmpl-capture-2\", \"finish_reason\": \"stop\", \"logprobs\": null}, \"type\": \"ai\", \"id\": \"lc_run--00000000-0000-0000-0000-000000000010-0\", \"usage_metadata\": {\"input_tokens\": 131, \"output_tokens\": 12, \"total_tokens\": 143, \"input_token_details\": {\"audio\": 0, \"cache_read\": 64}, \"output_token_details\": {\"audio\": 0, \"reasoning\": 0}}, \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"kwargs\": {\"tags\": []}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.output",
+                  "value": {
+                    "stringValue": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What's the weather in Paris?\", \"type\": \"human\", \"id\": \"msg_user\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 17, \"prompt_tokens\": 82, \"total_tokens\": 99, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": null, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null}}, \"model_provider\": \"openai\", \"model_name\": \"gpt-4o-mini-2024-07-18\", \"system_fingerprint\": \"fp_capture\", \"id\": \"chatcmpl-capture-1\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"id\": \"lc_run--00000000-0000-0000-0000-000000000008-0\", \"tool_calls\": [{\"name\": \"get_weather\", \"args\": {\"city\": \"Paris\"}, \"id\": \"call_weather_1\", \"type\": \"tool_call\"}], \"usage_metadata\": {\"input_tokens\": 82, \"output_tokens\": 17, \"total_tokens\": 99, \"input_token_details\": {\"audio\": 0, \"cache_read\": 0}, \"output_token_details\": {\"audio\": 0, \"reasoning\": 0}}, \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"temperature_c\\\": 18, \\\"conditions\\\": \\\"sunny\\\", \\\"city\\\": \\\"Paris\\\"}\", \"type\": \"tool\", \"name\": \"get_weather\", \"id\": \"00000000-0000-0000-0000-00000000000d\", \"tool_call_id\": \"call_weather_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"It is 18 °C and sunny in Paris.\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 12, \"prompt_tokens\": 131, \"total_tokens\": 143, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": null, \"cached_tokens\": 64, \"image_tokens\": null, \"text_tokens\": null}}, \"model_provider\": \"openai\", \"model_name\": \"gpt-4o-mini-2024-07-18\", \"system_fingerprint\": \"fp_capture\", \"id\": \"chatcmpl-capture-2\", \"finish_reason\": \"stop\", \"logprobs\": null}, \"type\": \"ai\", \"id\": \"lc_run--00000000-0000-0000-0000-000000000010-0\", \"usage_metadata\": {\"input_tokens\": 131, \"output_tokens\": 12, \"total_tokens\": 143, \"input_token_details\": {\"audio\": 0, \"cache_read\": 64}, \"output_token_details\": {\"audio\": 0, \"reasoning\": 0}}, \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"kwargs\": {\"tags\": []}}"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "764e9363f97559d4bd1e102f3f4ba29e",
+              "spanId": "61fca5eac67633f0",
+              "traceState": "",
+              "parentSpanId": "7a1bcf7b2462aa1d",
+              "flags": 256,
+              "name": "execute_task model",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590002000000",
+              "endTimeUnixNano": "1767225590045000000",
+              "attributes": [
+                {
+                  "key": "traceloop.workflow.name",
+                  "value": {
+                    "stringValue": "LangGraph"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.path",
+                  "value": {
+                    "stringValue": ""
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.ls_integration",
+                  "value": {
+                    "stringValue": "langchain_create_agent"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_step",
+                  "value": {
+                    "intValue": "1"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_node",
+                  "value": {
+                    "stringValue": "model"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_triggers",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "branch:to:model"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_path",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "__pregel_pull"
+                        },
+                        {
+                          "stringValue": "model"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_checkpoint_ns",
+                  "value": {
+                    "stringValue": "model:33e57db7-6874-bd98-a8c0-a8a5f2343cc0"
+                  }
+                },
+                {
+                  "key": "traceloop.span.kind",
+                  "value": {
+                    "stringValue": "task"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.name",
+                  "value": {
+                    "stringValue": "model"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "langgraph"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "execute_task"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.name",
+                  "value": {
+                    "stringValue": "model"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.id",
+                  "value": {
+                    "stringValue": "00000000-0000-0000-0000-000000000007"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.parent.id",
+                  "value": {
+                    "stringValue": "00000000-0000-0000-0000-000000000003"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.input",
+                  "value": {
+                    "stringValue": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What's the weather in Paris?\", \"type\": \"human\", \"id\": \"msg_user\"}}]}, \"tags\": [\"graph:step:1\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"langgraph_step\": 1, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:33e57db7-6874-bd98-a8c0-a8a5f2343cc0\"}, \"kwargs\": {\"name\": \"model\"}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.input",
+                  "value": {
+                    "stringValue": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What's the weather in Paris?\", \"type\": \"human\", \"id\": \"msg_user\"}}]}, \"tags\": [\"graph:step:1\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"langgraph_step\": 1, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:33e57db7-6874-bd98-a8c0-a8a5f2343cc0\"}, \"kwargs\": {\"name\": \"model\"}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.status",
+                  "value": {
+                    "stringValue": "success"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.output",
+                  "value": {
+                    "stringValue": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 17, \"prompt_tokens\": 82, \"total_tokens\": 99, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": null, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null}}, \"model_provider\": \"openai\", \"model_name\": \"gpt-4o-mini-2024-07-18\", \"system_fingerprint\": \"fp_capture\", \"id\": \"chatcmpl-capture-1\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"id\": \"lc_run--00000000-0000-0000-0000-000000000008-0\", \"tool_calls\": [{\"name\": \"get_weather\", \"args\": {\"city\": \"Paris\"}, \"id\": \"call_weather_1\", \"type\": \"tool_call\"}], \"usage_metadata\": {\"input_tokens\": 82, \"output_tokens\": 17, \"total_tokens\": 99, \"input_token_details\": {\"audio\": 0, \"cache_read\": 0}, \"output_token_details\": {\"audio\": 0, \"reasoning\": 0}}, \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:1\"]}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.output",
+                  "value": {
+                    "stringValue": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 17, \"prompt_tokens\": 82, \"total_tokens\": 99, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": null, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null}}, \"model_provider\": \"openai\", \"model_name\": \"gpt-4o-mini-2024-07-18\", \"system_fingerprint\": \"fp_capture\", \"id\": \"chatcmpl-capture-1\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"id\": \"lc_run--00000000-0000-0000-0000-000000000008-0\", \"tool_calls\": [{\"name\": \"get_weather\", \"args\": {\"city\": \"Paris\"}, \"id\": \"call_weather_1\", \"type\": \"tool_call\"}], \"usage_metadata\": {\"input_tokens\": 82, \"output_tokens\": 17, \"total_tokens\": 99, \"input_token_details\": {\"audio\": 0, \"cache_read\": 0}, \"output_token_details\": {\"audio\": 0, \"reasoning\": 0}}, \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:1\"]}}"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "764e9363f97559d4bd1e102f3f4ba29e",
+              "spanId": "95779dd186ae104c",
+              "traceState": "",
+              "parentSpanId": "61fca5eac67633f0",
+              "flags": 256,
+              "name": "ChatOpenAI.chat",
+              "kind": 3,
+              "startTimeUnixNano": "1767225590003000000",
+              "endTimeUnixNano": "1767225590044000000",
+              "attributes": [
+                {
+                  "key": "traceloop.workflow.name",
+                  "value": {
+                    "stringValue": "LangGraph"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.path",
+                  "value": {
+                    "stringValue": "model"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.ls_integration",
+                  "value": {
+                    "stringValue": "langchain_chat_model"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_step",
+                  "value": {
+                    "intValue": "1"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_node",
+                  "value": {
+                    "stringValue": "model"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_triggers",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "branch:to:model"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_path",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "__pregel_pull"
+                        },
+                        {
+                          "stringValue": "model"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_checkpoint_ns",
+                  "value": {
+                    "stringValue": "model:33e57db7-6874-bd98-a8c0-a8a5f2343cc0"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.checkpoint_ns",
+                  "value": {
+                    "stringValue": "model:33e57db7-6874-bd98-a8c0-a8a5f2343cc0"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.ls_provider",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.ls_model_name",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.ls_model_type",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.lc_versions",
+                  "value": {
+                    "stringValue": "{\"langchain-core\": \"1.7.4\", \"langchain\": \"1.4.8\", \"langchain-openai\": \"1.7.3\"}"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.definitions",
+                  "value": {
+                    "stringValue": "[{\"name\": \"get_weather\", \"description\": \"Look up the weather for a city.\", \"parameters\": {\"properties\": {\"city\": {\"type\": \"string\"}}, \"required\": [\"city\"], \"type\": \"object\"}}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "stringValue": "[{\"type\": \"text\", \"content\": \"You are a weather assistant.\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"What's the weather in Paris?\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "chatcmpl-capture-1"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "82"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "17"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.total_tokens",
+                  "value": {
+                    "intValue": "99"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read.input_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"tool_call\", \"id\": \"call_weather_1\", \"name\": \"get_weather\", \"arguments\": {\"city\": \"Paris\"}}], \"finish_reason\": \"tool_call\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "tool_call"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "764e9363f97559d4bd1e102f3f4ba29e",
+              "spanId": "09df1bd89f4bfabf",
+              "traceState": "",
+              "parentSpanId": "7a1bcf7b2462aa1d",
+              "flags": 256,
+              "name": "execute_task tools",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590046000000",
+              "endTimeUnixNano": "1767225590049000000",
+              "attributes": [
+                {
+                  "key": "traceloop.workflow.name",
+                  "value": {
+                    "stringValue": "LangGraph"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.path",
+                  "value": {
+                    "stringValue": ""
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.ls_integration",
+                  "value": {
+                    "stringValue": "langchain_create_agent"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_step",
+                  "value": {
+                    "intValue": "2"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_node",
+                  "value": {
+                    "stringValue": "tools"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_triggers",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "__pregel_push"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_path",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "__pregel_push"
+                        },
+                        {
+                          "stringValue": "0"
+                        },
+                        {
+                          "stringValue": "False"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_checkpoint_ns",
+                  "value": {
+                    "stringValue": "tools:08aa5f4b-d49c-e7f0-a492-df8856e56938"
+                  }
+                },
+                {
+                  "key": "traceloop.span.kind",
+                  "value": {
+                    "stringValue": "task"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.name",
+                  "value": {
+                    "stringValue": "tools"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "langgraph"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "execute_task"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.name",
+                  "value": {
+                    "stringValue": "tools"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.id",
+                  "value": {
+                    "stringValue": "00000000-0000-0000-0000-00000000000b"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.parent.id",
+                  "value": {
+                    "stringValue": "00000000-0000-0000-0000-000000000003"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.input",
+                  "value": {
+                    "stringValue": "{\"inputs\": [{\"name\": \"get_weather\", \"args\": {\"city\": \"Paris\"}, \"id\": \"call_weather_1\", \"type\": \"tool_call\"}], \"tags\": [\"graph:step:2\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"langgraph_step\": 2, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:08aa5f4b-d49c-e7f0-a492-df8856e56938\"}, \"kwargs\": {\"name\": \"tools\"}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.input",
+                  "value": {
+                    "stringValue": "{\"inputs\": [{\"name\": \"get_weather\", \"args\": {\"city\": \"Paris\"}, \"id\": \"call_weather_1\", \"type\": \"tool_call\"}], \"tags\": [\"graph:step:2\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"langgraph_step\": 2, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:08aa5f4b-d49c-e7f0-a492-df8856e56938\"}, \"kwargs\": {\"name\": \"tools\"}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.status",
+                  "value": {
+                    "stringValue": "success"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.output",
+                  "value": {
+                    "stringValue": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"temperature_c\\\": 18, \\\"conditions\\\": \\\"sunny\\\", \\\"city\\\": \\\"Paris\\\"}\", \"type\": \"tool\", \"name\": \"get_weather\", \"id\": \"00000000-0000-0000-0000-00000000000d\", \"tool_call_id\": \"call_weather_1\", \"status\": \"success\"}}]}, \"kwargs\": {\"tags\": [\"graph:step:2\"]}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.output",
+                  "value": {
+                    "stringValue": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"temperature_c\\\": 18, \\\"conditions\\\": \\\"sunny\\\", \\\"city\\\": \\\"Paris\\\"}\", \"type\": \"tool\", \"name\": \"get_weather\", \"id\": \"00000000-0000-0000-0000-00000000000d\", \"tool_call_id\": \"call_weather_1\", \"status\": \"success\"}}]}, \"kwargs\": {\"tags\": [\"graph:step:2\"]}}"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "764e9363f97559d4bd1e102f3f4ba29e",
+              "spanId": "75faca0953a17027",
+              "traceState": "",
+              "parentSpanId": "09df1bd89f4bfabf",
+              "flags": 256,
+              "name": "execute_tool get_weather",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590047000000",
+              "endTimeUnixNano": "1767225590047000000",
+              "attributes": [
+                {
+                  "key": "traceloop.workflow.name",
+                  "value": {
+                    "stringValue": "LangGraph"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.path",
+                  "value": {
+                    "stringValue": "tools"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.ls_integration",
+                  "value": {
+                    "stringValue": "langchain_create_agent"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_step",
+                  "value": {
+                    "intValue": "2"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_node",
+                  "value": {
+                    "stringValue": "tools"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_triggers",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "__pregel_push"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_path",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "__pregel_push"
+                        },
+                        {
+                          "stringValue": "0"
+                        },
+                        {
+                          "stringValue": "False"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_checkpoint_ns",
+                  "value": {
+                    "stringValue": "tools:08aa5f4b-d49c-e7f0-a492-df8856e56938"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.checkpoint_ns",
+                  "value": {
+                    "stringValue": "tools:08aa5f4b-d49c-e7f0-a492-df8856e56938"
+                  }
+                },
+                {
+                  "key": "traceloop.span.kind",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.name",
+                  "value": {
+                    "stringValue": "get_weather"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "langgraph"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "execute_tool"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "get_weather"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.type",
+                  "value": {
+                    "stringValue": "function"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.description",
+                  "value": {
+                    "stringValue": "Look up the weather for a city."
+                  }
+                },
+                {
+                  "key": "traceloop.entity.input",
+                  "value": {
+                    "stringValue": "{\"input_str\": \"{'city': 'Paris'}\", \"tags\": [\"seq:step:1\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"langgraph_step\": 2, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:08aa5f4b-d49c-e7f0-a492-df8856e56938\", \"checkpoint_ns\": \"tools:08aa5f4b-d49c-e7f0-a492-df8856e56938\"}, \"inputs\": {\"city\": \"Paris\"}, \"kwargs\": {\"color\": \"green\", \"name\": null, \"tool_call_id\": \"call_weather_1\"}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.arguments",
+                  "value": {
+                    "stringValue": "{\"input_str\": \"{'city': 'Paris'}\", \"tags\": [\"seq:step:1\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"langgraph_step\": 2, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:08aa5f4b-d49c-e7f0-a492-df8856e56938\", \"checkpoint_ns\": \"tools:08aa5f4b-d49c-e7f0-a492-df8856e56938\"}, \"inputs\": {\"city\": \"Paris\"}, \"kwargs\": {\"color\": \"green\", \"name\": null, \"tool_call_id\": \"call_weather_1\"}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.status",
+                  "value": {
+                    "stringValue": "success"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.output",
+                  "value": {
+                    "stringValue": "{\"output\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"temperature_c\\\": 18, \\\"conditions\\\": \\\"sunny\\\", \\\"city\\\": \\\"Paris\\\"}\", \"type\": \"tool\", \"name\": \"get_weather\", \"tool_call_id\": \"call_weather_1\", \"status\": \"success\"}}, \"kwargs\": {\"tags\": [\"seq:step:1\"], \"color\": \"green\", \"name\": \"get_weather\"}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.result",
+                  "value": {
+                    "stringValue": "{\"output\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"temperature_c\\\": 18, \\\"conditions\\\": \\\"sunny\\\", \\\"city\\\": \\\"Paris\\\"}\", \"type\": \"tool\", \"name\": \"get_weather\", \"tool_call_id\": \"call_weather_1\", \"status\": \"success\"}}, \"kwargs\": {\"tags\": [\"seq:step:1\"], \"color\": \"green\", \"name\": \"get_weather\"}}"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "764e9363f97559d4bd1e102f3f4ba29e",
+              "spanId": "c5763a9bfb18f9c8",
+              "traceState": "",
+              "parentSpanId": "7a1bcf7b2462aa1d",
+              "flags": 256,
+              "name": "execute_task model",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590050000000",
+              "endTimeUnixNano": "1767225590085000000",
+              "attributes": [
+                {
+                  "key": "traceloop.workflow.name",
+                  "value": {
+                    "stringValue": "LangGraph"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.path",
+                  "value": {
+                    "stringValue": ""
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.ls_integration",
+                  "value": {
+                    "stringValue": "langchain_create_agent"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_step",
+                  "value": {
+                    "intValue": "3"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_node",
+                  "value": {
+                    "stringValue": "model"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_triggers",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "branch:to:model"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_path",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "__pregel_pull"
+                        },
+                        {
+                          "stringValue": "model"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_checkpoint_ns",
+                  "value": {
+                    "stringValue": "model:b03e8b1f-3f7c-92d3-278d-6a927d4f4e91"
+                  }
+                },
+                {
+                  "key": "traceloop.span.kind",
+                  "value": {
+                    "stringValue": "task"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.name",
+                  "value": {
+                    "stringValue": "model"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "langgraph"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "execute_task"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.name",
+                  "value": {
+                    "stringValue": "model"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.id",
+                  "value": {
+                    "stringValue": "00000000-0000-0000-0000-00000000000f"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.parent.id",
+                  "value": {
+                    "stringValue": "00000000-0000-0000-0000-000000000003"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.input",
+                  "value": {
+                    "stringValue": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What's the weather in Paris?\", \"type\": \"human\", \"id\": \"msg_user\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 17, \"prompt_tokens\": 82, \"total_tokens\": 99, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": null, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null}}, \"model_provider\": \"openai\", \"model_name\": \"gpt-4o-mini-2024-07-18\", \"system_fingerprint\": \"fp_capture\", \"id\": \"chatcmpl-capture-1\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"id\": \"lc_run--00000000-0000-0000-0000-000000000008-0\", \"tool_calls\": [{\"name\": \"get_weather\", \"args\": {\"city\": \"Paris\"}, \"id\": \"call_weather_1\", \"type\": \"tool_call\"}], \"usage_metadata\": {\"input_tokens\": 82, \"output_tokens\": 17, \"total_tokens\": 99, \"input_token_details\": {\"audio\": 0, \"cache_read\": 0}, \"output_token_details\": {\"audio\": 0, \"reasoning\": 0}}, \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"temperature_c\\\": 18, \\\"conditions\\\": \\\"sunny\\\", \\\"city\\\": \\\"Paris\\\"}\", \"type\": \"tool\", \"name\": \"get_weather\", \"id\": \"00000000-0000-0000-0000-00000000000d\", \"tool_call_id\": \"call_weather_1\", \"status\": \"success\"}}]}, \"tags\": [\"graph:step:3\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"langgraph_step\": 3, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:b03e8b1f-3f7c-92d3-278d-6a927d4f4e91\"}, \"kwargs\": {\"name\": \"model\"}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.input",
+                  "value": {
+                    "stringValue": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What's the weather in Paris?\", \"type\": \"human\", \"id\": \"msg_user\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 17, \"prompt_tokens\": 82, \"total_tokens\": 99, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": null, \"cached_tokens\": 0, \"image_tokens\": null, \"text_tokens\": null}}, \"model_provider\": \"openai\", \"model_name\": \"gpt-4o-mini-2024-07-18\", \"system_fingerprint\": \"fp_capture\", \"id\": \"chatcmpl-capture-1\", \"finish_reason\": \"tool_calls\", \"logprobs\": null}, \"type\": \"ai\", \"id\": \"lc_run--00000000-0000-0000-0000-000000000008-0\", \"tool_calls\": [{\"name\": \"get_weather\", \"args\": {\"city\": \"Paris\"}, \"id\": \"call_weather_1\", \"type\": \"tool_call\"}], \"usage_metadata\": {\"input_tokens\": 82, \"output_tokens\": 17, \"total_tokens\": 99, \"input_token_details\": {\"audio\": 0, \"cache_read\": 0}, \"output_token_details\": {\"audio\": 0, \"reasoning\": 0}}, \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"temperature_c\\\": 18, \\\"conditions\\\": \\\"sunny\\\", \\\"city\\\": \\\"Paris\\\"}\", \"type\": \"tool\", \"name\": \"get_weather\", \"id\": \"00000000-0000-0000-0000-00000000000d\", \"tool_call_id\": \"call_weather_1\", \"status\": \"success\"}}]}, \"tags\": [\"graph:step:3\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"langgraph_step\": 3, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:b03e8b1f-3f7c-92d3-278d-6a927d4f4e91\"}, \"kwargs\": {\"name\": \"model\"}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.status",
+                  "value": {
+                    "stringValue": "success"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.output",
+                  "value": {
+                    "stringValue": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"It is 18 °C and sunny in Paris.\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 12, \"prompt_tokens\": 131, \"total_tokens\": 143, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": null, \"cached_tokens\": 64, \"image_tokens\": null, \"text_tokens\": null}}, \"model_provider\": \"openai\", \"model_name\": \"gpt-4o-mini-2024-07-18\", \"system_fingerprint\": \"fp_capture\", \"id\": \"chatcmpl-capture-2\", \"finish_reason\": \"stop\", \"logprobs\": null}, \"type\": \"ai\", \"id\": \"lc_run--00000000-0000-0000-0000-000000000010-0\", \"usage_metadata\": {\"input_tokens\": 131, \"output_tokens\": 12, \"total_tokens\": 143, \"input_token_details\": {\"audio\": 0, \"cache_read\": 64}, \"output_token_details\": {\"audio\": 0, \"reasoning\": 0}}, \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:3\"]}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.task.output",
+                  "value": {
+                    "stringValue": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"It is 18 °C and sunny in Paris.\", \"additional_kwargs\": {\"refusal\": null}, \"response_metadata\": {\"token_usage\": {\"completion_tokens\": 12, \"prompt_tokens\": 131, \"total_tokens\": 143, \"completion_tokens_details\": {\"accepted_prediction_tokens\": 0, \"audio_tokens\": 0, \"reasoning_tokens\": 0, \"rejected_prediction_tokens\": 0, \"text_tokens\": null}, \"prompt_tokens_details\": {\"audio_tokens\": 0, \"cache_write_tokens\": null, \"cached_tokens\": 64, \"image_tokens\": null, \"text_tokens\": null}}, \"model_provider\": \"openai\", \"model_name\": \"gpt-4o-mini-2024-07-18\", \"system_fingerprint\": \"fp_capture\", \"id\": \"chatcmpl-capture-2\", \"finish_reason\": \"stop\", \"logprobs\": null}, \"type\": \"ai\", \"id\": \"lc_run--00000000-0000-0000-0000-000000000010-0\", \"usage_metadata\": {\"input_tokens\": 131, \"output_tokens\": 12, \"total_tokens\": 143, \"input_token_details\": {\"audio\": 0, \"cache_read\": 64}, \"output_token_details\": {\"audio\": 0, \"reasoning\": 0}}, \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:3\"]}}"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            },
+            {
+              "traceId": "764e9363f97559d4bd1e102f3f4ba29e",
+              "spanId": "2ecc2ba093667360",
+              "traceState": "",
+              "parentSpanId": "c5763a9bfb18f9c8",
+              "flags": 256,
+              "name": "ChatOpenAI.chat",
+              "kind": 3,
+              "startTimeUnixNano": "1767225590050000000",
+              "endTimeUnixNano": "1767225590084000000",
+              "attributes": [
+                {
+                  "key": "traceloop.workflow.name",
+                  "value": {
+                    "stringValue": "LangGraph"
+                  }
+                },
+                {
+                  "key": "traceloop.entity.path",
+                  "value": {
+                    "stringValue": "model"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.ls_integration",
+                  "value": {
+                    "stringValue": "langchain_chat_model"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_step",
+                  "value": {
+                    "intValue": "3"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_node",
+                  "value": {
+                    "stringValue": "model"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_triggers",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "branch:to:model"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_path",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "__pregel_pull"
+                        },
+                        {
+                          "stringValue": "model"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.langgraph_checkpoint_ns",
+                  "value": {
+                    "stringValue": "model:b03e8b1f-3f7c-92d3-278d-6a927d4f4e91"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.checkpoint_ns",
+                  "value": {
+                    "stringValue": "model:b03e8b1f-3f7c-92d3-278d-6a927d4f4e91"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.ls_provider",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.ls_model_name",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.ls_model_type",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "traceloop.association.properties.lc_versions",
+                  "value": {
+                    "stringValue": "{\"langchain-core\": \"1.7.4\", \"langchain\": \"1.4.8\", \"langchain-openai\": \"1.7.3\"}"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.definitions",
+                  "value": {
+                    "stringValue": "[{\"name\": \"get_weather\", \"description\": \"Look up the weather for a city.\", \"parameters\": {\"properties\": {\"city\": {\"type\": \"string\"}}, \"required\": [\"city\"], \"type\": \"object\"}}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "stringValue": "[{\"type\": \"text\", \"content\": \"You are a weather assistant.\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"What's the weather in Paris?\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"tool_call\", \"id\": \"call_weather_1\", \"name\": \"get_weather\", \"arguments\": {\"city\": \"Paris\"}}]}, {\"role\": \"tool\", \"parts\": [{\"type\": \"tool_call_response\", \"id\": \"call_weather_1\", \"response\": \"{\\\"temperature_c\\\": 18, \\\"conditions\\\": \\\"sunny\\\", \\\"city\\\": \\\"Paris\\\"}\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "chatcmpl-capture-2"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "131"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "12"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.total_tokens",
+                  "value": {
+                    "intValue": "143"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read.input_tokens",
+                  "value": {
+                    "intValue": "64"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"It is 18 \\u00b0C and sunny in Paris.\"}], \"finish_reason\": \"stop\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
+            }
+          ],
+          "schemaUrl": ""
+        }
+      ],
+      "schemaUrl": ""
+    }
+  ]
+}

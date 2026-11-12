@@ -1,0 +1,25 @@
+{
+  "description": "Vercel AI SDK v7 structured object generation through OpenAI chat.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "ai",
+    "instrumentation_version": "7.0.162",
+    "language": "typescript",
+    "libraries": {
+      "@ai-sdk/openai": "4.0.108",
+      "@ai-sdk/otel": "1.0.162",
+      "@opentelemetry/api": "1.9.0",
+      "@opentelemetry/sdk-trace-node": "2.12.0",
+      "ai": "7.0.162"
+    },
+    "captured_at": "2026-11-11T12:27:57Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "generateObject is deprecated in ai 7.0.162, so the call is generateText with Output.object and a jsonSchema. ai 7.0.162 does not emit spans. Spans come from @ai-sdk/otel OpenTelemetry, passed on telemetry.integrations. Three spans: invoke_agent, agent_step, and chat. The model is openai.chat, and the SDK makes one call. Token counts are copied: input 24 and output 10."
+}

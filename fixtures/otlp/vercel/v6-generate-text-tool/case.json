@@ -1,0 +1,24 @@
+{
+  "description": "Vercel AI SDK v6 generateText with one tool and two Responses API steps.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "ai",
+    "instrumentation_version": "6.0.322",
+    "language": "typescript",
+    "libraries": {
+      "@ai-sdk/openai": "3.0.136",
+      "@opentelemetry/api": "1.9.0",
+      "@opentelemetry/sdk-trace-node": "2.12.0",
+      "ai": "6.0.322"
+    },
+    "captured_at": "2026-11-11T12:27:53Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Telemetry is enabled on the call through experimental_telemetry. recordInputs and recordOutputs stay at their defaults, which record message content on spans. The model is openai.responses. stopWhen is stepCountIs(2). Four spans: generateText, doGenerate, toolCall, doGenerate. experimental_telemetry.metadata holds sessionId, userId, and feature. Token counts are copied, and inputTokenDetails is present, so the input includes cache. The second doGenerate span's input is 131 with cacheReadTokens 64. The outer generateText span sums the steps: input 213, output 29, cache read 64. ai.response.timestamp is the mock created_at, 2026-01-01T00:00:00.000Z."
+}

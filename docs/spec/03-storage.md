@@ -39,9 +39,15 @@ Spans are expected to carry plausible start times. Normalization rejects spans t
 
 A trace is anchored to the partition day of its **first partial**: the first time a flush writes rows for it, they go to the UTC day of their `start_time`. Later rows of the same trace go to that anchor day if their own UTC day is within one day of it; otherwise they go to their own day. Retention and compaction therefore handle a trace that crosses midnight as one unit (D86).
 
-Only traces near midnight need remembering. The storage keeps a map `trace_id → anchor day` for every partial whose rows start within `anchor.window` (default = `trace_lookback`, 1 h) of a UTC day boundary, on either side, and drops entries `2 × anchor.window` after the boundary. At startup the map is rebuilt from the WAL replay and from the `trace_id` column of the `traces` files whose time range touches the current boundary window.
+Only traces near midnight need remembering. The storage keeps a map `(project_id, trace_id) → anchor day` for every trace with a row starting within `anchor.window` (default = `trace_lookback`, 1 h) of a UTC midnight, on either side. The nearest midnight wins; exactly noon rounds up.
 
-Because rows may sit in the day before or after their own date, day pruning (§6) widens the day range by one day on each side. File pruning by `min_time`/`max_time`, which hold the real times, stays exact.
+- **Assignment is per row.** A row goes to its trace's anchor day when its own UTC day is at most one day away, and to its own day otherwise. A row two or more days from the anchor stays in its own day, where the one-day query slack finds it.
+- **Expiry runs on ingest time.** An entry made by a flush expires at that flush's largest `ingest_time` + `2 × anchor.window`; any flush with rows for a trace that already has an entry refreshes that entry's deadline the same way, even when none of its rows is near midnight. Expired entries are dropped after each commit once the clock (the largest `ingest_time` any flush has committed) passes their deadline. Because this counts ingest time, not event age, backfilled data (old events ingested now) is anchored like live data.
+- **Rebuild at startup.** The map is rebuilt from the active `traces` files whose `max_ingest_time` is within `2 × anchor.window` of the clock. Only the row groups whose `last_ingest_time` statistics have a max in that window are read, projected to `trace_id`, `start_time`, `end_time` and `last_ingest_time`; rows with `last_ingest_time ≥ clock − 2 × anchor.window` and `start_time` or `end_time` near midnight restore an entry in the file's partition day. A partial's `start_time` is the trace's earliest start, so `end_time` is what restores a trace whose child ends near midnight. If several files name a trace, the earlier day and the later expiry win.
+- **Replayed rows.** Rows replayed from the WAL get their anchor when they flush.
+- **Known limit.** A trace with no row near midnight before a flush, and rows past midnight later, gets an entry only from its later rows. Example: rows at 22:00 flushed, then rows at 00:30. Its earlier rows stay in the earlier day. The anchor guarantees one day only for traces whose rows reach the window before midnight.
+
+Because rows may sit in the day before or after their own date, day pruning (§6) widens the day range by one day on each side. File pruning by `min_time`/`max_time`, which hold the real times, stays exact. Memtable pruning stays exact.
 
 ## 1. Write-ahead log
 
@@ -92,11 +98,11 @@ Per table: `active` (accepting inserts) and at most one `frozen` (being flushed)
 ### Flush
 
 1. **Freeze.** Under the table-state write lock: move `active` → `frozen`, create a new empty `active`, record `frozen_max_seq`.
-2. **Prepare, outside the lock,** per partition of `frozen`:
+2. **Prepare, outside the lock.** For `spans`, first regroup each project's frozen rows by trace and assign every trace's rows to its anchor day (§ Trace anchor): the memtable partitions by each row's own day, files by the anchor day. Then, per output partition:
    - drop rows hidden by tombstones (§7) and rows older than the project's retention watermark (§8);
    - drop duplicate `(trace_id, span_id)` rows, keeping the greatest `ingest_time` (spans);
    - sort (spans: `trace_id, start_time`; scores: `created_at`);
-   - for `spans`, also compute **trace partials** (`GROUP BY trace_id` with the merge rules of 01) for a `traces` file derived from that spans file (§3).
+   - for `spans`, also compute the **trace partials** of exactly the rows of that spans file, one per trace, with the merge operator (spec 01 merge rules, D152), for a `traces` file derived from it (§3).
 3. **Stage.** One small catalog transaction records every output path in `staged_objects`.
 4. **Write.** Write the files, up to `flush.upload_concurrency` (default 8) at a time. Each file is durable before the next step:
    - local disk: write to a temp file in the target directory, `sync_all`, rename, fsync the directory;
@@ -125,7 +131,7 @@ A failure in steps 2–5 keeps `frozen` and retries that same view under new fil
 | Statistics | page-level for all scalar columns |
 | Dictionary | on for dictionary-typed columns; off for `input`, `output`, `attributes` |
 | Bloom filters | `trace_id`, `session_id`, `user_id` (fpp 0.01) on `spans`; `trace_id`, `session_id`, `user_id` on `traces`; `trace_id`, `score_id` on `scores` |
-| Sort order (within a file) | `spans`: `trace_id, start_time` · `traces`: `start_time` · `scores`: `created_at` (declared in file metadata so DataFusion can exploit it; declared only because the writer sorted) |
+| Sort order (within a file) | `spans`: `trace_id, start_time` · `traces`: `start_time, trace_id` (the `trace_id` tie-break makes files byte-identical across runs) · `scores`: `created_at` (declared in file metadata so DataFusion can exploit it; declared only because the writer sorted) |
 | Time slicing (across files) | every file covers a contiguous `[min_time, max_time]` slice; see below |
 | KV metadata | `llmobs.table`, `llmobs.schema_version`, `llmobs.level`, `llmobs.min_time`, `llmobs.max_time`, `llmobs.min_ingest_time`, `llmobs.max_ingest_time` |
 
@@ -170,6 +176,7 @@ CREATE TABLE file_sources (
   spans_file_id TEXT NOT NULL REFERENCES data_files(id) ON DELETE CASCADE,
   PRIMARY KEY (traces_file_id, spans_file_id)
 );
+CREATE INDEX file_sources_by_spans ON file_sources (spans_file_id);
 
 -- objects being written; anything left here after a crash is garbage (§5 GC)
 CREATE TABLE staged_objects (path TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
@@ -251,25 +258,37 @@ Runs in a background task with bounded parallelism (`compaction.threads`, defaul
 
 ## 6. Query path
 
-For each request, `Storage::query` returns a `ProjectQuery`: the project's `TableProvider`s, all bound to one `ReadState` (catalog, memtable and tombstones, §4), plus the process `RuntimeEnv` built at open (object store and metadata cache; the memory pool stays the default until M6) and `target_partitions`. The query layer (05, D91) builds the DataFusion session from it. The providers expose the stored Arrow schemas of 01 (binary IDs, `project_id`). They don't register themselves: the query layer (05) registers the user-facing views over them (hex IDs, hidden `project_id`, `sessions`, default exclusions, D89). Because each provider is constructed for a single project, the user cannot name another project's data. A dropped project (§7) gets empty tables.
+For each request, `Storage::query` returns a `ProjectQuery`: the project's `TableProvider`s, all bound to one `ReadState` (catalog, memtable and tombstones, §4), plus the process `RuntimeEnv` built at open (object store and metadata cache; the memory pool stays the default until M6), `target_partitions`, and the physical optimizer rules the session appends (the trace list fast path, D153). `Storage::query` takes `QueryOptions` (`around`, D154). The query layer (05, D91) builds the DataFusion session from it. The providers expose the stored Arrow schemas of 01 (binary IDs, `project_id`). They don't register themselves: the query layer (05) registers the user-facing views over them (hex IDs, hidden `project_id`, `sessions`, default exclusions, D89). Because each provider is constructed for a single project, the user cannot name another project's data. A dropped project (§7) gets empty tables.
 
 ### `SpansProvider::scan(projection, filters, limit)`
 
-1. Extract a time range from the filters on `start_time` (`=, <, <=, >, >=, BETWEEN`). Prune partitions by `day` and files by `min_time`/`max_time`. Day pruning is exact until the trace anchor exists; it then widens by one day on each side (§ Trace anchor).
+1. Extract a time range from the filters on `start_time`:
+   - the comparisons `=, <, <=, >, >=, BETWEEN`;
+   - an `OR` gives the union of its sides' ranges; a side that is `start_time IS NULL` on the non-null column is dropped.
+
+   Prune file partitions by `day`, widened by one day on each side (§ Trace anchor), and files by `min_time`/`max_time`. A `trace_id` lookup (equality or `IN` with 16-byte literals) without a time range, with `QueryOptions::around` set, reads only the `spans` and `traces` files that overlap `around ± 1 day` (D154); `scores` files are never pruned by `around`.
 2. Build a `ParquetExec` (DataFusion's Parquet scan) over the remaining files, with filter pushdown on, page-index pruning, bloom-filter pruning (equality on `trace_id`, `session_id`, `user_id`) and the metadata cache.
 3. Build a `MemoryExec` (in-memory scan) over the `active` and `frozen` batches of the same partitions. Same filters, applied in-memory.
 4. Combine both with a `UnionExec`, then wrap in the **tombstone filter** (§7) when there are pending tombstones whose `created_at` is at or after the file's or batch's `min_ingest_time`.
 
 ### `TracesProvider` (exposed as the logical view `traces`)
 
-A plan that unions (a) the partial rows from `traces` files with (b) partials computed on the fly from the memtable span batches, then `GROUP BY trace_id` with the merge aggregates. "First non-null" values and the root are chosen by `(start_time, span_id)` order, both in partials and in the merge, so results don't depend on flush order.
+A `TracesExec` reads (a) the partial rows from `traces` files and (b) partials computed from the memtable span batches, hash-partitions them by `trace_id`, and merges them with the merge operator: spec 01's rules, written once in Rust and shared with the flush and compaction (D152). The order rules of spec 01 § Order make results independent of flush order. A SQL `GROUP BY trace_id` is not used: its ordered `first_value` and list-union aggregates cost several microseconds per trace (`docs/research/storage/traces-benchmark.md`).
 
-- *Pushdown:* only `start_time` ranges and `trace_id` equality / `IN` are pushed into the partial scans. Every other filter applies after the merge: a non-root partial usually has no session or user, and `cost_total > 0.1` can fail on every partial and pass on the merged row.
-- *Time window:* when the filter bounds `start_time` to `[a, b]`, partials are scanned on `[a − trace_lookback, b + trace_lookback]` (default `trace_lookback` = 1 h), merged, and the merged `start_time` is then filtered to `[a, b]`. Memtable partials come from every memtable span batch of the project whose time range overlaps that padded window. A trace with partials more than 1 h apart may show up with a late start time; this is documented as a known limit.
+- *Columns:* only the columns the query projects or filters on are merged, plus the order keys (`trace_id`, `start_time`, `has_root`, `root_span_id`).
+- *Pushdown:* the provider accepts every filter as exact, so DataFusion keeps no filter above it. Only `start_time` ranges and `trace_id` equality / `IN` prune the partial scans. Every filter is evaluated on merged rows: a non-root partial usually has no session or user, and `cost_total > 0.1` can fail on every partial and pass on the merged row.
+- *Time window:* when the filter bounds `start_time` to `[a, b]`, partials are scanned on `[a − trace_lookback, b + trace_lookback]` (default `trace_lookback` = 1 h), merged, and the merged `start_time` is then filtered to `[a, b]`. Memtable partials come from every memtable span batch of the project whose time range overlaps that padded window; each batch's partials are computed once and cached with the batch. A trace with partials more than 1 h apart may show up with a late start time; this is documented as a known limit.
+- *Memory:* each merge partition reserves its accumulators' size from the query's memory pool and fails with the pool's error when the reservation is refused.
 - *Duplicates:* a span retried by a client and stored in two flushes is counted twice by the merge until compaction merges the two files (≈ 10 min, §5). Documented.
-- *Fast path for "latest N traces"* (trace list): scan widening windows back from `b` (15 min, 1 h, 6 h, 24 h, then the whole range) and stop once N merged rows pass the post-merge filters.
+- *Fast path for "latest N traces"* (trace list, D153):
+  - **Recognising it.** A physical optimizer rule, which `ProjectQuery.optimizer_rules` hands to the query layer's session, matches `ORDER BY start_time DESC, trace_id DESC LIMIT k` over the `traces` scan. Projections may sit in between, including the view's hex-encoded `trace_id`.
+  - **Other queries.** A query with another sort, or with a filter DataFusion keeps above the scan (a score-function join), runs the full merge.
+  - **Phase 1, rank.** The scan reads disjoint slices back from `b`, or from the newest data when `b` is open: 15 min, then up to 1 h, 6 h, 24 h, then the rest of the range. Each slice is padded by `trace_lookback`. In each slice, it merges only the filter's columns and collects the matching `(start_time, trace_id)`. It stops after the first slice that brings the total to `k`.
+  - **Phase 2, fetch.** It merges all requested columns for the best `k` traces, each within its own slice's padded window, so their values are the ones phase 1 filtered on.
+  - **Result.** The first `k` rows of the full merge, except for traces with partials more than `trace_lookback` apart: the known limit above.
+  - TopK over a full `GROUP BY trace_id` does not bound the aggregate, which is why the rule exists.
 - *Single-trace lookup* (`trace_id = X`), in order of preference:
-  1. a time hint (`?around=<ts>`, always present in links generated by the UI, API list responses and SDK helpers) narrows the search to files overlapping ±1 day;
+  1. a time hint (`?around=<ts>`, always present in links generated by the UI, API list responses and SDK helpers; passed as `QueryOptions::around`, D154) narrows the search to files overlapping ±1 day;
   2. otherwise, trace-ID bloom filters select candidate files across all of the project's partitions — a few microseconds per file. The bitsets are not in the metadata cache (§4): a pruning read fetches each one from the object;
   3. post-MVP, if per-project file counts make (2) slow: either a `trace_index` table (trace_id → min/max day), sorted by `trace_id` and maintained at compaction, as LangWatch and Opik do; or one combined bloom-filter file per partition, laid out so a lookup is one ranged read per partition, as OpenObserve does.
 

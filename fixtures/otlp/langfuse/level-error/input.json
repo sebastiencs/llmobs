@@ -4,28 +4,66 @@
       "resource": {
         "attributes": [
           {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.45.2"
+            }
+          },
+          {
             "key": "service.name",
             "value": {
-              "stringValue": "langfuse-app"
+              "stringValue": "capture-app"
             }
           }
-        ]
+        ],
+        "droppedAttributesCount": 0,
+        "entityRefs": []
       },
       "scopeSpans": [
         {
           "scope": {
             "name": "langfuse-sdk",
-            "version": "5.2.0"
+            "version": "5.1.0",
+            "attributes": [
+              {
+                "key": "public_key",
+                "value": {
+                  "stringValue": "capture-public-key"
+                }
+              }
+            ],
+            "droppedAttributesCount": 0
           },
           "spans": [
             {
-              "traceId": "fd3a0000000000000000000000000001",
-              "spanId": "fd3a000000000001",
-              "name": "answer",
+              "traceId": "3abd63589fa5ef397a271ceb22cdf1b8",
+              "spanId": "fb00a141331328a9",
+              "traceState": "",
+              "parentSpanId": "",
+              "flags": 256,
+              "name": "failed-lookup",
               "kind": 1,
               "startTimeUnixNano": "1767225590000000000",
-              "endTimeUnixNano": "1767225591000000000",
+              "endTimeUnixNano": "1767225590055000000",
               "attributes": [
+                {
+                  "key": "langfuse.internal.is_app_root",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
                 {
                   "key": "langfuse.observation.type",
                   "value": {
@@ -41,20 +79,22 @@
                 {
                   "key": "langfuse.observation.status_message",
                   "value": {
-                    "stringValue": "rate limited"
-                  }
-                },
-                {
-                  "key": "langfuse.trace.input",
-                  "value": {
-                    "stringValue": "[{\"role\":\"user\",\"content\":\"from trace\"}]"
+                    "stringValue": "weather lookup failed"
                   }
                 }
-              ]
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": null
             }
-          ]
+          ],
+          "schemaUrl": ""
         }
-      ]
+      ],
+      "schemaUrl": ""
     }
   ]
 }

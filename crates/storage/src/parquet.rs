@@ -1,6 +1,6 @@
 //! Parquet encoding for one flush partition.
 //!
-//! `Storage` does not call this yet. M2.6 writes each frozen partition from
+//! The flush writes each frozen partition through `write_file` from
 //! `spawn_blocking`.
 
 #![allow(dead_code)]
@@ -11,9 +11,9 @@ use arrow::array::{Array, AsArray, RecordBatch};
 use arrow::compute::{
     SortColumn, SortOptions, concat_batches, lexsort_to_indices, take_record_batch,
 };
-use arrow::datatypes::TimestampNanosecondType;
+use arrow::datatypes::{SchemaRef, TimestampNanosecondType};
 use bytes::Bytes;
-use llmobs_core::schema::{scores, spans};
+use llmobs_core::schema::{scores, scores_schema, spans, spans_schema, traces, traces_schema};
 use parquet::arrow::ArrowSchemaConverter;
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::basic::{Compression, ZstdLevel};
@@ -21,8 +21,8 @@ use parquet::file::metadata::{KeyValue, SortingColumn};
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use parquet::schema::types::{ColumnPath, SchemaDescriptor};
 
+use crate::catalog::FileTable;
 use crate::error::ParquetWriteError;
-use crate::wal::Table;
 
 /// `llmobs.schema_version` written into every file.
 ///
@@ -70,7 +70,16 @@ pub(crate) const SCORES_DICTIONARY_COLUMNS: &[&str] = &[
     scores::SOURCE,
 ];
 
+/// Low-cardinality strings of `traces`, in schema order. Spec 03 §3.
+pub(crate) const TRACES_DICTIONARY_COLUMNS: &[&str] = &[
+    traces::NAME,
+    traces::STATUS,
+    traces::ENVIRONMENT,
+    traces::RELEASE,
+];
+
 const SPANS_BLOOM_COLUMNS: &[&str] = &[spans::TRACE_ID, spans::SESSION_ID, spans::USER_ID];
+const TRACES_BLOOM_COLUMNS: &[&str] = &[traces::TRACE_ID, traces::SESSION_ID, traces::USER_ID];
 const SCORES_BLOOM_COLUMNS: &[&str] = &[scores::TRACE_ID, scores::SCORE_ID];
 
 /// Close a row group at this many rows. Spec 03 §3.
@@ -119,7 +128,7 @@ pub(crate) struct WrittenFile {
 ///
 /// CPU-bound: call from `spawn_blocking`. `level` is `0` or `1`.
 pub(crate) fn write_file(
-    table: Table,
+    table: FileTable,
     level: u8,
     batches: &[Arc<RecordBatch>],
 ) -> Result<WrittenFile, ParquetWriteError> {
@@ -152,10 +161,10 @@ pub(crate) fn write_file(
 }
 
 fn sort_batches(
-    table: Table,
+    table: FileTable,
     batches: &[Arc<RecordBatch>],
 ) -> Result<RecordBatch, ParquetWriteError> {
-    let schema = table.schema();
+    let schema = table_schema(table);
     let mut rows = Vec::new();
     for batch in batches {
         if batch.schema().as_ref() != schema.as_ref() {
@@ -174,7 +183,7 @@ fn sort_batches(
     take_record_batch(&combined, &indices).map_err(ParquetWriteError::arrow)
 }
 
-fn sort_keys(table: Table, batch: &RecordBatch) -> Result<Vec<SortColumn>, ParquetWriteError> {
+fn sort_keys(table: FileTable, batch: &RecordBatch) -> Result<Vec<SortColumn>, ParquetWriteError> {
     let ascending = SortOptions {
         descending: false,
         nulls_first: false,
@@ -189,43 +198,56 @@ fn sort_keys(table: Table, batch: &RecordBatch) -> Result<Vec<SortColumn>, Parqu
     Ok(keys)
 }
 
-fn sort_columns(table: Table) -> &'static [&'static str] {
+fn table_schema(table: FileTable) -> SchemaRef {
     match table {
-        Table::Spans => &[spans::TRACE_ID, spans::START_TIME],
-        Table::Scores => &[scores::CREATED_AT],
+        FileTable::Spans => spans_schema(),
+        FileTable::Traces => traces_schema(),
+        FileTable::Scores => scores_schema(),
     }
 }
 
-fn time_column(table: Table) -> &'static str {
+fn sort_columns(table: FileTable) -> &'static [&'static str] {
     match table {
-        Table::Spans => spans::START_TIME,
-        Table::Scores => scores::CREATED_AT,
+        FileTable::Spans => &[spans::TRACE_ID, spans::START_TIME],
+        FileTable::Traces => &[traces::START_TIME, traces::TRACE_ID],
+        FileTable::Scores => &[scores::CREATED_AT],
     }
 }
 
-fn ingest_column(table: Table) -> &'static str {
+fn time_column(table: FileTable) -> &'static str {
     match table {
-        Table::Spans => spans::INGEST_TIME,
-        Table::Scores => scores::INGEST_TIME,
+        FileTable::Spans => spans::START_TIME,
+        FileTable::Traces => traces::START_TIME,
+        FileTable::Scores => scores::CREATED_AT,
     }
 }
 
-fn dictionary_columns(table: Table) -> &'static [&'static str] {
+fn ingest_column(table: FileTable) -> &'static str {
     match table {
-        Table::Spans => SPANS_DICTIONARY_COLUMNS,
-        Table::Scores => SCORES_DICTIONARY_COLUMNS,
+        FileTable::Spans => spans::INGEST_TIME,
+        FileTable::Traces => traces::LAST_INGEST_TIME,
+        FileTable::Scores => scores::INGEST_TIME,
     }
 }
 
-fn bloom_columns(table: Table) -> &'static [&'static str] {
+fn dictionary_columns(table: FileTable) -> &'static [&'static str] {
     match table {
-        Table::Spans => SPANS_BLOOM_COLUMNS,
-        Table::Scores => SCORES_BLOOM_COLUMNS,
+        FileTable::Spans => SPANS_DICTIONARY_COLUMNS,
+        FileTable::Traces => TRACES_DICTIONARY_COLUMNS,
+        FileTable::Scores => SCORES_DICTIONARY_COLUMNS,
+    }
+}
+
+fn bloom_columns(table: FileTable) -> &'static [&'static str] {
+    match table {
+        FileTable::Spans => SPANS_BLOOM_COLUMNS,
+        FileTable::Traces => TRACES_BLOOM_COLUMNS,
+        FileTable::Scores => SCORES_BLOOM_COLUMNS,
     }
 }
 
 fn writer_properties(
-    table: Table,
+    table: FileTable,
     level: u8,
     rows: u64,
     bounds: &Bounds,
@@ -268,7 +290,7 @@ fn writer_properties(
 }
 
 fn sorting_columns(
-    table: Table,
+    table: FileTable,
     descriptor: &SchemaDescriptor,
 ) -> Result<Vec<SortingColumn>, ParquetWriteError> {
     let mut columns = Vec::new();
@@ -307,9 +329,9 @@ fn leaf_index(descriptor: &SchemaDescriptor, name: &str) -> Result<i32, ParquetW
     found.ok_or_else(|| ParquetWriteError::invalid("missing column"))
 }
 
-fn file_metadata(table: Table, level: u8, bounds: &Bounds) -> Vec<KeyValue> {
+fn file_metadata(table: FileTable, level: u8, bounds: &Bounds) -> Vec<KeyValue> {
     let pairs = [
-        (KEY_TABLE, table.name().to_owned()),
+        (KEY_TABLE, table.as_str().to_owned()),
         (KEY_SCHEMA_VERSION, SCHEMA_VERSION.to_owned()),
         (KEY_LEVEL, level.to_string()),
         (KEY_MIN_TIME, bounds.min_time.to_string()),
@@ -386,17 +408,21 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
-    use arrow::array::{AsArray, RecordBatch};
+    use arrow::array::{
+        ArrayRef, AsArray, BooleanArray, FixedSizeBinaryBuilder, Float64Array, Int32Array,
+        Int64Array, ListBuilder, MapBuilder, RecordBatch, StringArray, StringBuilder,
+        TimestampNanosecondBuilder,
+    };
     use arrow::compute::{
         SortColumn, SortOptions, concat_batches, lexsort_to_indices, take_record_batch,
     };
-    use arrow::datatypes::TimestampNanosecondType;
+    use arrow::datatypes::{DataType, Field, TimestampNanosecondType};
     use llmobs_core::batch::{scores_to_record_batch, spans_to_record_batch};
     use llmobs_core::enums::{
         Convention, CostSource, PayloadFormat, ScoreSource, SpanKind, SpanStatus,
     };
     use llmobs_core::ids::{ProjectId, SpanId, TraceId};
-    use llmobs_core::schema::{scores, scores_schema, spans, spans_schema};
+    use llmobs_core::schema::{scores, scores_schema, spans, spans_schema, traces, traces_schema};
     use llmobs_core::score::{Score, ScoreTarget, ScoreValue};
     use llmobs_core::span::{Span, SpanEvent, SpanLink};
     use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
@@ -405,9 +431,13 @@ mod tests {
     use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
     use uuid::Uuid;
 
-    use super::{SCHEMA_VERSION, SCORES_DICTIONARY_COLUMNS, SPANS_DICTIONARY_COLUMNS, write_file};
+    use super::{
+        SCHEMA_VERSION, SCORES_DICTIONARY_COLUMNS, SPANS_DICTIONARY_COLUMNS,
+        TRACES_DICTIONARY_COLUMNS, write_file,
+    };
+    use crate::catalog::FileTable;
     use crate::error::ParquetWriteError;
-    use crate::wal::{Table, spans_named};
+    use crate::wal::spans_named;
 
     fn project() -> ProjectId {
         "018f6b4e-7c1a-7c1a-8c1a-000000000001".parse().unwrap()
@@ -542,10 +572,11 @@ mod tests {
         reader.finish().unwrap()
     }
 
-    fn sorted_like_the_writer(table: Table, batch: &RecordBatch) -> RecordBatch {
+    fn sorted_like_the_writer(table: FileTable, batch: &RecordBatch) -> RecordBatch {
         let names: &[&str] = match table {
-            Table::Spans => &[spans::TRACE_ID, spans::START_TIME],
-            Table::Scores => &[scores::CREATED_AT],
+            FileTable::Spans => &[spans::TRACE_ID, spans::START_TIME],
+            FileTable::Traces => &[traces::START_TIME, traces::TRACE_ID],
+            FileTable::Scores => &[scores::CREATED_AT],
         };
         let keys: Vec<_> = names
             .iter()
@@ -559,6 +590,87 @@ mod tests {
             .collect();
         let indices = lexsort_to_indices(&keys, None).unwrap();
         take_record_batch(batch, &indices).unwrap()
+    }
+
+    fn timestamp(rows: usize) -> TimestampNanosecondBuilder {
+        TimestampNanosecondBuilder::with_capacity(rows).with_timezone("UTC")
+    }
+
+    fn strings(value: &str, rows: usize) -> ArrayRef {
+        Arc::new(StringArray::from(vec![value; rows]))
+    }
+
+    fn utf8_list(value: &str, rows: usize) -> ArrayRef {
+        let mut builder = ListBuilder::with_capacity(StringBuilder::new(), rows)
+            .with_field(Arc::new(Field::new("item", DataType::Utf8, false)));
+        for _ in 0..rows {
+            builder.values().append_value(value);
+            builder.append(true);
+        }
+        Arc::new(builder.finish())
+    }
+
+    fn metadata_map(rows: usize) -> ArrayRef {
+        let mut builder =
+            MapBuilder::with_capacity(None, StringBuilder::new(), StringBuilder::new(), rows);
+        for _ in 0..rows {
+            builder.keys().append_value("key");
+            builder.values().append_value("value");
+            builder.append(true).unwrap();
+        }
+        Arc::new(builder.finish())
+    }
+
+    /// A small `traces_schema()` batch: `(trace id byte, start_time, last_ingest_time)`.
+    fn traces_batch(rows: &[(u8, i64, i64)]) -> RecordBatch {
+        let count = rows.len();
+        let project = project().to_string();
+        let mut trace_id = FixedSizeBinaryBuilder::with_capacity(count, 16);
+        let mut root_span_id = FixedSizeBinaryBuilder::with_capacity(count, 8);
+        let mut start_time = timestamp(count);
+        let mut end_time = timestamp(count);
+        let mut last_ingest_time = timestamp(count);
+        for (last, start, ingest) in rows {
+            trace_id.append_value(trace(*last).as_bytes()).unwrap();
+            root_span_id
+                .append_value(span_id(*last).as_bytes())
+                .unwrap();
+            start_time.append_value(*start);
+            end_time.append_value(*start + 10);
+            last_ingest_time.append_value(*ingest);
+        }
+        let columns: Vec<ArrayRef> = vec![
+            strings(&project, count),
+            Arc::new(trace_id.finish()),
+            Arc::new(start_time.finish()),
+            Arc::new(end_time.finish()),
+            strings("trace", count),
+            Arc::new(root_span_id.finish()),
+            Arc::new(BooleanArray::from(vec![false; count])),
+            strings("ok", count),
+            strings("session", count),
+            strings("user", count),
+            strings("production", count),
+            strings("abc", count),
+            utf8_list("tag", count),
+            metadata_map(count),
+            strings("in", count),
+            strings("out", count),
+            Arc::new(Int64Array::from(vec![1_i64; count])),
+            Arc::new(Int64Array::from(vec![0_i64; count])),
+            Arc::new(Int64Array::from(vec![0_i64; count])),
+            Arc::new(Int64Array::from(vec![1_i64; count])),
+            Arc::new(Int64Array::from(vec![1_i64; count])),
+            Arc::new(Int64Array::from(vec![1_i64; count])),
+            Arc::new(Int64Array::from(vec![1_i64; count])),
+            Arc::new(Int64Array::from(vec![1_i64; count])),
+            Arc::new(Int64Array::from(vec![1_i64; count])),
+            Arc::new(Float64Array::from(vec![0.5_f64; count])),
+            utf8_list("model", count),
+            Arc::new(last_ingest_time.finish()),
+            Arc::new(Int32Array::from(vec![1_i32; count])),
+        ];
+        RecordBatch::try_new(traces_schema(), columns).unwrap()
     }
 
     fn assert_columns_equal(actual: &RecordBatch, expected: &RecordBatch) {
@@ -589,6 +701,7 @@ mod tests {
     #[test]
     fn dictionary_lists_match_the_schemas() {
         dictionary_names_follow_the_schema(spans_schema().as_ref(), SPANS_DICTIONARY_COLUMNS);
+        dictionary_names_follow_the_schema(traces_schema().as_ref(), TRACES_DICTIONARY_COLUMNS);
         dictionary_names_follow_the_schema(scores_schema().as_ref(), SCORES_DICTIONARY_COLUMNS);
         assert_eq!(SCHEMA_VERSION, "1");
     }
@@ -597,8 +710,8 @@ mod tests {
     fn spans_round_trip_sorted_with_the_file_settings() {
         let batch =
             spans_to_record_batch(&[span(2, 1, 30), span(1, 50, 10), span(1, 20, 40)]).unwrap();
-        let written = write_file(Table::Spans, 0, &[Arc::new(batch.clone())]).unwrap();
-        let expected = sorted_like_the_writer(Table::Spans, &batch);
+        let written = write_file(FileTable::Spans, 0, &[Arc::new(batch.clone())]).unwrap();
+        let expected = sorted_like_the_writer(FileTable::Spans, &batch);
         assert_columns_equal(&read_rows(&written.bytes, &spans_schema()), &expected);
         assert_eq!(written.rows, 3);
         assert_eq!(
@@ -635,8 +748,8 @@ mod tests {
     fn scores_round_trip_sorted_with_the_file_settings() {
         let batch =
             scores_to_record_batch(&[score(20, "accuracy"), score(10, "helpfulness")]).unwrap();
-        let written = write_file(Table::Scores, 1, &[Arc::new(batch.clone())]).unwrap();
-        let expected = sorted_like_the_writer(Table::Scores, &batch);
+        let written = write_file(FileTable::Scores, 1, &[Arc::new(batch.clone())]).unwrap();
+        let expected = sorted_like_the_writer(FileTable::Scores, &batch);
         assert_columns_equal(&read_rows(&written.bytes, &scores_schema()), &expected);
         assert_eq!(
             (written.min_time, written.max_time),
@@ -669,11 +782,48 @@ mod tests {
     }
 
     #[test]
+    fn traces_round_trip_sorted_with_the_file_settings() {
+        let batch = traces_batch(&[(2, 1, 30), (1, 1, 10), (3, 20, 40)]);
+        let written = write_file(FileTable::Traces, 0, &[Arc::new(batch.clone())]).unwrap();
+        let expected = sorted_like_the_writer(FileTable::Traces, &batch);
+        assert_columns_equal(&read_rows(&written.bytes, &traces_schema()), &expected);
+        assert_eq!(written.rows, 3);
+        assert_eq!(
+            (written.min_time, written.max_time),
+            i64_pair(&expected, traces::START_TIME)
+        );
+        assert_eq!(
+            (written.min_ingest_time, written.max_ingest_time),
+            i64_pair(&expected, traces::LAST_INGEST_TIME)
+        );
+        assert_file_settings(
+            &written.bytes,
+            "traces",
+            "0",
+            &written,
+            TRACES_DICTIONARY_COLUMNS,
+            &[traces::TRACE_ID, traces::SESSION_ID, traces::USER_ID],
+            &[traces::START_TIME, traces::TRACE_ID],
+        );
+        let trace_bytes = expected
+            .column_by_name(traces::TRACE_ID)
+            .unwrap()
+            .as_fixed_size_binary()
+            .value(0)
+            .to_vec();
+        assert!(bloom_contains(
+            &written.bytes,
+            traces::TRACE_ID,
+            &trace_bytes
+        ));
+    }
+
+    #[test]
     fn many_small_rows_use_three_row_groups() {
         let starts: Vec<i64> = (0..1_000).collect();
         let batch = Arc::new(spans_named(&starts, "row"));
         let batches = vec![Arc::clone(&batch); 250];
-        let written = write_file(Table::Spans, 0, &batches).unwrap();
+        let written = write_file(FileTable::Spans, 0, &batches).unwrap();
         assert_eq!(written.rows, 250_000);
         assert_eq!(metadata(&written.bytes).num_row_groups(), 3);
     }
@@ -682,12 +832,12 @@ mod tests {
     fn empty_and_foreign_batches_are_rejected() {
         let spans = spans_to_record_batch(&[span(1, 1, 1)]).unwrap();
         let empty = spans.slice(0, 0);
-        let error = write_file(Table::Spans, 0, &[Arc::new(empty)]).unwrap_err();
+        let error = write_file(FileTable::Spans, 0, &[Arc::new(empty)]).unwrap_err();
         assert!(matches!(error, ParquetWriteError::Invalid { .. }));
         let scores = scores_to_record_batch(&[score(1, "accuracy")]).unwrap();
-        let error = write_file(Table::Spans, 0, &[Arc::new(scores)]).unwrap_err();
+        let error = write_file(FileTable::Spans, 0, &[Arc::new(scores)]).unwrap_err();
         assert!(matches!(error, ParquetWriteError::Invalid { .. }));
-        let error = write_file(Table::Spans, 2, &[Arc::new(spans)]).unwrap_err();
+        let error = write_file(FileTable::Spans, 2, &[Arc::new(spans)]).unwrap_err();
         assert!(matches!(error, ParquetWriteError::Invalid { .. }));
     }
 

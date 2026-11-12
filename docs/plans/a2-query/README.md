@@ -49,8 +49,8 @@ These go into `docs/mvp-decisions.md` in Q1. **The numbers may need rebasing:** 
 ## Boundaries
 
 ```
-llmobs-server ──Storage::query(project, options)──▶ A1 ──▶ ProjectQuery { spans, traces, scores, runtime, target_partitions }
-llmobs-server ──QueryContext::new(ProjectQuery, window)──▶ A2: views, hex rule, sandbox
+llmobs-server ──Storage::query(project, options)──▶ A1 ──▶ ProjectQuery { spans, traces, scores, runtime, target_partitions, optimizer_rules }
+llmobs-server ──QueryContext::new(ProjectQuery, window)──▶ A2: views, hex rule, physical optimizer rules, sandbox
               ──reads::* (lists, details, metrics)──▶ Arrow batches / structs ──▶ server maps to API types
               ──QueryContext::sql_json / sql_export──▶ JSON rows / byte stream
               ──QueryContext::register_sqlite_view──▶ experiment_items, dataset_items (server-built MemTables)
@@ -59,7 +59,8 @@ llmobs-server ──QueryContext::new(ProjectQuery, window)──▶ A2: views, 
 **A1 (storage engine)**
 - It owns the raw providers, their pushdown, trace merging, tombstones, score last-writer-wins, the memory pool and admission.
 - A2 never relies on how a provider works inside, only on its schema (`llmobs_core::schema`) and on the filters it receives.
-- Time hints (`?around=`) and any "latest N traces" fast-path hint go through A1's `QueryOptions` when the server calls `Storage::query`. A2 does not see them.
+- Time hints (`?around=`) go through A1's `QueryOptions` when the server calls `Storage::query` (D154). A2 does not see them.
+- The "latest N traces" fast path is a physical optimizer rule that A1 puts in `ProjectQuery.optimizer_rules`. `session_state` appends those rules to the session without looking inside them (D153, A1 M3.7).
 - Q14 documents the exact plan shape of the trace list (`ORDER BY start_time DESC, trace_id DESC LIMIT n+1` over the `traces` view), so A1's M3 can recognise it.
 - **Change requested from A1:** its design says `Storage::query` returns "a `SessionContext` … and the project's providers". Under D91 it returns a `ProjectQuery` with the fields below, and builds no `SessionContext`. A1's own tests can scan its providers through a plain `SessionContext::new()`.
 - `ProjectQuery` is defined once, by whichever track lands first (Q2 here, or A1 M1). The other one reuses it.
@@ -206,12 +207,15 @@ pub struct ProjectQuery {
     pub scores: Arc<dyn TableProvider>,
     pub runtime: Arc<RuntimeEnv>,
     pub target_partitions: NonZeroUsize,
+    /// Physical optimizer rules the session appends: the trace list fast path (D153, A1 M3.7).
+    pub optimizer_rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
 }
 pub struct QueryContext { /* private: SessionContext */ }
 pub struct TimeWindow { /* from inclusive, to exclusive, ns UTC */ }   // TimeWindow::new(from, to)
 impl QueryContext {
     pub fn new(source: ProjectQuery, window: Option<TimeWindow>) -> Result<QueryContext, RunError>;  // D101
     pub fn register_sqlite_view(&self, view: SqliteView, table: Arc<dyn TableProvider>) -> Result<(), RunError>;
+    pub fn session(&self) -> &SessionContext;            // M3 benchmark: raw SQL / EXPLAIN ANALYZE
 }
 pub enum ViewName { Traces, Spans, Sessions, Scores, ExperimentItems, DatasetItems }
 pub enum SqliteView { ExperimentItems, DatasetItems }

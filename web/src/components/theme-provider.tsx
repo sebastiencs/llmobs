@@ -14,9 +14,9 @@ export function readStoredTheme(): Theme {
     if (value === "light" || value === "dark" || value === "system") {
       return value;
     }
-    return "system";
+    return "dark";
   } catch {
-    return "system";
+    return "dark";
   }
 }
 

@@ -1,0 +1,269 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "main.py"
+            }
+          }
+        ],
+        "droppedAttributesCount": 0,
+        "entityRefs": []
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "lmnr.tracer",
+            "version": "",
+            "attributes": [],
+            "droppedAttributesCount": 0
+          },
+          "spans": [
+            {
+              "traceId": "b594ed7c920c0739bf6ab3a45fa5d6a1",
+              "spanId": "8a1d321b3948e3cf",
+              "traceState": "",
+              "parentSpanId": "",
+              "flags": 256,
+              "name": "openai.chat",
+              "kind": 1,
+              "startTimeUnixNano": "1767225590000000000",
+              "endTimeUnixNano": "1767225590170000000",
+              "attributes": [
+                {
+                  "key": "lmnr.span.type",
+                  "value": {
+                    "stringValue": "LLM"
+                  }
+                },
+                {
+                  "key": "lmnr.span.parent_path",
+                  "value": {
+                    "arrayValue": {
+                      "values": []
+                    }
+                  }
+                },
+                {
+                  "key": "lmnr.span.parent_ids_path",
+                  "value": {
+                    "arrayValue": {
+                      "values": []
+                    }
+                  }
+                },
+                {
+                  "key": "lmnr.span.path",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "openai.chat"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "lmnr.span.ids_path",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "00000000-0000-0000-8a1d-321b3948e3cf"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "lmnr.span.instrumentation_source",
+                  "value": {
+                    "stringValue": "python"
+                  }
+                },
+                {
+                  "key": "lmnr.span.sdk_version",
+                  "value": {
+                    "stringValue": "0.8.8"
+                  }
+                },
+                {
+                  "key": "lmnr.span.language_version",
+                  "value": {
+                    "stringValue": "python@3.13"
+                  }
+                },
+                {
+                  "key": "lmnr.span.release",
+                  "value": {
+                    "stringValue": "capture"
+                  }
+                },
+                {
+                  "key": "lmnr.span.instrumentation_scope.name",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "lmnr.span.instrumentation_scope.version",
+                  "value": {
+                    "stringValue": "3.45.0"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "llm.headers",
+                  "value": {
+                    "stringValue": "None"
+                  }
+                },
+                {
+                  "key": "llm.is_streaming",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "gen_ai.request.base_url",
+                  "value": {
+                    "stringValue": "https://api.openai.com/v1/"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"content\":\"What's the weather in Paris?\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "chatcmpl-capture-1"
+                  }
+                },
+                {
+                  "key": "openai.response.system_fingerprint",
+                  "value": {
+                    "stringValue": "fp_capture"
+                  }
+                },
+                {
+                  "key": "llm.usage.total_tokens",
+                  "value": {
+                    "intValue": "36"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "12"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "24"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read_input_tokens",
+                  "value": {
+                    "intValue": "8"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.reasoning_tokens",
+                  "value": {
+                    "intValue": "3"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"index\":0,\"message\":{\"content\":\"It is 18 °C and sunny in Paris.\",\"role\":\"assistant\"},\"finish_reason\":\"stop\"}]"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [
+                {
+                  "timeUnixNano": "1767225590130000000",
+                  "name": "llm.content.completion.chunk",
+                  "attributes": [],
+                  "droppedAttributesCount": 0
+                },
+                {
+                  "timeUnixNano": "1767225590133000000",
+                  "name": "llm.content.completion.chunk",
+                  "attributes": [],
+                  "droppedAttributesCount": 0
+                },
+                {
+                  "timeUnixNano": "1767225590139000000",
+                  "name": "llm.content.completion.chunk",
+                  "attributes": [],
+                  "droppedAttributesCount": 0
+                },
+                {
+                  "timeUnixNano": "1767225590145000000",
+                  "name": "llm.content.completion.chunk",
+                  "attributes": [],
+                  "droppedAttributesCount": 0
+                },
+                {
+                  "timeUnixNano": "1767225590151000000",
+                  "name": "llm.content.completion.chunk",
+                  "attributes": [],
+                  "droppedAttributesCount": 0
+                },
+                {
+                  "timeUnixNano": "1767225590157000000",
+                  "name": "llm.content.completion.chunk",
+                  "attributes": [],
+                  "droppedAttributesCount": 0
+                },
+                {
+                  "timeUnixNano": "1767225590164000000",
+                  "name": "llm.content.completion.chunk",
+                  "attributes": [],
+                  "droppedAttributesCount": 0
+                }
+              ],
+              "droppedEventsCount": 0,
+              "links": [],
+              "droppedLinksCount": 0,
+              "status": {
+                "message": "",
+                "code": 1
+              }
+            }
+          ],
+          "schemaUrl": ""
+        }
+      ],
+      "schemaUrl": ""
+    }
+  ]
+}

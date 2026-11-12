@@ -1,0 +1,29 @@
+{
+  "description": "Vercel AI SDK v5 streamText of one OpenAI chat answer with usage.",
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "Telemetry is enabled on the call. recordInputs and recordOutputs stay at their defaults, which record message content on spans. The model is openai.chat. The provider sets stream_options.include_usage. The mock waits 120 ms before the first chunk and splits the answer into 4 chunks. Two spans: streamText and doStream. Token counts are copied, including cachedInputTokens and reasoningTokens written as 0. The doStream span measures ai.response.msToFirstChunk, ai.response.msToFinish, and ai.response.avgOutputTokensPerSecond. ai.stream.msToFirstChunk is absent. ai.response.timestamp is the mock created_at, 2026-01-01T00:00:00.000Z.",
+  "instrumentation": "ai",
+  "libraries": ["ai", "@ai-sdk/openai", "@opentelemetry/api", "@opentelemetry/sdk-trace-node"],
+  "timing_attributes": [
+    "ai.response.msToFirstChunk",
+    "ai.response.msToFinish",
+    "ai.response.avgOutputTokensPerSecond"
+  ],
+  "turns": [
+    {
+      "api": "openai.chat",
+      "model": "gpt-4o-mini-2024-07-18",
+      "message": { "text": "Clear skies over the harbor." },
+      "finish": "stop",
+      "usage": { "input": 20, "output": 8 },
+      "ttft_ms": 120,
+      "chunks": 4
+    }
+  ]
+}

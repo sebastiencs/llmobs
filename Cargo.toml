@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "tools/capture"]
 
 [workspace.package]
 version = "0.0.0"
@@ -175,13 +175,17 @@ subtle = "2.6.1"
 # OpenAPI 3.1 schemas. `uuid` enables the `format: uuid` schema. Do not enable
 # `preserve_order` or `preserve_path_order`: default `BTreeMap`s keep the document sorted.
 utoipa = { version = "6.0.0", features = ["uuid"] }
-# Same major as axum 0.8's query decoding. Axum is not a dependency yet.
+# Same major as axum 0.8's query decoding.
 serde_urlencoded = "0.7.1"
 tempfile = "3.27.0"
 # OTLP property tests in llmobs-otel. MSRV 1.88. Tests enable `std` only.
 proptest = "1.12.0"
 # Mock identity-provider RS256 keys (tests only). `rand_core` 0.10 matches workspace `rand`.
 rsa = { version = "0.10.0", features = ["pkcs1v15"] }
+# axum 0.8.9's body trait. The capture mock's stream implements it; axum does not re-export `Frame`.
+http-body = "1.1.0"
+# Dev-dependency of llmobs-capture, for `oneshot` tests of the axum apps.
+http-body-util = "0.1.5"
 
 [profile.dev]
 debug = "line-tables-only"

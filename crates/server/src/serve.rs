@@ -433,7 +433,7 @@ mod tests {
     use std::time::Instant;
 
     use llmobs_storage::config::{
-        FlushConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig, WalConfig,
+        AnchorConfig, FlushConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig, WalConfig,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
@@ -648,6 +648,7 @@ mod tests {
                 flush: FlushConfig::default(),
                 memtable: MemtableConfig::default(),
                 query: QueryConfig::default(),
+                anchor: AnchorConfig::default(),
             },
             auth: AuthSettings::default(),
             smtp_url: None,

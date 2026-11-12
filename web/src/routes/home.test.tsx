@@ -27,8 +27,14 @@ it("redirects a member to their first org and lists its projects", async () => {
 
   expect(router.state.location.pathname).toBe("/acme");
   expect(screen.getByRole("heading", { name: "Acme" })).toBeInTheDocument();
-  expect(screen.getByText("Support bot")).toBeInTheDocument();
-  expect(screen.getByText("Playground")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Support bot" })).toHaveAttribute(
+    "href",
+    "/acme/support-bot/traces",
+  );
+  expect(screen.getByRole("link", { name: "Playground" })).toHaveAttribute(
+    "href",
+    "/acme/playground/traces",
+  );
 });
 
 it("shows role, retention and slug", async () => {

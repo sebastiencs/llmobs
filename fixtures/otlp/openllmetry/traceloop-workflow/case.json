@@ -1,0 +1,26 @@
+{
+  "description": "Traceloop @workflow calling a @task that makes one OpenAI chat completion, with session, user, and one other association property.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "traceloop-sdk",
+    "instrumentation_version": "0.62.4",
+    "language": "python",
+    "libraries": {
+      "openai": "3.45.0",
+      "opentelemetry-instrumentation-openai": "0.62.4",
+      "opentelemetry-sdk": "1.45.2",
+      "opentelemetry-semantic-conventions-ai": "0.5.1",
+      "traceloop-sdk": "0.62.4"
+    },
+    "captured_at": "2026-11-11T12:54:56Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Mapping tables / Context fields",
+    "02 § Normalization rules"
+  ],
+  "notes": "TRACELOOP_TRACE_CONTENT is true, which is also the default, so message content and workflow input and output are recorded on spans. TRACELOOP_METRICS_ENABLED is false and TRACELOOP_LOGGING_ENABLED is false. Traceloop.init sets api_endpoint to the receiver base URL, disables batching, passes telemetry_enabled false, and enables only the OpenAI instrument. The SDK then appends /v1/traces and exports over HTTP. In 0.62.4 the telemetry_enabled parameter is unused: there is no posthog client and no TRACELOOP_TELEMETRY variable. ThreadingInstrumentor is always enabled and emitted no spans. Image upload runs only for an image span, and this call has none. The capture is weather_report.workflow, lookup_weather.task, and openai.chat. Association properties session_id, user_id, and feature are on all three, with traceloop.workflow.name weather_report. Token counts are copied: input 24, output 12, cache_read 8, reasoning 0. gen_ai.openai.api_base is the public host https://api.openai.com/v1/. The workflow scope traceloop.tracer carries no version."
+}

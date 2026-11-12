@@ -1,0 +1,25 @@
+{
+  "description": "OpenAI Agents SDK with one function tool, traced by OpenLLMetry.",
+  "origin": "captured",
+  "source": {
+    "instrumentation": "opentelemetry-instrumentation-openai-agents",
+    "instrumentation_version": "0.62.4",
+    "language": "python",
+    "libraries": {
+      "openai": "3.45.0",
+      "openai-agents": "0.24.0",
+      "opentelemetry-instrumentation-openai-agents": "0.62.4",
+      "opentelemetry-sdk": "1.45.2",
+      "opentelemetry-semantic-conventions-ai": "0.5.1"
+    },
+    "captured_at": "2026-11-11T12:54:55Z"
+  },
+  "spec_refs": [
+    "02 § Convention detection",
+    "02 § Mapping tables / Span kind",
+    "02 § Mapping tables / Input / output",
+    "02 § Mapping tables / Model, provider, usage",
+    "02 § Normalization rules"
+  ],
+  "notes": "TRACELOOP_TRACE_CONTENT is true, which is also the default, so message content is recorded on spans as gen_ai.input.messages and gen_ai.output.messages. TRACELOOP_METRICS_ENABLED is false. These packages have no TRACELOOP_TELEMETRY switch. OpenAIAgentsInstrumentor is constructed with replace_existing_processors, which clears the Agents SDK processor that exports to api.openai.com. The default client is pointed at the mock with use_for_tracing false. The capture keeps five spans: Agent Workflow, the weather agent, the response, the tool, and the second response. Token counts are copied from the Responses usage: input 82 then 131, output 17 then 12, cache_read 0 then 64, reasoning 0. Finish reasons are mapped from tool_calls to tool_call, then stop. The model is recorded as gen_ai.response.model."
+}

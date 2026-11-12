@@ -18,7 +18,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode
 use llmobs_core::names::PRODUCT;
 use llmobs_storage::Storage;
 use llmobs_storage::config::{
-    FlushConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig, WalConfig,
+    AnchorConfig, FlushConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig, WalConfig,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -197,6 +197,7 @@ fn default_config(data_dir: &std::path::Path) -> ServerConfig {
             flush: FlushConfig::default(),
             memtable: MemtableConfig::default(),
             query: QueryConfig::default(),
+            anchor: AnchorConfig::default(),
         },
         auth: AuthSettings::default(),
         smtp_url: None,
