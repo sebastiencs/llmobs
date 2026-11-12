@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::error::ConfigError;
 
 /// Largest prompt, in UTF-8 bytes. Spec 06 and D163's template limit.
-const PROMPT_MAX_BYTES: usize = 64 * 1024;
+pub(crate) const PROMPT_MAX_BYTES: usize = 64 * 1024;
 const NAME_MAX_CHARS: usize = 128;
 const MAX_OUTPUT_TOKENS_DEFAULT: u32 = 1024;
 const MAX_OUTPUT_TOKENS_MAX: u32 = 65_536;
@@ -78,14 +78,25 @@ pub struct Evaluator {
 }
 
 impl Evaluator {
-    /// Checks the config, the name, and that `output` agrees with the config.
+    /// Checks the config, the name, the judge prompt, and that `output` agrees
+    /// with the config.
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when a field breaks a rule or the output data
-    /// type does not match the config.
+    /// Returns [`ConfigError`] when a field breaks a rule, the judge prompt
+    /// does not compile, or the output data type does not match the config.
+    /// A template syntax error is `invalid template` and does not quote the
+    /// prompt.
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.config.validate_parts()?;
+        if let EvaluatorConfig::LlmJudge(config) = &self.config {
+            crate::template::PromptTemplate::compile(&config.prompt).map_err(|_| {
+                ConfigError::Invalid {
+                    field: "prompt",
+                    reason: "invalid template",
+                }
+            })?;
+        }
         validate_name(&self.name)?;
         self.validate_output()
     }
@@ -1112,6 +1123,30 @@ mod tests {
             "label_values",
             "key is not a label",
         );
+    }
+
+    #[test]
+    fn validate_compiles_the_judge_prompt() {
+        let mut value = boolean_judge();
+        value["prompt"] = json!("Hello {{ name }}");
+        let config = EvaluatorConfig::from_parts("llm_judge", &value).unwrap();
+        evaluator(config, score(ScoreDataType::Boolean, None))
+            .validate()
+            .unwrap();
+
+        value["prompt"] = json!("{{");
+        let config = EvaluatorConfig::from_parts("llm_judge", &value).unwrap();
+        let err = evaluator(config, score(ScoreDataType::Boolean, None))
+            .validate()
+            .unwrap_err();
+        assert_eq!(
+            err,
+            ConfigError::Invalid {
+                field: "prompt",
+                reason: "invalid template",
+            }
+        );
+        assert_no_payload(&err.to_string(), "{{");
     }
 
     #[test]

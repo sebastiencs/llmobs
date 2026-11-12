@@ -140,6 +140,43 @@ pub enum MappingError {
     NoItem,
 }
 
+/// A judge prompt failed to compile or render.
+///
+/// `kind` is the engine's error category, not its detail text. The detail can
+/// quote the template or a value, so it is never copied here.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum TemplateError {
+    /// The template is longer than 64 KiB or the engine rejected it.
+    #[error("invalid template at line {line}: {kind}")]
+    Syntax {
+        /// Line reported by the engine. `0` when the source was rejected first.
+        line: usize,
+        /// Engine category, such as `syntax error`.
+        kind: String,
+    },
+    /// A top-level name used by the template was not supplied.
+    #[error("missing variable {name}")]
+    MissingVariable {
+        /// The first missing name in sorted order.
+        name: String,
+    },
+    /// A value or attribute was undefined while rendering.
+    #[error("undefined value at line {line}")]
+    Undefined {
+        /// Line of the expression that read the undefined value.
+        line: usize,
+    },
+    /// The engine's fuel budget was exhausted.
+    #[error("template is too complex")]
+    TooComplex,
+    /// The rendered prompt is larger than 2 MiB.
+    #[error("prompt is {bytes} bytes")]
+    PromptTooLarge {
+        /// UTF-8 length of the rendered prompt.
+        bytes: usize,
+    },
+}
+
 /// Fails the test when `message` contains `payload`.
 #[cfg(test)]
 pub(crate) fn assert_no_payload(message: &str, payload: &str) {

@@ -89,6 +89,13 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 # RFC 9535 JSONPath on mapping expressions (D162).
 serde_json_path = "0.7.2"
+# Judge prompt templates (D163). One self-contained template: no macros, imports, or debug.
+minijinja = { version = "3.1.0", default-features = false, features = [
+    "builtins",
+    "fuel",
+    "serde",
+    "json",
+] }
 thiserror = "2.0"
 # DataFusion 55's `TableProvider` is an `#[async_trait]` trait.
 async-trait = "0.1.92"

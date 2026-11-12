@@ -8,6 +8,7 @@ mod config;
 mod error;
 mod mapping;
 mod secret;
+mod template;
 mod text;
 
 pub use check::{CheckInput, CheckResult, run_check};
@@ -15,7 +16,8 @@ pub use config::{
     Check, ContainsMode, Evaluator, EvaluatorConfig, JudgeConfig, JudgeOutput, OutputScore,
     WebhookConfig,
 };
-pub use error::{CheckError, ConfigError, MappingError};
+pub use error::{CheckError, ConfigError, MappingError, TemplateError};
 pub use mapping::resolve::{ItemData, TraceData, Variables, resolve};
 pub use mapping::{Expr, VariableMapping};
 pub use secret::Secret;
+pub use template::PromptTemplate;

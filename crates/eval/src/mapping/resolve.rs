@@ -54,6 +54,14 @@ impl Variables {
     pub fn from_map(variables: BTreeMap<String, Value>) -> Self {
         Self(variables)
     }
+
+    pub(crate) fn get(&self, name: &str) -> Option<&Value> {
+        self.0.get(name)
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, &Value)> {
+        self.0.iter().map(|(name, value)| (name.as_str(), value))
+    }
 }
 
 /// Resolves every expression in `mapping`.
