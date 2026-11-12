@@ -1,0 +1,64 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "2ac37617cacd2cc5067dc21a9248874e",
+      "span_id": "8c6606df413b8b05",
+      "name": "messages.create",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.044000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "provider": "anthropic",
+      "request_model": "claude-sonnet-4-5",
+      "input_tokens": 2100,
+      "output_tokens": 40,
+      "cache_read_tokens": 1800,
+      "cache_write_tokens": 200,
+      "total_tokens": 2140,
+      "cost_input": 0.00159,
+      "cost_output": 0.0006,
+      "cost_total": 0.00219,
+      "cost_source": "computed",
+      "request_params": "{\"max_tokens\":64}",
+      "input": "[{\"role\":\"system\",\"parts\":[{\"type\":\"text\",\"content\":\"You are a weather assistant.\"}]},{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"It is 18 °C and sunny in Paris.\"}]}]",
+      "output_format": "messages",
+      "input_preview": "What's the weather in Paris?",
+      "output_preview": "It is 18 °C and sunny in Paris.",
+      "attributes": {
+        "input.mime_type": "application/json",
+        "llm.finish_reason": "end_turn",
+        "llm.invocation_parameters": "{\"max_tokens\": 64}",
+        "llm.model_name": "claude-sonnet-4-5",
+        "llm.provider": "anthropic",
+        "llm.request.model_name": "claude-sonnet-4-5",
+        "llm.response.model_name": "claude-sonnet-4-5",
+        "llm.system": "anthropic",
+        "llm.token_count.completion": "40",
+        "llm.token_count.prompt": "2100",
+        "llm.token_count.prompt_details.cache_read": "1800",
+        "llm.token_count.prompt_details.cache_write": "200",
+        "llm.token_count.total": "2140",
+        "openinference.span.kind": "LLM",
+        "output.mime_type": "application/json"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.anthropic",
+      "scope_version": "3.3.0",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

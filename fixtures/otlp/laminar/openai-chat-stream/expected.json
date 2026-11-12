@@ -1,0 +1,101 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "b594ed7c920c0739bf6ab3a45fa5d6a1",
+      "span_id": "8a1d321b3948e3cf",
+      "name": "openai.chat",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.170000000Z",
+      "status": "ok",
+      "service_name": "main.py",
+      "release": "capture",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "response_model": "gpt-4o-mini-2024-07-18",
+      "input_tokens": 24,
+      "output_tokens": 12,
+      "cache_read_tokens": 8,
+      "reasoning_tokens": 3,
+      "total_tokens": 36,
+      "cost_input": 0.00002,
+      "cost_output": 0.000048,
+      "cost_total": 0.000068,
+      "cost_source": "computed",
+      "request_params": "{\"base_url\":\"https://api.openai.com/v1/\"}",
+      "input": "[{\"role\":\"user\",\"parts\":[],\"content\":\"What's the weather in Paris?\"}]",
+      "input_format": "messages",
+      "output": "[{\"index\":0,\"message\":{\"content\":\"It is 18 °C and sunny in Paris.\",\"role\":\"assistant\"},\"finish_reason\":\"stop\"}]",
+      "output_format": "json",
+      "output_preview": "[{\"index\":0,\"message\":{\"content\":\"It is 18 °C and sunny in Paris.\",\"role\":\"assistant\"},\"finish_reason\":\"stop\"}]",
+      "attributes": {
+        "gen_ai.request.base_url": "https://api.openai.com/v1/",
+        "gen_ai.request.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.response.id": "chatcmpl-capture-1",
+        "gen_ai.response.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.system": "openai",
+        "gen_ai.usage.cache_read_input_tokens": "8",
+        "gen_ai.usage.input_tokens": "24",
+        "gen_ai.usage.output_tokens": "12",
+        "gen_ai.usage.reasoning_tokens": "3",
+        "llm.headers": "None",
+        "llm.is_streaming": "true",
+        "llm.usage.total_tokens": "36",
+        "llmobs.normalize_error": "messages:genai:output",
+        "lmnr.span.ids_path": "[\"00000000-0000-0000-8a1d-321b3948e3cf\"]",
+        "lmnr.span.instrumentation_scope.name": "openai",
+        "lmnr.span.instrumentation_scope.version": "3.45.0",
+        "lmnr.span.instrumentation_source": "python",
+        "lmnr.span.language_version": "python@3.13",
+        "lmnr.span.parent_ids_path": "[]",
+        "lmnr.span.parent_path": "[]",
+        "lmnr.span.path": "[\"openai.chat\"]",
+        "lmnr.span.release": "capture",
+        "lmnr.span.sdk_version": "0.8.8",
+        "lmnr.span.type": "LLM",
+        "openai.response.system_fingerprint": "fp_capture"
+      },
+      "scope_name": "lmnr.tracer",
+      "events": [
+        {
+          "time": "2025-12-31T23:59:50.130000000Z",
+          "name": "llm.content.completion.chunk"
+        },
+        {
+          "time": "2025-12-31T23:59:50.133000000Z",
+          "name": "llm.content.completion.chunk"
+        },
+        {
+          "time": "2025-12-31T23:59:50.139000000Z",
+          "name": "llm.content.completion.chunk"
+        },
+        {
+          "time": "2025-12-31T23:59:50.145000000Z",
+          "name": "llm.content.completion.chunk"
+        },
+        {
+          "time": "2025-12-31T23:59:50.151000000Z",
+          "name": "llm.content.completion.chunk"
+        },
+        {
+          "time": "2025-12-31T23:59:50.157000000Z",
+          "name": "llm.content.completion.chunk"
+        },
+        {
+          "time": "2025-12-31T23:59:50.164000000Z",
+          "name": "llm.content.completion.chunk"
+        }
+      ],
+      "conventions": [
+        "genai",
+        "openinference",
+        "laminar"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

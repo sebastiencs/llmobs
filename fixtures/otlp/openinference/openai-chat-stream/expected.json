@@ -1,0 +1,69 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "46276fec0dbc53a298cac307a6a5854f",
+      "span_id": "85f8b4155b39df04",
+      "name": "ChatCompletion",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.171000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "input_tokens": 20,
+      "output_tokens": 8,
+      "cache_read_tokens": 0,
+      "reasoning_tokens": 0,
+      "total_tokens": 28,
+      "cost_input": 0.00002,
+      "cost_output": 0.000032,
+      "cost_total": 0.000052000000000000004,
+      "cost_source": "computed",
+      "request_params": "{\"model\":\"gpt-4o-mini-2024-07-18\",\"stream\":true,\"stream_options\":{\"include_usage\":true}}",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Describe the harbor in a few words.\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Clear skies over the harbor.\"}]}]",
+      "output_format": "messages",
+      "input_preview": "Describe the harbor in a few words.",
+      "output_preview": "Clear skies over the harbor.",
+      "attributes": {
+        "input.mime_type": "application/json",
+        "llm.finish_reason": "stop",
+        "llm.invocation_parameters": "{\"model\": \"gpt-4o-mini-2024-07-18\", \"stream\": true, \"stream_options\": {\"include_usage\": true}}",
+        "llm.model_name": "gpt-4o-mini-2024-07-18",
+        "llm.system": "openai",
+        "llm.token_count.completion": "8",
+        "llm.token_count.completion_details.audio": "0",
+        "llm.token_count.completion_details.reasoning": "0",
+        "llm.token_count.prompt": "20",
+        "llm.token_count.prompt_details.audio": "0",
+        "llm.token_count.prompt_details.cache_read": "0",
+        "llm.token_count.total": "28",
+        "openinference.span.kind": "LLM",
+        "output.mime_type": "application/json"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.openai",
+      "scope_version": "0.1.69",
+      "events": [
+        {
+          "time": "2025-12-31T23:59:50.128000000Z",
+          "name": "First Token Stream Event"
+        }
+      ],
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

@@ -1,0 +1,44 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "21f470416598f9c239cd97edeac73263",
+      "span_id": "1b9dcc265ceb7806",
+      "name": "embeddings text-embedding-3-small",
+      "span_kind": "embedding",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.036000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "provider": "openai",
+      "request_model": "text-embedding-3-small",
+      "response_model": "text-embedding-3-small",
+      "operation": "embeddings",
+      "input_tokens": 6,
+      "cost_input": 1.2e-7,
+      "cost_total": 1.2e-7,
+      "cost_source": "computed",
+      "attributes": {
+        "gen_ai.embeddings.dimension.count": "8",
+        "gen_ai.operation.name": "embeddings",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "text-embedding-3-small",
+        "gen_ai.response.model": "text-embedding-3-small",
+        "gen_ai.usage.input_tokens": "6"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "opentelemetry.instrumentation.openai_v2",
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

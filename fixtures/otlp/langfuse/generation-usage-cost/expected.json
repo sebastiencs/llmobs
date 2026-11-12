@@ -1,0 +1,55 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "ebfb55d6ad2563b827f75a448a9e5031",
+      "span_id": "1594771b40d5170b",
+      "name": "weather-generation",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.054000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "input_tokens": 32,
+      "output_tokens": 12,
+      "cache_read_tokens": 8,
+      "reasoning_tokens": 3,
+      "total_tokens": 44,
+      "cost_input": 1.0,
+      "cost_output": 2.0,
+      "cost_total": 3.0,
+      "cost_source": "reported",
+      "request_params": "{\"max_tokens\":64,\"temperature\":0}",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
+      "input_format": "messages",
+      "output": "It is 18 °C and sunny in Paris.",
+      "output_format": "text",
+      "input_preview": "What's the weather in Paris?",
+      "output_preview": "It is 18 °C and sunny in Paris.",
+      "attributes": {
+        "langfuse.internal.is_app_root": "true",
+        "langfuse.observation.completion_start_time": "\"2025-12-31T23:59:50.054000Z\"",
+        "langfuse.observation.cost_details": "{\"input\": 1.0, \"output\": 2.0, \"total\": 3.0}",
+        "langfuse.observation.model.name": "gpt-4o-mini-2024-07-18",
+        "langfuse.observation.model.parameters": "{\"temperature\": 0, \"max_tokens\": 64}",
+        "langfuse.observation.type": "generation",
+        "langfuse.observation.usage_details": "{\"input\": 24, \"output\": 12, \"input_cached_tokens\": 8, \"output_reasoning_tokens\": 3}"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "langfuse-sdk",
+      "scope_version": "5.1.0",
+      "conventions": [
+        "langfuse"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

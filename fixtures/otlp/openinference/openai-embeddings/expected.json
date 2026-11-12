@@ -1,0 +1,52 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "981f0ab2d3042624bc5d46fc1d8a6bf7",
+      "span_id": "e9410536d9b35ae8",
+      "name": "CreateEmbeddings",
+      "span_kind": "embedding",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.035000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "provider": "openai",
+      "request_model": "text-embedding-3-small",
+      "input_tokens": 6,
+      "total_tokens": 6,
+      "cost_input": 1.2e-7,
+      "cost_total": 1.2e-7,
+      "cost_source": "computed",
+      "input": "[\"alpha\",\"beta\"]",
+      "input_format": "json",
+      "output": "{\"data\":[{\"embedding\":[-0.5,-0.4000000059604645,-0.30000001192092896,-0.19999998807907104,-0.09999999403953552,0.0,0.10000002384185791,0.19999998807907104],\"index\":0,\"object\":\"embedding\"},{\"embedding\":[0.19999998807907104,0.30000001192092896,0.3999999761581421,0.5,-0.5,-0.4000000059604645,-0.30000001192092896,-0.19999998807907104],\"index\":1,\"object\":\"embedding\"}],\"model\":\"text-embedding-3-small\",\"object\":\"list\",\"usage\":{\"prompt_tokens\":6,\"total_tokens\":6}}",
+      "output_format": "json",
+      "input_preview": "[\"alpha\",\"beta\"]",
+      "output_preview": "{\"data\":[{\"embedding\":[-0.5,-0.4000000059604645,-0.30000001192092896,-0.19999998807907104,-0.09999999403953552,0.0,0.10000002384185791,0.19999998807907104],\"index\":0,\"object\":\"embedding\"},{\"embedding\":[0.19999998807907104,0.30000001192092896,0.3999999761581421,0.5,-0.5,-0.4000000059604645,-0.30000001192092896,-0.19999998807907104],\"index\":1,\"object\":\"embedding\"}],\"model\":\"text-embedding-3-small\",\"object\":\"list\",\"usage\":{\"prompt_tokens\":6,\"total_tokens\":6}}",
+      "attributes": {
+        "embedding.invocation_parameters": "{\"model\": \"text-embedding-3-small\", \"dimensions\": 8, \"encoding_format\": \"base64\"}",
+        "embedding.model_name": "text-embedding-3-small",
+        "input.mime_type": "application/json",
+        "llm.system": "openai",
+        "llm.token_count.prompt": "6",
+        "llm.token_count.total": "6",
+        "openinference.span.kind": "EMBEDDING",
+        "output.mime_type": "application/json"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.openai",
+      "scope_version": "0.1.69",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

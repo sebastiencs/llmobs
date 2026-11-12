@@ -1,0 +1,268 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "e42866328d520e442bd357b8eccd5b19",
+      "span_id": "7667c4112e02a136",
+      "name": "invoke_agent gpt-4o-mini-2024-07-18",
+      "span_kind": "agent",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.109000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "operation": "invoke_agent",
+      "request_params": "{\"context.feature\":\"forecast\",\"context.sessionId\":\"sess-weather\",\"context.userId\":\"user-weather\"}",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"It is 18 °C and sunny in Paris.\"},{\"type\":\"tool_call\",\"id\":\"call_weather_1\",\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}},{\"type\":\"tool_call_response\",\"id\":\"call_weather_1\",\"response\":{\"temperature_c\":18,\"conditions\":\"sunny\",\"city\":\"Paris\"}}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "input_preview": "What's the weather in Paris?",
+      "output_preview": "It is 18 °C and sunny in Paris.",
+      "system_instructions": "[{\"type\":\"text\",\"content\":\"You are a weather assistant.\"}]",
+      "attributes": {
+        "ai.settings.context.feature": "forecast",
+        "ai.settings.context.sessionId": "sess-weather",
+        "ai.settings.context.userId": "user-weather",
+        "gen_ai.agent.name": "v7-generate-text-tool",
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.response.finish_reasons": "[\"stop\"]",
+        "gen_ai.usage.cache_creation.input_tokens": "0",
+        "gen_ai.usage.cache_read.input_tokens": "64",
+        "gen_ai.usage.input_tokens": "213",
+        "gen_ai.usage.output_tokens": "29"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "nodejs",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "2.12.0"
+      },
+      "scope_name": "gen_ai",
+      "conventions": [
+        "genai",
+        "vercel"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "e42866328d520e442bd357b8eccd5b19",
+      "span_id": "4dd908561493403c",
+      "parent_span_id": "7667c4112e02a136",
+      "name": "step 1",
+      "span_kind": "span",
+      "start_time": "2025-12-31T23:59:50.002000000Z",
+      "end_time": "2025-12-31T23:59:50.069000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "operation": "agent_step",
+      "request_params": "{\"context.feature\":\"forecast\",\"context.sessionId\":\"sess-weather\",\"context.userId\":\"user-weather\"}",
+      "attributes": {
+        "ai.settings.context.feature": "forecast",
+        "ai.settings.context.sessionId": "sess-weather",
+        "ai.settings.context.userId": "user-weather",
+        "gen_ai.operation.name": "agent_step"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "nodejs",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "2.12.0"
+      },
+      "scope_name": "gen_ai",
+      "conventions": [
+        "genai",
+        "vercel"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "e42866328d520e442bd357b8eccd5b19",
+      "span_id": "d494d74b44de1486",
+      "parent_span_id": "4dd908561493403c",
+      "name": "chat gpt-4o-mini-2024-07-18",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.002000000Z",
+      "end_time": "2025-12-31T23:59:50.062000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "response_model": "gpt-4o-mini-2024-07-18",
+      "operation": "chat",
+      "input_tokens": 82,
+      "output_tokens": 17,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "total_tokens": 99,
+      "cost_input": 0.000082,
+      "cost_output": 0.000068,
+      "cost_total": 0.00015000000000000001,
+      "cost_source": "computed",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_weather_1\",\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}],\"finish_reason\":\"tool_call\"}]",
+      "output_format": "messages",
+      "input_preview": "What's the weather in Paris?",
+      "system_instructions": "[{\"type\":\"text\",\"content\":\"You are a weather assistant.\"}]",
+      "tool_definitions": "[{\"type\":\"function\",\"name\":\"get_weather\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"],\"additionalProperties\":false},\"description\":\"Look up the weather for a city.\"}]",
+      "attributes": {
+        "gen_ai.client.operation.duration": "0.05924106900000001",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.response.finish_reasons": "[\"tool-calls\"]",
+        "gen_ai.response.id": "resp_capture_1",
+        "gen_ai.response.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.usage.cache_creation.input_tokens": "0",
+        "gen_ai.usage.cache_read.input_tokens": "0",
+        "gen_ai.usage.input_tokens": "82",
+        "gen_ai.usage.output_tokens": "17"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "nodejs",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "2.12.0"
+      },
+      "scope_name": "gen_ai",
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "e42866328d520e442bd357b8eccd5b19",
+      "span_id": "d5c2a7aa9c7ce38d",
+      "parent_span_id": "4dd908561493403c",
+      "name": "execute_tool get_weather",
+      "span_kind": "tool",
+      "start_time": "2025-12-31T23:59:50.065000000Z",
+      "end_time": "2025-12-31T23:59:50.067000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "operation": "execute_tool",
+      "input": "{\"city\":\"Paris\"}",
+      "input_format": "json",
+      "output": "{\"temperature_c\":18,\"conditions\":\"sunny\",\"city\":\"Paris\"}",
+      "output_format": "json",
+      "input_preview": "{\"city\":\"Paris\"}",
+      "output_preview": "{\"temperature_c\":18,\"conditions\":\"sunny\",\"city\":\"Paris\"}",
+      "attributes": {
+        "gen_ai.execute_tool.duration": "0.00008871000000004869",
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.call.id": "call_weather_1",
+        "gen_ai.tool.name": "get_weather",
+        "gen_ai.tool.type": "function"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "nodejs",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "2.12.0"
+      },
+      "scope_name": "gen_ai",
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "e42866328d520e442bd357b8eccd5b19",
+      "span_id": "0d044d0ccabbb293",
+      "parent_span_id": "7667c4112e02a136",
+      "name": "step 2",
+      "span_kind": "span",
+      "start_time": "2025-12-31T23:59:50.069000000Z",
+      "end_time": "2025-12-31T23:59:50.107000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "operation": "agent_step",
+      "request_params": "{\"context.feature\":\"forecast\",\"context.sessionId\":\"sess-weather\",\"context.userId\":\"user-weather\"}",
+      "attributes": {
+        "ai.settings.context.feature": "forecast",
+        "ai.settings.context.sessionId": "sess-weather",
+        "ai.settings.context.userId": "user-weather",
+        "gen_ai.operation.name": "agent_step"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "nodejs",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "2.12.0"
+      },
+      "scope_name": "gen_ai",
+      "conventions": [
+        "genai",
+        "vercel"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "e42866328d520e442bd357b8eccd5b19",
+      "span_id": "9ef376ac2f2b8ceb",
+      "parent_span_id": "0d044d0ccabbb293",
+      "name": "chat gpt-4o-mini-2024-07-18",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.069000000Z",
+      "end_time": "2025-12-31T23:59:50.106000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "response_model": "gpt-4o-mini-2024-07-18",
+      "operation": "chat",
+      "input_tokens": 131,
+      "output_tokens": 12,
+      "cache_read_tokens": 64,
+      "cache_write_tokens": 0,
+      "total_tokens": 143,
+      "cost_input": 0.000099,
+      "cost_output": 0.000048,
+      "cost_total": 0.000147,
+      "cost_source": "computed",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_weather_1\",\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}]},{\"role\":\"tool\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"call_weather_1\",\"response\":{\"temperature_c\":18,\"conditions\":\"sunny\",\"city\":\"Paris\"}}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"It is 18 °C and sunny in Paris.\"}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "input_preview": "What's the weather in Paris?",
+      "output_preview": "It is 18 °C and sunny in Paris.",
+      "system_instructions": "[{\"type\":\"text\",\"content\":\"You are a weather assistant.\"}]",
+      "tool_definitions": "[{\"type\":\"function\",\"name\":\"get_weather\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"],\"additionalProperties\":false},\"description\":\"Look up the weather for a city.\"}]",
+      "attributes": {
+        "gen_ai.client.operation.duration": "0.037206988000000024",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.response.finish_reasons": "[\"stop\"]",
+        "gen_ai.response.id": "resp_capture_2",
+        "gen_ai.response.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.usage.cache_creation.input_tokens": "0",
+        "gen_ai.usage.cache_read.input_tokens": "64",
+        "gen_ai.usage.input_tokens": "131",
+        "gen_ai.usage.output_tokens": "12"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "nodejs",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "2.12.0"
+      },
+      "scope_name": "gen_ai",
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

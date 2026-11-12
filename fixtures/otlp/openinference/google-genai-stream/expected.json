@@ -1,0 +1,54 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "97b6ccb437d1ded230a0dcfbefd527e9",
+      "span_id": "2f5d9de763d028a4",
+      "name": "GenerateContentStream",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.177000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "provider": "google",
+      "request_model": "gemini-2.5-flash",
+      "input_tokens": 48,
+      "output_tokens": 20,
+      "reasoning_tokens": 6,
+      "total_tokens": 68,
+      "cost_source": "none",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Describe the harbor in a few words.\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"model\",\"parts\":[{\"type\":\"reasoning\",\"text\":\"The harbor is calm.\"},{\"type\":\"text\",\"content\":\"Clear skies over the harbor.\"}]}]",
+      "output_format": "messages",
+      "input_preview": "Describe the harbor in a few words.",
+      "output_preview": "Clear skies over the harbor.",
+      "attributes": {
+        "input.mime_type": "application/json",
+        "llm.finish_reason": "STOP",
+        "llm.model_name": "gemini-2.5-flash",
+        "llm.provider": "google",
+        "llm.token_count.completion": "20",
+        "llm.token_count.completion_details.reasoning": "6",
+        "llm.token_count.prompt": "48",
+        "llm.token_count.total": "68",
+        "openinference.span.kind": "LLM",
+        "output.mime_type": "application/json"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.google_genai",
+      "scope_version": "1.5.0",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

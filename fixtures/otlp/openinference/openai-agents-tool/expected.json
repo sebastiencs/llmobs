@@ -1,0 +1,295 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "76f368acf285e583c171752c2ed19ad7",
+      "span_id": "7b3bf3f37ab53947",
+      "name": "Agent workflow",
+      "span_kind": "agent",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.178000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "attributes": {
+        "openinference.span.kind": "AGENT"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.openai_agents",
+      "scope_version": "2.7.0",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "76f368acf285e583c171752c2ed19ad7",
+      "span_id": "bf93f46c62524283",
+      "parent_span_id": "eb24ef516dcf4fa4",
+      "name": "weather",
+      "span_kind": "agent",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.177000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "attributes": {
+        "agent.name": "weather",
+        "graph.node.id": "weather",
+        "openinference.span.kind": "AGENT"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.openai_agents",
+      "scope_version": "2.7.0",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "76f368acf285e583c171752c2ed19ad7",
+      "span_id": "eb24ef516dcf4fa4",
+      "parent_span_id": "7b3bf3f37ab53947",
+      "name": "Agent workflow",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.178000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "attributes": {
+        "openinference.span.kind": "CHAIN"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.openai_agents",
+      "scope_version": "2.7.0",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "76f368acf285e583c171752c2ed19ad7",
+      "span_id": "7bb78bf5922b9093",
+      "parent_span_id": "bf93f46c62524283",
+      "name": "turn",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.001000000Z",
+      "end_time": "2025-12-31T23:59:50.139000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "attributes": {
+        "openinference.span.kind": "CHAIN"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.openai_agents",
+      "scope_version": "2.7.0",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "76f368acf285e583c171752c2ed19ad7",
+      "span_id": "dd2e1a97a902792b",
+      "parent_span_id": "7bb78bf5922b9093",
+      "name": "response",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.001000000Z",
+      "end_time": "2025-12-31T23:59:50.134000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "input_tokens": 82,
+      "output_tokens": 17,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "reasoning_tokens": 0,
+      "total_tokens": 99,
+      "cost_input": 0.000082,
+      "cost_output": 0.000068,
+      "cost_total": 0.00015000000000000001,
+      "cost_source": "computed",
+      "request_params": "{\"created_at\":1767225600.0,\"id\":\"resp_capture_1\",\"model\":\"gpt-4o-mini-2024-07-18\",\"parallel_tool_calls\":true,\"tool_choice\":\"auto\"}",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_weather_1\",\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}]}]",
+      "output_format": "messages",
+      "input_preview": "What's the weather in Paris?",
+      "attributes": {
+        "input.mime_type": "application/json",
+        "llm.finish_reason": "stop",
+        "llm.invocation_parameters": "{\"id\": \"resp_capture_1\", \"created_at\": 1767225600.0, \"model\": \"gpt-4o-mini-2024-07-18\", \"parallel_tool_calls\": true, \"tool_choice\": \"auto\"}",
+        "llm.model_name": "gpt-4o-mini-2024-07-18",
+        "llm.system": "openai",
+        "llm.token_count.completion": "17",
+        "llm.token_count.completion_details.reasoning": "0",
+        "llm.token_count.prompt": "82",
+        "llm.token_count.prompt_details.cache_read": "0",
+        "llm.token_count.prompt_details.cache_write": "0",
+        "llm.token_count.total": "99",
+        "openinference.span.kind": "LLM",
+        "output.mime_type": "application/json"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.openai_agents",
+      "scope_version": "2.7.0",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "76f368acf285e583c171752c2ed19ad7",
+      "span_id": "d038b876b2c372c4",
+      "parent_span_id": "7bb78bf5922b9093",
+      "name": "get_weather",
+      "span_kind": "tool",
+      "start_time": "2025-12-31T23:59:50.137000000Z",
+      "end_time": "2025-12-31T23:59:50.138000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "input": "{\"city\":\"Paris\"}",
+      "input_format": "json",
+      "output": "{\"temperature_c\":18,\"conditions\":\"sunny\",\"city\":\"Paris\"}",
+      "output_format": "json",
+      "input_preview": "{\"city\":\"Paris\"}",
+      "output_preview": "{\"temperature_c\":18,\"conditions\":\"sunny\",\"city\":\"Paris\"}",
+      "attributes": {
+        "input.mime_type": "application/json",
+        "openinference.span.kind": "TOOL",
+        "output.mime_type": "application/json",
+        "tool.description": "Look up the weather for a city.",
+        "tool.name": "get_weather",
+        "tool.parameters": "{\"properties\": {\"city\": {\"title\": \"City\", \"type\": \"string\"}}, \"required\": [\"city\"], \"title\": \"get_weather_args\", \"type\": \"object\", \"additionalProperties\": false}"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.openai_agents",
+      "scope_version": "2.7.0",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "76f368acf285e583c171752c2ed19ad7",
+      "span_id": "6bb37497e0ee55a8",
+      "parent_span_id": "ed299bd22fe1f19c",
+      "name": "response",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.140000000Z",
+      "end_time": "2025-12-31T23:59:50.175000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "input_tokens": 131,
+      "output_tokens": 12,
+      "cache_read_tokens": 64,
+      "cache_write_tokens": 0,
+      "reasoning_tokens": 0,
+      "total_tokens": 143,
+      "cost_input": 0.000099,
+      "cost_output": 0.000048,
+      "cost_total": 0.000147,
+      "cost_source": "computed",
+      "request_params": "{\"created_at\":1767225600.0,\"id\":\"resp_capture_2\",\"model\":\"gpt-4o-mini-2024-07-18\",\"parallel_tool_calls\":true,\"tool_choice\":\"auto\"}",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_weather_1\",\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}]},{\"role\":\"tool\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"call_weather_1\",\"response\":{\"temperature_c\":18,\"conditions\":\"sunny\",\"city\":\"Paris\"}}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"It is 18 °C and sunny in Paris.\"}]}]",
+      "output_format": "messages",
+      "input_preview": "What's the weather in Paris?",
+      "output_preview": "It is 18 °C and sunny in Paris.",
+      "attributes": {
+        "input.mime_type": "application/json",
+        "llm.finish_reason": "stop",
+        "llm.invocation_parameters": "{\"id\": \"resp_capture_2\", \"created_at\": 1767225600.0, \"model\": \"gpt-4o-mini-2024-07-18\", \"parallel_tool_calls\": true, \"tool_choice\": \"auto\"}",
+        "llm.model_name": "gpt-4o-mini-2024-07-18",
+        "llm.system": "openai",
+        "llm.token_count.completion": "12",
+        "llm.token_count.completion_details.reasoning": "0",
+        "llm.token_count.prompt": "131",
+        "llm.token_count.prompt_details.cache_read": "64",
+        "llm.token_count.prompt_details.cache_write": "0",
+        "llm.token_count.total": "143",
+        "openinference.span.kind": "LLM",
+        "output.mime_type": "application/json"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.openai_agents",
+      "scope_version": "2.7.0",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "76f368acf285e583c171752c2ed19ad7",
+      "span_id": "ed299bd22fe1f19c",
+      "parent_span_id": "bf93f46c62524283",
+      "name": "turn",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.140000000Z",
+      "end_time": "2025-12-31T23:59:50.177000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "attributes": {
+        "openinference.span.kind": "CHAIN"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.openai_agents",
+      "scope_version": "2.7.0",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

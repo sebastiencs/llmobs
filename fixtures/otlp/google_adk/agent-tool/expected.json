@@ -1,0 +1,287 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "9b81d4368bef7254c1826ae02743a2ae",
+      "span_id": "66eb565e797ca2f9",
+      "name": "invocation",
+      "span_kind": "span",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.151000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "gcp.vertex.agent",
+      "scope_version": "2.14.0",
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "9b81d4368bef7254c1826ae02743a2ae",
+      "span_id": "5ab9a20658712793",
+      "parent_span_id": "66eb565e797ca2f9",
+      "name": "invoke_agent weather_agent",
+      "span_kind": "agent",
+      "start_time": "2025-12-31T23:59:50.002000000Z",
+      "end_time": "2025-12-31T23:59:50.150000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "session_id": "session-1",
+      "operation": "invoke_agent",
+      "attributes": {
+        "gen_ai.agent.description": "",
+        "gen_ai.agent.name": "weather_agent",
+        "gen_ai.conversation.id": "session-1",
+        "gen_ai.operation.name": "invoke_agent"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "gcp.vertex.agent",
+      "scope_version": "2.14.0",
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "9b81d4368bef7254c1826ae02743a2ae",
+      "span_id": "05a5f6489ec340e5",
+      "parent_span_id": "20e47d3d6e909f73",
+      "name": "generate_content gemini-2.5-flash",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.034000000Z",
+      "end_time": "2025-12-31T23:59:50.110000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "session_id": "session-1",
+      "provider": "gemini",
+      "request_model": "gemini-2.5-flash",
+      "operation": "generate_content",
+      "input_tokens": 40,
+      "output_tokens": 12,
+      "total_tokens": 52,
+      "cost_source": "none",
+      "attributes": {
+        "gcp.vertex.agent.event_id": "capture-2",
+        "gcp.vertex.agent.invocation_id": "invocation-1",
+        "gen_ai.agent.name": "weather_agent",
+        "gen_ai.conversation.id": "session-1",
+        "gen_ai.operation.name": "generate_content",
+        "gen_ai.request.model": "gemini-2.5-flash",
+        "gen_ai.response.finish_reasons": "[\"stop\"]",
+        "gen_ai.system": "gemini",
+        "gen_ai.usage.input_tokens": "40",
+        "gen_ai.usage.output_tokens": "12"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "gcp.vertex.agent",
+      "scope_version": "2.14.0",
+      "conventions": [
+        "genai",
+        "google_adk"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "9b81d4368bef7254c1826ae02743a2ae",
+      "span_id": "20e47d3d6e909f73",
+      "parent_span_id": "5ab9a20658712793",
+      "name": "call_llm",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.034000000Z",
+      "end_time": "2025-12-31T23:59:50.114000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "provider": "gcp.vertex.agent",
+      "request_model": "gemini-2.5-flash",
+      "input_tokens": 40,
+      "output_tokens": 12,
+      "total_tokens": 52,
+      "cost_source": "none",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_weather_1\",\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}],\"finish_reason\":\"STOP\"}]",
+      "output_format": "messages",
+      "input_preview": "What's the weather in Paris?",
+      "system_instructions": "[{\"type\":\"text\",\"content\":\"Use get_weather for weather questions.\\n\\nYou are an agent. Your internal name is \\\"weather_agent\\\".\"}]",
+      "tool_definitions": "[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Return the weather for a city.\"}]",
+      "attributes": {
+        "gcp.vertex.agent.event_id": "capture-2",
+        "gcp.vertex.agent.invocation_id": "invocation-1",
+        "gcp.vertex.agent.session_id": "session-1",
+        "gen_ai.request.model": "gemini-2.5-flash",
+        "gen_ai.response.finish_reasons": "[\"stop\"]",
+        "gen_ai.system": "gcp.vertex.agent",
+        "gen_ai.usage.input_tokens": "40",
+        "gen_ai.usage.output_tokens": "12"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "gcp.vertex.agent",
+      "scope_version": "2.14.0",
+      "conventions": [
+        "genai",
+        "google_adk"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "9b81d4368bef7254c1826ae02743a2ae",
+      "span_id": "01be24d01e2ffa39",
+      "parent_span_id": "5ab9a20658712793",
+      "name": "execute_tool get_weather",
+      "span_kind": "tool",
+      "start_time": "2025-12-31T23:59:50.112000000Z",
+      "end_time": "2025-12-31T23:59:50.113000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "operation": "execute_tool",
+      "input": "{\"city\":\"Paris\"}",
+      "input_format": "json",
+      "output": "{\"city\":\"Paris\",\"report\":\"It is 18 °C and sunny.\"}",
+      "output_format": "json",
+      "input_preview": "{\"city\":\"Paris\"}",
+      "output_preview": "{\"city\":\"Paris\",\"report\":\"It is 18 °C and sunny.\"}",
+      "attributes": {
+        "gcp.vertex.agent.event_id": "capture-4",
+        "gcp.vertex.agent.llm_request": "{}",
+        "gcp.vertex.agent.llm_response": "{}",
+        "gen_ai.agent.name": "weather_agent",
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.call.id": "call_weather_1",
+        "gen_ai.tool.description": "Return the weather for a city.",
+        "gen_ai.tool.name": "get_weather",
+        "gen_ai.tool.type": "FunctionTool"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "gcp.vertex.agent",
+      "scope_version": "2.14.0",
+      "conventions": [
+        "genai",
+        "google_adk"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "9b81d4368bef7254c1826ae02743a2ae",
+      "span_id": "337b850921267187",
+      "parent_span_id": "94d53a3aad5f17d4",
+      "name": "generate_content gemini-2.5-flash",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.115000000Z",
+      "end_time": "2025-12-31T23:59:50.149000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "session_id": "session-1",
+      "provider": "gemini",
+      "request_model": "gemini-2.5-flash",
+      "operation": "generate_content",
+      "input_tokens": 58,
+      "output_tokens": 16,
+      "total_tokens": 74,
+      "cost_source": "none",
+      "attributes": {
+        "gcp.vertex.agent.event_id": "capture-6",
+        "gcp.vertex.agent.invocation_id": "invocation-1",
+        "gen_ai.agent.name": "weather_agent",
+        "gen_ai.conversation.id": "session-1",
+        "gen_ai.operation.name": "generate_content",
+        "gen_ai.request.model": "gemini-2.5-flash",
+        "gen_ai.response.finish_reasons": "[\"stop\"]",
+        "gen_ai.system": "gemini",
+        "gen_ai.usage.input_tokens": "58",
+        "gen_ai.usage.output_tokens": "16"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "gcp.vertex.agent",
+      "scope_version": "2.14.0",
+      "conventions": [
+        "genai",
+        "google_adk"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "9b81d4368bef7254c1826ae02743a2ae",
+      "span_id": "94d53a3aad5f17d4",
+      "parent_span_id": "5ab9a20658712793",
+      "name": "call_llm",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.115000000Z",
+      "end_time": "2025-12-31T23:59:50.150000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "provider": "gcp.vertex.agent",
+      "request_model": "gemini-2.5-flash",
+      "input_tokens": 58,
+      "output_tokens": 16,
+      "total_tokens": 74,
+      "cost_source": "none",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_weather_1\",\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}]},{\"role\":\"user\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"call_weather_1\",\"response\":{\"city\":\"Paris\",\"report\":\"It is 18 °C and sunny.\"},\"name\":\"get_weather\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"It is 18 °C and sunny in Paris.\"}],\"finish_reason\":\"STOP\"}]",
+      "output_format": "messages",
+      "output_preview": "It is 18 °C and sunny in Paris.",
+      "system_instructions": "[{\"type\":\"text\",\"content\":\"Use get_weather for weather questions.\\n\\nYou are an agent. Your internal name is \\\"weather_agent\\\".\"}]",
+      "tool_definitions": "[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Return the weather for a city.\"}]",
+      "attributes": {
+        "gcp.vertex.agent.event_id": "capture-6",
+        "gcp.vertex.agent.invocation_id": "invocation-1",
+        "gcp.vertex.agent.session_id": "session-1",
+        "gen_ai.request.model": "gemini-2.5-flash",
+        "gen_ai.response.finish_reasons": "[\"stop\"]",
+        "gen_ai.system": "gcp.vertex.agent",
+        "gen_ai.usage.input_tokens": "58",
+        "gen_ai.usage.output_tokens": "16"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "gcp.vertex.agent",
+      "scope_version": "2.14.0",
+      "conventions": [
+        "genai",
+        "google_adk"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

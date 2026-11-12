@@ -1,0 +1,123 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "68cb3a5f859860503082a90b4040f47d",
+      "span_id": "715ec1cb7d1f067a",
+      "name": "ai.generateText",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.079000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "metadata": {
+        "functionId": "v5-anthropic-cache"
+      },
+      "provider": "anthropic",
+      "request_model": "claude-sonnet-4-5",
+      "request_params": "{\"maxRetries\":0}",
+      "input": "{\"messages\":[{\"role\":\"system\",\"content\":\"You are a weather assistant.\",\"providerOptions\":{\"anthropic\":{\"cacheControl\":{\"type\":\"ephemeral\"}}}},{\"role\":\"user\",\"content\":\"What's the weather in Paris?\"}]}",
+      "input_format": "json",
+      "output": "It is 18 °C and sunny in Paris.",
+      "output_format": "text",
+      "input_preview": "{\"messages\":[{\"role\":\"system\",\"content\":\"You are a weather assistant.\",\"providerOptions\":{\"anthropic\":{\"cacheControl\":{\"type\":\"ephemeral\"}}}},{\"role\":\"user\",\"content\":\"What's the weather in Paris?\"}]}",
+      "output_preview": "It is 18 °C and sunny in Paris.",
+      "attributes": {
+        "ai.model.id": "claude-sonnet-4-5",
+        "ai.model.provider": "anthropic.messages",
+        "ai.operationId": "ai.generateText",
+        "ai.request.headers.user-agent": "ai/5.0.285",
+        "ai.response.finishReason": "stop",
+        "ai.response.providerMetadata": "{\"anthropic\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":40,\"cache_creation_input_tokens\":200,\"cache_read_input_tokens\":1800},\"cacheCreationInputTokens\":200,\"stopSequence\":null,\"iterations\":null,\"container\":null,\"contextManagement\":null}}",
+        "ai.settings.maxRetries": "0",
+        "ai.telemetry.functionId": "v5-anthropic-cache",
+        "ai.usage.completionTokens": "40",
+        "ai.usage.promptTokens": "100",
+        "operation.name": "ai.generateText v5-anthropic-cache",
+        "resource.name": "v5-anthropic-cache"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "nodejs",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "2.12.0"
+      },
+      "scope_name": "ai",
+      "conventions": [
+        "vercel"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "68cb3a5f859860503082a90b4040f47d",
+      "span_id": "45f24540d453260b",
+      "parent_span_id": "715ec1cb7d1f067a",
+      "name": "ai.generateText.doGenerate",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.002000000Z",
+      "end_time": "2025-12-31T23:59:50.074000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "metadata": {
+        "functionId": "v5-anthropic-cache"
+      },
+      "provider": "anthropic",
+      "request_model": "claude-sonnet-4-5",
+      "response_model": "claude-sonnet-4-5",
+      "input_tokens": 300,
+      "output_tokens": 40,
+      "cache_write_tokens": 200,
+      "total_tokens": 340,
+      "cost_input": 0.00105,
+      "cost_output": 0.0006,
+      "cost_total": 0.00165,
+      "cost_source": "computed",
+      "request_params": "{\"maxRetries\":0}",
+      "input": "[{\"role\":\"system\",\"parts\":[{\"type\":\"text\",\"content\":\"You are a weather assistant.\"}],\"providerOptions\":{\"anthropic\":{\"cacheControl\":{\"type\":\"ephemeral\"}}}},{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"It is 18 °C and sunny in Paris.\"}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "input_preview": "What's the weather in Paris?",
+      "output_preview": "It is 18 °C and sunny in Paris.",
+      "attributes": {
+        "ai.model.id": "claude-sonnet-4-5",
+        "ai.model.provider": "anthropic.messages",
+        "ai.operationId": "ai.generateText.doGenerate",
+        "ai.request.headers.user-agent": "ai/5.0.285",
+        "ai.response.finishReason": "stop",
+        "ai.response.id": "msg_capture_1",
+        "ai.response.model": "claude-sonnet-4-5",
+        "ai.response.providerMetadata": "{\"anthropic\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":40,\"cache_creation_input_tokens\":200,\"cache_read_input_tokens\":1800},\"cacheCreationInputTokens\":200,\"stopSequence\":null,\"iterations\":null,\"container\":null,\"contextManagement\":null}}",
+        "ai.response.timestamp": "2025-12-31T23:59:50.073Z",
+        "ai.settings.maxRetries": "0",
+        "ai.telemetry.functionId": "v5-anthropic-cache",
+        "ai.usage.completionTokens": "40",
+        "ai.usage.promptTokens": "100",
+        "gen_ai.request.model": "claude-sonnet-4-5",
+        "gen_ai.response.finish_reasons": "[\"stop\"]",
+        "gen_ai.response.id": "msg_capture_1",
+        "gen_ai.response.model": "claude-sonnet-4-5",
+        "gen_ai.system": "anthropic.messages",
+        "gen_ai.usage.input_tokens": "100",
+        "gen_ai.usage.output_tokens": "40",
+        "operation.name": "ai.generateText.doGenerate v5-anthropic-cache",
+        "resource.name": "v5-anthropic-cache"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "nodejs",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "2.12.0"
+      },
+      "scope_name": "ai",
+      "conventions": [
+        "genai",
+        "vercel"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

@@ -1,0 +1,364 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "01d88a7e4bcd41f492baf3694116060a",
+      "span_id": "8aa129e8474d6203",
+      "name": "LangGraph",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.087000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "metadata": {
+        "ls_integration": "langchain_create_agent"
+      },
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
+      "input_format": "messages",
+      "output": "{\"messages\":[{\"type\":\"human\",\"data\":{\"content\":\"What's the weather in Paris?\",\"additional_kwargs\":{},\"response_metadata\":{},\"type\":\"human\",\"name\":null,\"id\":\"msg_user\"}},{\"type\":\"ai\",\"data\":{\"content\":\"\",\"additional_kwargs\":{\"refusal\":null},\"response_metadata\":{\"token_usage\":{\"completion_tokens\":17,\"prompt_tokens\":82,\"total_tokens\":99,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":0,\"rejected_prediction_tokens\":0,\"text_tokens\":null},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":null,\"cached_tokens\":0,\"image_tokens\":null,\"text_tokens\":null}},\"model_provider\":\"openai\",\"model_name\":\"gpt-4o-mini-2024-07-18\",\"system_fingerprint\":\"fp_capture\",\"id\":\"chatcmpl-capture-1\",\"finish_reason\":\"tool_calls\",\"logprobs\":null},\"type\":\"ai\",\"name\":null,\"id\":\"lc_run--00000000-0000-0000-0000-000000000007-0\",\"tool_calls\":[{\"name\":\"get_weather\",\"args\":{\"city\":\"Paris\"},\"id\":\"call_weather_1\",\"type\":\"tool_call\"}],\"invalid_tool_calls\":[],\"usage_metadata\":{\"input_tokens\":82,\"output_tokens\":17,\"total_tokens\":99,\"input_token_details\":{\"audio\":0,\"cache_read\":0},\"output_token_details\":{\"audio\":0,\"reasoning\":0}}}},{\"type\":\"tool\",\"data\":{\"content\":\"{\\\"temperature_c\\\": 18, \\\"conditions\\\": \\\"sunny\\\", \\\"city\\\": \\\"Paris\\\"}\",\"additional_kwargs\":{},\"response_metadata\":{},\"type\":\"tool\",\"name\":\"get_weather\",\"id\":\"00000000-0000-0000-0000-00000000000c\",\"tool_call_id\":\"call_weather_1\",\"artifact\":null,\"status\":\"success\"}},{\"type\":\"ai\",\"data\":{\"content\":\"It is 18 °C and sunny in Paris.\",\"additional_kwargs\":{\"refusal\":null},\"response_metadata\":{\"token_usage\":{\"completion_tokens\":12,\"prompt_tokens\":131,\"total_tokens\":143,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":0,\"rejected_prediction_tokens\":0,\"text_tokens\":null},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":null,\"cached_tokens\":64,\"image_tokens\":null,\"text_tokens\":null}},\"model_provider\":\"openai\",\"model_name\":\"gpt-4o-mini-2024-07-18\",\"system_fingerprint\":\"fp_capture\",\"id\":\"chatcmpl-capture-2\",\"finish_reason\":\"stop\",\"logprobs\":null},\"type\":\"ai\",\"name\":null,\"id\":\"lc_run--00000000-0000-0000-0000-00000000000f-0\",\"tool_calls\":[],\"invalid_tool_calls\":[],\"usage_metadata\":{\"input_tokens\":131,\"output_tokens\":12,\"total_tokens\":143,\"input_token_details\":{\"audio\":0,\"cache_read\":64},\"output_token_details\":{\"audio\":0,\"reasoning\":0}}}}]}",
+      "output_format": "json",
+      "input_preview": "What's the weather in Paris?",
+      "output_preview": "{\"messages\":[{\"type\":\"human\",\"data\":{\"content\":\"What's the weather in Paris?\",\"additional_kwargs\":{},\"response_metadata\":{},\"type\":\"human\",\"name\":null,\"id\":\"msg_user\"}},{\"type\":\"ai\",\"data\":{\"content\":\"\",\"additional_kwargs\":{\"refusal\":null},\"response_metadata\":{\"token_usage\":{\"completion_tokens\":17,\"prompt_tokens\":82,\"total_tokens\":99,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":0,\"rejected_prediction_tokens\":0,\"text_tokens\":null},\"prompt_tokens_details\":{\"a",
+      "attributes": {
+        "input.mime_type": "application/json",
+        "metadata": "{\"ls_integration\": \"langchain_create_agent\"}",
+        "openinference.span.kind": "CHAIN",
+        "output.mime_type": "application/json"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.langchain",
+      "scope_version": "0.1.81",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "01d88a7e4bcd41f492baf3694116060a",
+      "span_id": "66616a7eb6dcfb41",
+      "parent_span_id": "8aa129e8474d6203",
+      "name": "model",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.001000000Z",
+      "end_time": "2025-12-31T23:59:50.046000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "metadata": {
+        "langgraph_checkpoint_ns": "model:4a6c694f-d8cc-8777-ad19-4c3082bb1935",
+        "langgraph_node": "model",
+        "langgraph_path": "[\"__pregel_pull\",\"model\"]",
+        "langgraph_step": "1",
+        "langgraph_triggers": "[\"branch:to:model\"]",
+        "ls_integration": "langchain_create_agent"
+      },
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"graph\":null,\"update\":{\"messages\":[{\"type\":\"ai\",\"data\":{\"content\":\"\",\"additional_kwargs\":{\"refusal\":null},\"response_metadata\":{\"token_usage\":{\"completion_tokens\":17,\"prompt_tokens\":82,\"total_tokens\":99,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":0,\"rejected_prediction_tokens\":0,\"text_tokens\":null},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":null,\"cached_tokens\":0,\"image_tokens\":null,\"text_tokens\":null}},\"model_provider\":\"openai\",\"model_name\":\"gpt-4o-mini-2024-07-18\",\"system_fingerprint\":\"fp_capture\",\"id\":\"chatcmpl-capture-1\",\"finish_reason\":\"tool_calls\",\"logprobs\":null},\"type\":\"ai\",\"name\":null,\"id\":\"lc_run--00000000-0000-0000-0000-000000000007-0\",\"tool_calls\":[{\"name\":\"get_weather\",\"args\":{\"city\":\"Paris\"},\"id\":\"call_weather_1\",\"type\":\"tool_call\"}],\"invalid_tool_calls\":[],\"usage_metadata\":{\"input_tokens\":82,\"output_tokens\":17,\"total_tokens\":99,\"input_token_details\":{\"audio\":0,\"cache_read\":0},\"output_token_details\":{\"audio\":0,\"reasoning\":0}}}}]},\"resume\":null,\"goto\":[]}]",
+      "output_format": "json",
+      "input_preview": "What's the weather in Paris?",
+      "output_preview": "[{\"graph\":null,\"update\":{\"messages\":[{\"type\":\"ai\",\"data\":{\"content\":\"\",\"additional_kwargs\":{\"refusal\":null},\"response_metadata\":{\"token_usage\":{\"completion_tokens\":17,\"prompt_tokens\":82,\"total_tokens\":99,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":0,\"rejected_prediction_tokens\":0,\"text_tokens\":null},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":null,\"cached_tokens\":0,\"image_tokens\":null,\"text_tokens\":null}},\"model_provider\":\"openai\",\"model",
+      "attributes": {
+        "input.mime_type": "application/json",
+        "metadata": "{\"ls_integration\": \"langchain_create_agent\", \"langgraph_step\": 1, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:4a6c694f-d8cc-8777-ad19-4c3082bb1935\"}",
+        "openinference.span.kind": "CHAIN",
+        "output.mime_type": "application/json"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.langchain",
+      "scope_version": "0.1.81",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "01d88a7e4bcd41f492baf3694116060a",
+      "span_id": "ff61144d7b4194be",
+      "parent_span_id": "66616a7eb6dcfb41",
+      "name": "ChatOpenAI",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.002000000Z",
+      "end_time": "2025-12-31T23:59:50.043000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "metadata": {
+        "checkpoint_ns": "model:4a6c694f-d8cc-8777-ad19-4c3082bb1935",
+        "langgraph_checkpoint_ns": "model:4a6c694f-d8cc-8777-ad19-4c3082bb1935",
+        "langgraph_node": "model",
+        "langgraph_path": "[\"__pregel_pull\",\"model\"]",
+        "langgraph_step": "1",
+        "langgraph_triggers": "[\"branch:to:model\"]",
+        "lc_versions": "{\"langchain-core\":\"1.7.4\",\"langchain\":\"1.4.8\",\"langchain-openai\":\"1.7.3\"}",
+        "ls_integration": "langchain_chat_model",
+        "ls_model_name": "gpt-4o-mini-2024-07-18",
+        "ls_model_type": "chat",
+        "ls_provider": "openai"
+      },
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "input_tokens": 82,
+      "output_tokens": 17,
+      "cache_read_tokens": 0,
+      "reasoning_tokens": 0,
+      "total_tokens": 99,
+      "cost_input": 0.000082,
+      "cost_output": 0.000068,
+      "cost_total": 0.00015000000000000001,
+      "cost_source": "computed",
+      "request_params": "{\"_type\":\"openai-chat\",\"model\":\"gpt-4o-mini-2024-07-18\",\"model_name\":\"gpt-4o-mini-2024-07-18\",\"stop\":null,\"stream\":false,\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Look up the weather for a city.\",\"parameters\":{\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"],\"type\":\"object\"}}}]}",
+      "input": "[{\"role\":\"system\",\"parts\":[{\"type\":\"text\",\"content\":\"You are a weather assistant.\"}]},{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_weather_1\",\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}]}]",
+      "output_format": "messages",
+      "input_preview": "What's the weather in Paris?",
+      "tool_definitions": "[{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Look up the weather for a city.\",\"parameters\":{\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"],\"type\":\"object\"}}}]",
+      "attributes": {
+        "input.mime_type": "application/json",
+        "llm.finish_reason": "tool_calls",
+        "llm.model_name": "gpt-4o-mini-2024-07-18",
+        "llm.provider": "openai",
+        "llm.system": "openai",
+        "llm.token_count.completion": "17",
+        "llm.token_count.completion_details.audio": "0",
+        "llm.token_count.completion_details.reasoning": "0",
+        "llm.token_count.prompt": "82",
+        "llm.token_count.prompt_details.audio": "0",
+        "llm.token_count.prompt_details.cache_read": "0",
+        "llm.token_count.total": "99",
+        "openinference.span.kind": "LLM",
+        "output.mime_type": "application/json"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.langchain",
+      "scope_version": "0.1.81",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "01d88a7e4bcd41f492baf3694116060a",
+      "span_id": "4a7b7ae41292ecfd",
+      "parent_span_id": "8aa129e8474d6203",
+      "name": "tools",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.047000000Z",
+      "end_time": "2025-12-31T23:59:50.049000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "metadata": {
+        "langgraph_checkpoint_ns": "tools:b726c3b3-053c-2c40-87b0-bf6c2a02f2fa",
+        "langgraph_node": "tools",
+        "langgraph_path": "[\"__pregel_push\",0,false]",
+        "langgraph_step": "2",
+        "langgraph_triggers": "[\"__pregel_push\"]",
+        "ls_integration": "langchain_create_agent"
+      },
+      "input": "[{\"name\":\"get_weather\",\"args\":{\"city\":\"Paris\"},\"id\":\"call_weather_1\",\"type\":\"tool_call\"}]",
+      "input_format": "json",
+      "output": "{\"messages\":[{\"type\":\"tool\",\"data\":{\"content\":\"{\\\"temperature_c\\\": 18, \\\"conditions\\\": \\\"sunny\\\", \\\"city\\\": \\\"Paris\\\"}\",\"additional_kwargs\":{},\"response_metadata\":{},\"type\":\"tool\",\"name\":\"get_weather\",\"id\":\"00000000-0000-0000-0000-00000000000c\",\"tool_call_id\":\"call_weather_1\",\"artifact\":null,\"status\":\"success\"}}]}",
+      "output_format": "json",
+      "input_preview": "[{\"name\":\"get_weather\",\"args\":{\"city\":\"Paris\"},\"id\":\"call_weather_1\",\"type\":\"tool_call\"}]",
+      "output_preview": "{\"messages\":[{\"type\":\"tool\",\"data\":{\"content\":\"{\\\"temperature_c\\\": 18, \\\"conditions\\\": \\\"sunny\\\", \\\"city\\\": \\\"Paris\\\"}\",\"additional_kwargs\":{},\"response_metadata\":{},\"type\":\"tool\",\"name\":\"get_weather\",\"id\":\"00000000-0000-0000-0000-00000000000c\",\"tool_call_id\":\"call_weather_1\",\"artifact\":null,\"status\":\"success\"}}]}",
+      "attributes": {
+        "input.mime_type": "application/json",
+        "metadata": "{\"ls_integration\": \"langchain_create_agent\", \"langgraph_step\": 2, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:b726c3b3-053c-2c40-87b0-bf6c2a02f2fa\"}",
+        "openinference.span.kind": "CHAIN",
+        "output.mime_type": "application/json"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.langchain",
+      "scope_version": "0.1.81",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "01d88a7e4bcd41f492baf3694116060a",
+      "span_id": "6c7e8e80a4035d36",
+      "parent_span_id": "4a7b7ae41292ecfd",
+      "name": "get_weather",
+      "span_kind": "tool",
+      "start_time": "2025-12-31T23:59:50.048000000Z",
+      "end_time": "2025-12-31T23:59:50.048000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "metadata": {
+        "checkpoint_ns": "tools:b726c3b3-053c-2c40-87b0-bf6c2a02f2fa",
+        "langgraph_checkpoint_ns": "tools:b726c3b3-053c-2c40-87b0-bf6c2a02f2fa",
+        "langgraph_node": "tools",
+        "langgraph_path": "[\"__pregel_push\",0,false]",
+        "langgraph_step": "2",
+        "langgraph_triggers": "[\"__pregel_push\"]",
+        "ls_integration": "langchain_create_agent"
+      },
+      "input": "Paris",
+      "input_format": "text",
+      "output": "{\"type\":\"tool\",\"data\":{\"content\":\"{\\\"temperature_c\\\": 18, \\\"conditions\\\": \\\"sunny\\\", \\\"city\\\": \\\"Paris\\\"}\",\"additional_kwargs\":{},\"response_metadata\":{},\"type\":\"tool\",\"name\":\"get_weather\",\"id\":null,\"tool_call_id\":\"call_weather_1\",\"artifact\":null,\"status\":\"success\"}}",
+      "output_format": "json",
+      "input_preview": "Paris",
+      "output_preview": "{\"type\":\"tool\",\"data\":{\"content\":\"{\\\"temperature_c\\\": 18, \\\"conditions\\\": \\\"sunny\\\", \\\"city\\\": \\\"Paris\\\"}\",\"additional_kwargs\":{},\"response_metadata\":{},\"type\":\"tool\",\"name\":\"get_weather\",\"id\":null,\"tool_call_id\":\"call_weather_1\",\"artifact\":null,\"status\":\"success\"}}",
+      "attributes": {
+        "openinference.span.kind": "TOOL",
+        "output.mime_type": "application/json",
+        "tool.description": "Look up the weather for a city.",
+        "tool.name": "get_weather"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.langchain",
+      "scope_version": "0.1.81",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "01d88a7e4bcd41f492baf3694116060a",
+      "span_id": "078c4236ac479098",
+      "parent_span_id": "8aa129e8474d6203",
+      "name": "model",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.050000000Z",
+      "end_time": "2025-12-31T23:59:50.086000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "metadata": {
+        "langgraph_checkpoint_ns": "model:6e765ee2-8763-3c74-e29e-0f8c3fd84482",
+        "langgraph_node": "model",
+        "langgraph_path": "[\"__pregel_pull\",\"model\"]",
+        "langgraph_step": "3",
+        "langgraph_triggers": "[\"branch:to:model\"]",
+        "ls_integration": "langchain_create_agent"
+      },
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"graph\":null,\"update\":{\"messages\":[{\"type\":\"ai\",\"data\":{\"content\":\"It is 18 °C and sunny in Paris.\",\"additional_kwargs\":{\"refusal\":null},\"response_metadata\":{\"token_usage\":{\"completion_tokens\":12,\"prompt_tokens\":131,\"total_tokens\":143,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":0,\"rejected_prediction_tokens\":0,\"text_tokens\":null},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":null,\"cached_tokens\":64,\"image_tokens\":null,\"text_tokens\":null}},\"model_provider\":\"openai\",\"model_name\":\"gpt-4o-mini-2024-07-18\",\"system_fingerprint\":\"fp_capture\",\"id\":\"chatcmpl-capture-2\",\"finish_reason\":\"stop\",\"logprobs\":null},\"type\":\"ai\",\"name\":null,\"id\":\"lc_run--00000000-0000-0000-0000-00000000000f-0\",\"tool_calls\":[],\"invalid_tool_calls\":[],\"usage_metadata\":{\"input_tokens\":131,\"output_tokens\":12,\"total_tokens\":143,\"input_token_details\":{\"audio\":0,\"cache_read\":64},\"output_token_details\":{\"audio\":0,\"reasoning\":0}}}}]},\"resume\":null,\"goto\":[]}]",
+      "output_format": "json",
+      "input_preview": "What's the weather in Paris?",
+      "output_preview": "[{\"graph\":null,\"update\":{\"messages\":[{\"type\":\"ai\",\"data\":{\"content\":\"It is 18 °C and sunny in Paris.\",\"additional_kwargs\":{\"refusal\":null},\"response_metadata\":{\"token_usage\":{\"completion_tokens\":12,\"prompt_tokens\":131,\"total_tokens\":143,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":0,\"rejected_prediction_tokens\":0,\"text_tokens\":null},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":null,\"cached_tokens\":64,\"image_tokens\":null,\"text_tokens\":null}",
+      "attributes": {
+        "input.mime_type": "application/json",
+        "metadata": "{\"ls_integration\": \"langchain_create_agent\", \"langgraph_step\": 3, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:6e765ee2-8763-3c74-e29e-0f8c3fd84482\"}",
+        "openinference.span.kind": "CHAIN",
+        "output.mime_type": "application/json"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.langchain",
+      "scope_version": "0.1.81",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "01d88a7e4bcd41f492baf3694116060a",
+      "span_id": "ca9858e8f202f17a",
+      "parent_span_id": "078c4236ac479098",
+      "name": "ChatOpenAI",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.051000000Z",
+      "end_time": "2025-12-31T23:59:50.085000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "metadata": {
+        "checkpoint_ns": "model:6e765ee2-8763-3c74-e29e-0f8c3fd84482",
+        "langgraph_checkpoint_ns": "model:6e765ee2-8763-3c74-e29e-0f8c3fd84482",
+        "langgraph_node": "model",
+        "langgraph_path": "[\"__pregel_pull\",\"model\"]",
+        "langgraph_step": "3",
+        "langgraph_triggers": "[\"branch:to:model\"]",
+        "lc_versions": "{\"langchain-core\":\"1.7.4\",\"langchain\":\"1.4.8\",\"langchain-openai\":\"1.7.3\"}",
+        "ls_integration": "langchain_chat_model",
+        "ls_model_name": "gpt-4o-mini-2024-07-18",
+        "ls_model_type": "chat",
+        "ls_provider": "openai"
+      },
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "input_tokens": 131,
+      "output_tokens": 12,
+      "cache_read_tokens": 64,
+      "reasoning_tokens": 0,
+      "total_tokens": 143,
+      "cost_input": 0.000099,
+      "cost_output": 0.000048,
+      "cost_total": 0.000147,
+      "cost_source": "computed",
+      "request_params": "{\"_type\":\"openai-chat\",\"model\":\"gpt-4o-mini-2024-07-18\",\"model_name\":\"gpt-4o-mini-2024-07-18\",\"stop\":null,\"stream\":false,\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Look up the weather for a city.\",\"parameters\":{\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"],\"type\":\"object\"}}}]}",
+      "input": "[{\"role\":\"system\",\"parts\":[{\"type\":\"text\",\"content\":\"You are a weather assistant.\"}]},{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_weather_1\",\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}]},{\"role\":\"tool\",\"name\":\"get_weather\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"call_weather_1\",\"response\":{\"temperature_c\":18,\"conditions\":\"sunny\",\"city\":\"Paris\"}}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"It is 18 °C and sunny in Paris.\"}]}]",
+      "output_format": "messages",
+      "input_preview": "What's the weather in Paris?",
+      "output_preview": "It is 18 °C and sunny in Paris.",
+      "tool_definitions": "[{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Look up the weather for a city.\",\"parameters\":{\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"],\"type\":\"object\"}}}]",
+      "attributes": {
+        "input.mime_type": "application/json",
+        "llm.finish_reason": "stop",
+        "llm.model_name": "gpt-4o-mini-2024-07-18",
+        "llm.provider": "openai",
+        "llm.system": "openai",
+        "llm.token_count.completion": "12",
+        "llm.token_count.completion_details.audio": "0",
+        "llm.token_count.completion_details.reasoning": "0",
+        "llm.token_count.prompt": "131",
+        "llm.token_count.prompt_details.audio": "0",
+        "llm.token_count.prompt_details.cache_read": "64",
+        "llm.token_count.total": "143",
+        "openinference.span.kind": "LLM",
+        "output.mime_type": "application/json"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "openinference.instrumentation.langchain",
+      "scope_version": "0.1.81",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

@@ -1,0 +1,36 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "3abd63589fa5ef397a271ceb22cdf1b8",
+      "span_id": "fb00a141331328a9",
+      "name": "failed-lookup",
+      "span_kind": "span",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.055000000Z",
+      "status": "error",
+      "status_message": "weather lookup failed",
+      "service_name": "capture-app",
+      "attributes": {
+        "langfuse.internal.is_app_root": "true",
+        "langfuse.observation.level": "ERROR",
+        "langfuse.observation.status_message": "weather lookup failed",
+        "langfuse.observation.type": "span"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "langfuse-sdk",
+      "scope_version": "5.1.0",
+      "conventions": [
+        "langfuse"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}
