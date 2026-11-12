@@ -23,6 +23,7 @@ mod mapping;
 mod runner;
 mod secret;
 mod template;
+mod templates;
 mod text;
 mod trace;
 mod webhook;
@@ -42,6 +43,7 @@ pub use mapping::{Expr, VariableMapping};
 pub use runner::{EvalOutcome, EvalRun, EvalRunner, RunInput};
 pub use secret::Secret;
 pub use template::PromptTemplate;
+pub use templates::{JudgeTemplate, builtin_templates};
 pub use trace::{EvalOrigin, EvalTarget};
 
 #[cfg(test)]
