@@ -24,6 +24,11 @@ Top-level design of the storage track (Wave 1, track A1). It settles what specs 
 | D87 | **Durability and commit protocol.** A file is durable (fsynced file and directory on local disk; completed PUT on S3) before any catalog row makes it active. Catalog commits are serialized and compare-and-set on their input files. Obsolete files are deleted only when no read snapshot references them. Details in § Durability and § Commit protocol. | Research G1–G4, G8–G10, G20 |
 | D-A1-1 | **Compaction keeps one `traces` file per `spans` file.** Each `spans` output gets its own `traces` output, computed from its rows. A day that fully merges ends with one partial per trace. | M4 plan |
 | D-A1-2 | **Compaction streams its outputs through temp files.** Disk reservation before a merge moves to M6. | M4 plan |
+| D-A1-3 | **One covered-row predicate.** A DataFusion physical predicate built from the pending deletions decides which rows are deleted, for queries, flush, compaction and the rewriter. Queries filter only the files and batches a deletion may cover. | M5 plan |
+| D-A1-4 | **Session IDs delete scores only.** A `user` deletion removes spans by trace ID and `user_id`, and scores by trace ID, `user_id` and session ID. | User |
+| D-A1-5 | **The rewriter is a compaction job kind.** A deletion pass after each compaction pass rewrites the files with covered rows and raises `deletions_applied_seq` on clean ones. | M5 plan |
+| D-A1-6 | **Media: verified hash, last-seen grace, GC on deletion.** `put_media` checks the SHA-256; GC keeps blobs seen in the last hour and runs for a project when one of its deletions is applied. | User |
+| D-A1-7 | **Project drop refuses appends.** Appends to a dropped project fail with `ProjectDropped`; its files are obsoleted in one commit and collected by GC. | User |
 | D88 | **`traces` files are derived from `spans` files.** Every `traces` file records the `spans` files it was computed from. Whatever replaces a `spans` file (compaction, deletion rewrite) recomputes the `traces` files derived from it. Duplicate spans therefore stop inflating trace totals once their spans are compacted, and deletion never needs separate logic for `traces`. | Research G17 |
 
 ## Scope
@@ -83,11 +88,13 @@ impl Storage {
     /// Drops every partition of `project` older than `keep_from` (a UTC day), and drops late
     /// rows for those days at flush from then on (G13).
     pub async fn apply_retention(&self, project: ProjectId, keep_from: NaiveDate) -> Result<RetentionReport, StorageError>;
-    /// Hides the project at once, then deletes its files, media and catalog rows.
+    /// Hides the project and refuses its appends at once, obsoletes its files (GC deletes
+    /// them), then deletes its media. Idempotent (D-A1-7).
     pub async fn drop_project(&self, project: ProjectId) -> Result<(), StorageError>;
 
-    pub async fn put_media(&self, project: ProjectId, media: MediaBlob) -> Result<(), StorageError>;
-    pub async fn get_media(&self, project: ProjectId, sha256: &Sha256, range: Option<Range<u64>>) -> Result<MediaRead, StorageError>;
+    /// Verifies the hash, stores the blob once, refreshes `last_seen_at` (D-A1-6).
+    pub async fn put_media(&self, project: ProjectId, blob: MediaBlob) -> Result<(), MediaError>;
+    pub async fn get_media(&self, project: ProjectId, sha256: &[u8; 32], range: Option<Range<u64>>) -> Result<MediaRead, MediaError>;
 
     /// Writer failure flags and memtable bytes. Does no I/O.
     pub fn health(&self) -> StorageHealth;
@@ -106,6 +113,13 @@ impl Storage {
     /// passes the wall clock every `compaction.interval`.
     #[doc(hidden)]
     pub async fn compact(&self, now: i64) -> Result<CompactionReport, CompactionError>;
+    /// One deletion pass at `now` (M5): rewrites, raises, marks applied, collects
+    /// the media of projects with an applied deletion.
+    #[doc(hidden)]
+    pub async fn apply_deletions(&self, now: i64) -> Result<DeletionReport, CompactionError>;
+    /// One media collection over every project at `now` (M5). The background task runs one daily.
+    #[doc(hidden)]
+    pub async fn collect_media(&self, now: i64) -> Result<MediaReport, MediaError>;
 }
 
 pub struct ProjectQuery {
@@ -128,9 +142,9 @@ pub struct QueryOptions {
 - `ProjectQuery` is what `query` returns. A2 builds the session from `runtime`, `target_partitions` and `optimizer_rules`, and does not look inside the providers or the rules (D91, D153).
 - `GcError`, `ObsoleteReport`, `CompactionReport` and `CompactionError` are public because the hidden maintenance calls return them; the crash harness and the M4 tests use them.
 - `GcError` is public because `collect_staged` returns it. The other storage errors stay public as well (`OpenError`, `AppendError`, `QueryError`, `StorageError`, and the catalog, object and WAL enums the library already exposes).
-- `register_deletion`, `deletion_status`, `apply_retention`, `drop_project`, `put_media` and `get_media` are the later-milestone surface. They are not implemented.
+- `register_deletion`, `deletion_status`, `apply_retention`, `drop_project`, `put_media` and `get_media` arrive with M5 (plans `09-m5a-deletion.md` and `10-m5b-retention-media-drop.md`). `Deletion`, `DeletionScope` and `DeletionStatus` describe a request; `RetentionReport`, `MediaBlob`, `MediaRead`, `MediaReport` and `DeletionReport` are plain public structs.
 - `AppendReceipt { seq, rows }`.
-- Errors are `thiserror` enums, one per operation: `OpenError`, `AppendError`, `QueryError`, `DeletionError`, and `StorageError` for the rest. `AppendError` separates the cases the server maps to HTTP:
+- Errors are `thiserror` enums, one per operation: `OpenError`, `AppendError`, `QueryError`, `DeletionError`, `MediaError`, and `StorageError` for the rest. `AppendError` separates the cases the server maps to HTTP:
   - `Backpressure` (429);
   - `DiskFull` (503);
   - `WalFailed` (503 and unhealthy, G4);
@@ -156,12 +170,13 @@ crates/storage/src/
   catalog/          catalog.db migrations, rows, in-memory catalog, committer, edits
   snapshot.rs       ReadState: catalog + memtable + tombstones, published atomically
   query/            SpansProvider, TracesProvider and TracesExec, TraceListRule, ScoresProvider,
-                    TombstoneFilterExec, memory pool and admission, metadata and S3 read caches
+                    tombstone filtering, memory pool and admission, metadata and S3 read caches
   dedup.rs          latest version per span / per score (flush and compaction)
-  compaction/       planning (L0 merge, day close, size ratio), slicing, merge, jobs, pass and task
-  deletion.rs       tombstones, rewriter, deletion sequence
-  retention.rs      partition drops, dropped-day watermark
-  media.rs          media blobs and their GC
+  compaction/       planning (L0 merge, day close, size ratio), slicing, merge, jobs, pass and task;
+                    rewrite jobs and the deletion pass (rewrite.rs)
+  deletion.rs       deletion types, tombstones, the covered-row predicate (D-A1-3)
+  projects.rs       retention watermarks and dropped projects, as readers see them
+  media.rs          media blobs, their GC, and the media part of a project drop
   gc.rs             obsolete and staged file removal
   filter/  sql/     track A2
 ```
@@ -325,20 +340,22 @@ Spec 03 §5 is the full policy. The M4 plans are `07-m4a-gc-and-merge.md` and `0
 - **Memory bound.** Each merge streams its inputs in `(trace_id, start_time)` order: the inputs are sorted runs, so a k-way merge needs one batch per input. Slice boundaries are exact quantiles of the inputs' time column. Merge memory is capped by `compaction.max_memory` (default 1 GiB) across running merges, and outputs stream through temp files (D-A1-2).
 - **Disk reservation** (VictoriaLogs' rule) moves to M6 with the disk-full handling (D-A1-2).
 - **Late data** re-opens a closed day. A new L0 file in a day already closed triggers another day close after `compaction.close_delay` (G13).
-- **Outputs** apply every tombstone known when the job started, and record that deletion sequence (§ Deletion). This arrives with M5.
+- **Outputs** apply every tombstone pending when the job started, and record the known deletion sequence (§ Deletion).
 
 ## Deletion
 
 Spec 03 §7, with the bookkeeping that makes it terminate (G20):
 - Every registered deletion gets a **deletion sequence number** (`deletion_seq`, increasing, in `catalog.db`).
 - Every file records `deletions_applied_seq`: no row of any deletion up to that number remains in it.
-  - A flush sets it to the highest `deletion_seq` whose tombstones it applied.
+  - A flush sets it to the highest `deletion_seq` known when it started, since it drops every covered row.
   - Compaction and the rewriter set it to the highest `deletion_seq` known when the job started, since they apply all of those.
+- One predicate decides which rows a deletion covers, for queries, flush, compaction and the rewriter (D-A1-3). Session IDs match `scores` only (D-A1-4).
+- The **rewriter** is a compaction job kind, run by a deletion pass after each compaction pass: candidates are checked with a pushed-down scan, rewritten when they hold a covered row, and otherwise get their `deletions_applied_seq` raised without a rewrite (D-A1-5).
 - A deletion is **applied** when two conditions hold:
-  - every active file of the project with `min_ingest_time ≤ cut-off` has `deletions_applied_seq ≥` its seq;
-  - no memtable batch older than the cut-off remains.
+  - every active `spans` and `scores` file of the project with `min_ingest_time ≤ cut-off` has `deletions_applied_seq ≥` its seq;
+  - no memtable batch of the project has `min_ingest_time ≤ cut-off`.
 
-  Then its tombstones are dropped from memory, and storage's row is marked applied.
+  Then its tombstones are dropped from memory, storage's row is marked applied, and the project's media GC runs (D-A1-6).
 - `register_deletion` persists the request and its resolved scope (trace IDs, users, sessions) in `catalog.db`, then publishes the tombstones in a new `ReadState`. It returns only after both. `deletion_status` reads storage's row.
 - **Server side** (Wave 2, documented here so the boundary is clear):
   1. it inserts the request into `meta.db` with the cascades;
@@ -349,8 +366,8 @@ Spec 03 §7, with the bookkeeping that makes it terminate (G20):
 
 ## Retention and project drop
 
-- `apply_retention(project, keep_from)` commits one edit that obsoletes every file of the project in days before `keep_from`, and records `keep_from` in `retention_watermarks`. From then on, a flush drops rows of that project older than the watermark (G13). The server calls it hourly with `today − retention_days`.
-- `drop_project` marks the project dropped in `catalog.db` and removes it from every new `ReadState` in the same commit. The query provider returns empty tables for it. A background task then deletes its objects under `project=` and `media/<project_id>/` and its rows.
+- `apply_retention(project, keep_from)` commits one edit that obsoletes every file of the project in days before the watermark, and records the watermark (the later of the stored one and `keep_from`) in `retention_watermarks`. From then on, a flush drops rows of that project older than the watermark, queries hide such memtable rows, and the committer refuses such files (G13). The server calls it hourly with `today − retention_days`.
+- `drop_project` waits for appends in flight, then obsoletes the project's files, records it in `projects` and publishes a `ReadState` without it, in one commit. Its queries return empty tables and its appends fail with `ProjectDropped`. It then deletes the project's media. GC removes the obsolete files like any others (D-A1-7).
 
 ## Catalog (`catalog.db`, D83)
 
@@ -395,7 +412,7 @@ Present after M2:
 - `memtable`: `hard_limit`;
 - `query`: `target_partitions` (default: the process parallelism), `metadata_cache_bytes` (default 512 MiB).
 
-Later milestones add, when they implement them: `min_free_bytes`; `query.max_memory_total`, `query.max_memory`, `query.read_cache_bytes`, `query.admission_wait`; `deletion.max_delay`. M3 adds `query.trace_lookback` (default 1 h) and `anchor.window` (default: `trace_lookback`). M4 adds `gc.grace` and `compaction.*` (`interval`, `threads`, `target_file_size`, `size_ratio`, `l0_files`, `l0_bytes`, `l0_age`, `close_delay`, `max_memory`).
+Later milestones add, when they implement them: `min_free_bytes`; `query.max_memory_total`, `query.max_memory`, `query.read_cache_bytes`, `query.admission_wait`. M3 adds `query.trace_lookback` (default 1 h) and `anchor.window` (default: `trace_lookback`). M4 adds `gc.grace` and `compaction.*` (`interval`, `threads`, `target_file_size`, `size_ratio`, `l0_files`, `l0_bytes`, `l0_age`, `close_delay`, `max_memory`). M5 adds `deletion.max_delay` (default 24 h).
 
 ## Testing
 
@@ -427,7 +444,7 @@ Each milestone ends merged, with `just check` green, and gets its own implementa
 | M2 | **Flush and catalog.** `catalog.db` with migrations and the committer; durable local writes and S3 uploads; Parquet writer settings; flush with staged rows, `flushed_seq` and WAL truncation; providers over files plus memtable; metadata cache; staged-row GC. | Data survives restart after flush. Crash tests cover every flush step. A query during a flush sees each row once (pause-point test). Works against local disk and an S3-compatible store (MinIO in a test, if available). | M1 |
 | M3 | **Traces.** Plans `05-m3a-traces-write.md` and `06-m3b-traces-read.md`. The merge operator (D152), partials at flush, `file_sources`, the anchor (D86), `TracesProvider` (window, exact filters, latest-N rule and two-phase list mode D153, single-trace lookup with bloom filters and `QueryOptions::around` D154), the S1-shaped benchmark. The duplicate drop at flush already landed in M2. | Golden tests on the traces view: late partials, midnight crossing, duplicates, filters that only pass after the merge. The S1 latency targets hold on the real implementation. | M2, S1 |
 | M4 | **Compaction and GC.** Plans `07-m4a-gc-and-merge.md` and `08-m4b-compaction.md`. L0 merge with the size ratio, day close, streaming merge with a memory cap and temp-file outputs, traces rebuilt per spans output (D-A1-1), obsolete-file GC with reference counts. Disk reservation moved to M6 (D-A1-2). | Write amplification measured on a synthetic day stays bounded. Crash and race tests (compaction vs query, vs flush). | M3 (traces rebuild); spans/scores parts could start after M2 |
-| M5 | **Deletion, retention, project drop, media.** Tombstones and `TombstoneFilterExec`, `deletion_seq` bookkeeping, rewriter, `apply_retention`, `drop_project`, media blobs and GC. | Deleted rows vanish from queries at once and from files within `deletion.max_delay`. The race test "compaction started before a deletion commits after it" keeps the rows gone. | M2 (deletion of spans/scores); M3 for traces |
+| M5 | **Deletion, retention, project drop, media.** Plans `09-m5a-deletion.md` and `10-m5b-retention-media-drop.md`. Tombstones and the covered-row filter (D-A1-3), `deletion_seq` bookkeeping, rewriter, `apply_retention`, `drop_project`, media blobs and GC. | Deleted rows vanish from queries at once and from files within `deletion.max_delay`. The race test "compaction started before a deletion commits after it" keeps the rows gone. | M2 (deletion of spans/scores); M3 for traces |
 | M6 | **Resources and hardening.** Process-wide memory pool and admission, disk-full behaviour (including compaction's disk reservation, D-A1-2), quarantine of corrupt files, the S3 read cache (§ Query resources), benchmarks. | Benchmarks recorded against spec 03's capacity check, on local disk and on S3 with a warm and a cold cache. Disk-full and corrupt-file tests. | M2 |
 
 **What can run in parallel:**
