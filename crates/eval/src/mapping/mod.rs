@@ -6,11 +6,13 @@
 //! `expr_offset` is a byte index into the original expression. One kibibyte
 //! is 1024 bytes.
 
+mod transcript;
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
-use llmobs_core::enums::SpanKind;
+use llmobs_core::enums::{PayloadFormat, SpanKind};
 use serde_json::Value;
 use serde_json_path::JsonPath;
 
@@ -313,6 +315,27 @@ fn parse_quoted(body: &str, content_at: usize) -> Result<(String, usize), Mappin
         }
     }
     Err(syntax(content_at.saturating_sub(1), "unterminated string"))
+}
+
+/// Decodes one stored `input` or `output`.
+///
+/// `messages` and `json` parse as JSON. Storage guarantees that text is valid
+/// JSON; a parse failure returns the raw string so a bad row still renders.
+/// `text` becomes a JSON string. A missing payload or format is absent.
+///
+/// E7 resolves payloads through this helper. Until then only the transcript calls it.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn decode_payload(
+    payload: Option<&str>,
+    format: Option<PayloadFormat>,
+) -> Option<Value> {
+    let (payload, format) = (payload?, format?);
+    Some(match format {
+        PayloadFormat::Text => Value::String(payload.to_owned()),
+        PayloadFormat::Messages | PayloadFormat::Json => {
+            serde_json::from_str(payload).unwrap_or_else(|_| Value::String(payload.to_owned()))
+        }
+    })
 }
 
 fn valid_variable_name(name: &str) -> bool {

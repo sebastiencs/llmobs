@@ -1,9 +1,11 @@
-//! Text extracted from a check variable.
+//! Text extracted from a check variable, and the prompt rendering of a JSON value.
 //!
-//! Spec 06 § `check` defaults (D164). A string is kept. A messages array yields
-//! the text parts of its last assistant message. Anything else is compact JSON.
+//! Spec 06 § `check` defaults (D164) and § Rendering (D163). Extraction keeps a
+//! string, the text parts of the last assistant message, or compact JSON.
+//! Rendering keeps a string as itself, writes one line per message, and uses
+//! compact JSON for every other value.
 
-use llmobs_core::message::{Message, Part, Role};
+use llmobs_core::message::{Message, Modality, Part, Role};
 use serde_json::Value;
 
 /// Parses `value` as a messages array.
@@ -27,6 +29,85 @@ pub(crate) fn extract_text(value: &Value) -> String {
     if let Some(messages) = is_messages(value) {
         return last_assistant_text(&messages);
     }
+    // `Value` contains only JSON, so compact serialization cannot fail.
+    serde_json::to_string(value).unwrap_or_default()
+}
+
+/// Renders a value the way a judge prompt sees it.
+///
+/// A string is copied. Null is empty. A messages array is one `role: …` line
+/// per message: text and reasoning are their content, media is `[image]`,
+/// `[audio]`, or `[file]`, a tool call is `tool_call name(arguments)`, and a
+/// tool result is `tool_result: ` plus the rendered response. Every other
+/// value, including an unknown message part, is compact JSON.
+///
+/// E8's formatter calls this. Until then only the transcript does.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn render_value(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(text) => text.clone(),
+        other => {
+            if let Some(messages) = is_messages(other) {
+                render_messages(&messages)
+            } else {
+                compact_json(other)
+            }
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn render_messages(messages: &[Message]) -> String {
+    messages
+        .iter()
+        .map(render_message)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn render_message(message: &Message) -> String {
+    let body = message
+        .parts
+        .iter()
+        .map(render_part)
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{}: {body}", message.role.as_str())
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn render_part(part: &Part) -> String {
+    match part {
+        Part::Text { content, .. } | Part::Reasoning { content, .. } => content.clone(),
+        Part::ToolCall {
+            name, arguments, ..
+        } => match arguments {
+            Some(arguments) => format!("tool_call {name}({})", compact_json(arguments)),
+            None => format!("tool_call {name}()"),
+        },
+        Part::ToolCallResponse { response, .. } => {
+            format!("tool_result: {}", render_value(response))
+        }
+        Part::Uri { modality, .. } | Part::Blob { modality, .. } => media_placeholder(modality),
+        Part::Unknown(value) => compact_json(value),
+    }
+}
+
+/// Image and audio keep their labels. Video and any other modality are `[file]`.
+#[cfg_attr(not(test), allow(dead_code))]
+fn media_placeholder(modality: &Option<Modality>) -> String {
+    match modality {
+        Some(Modality::Image) => "[image]",
+        Some(Modality::Audio) => "[audio]",
+        _ => "[file]",
+    }
+    .to_owned()
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn compact_json(value: &Value) -> String {
     // `Value` contains only JSON, so compact serialization cannot fail.
     serde_json::to_string(value).unwrap_or_default()
 }
@@ -57,7 +138,7 @@ fn last_assistant_text(messages: &[Message]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::extract_text;
 
@@ -98,5 +179,68 @@ mod tests {
             {"role": "assistant", "parts": [{"type": "tool_call", "name": "lookup"}]}
         ]);
         assert_eq!(extract_text(&tool_only), "");
+    }
+
+    #[test]
+    fn renders_every_part_and_other_json() {
+        let planted = "SECRET-PAYLOAD";
+        let messages = json!([
+            {
+                "role": "user",
+                "parts": [
+                    {"type": "text", "content": "see"},
+                    {"type": "uri", "modality": "image", "uri": format!("media://{planted}")},
+                    {"type": "blob", "modality": "audio", "content": planted},
+                    {"type": "uri", "modality": "video", "uri": format!("https://example.test/{planted}")},
+                    {"type": "blob", "modality": "file", "content": planted},
+                    {"type": "uri", "uri": format!("media://{planted}")}
+                ]
+            },
+            {
+                "role": "assistant",
+                "parts": [
+                    {"type": "reasoning", "content": "thinking"},
+                    {"type": "tool_call", "name": "get_weather", "arguments": {"city": "Paris"}},
+                    {"type": "tool_call", "name": "bare"},
+                    {"type": "tool_call", "name": "empty", "arguments": null}
+                ]
+            },
+            {
+                "role": "tool",
+                "parts": [
+                    {"type": "tool_call_response", "response": "sunny"},
+                    {"type": "tool_call_response", "response": {"ok": true}},
+                    {"type": "tool_call_response", "response": null}
+                ]
+            },
+            {
+                "role": "custom",
+                "parts": [{"type": "widget", "value": 1}]
+            },
+            {"role": "user"}
+        ]);
+        assert_eq!(
+            super::render_value(&messages),
+            "\
+user: see [image] [audio] [file] [file] [file]
+assistant: thinking tool_call get_weather({\"city\":\"Paris\"}) tool_call bare() tool_call empty(null)
+tool: tool_result: sunny tool_result: {\"ok\":true} tool_result: 
+custom: {\"type\":\"widget\",\"value\":1}
+user: "
+        );
+        assert!(!super::render_value(&messages).contains(planted));
+
+        assert_eq!(super::render_value(&json!("hello\nthere")), "hello\nthere");
+        assert_eq!(super::render_value(&Value::Null), "");
+        assert_eq!(super::render_value(&json!(12)), "12");
+        assert_eq!(
+            super::render_value(&json!({"b": 1, "a": 2})),
+            r#"{"b":1,"a":2}"#
+        );
+        assert_eq!(super::render_value(&json!([1, 2])), "[1,2]");
+        assert_eq!(
+            super::render_value(&json!([{"not": "a message"}])),
+            r#"[{"not":"a message"}]"#
+        );
     }
 }
