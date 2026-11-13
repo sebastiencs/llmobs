@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import type { UserEvent } from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
@@ -162,8 +162,10 @@ it("makes a user an instance admin", async () => {
   await openActions(user, "bob@example.com");
   await user.click(screen.getByRole("menuitem", { name: "Make instance admin" }));
 
-  expect(patchId).toBe(BOB_ID);
-  expect(patchBody).toEqual({ is_instance_admin: true });
+  await waitFor(() => {
+    expect(patchId).toBe(BOB_ID);
+    expect(patchBody).toEqual({ is_instance_admin: true });
+  });
   await waitFor(() => expect(listCalls).toBeGreaterThan(callsAfterLoad));
 });
 
@@ -375,7 +377,7 @@ it("creates a reset link", async () => {
   await openActions(user, "bob@example.com");
   await user.click(screen.getByRole("menuitem", { name: "Create reset link" }));
 
-  expect(resetId).toBe(BOB_ID);
+  await waitFor(() => expect(resetId).toBe(BOB_ID));
   const dialog = await screen.findByRole("dialog", { name: "Reset link for bob@example.com" });
   expect(within(dialog).getByLabelText("Secret")).toHaveValue(
     "http://localhost:8080/reset?token=EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXA",
@@ -493,6 +495,56 @@ it("adds a user and shows the link", async () => {
       ),
     ).not.toContain("token=EXAMPLE0"),
   );
+});
+
+it("keeps the add-user dialog open while the request runs", async () => {
+  let resolveCreate: (response: Response) => void = () => {};
+  server.use(
+    http.post("/api/v1/admin/users", async () => {
+      return await new Promise<Response>((resolve) => {
+        resolveCreate = resolve;
+      });
+    }),
+  );
+
+  const { user } = await renderApp("/admin/users");
+  await screen.findByRole("table", { name: "Users" });
+  await user.click(screen.getByRole("button", { name: "Add user" }));
+  const dialog = await screen.findByRole("dialog", { name: "Add user" });
+  await user.type(within(dialog).getByLabelText("Email"), "new@example.com");
+  await user.click(within(dialog).getByRole("button", { name: "Add user" }));
+
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog", { name: "Add user" })).toBeInTheDocument();
+
+  await act(async () => {
+    resolveCreate(
+      HttpResponse.json(
+        {
+          user: {
+            id: "01900000-0000-7000-8000-000000000102",
+            email: "new@example.com",
+            name: "New User",
+            is_instance_admin: false,
+            disabled: false,
+            email_verified: true,
+            has_password: false,
+            providers: [],
+            created_at: "2026-01-04T00:00:00.000000000Z",
+          },
+          reset_url:
+            "http://localhost:8080/reset?token=EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXA",
+        },
+        { status: 201 },
+      ),
+    );
+  });
+
+  const secret = await screen.findByRole("dialog", { name: "User created" });
+  expect(within(secret).getByLabelText("Secret")).toHaveValue(
+    "http://localhost:8080/reset?token=EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXA",
+  );
+  expect(screen.queryByRole("dialog", { name: "Add user" })).toBeNull();
 });
 
 it("leaves out an empty name and the admin flag", async () => {

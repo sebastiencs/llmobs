@@ -276,7 +276,7 @@ it("creates a project and opens its traces", async () => {
   await user.type(within(dialog).getByLabelText("Name"), "New bot");
   await user.click(within(dialog).getByRole("button", { name: "Create project" }));
 
-  expect(body).toEqual({ name: "New bot" });
+  await waitFor(() => expect(body).toEqual({ name: "New bot" }));
   await waitFor(() => expect(router.state.location.pathname).toBe("/acme/new-bot/traces"));
 });
 

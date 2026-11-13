@@ -57,7 +57,9 @@ export function OrgMembers({
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [actionError, setActionError] = useState<string | undefined>();
-  const [removing, setRemoving] = useState<Schema<"OrgMember"> | undefined>();
+  // Never cleared on close, so the dialog does not blank while it animates out.
+  const [removeTarget, setRemoveTarget] = useState<Schema<"OrgMember"> | undefined>();
+  const [removeOpen, setRemoveOpen] = useState(false);
   const query = $api.useInfiniteQuery("get", "/api/v1/orgs/{org}/members", orgMembersInit(org), {
     pageParamName: "cursor",
     initialPageParam: null,
@@ -67,6 +69,13 @@ export function OrgMembers({
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: orgMembersKey(org) });
       void queryClient.invalidateQueries({ queryKey: meQuery.queryKey });
+      // The new org role changes project access: drop every cached project and
+      // project-member entry ($api keys are [method, path, init], so these match
+      // by prefix whatever the path parameters are).
+      void queryClient.invalidateQueries({ queryKey: ["get", "/api/v1/projects/{project}"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["get", "/api/v1/projects/{project}/members"],
+      });
     },
     onError: (error) => {
       const status = problemOf(error)?.status;
@@ -130,7 +139,8 @@ export function OrgMembers({
                 }
                 onChangeRole={changeRole}
                 onRemove={() => {
-                  setRemoving(member);
+                  setRemoveTarget(member);
+                  setRemoveOpen(true);
                 }}
               />
             ))}
@@ -152,25 +162,25 @@ export function OrgMembers({
         </Button>
       ) : null}
       <ConfirmDialog
-        open={removing !== undefined}
+        open={removeOpen}
         onOpenChange={(open) => {
           if (!open) {
-            setRemoving(undefined);
+            setRemoveOpen(false);
             remove.reset();
           }
         }}
-        title={removing?.user.id === me ? "Leave organization?" : "Remove member?"}
+        title={removeTarget?.user.id === me ? "Leave organization?" : "Remove member?"}
         description={
-          removing?.user.id === me ? (
+          removeTarget?.user.id === me ? (
             "You will lose access to every project in this organization."
           ) : (
             <>
-              {removing?.user.name ?? removing?.user.email} loses access to every project in this
-              organization.
+              {removeTarget?.user.name ?? removeTarget?.user.email} loses access to every project in
+              this organization.
             </>
           )
         }
-        confirmLabel={removing?.user.id === me ? "Leave" : "Remove"}
+        confirmLabel={removeTarget?.user.id === me ? "Leave" : "Remove"}
         destructive
         pending={remove.isPending}
         error={
@@ -181,15 +191,15 @@ export function OrgMembers({
             : undefined
         }
         onConfirm={() => {
-          if (!removing) {
+          if (!removeTarget) {
             return;
           }
-          const self = removing.user.id === me;
+          const self = removeTarget.user.id === me;
           remove.mutate(
-            { params: { path: { org, user: removing.user.id } } },
+            { params: { path: { org, user: removeTarget.user.id } } },
             {
               onSuccess: async () => {
-                setRemoving(undefined);
+                setRemoveOpen(false);
                 remove.reset();
                 if (self) {
                   await queryClient.refetchQueries({ queryKey: meQuery.queryKey, type: "all" });

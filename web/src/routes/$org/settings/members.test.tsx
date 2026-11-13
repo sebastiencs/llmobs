@@ -1,7 +1,10 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import type { UserEvent } from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
+import { $api } from "@/api/client";
+import { projectQuery } from "@/api/queries";
+import { projectMembersInit } from "@/api/queries-settings";
 import { server } from "@/mocks/node";
 import { ADA_ID, BOB_ID, INVITE_ID, ORG_ID } from "@/test/fixtures";
 import { problemResponse } from "@/test/problem";
@@ -52,13 +55,27 @@ it("changes a member's role", async () => {
     }),
   );
 
-  const { user } = await renderApp("/acme/settings/members");
+  const { user, queryClient } = await renderApp("/acme/settings/members");
   await screen.findByRole("table", { name: "Members" });
+  // A role change also invalidates every cached project and project-member entry.
+  const project = projectQuery("acme", "support-bot");
+  const projectMembers = $api.queryOptions(
+    "get",
+    "/api/v1/projects/{project}/members",
+    projectMembersInit("acme", "support-bot"),
+  );
+  await queryClient.ensureQueryData(project);
+  await queryClient.ensureQueryData(projectMembers);
+
   await user.click(screen.getByRole("combobox", { name: "Role of bob@example.com" }));
   await user.click(await screen.findByRole("option", { name: "Admin" }));
 
   await waitFor(() => expect(body).toEqual({ role: "admin" }));
   expect(pathUser).toBe(BOB_ID);
+  await waitFor(() => {
+    expect(queryClient.getQueryState(project.queryKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(projectMembers.queryKey)?.isInvalidated).toBe(true);
+  });
 });
 
 it("explains the last-owner rule", async () => {
@@ -375,6 +392,36 @@ it("drops the link when the dialog closes", async () => {
   const reopened = await screen.findByRole("dialog", { name: "Invite member" });
   expect(within(reopened).getByLabelText("Email")).toHaveValue("");
   expect(screen.queryByRole("textbox", { name: "Invitation link" })).toBeNull();
+});
+
+it("keeps the invite dialog open while the request runs", async () => {
+  let resolveInvite: (response: Response) => void = () => {};
+  server.use(
+    http.post("/api/v1/orgs/:org/invites", async () => {
+      return await new Promise<Response>((resolve) => {
+        resolveInvite = resolve;
+      });
+    }),
+  );
+
+  const { user } = await renderApp("/acme/settings/members");
+  await screen.findByRole("table", { name: "Members" });
+  await user.click(screen.getByRole("button", { name: "Invite member" }));
+  const dialog = await screen.findByRole("dialog", { name: "Invite member" });
+  await user.type(within(dialog).getByLabelText("Email"), "guest@example.com");
+  await user.click(within(dialog).getByRole("button", { name: "Send invitation" }));
+
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog", { name: "Invite member" })).toBeInTheDocument();
+
+  await act(async () => {
+    resolveInvite(HttpResponse.json(inviteCreated, { status: 201 }));
+  });
+
+  const result = await screen.findByRole("dialog", { name: "Invitation created" });
+  expect(within(result).getByRole("textbox", { name: "Invitation link" })).toHaveValue(
+    "http://localhost:8080/invite/EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXA",
+  );
 });
 
 it("revokes an invitation", async () => {

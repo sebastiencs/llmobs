@@ -17,6 +17,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+function useCreateOrg() {
+  return $api.useMutation("post", "/api/v1/orgs");
+}
+
+type CreateOrgMutation = ReturnType<typeof useCreateOrg>;
+
 export function NewOrgDialog({
   open,
   onOpenChange,
@@ -24,21 +30,43 @@ export function NewOrgDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  // The mutation lives here, not in the form, so the dialog knows when a request is
+  // in flight and can stay open until it settles (README § Pitfalls).
+  const create = useCreateOrg();
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // The org may already exist on the server while the request runs: closing now
+        // would drop the success handling. Esc and outside clicks wait.
+        if (next || !create.isPending) {
+          onOpenChange(next);
+        }
+      }}
+    >
+      <DialogContent
+        onEscapeKeyDown={(event) => {
+          if (create.isPending) {
+            event.preventDefault();
+          }
+        }}
+        onPointerDownOutside={(event) => {
+          if (create.isPending) {
+            event.preventDefault();
+          }
+        }}
+      >
         <DialogHeader>
           <DialogTitle>New organization</DialogTitle>
           <DialogDescription>You will be its owner.</DialogDescription>
         </DialogHeader>
-        {open ? <NewOrgForm onDone={() => onOpenChange(false)} /> : null}
+        {open ? <NewOrgForm create={create} onDone={() => onOpenChange(false)} /> : null}
       </DialogContent>
     </Dialog>
   );
 }
 
-function NewOrgForm({ onDone }: { onDone: () => void }) {
-  const mutation = $api.useMutation("post", "/api/v1/orgs");
+function NewOrgForm({ create, onDone }: { create: CreateOrgMutation; onDone: () => void }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [name, setName] = useState("");
@@ -52,13 +80,13 @@ function NewOrgForm({ onDone }: { onDone: () => void }) {
     setNameError(undefined);
     setSlugError(undefined);
     setError(undefined);
-    mutation.reset();
+    create.reset();
     const trimmed = name.trim();
     if (trimmed.length === 0) {
       setNameError("Enter a name.");
       return;
     }
-    mutation.mutate(
+    create.mutate(
       { body: { name: trimmed, ...(slug.trim() ? { slug: slug.trim() } : {}) } },
       {
         onSuccess: async (data) => {
@@ -101,7 +129,7 @@ function NewOrgForm({ onDone }: { onDone: () => void }) {
         required
         maxLength={100}
         error={nameError}
-        disabled={mutation.isPending}
+        disabled={create.isPending}
         onChange={setName}
       />
       <TextField
@@ -111,15 +139,15 @@ function NewOrgForm({ onDone }: { onDone: () => void }) {
         maxLength={48}
         description="Lowercase letters, digits and dashes. Leave empty to derive it from the name."
         error={slugError}
-        disabled={mutation.isPending}
+        disabled={create.isPending}
         onChange={setSlug}
       />
       <FormError message={error} />
       <DialogFooter>
-        <Button type="button" variant="outline" disabled={mutation.isPending} onClick={onDone}>
+        <Button type="button" variant="outline" disabled={create.isPending} onClick={onDone}>
           Cancel
         </Button>
-        <SubmitButton pending={mutation.isPending}>Create organization</SubmitButton>
+        <SubmitButton pending={create.isPending}>Create organization</SubmitButton>
       </DialogFooter>
     </form>
   );

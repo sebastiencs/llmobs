@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -16,6 +15,23 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+
+function useCreateUser(onCreated: (email: string, resetUrl: string) => void) {
+  // gcTime 0: the response holds the password link, a secret shown once (D-L-5).
+  // `onSuccess` sits on the hook, not on `mutate`, so a close mid-request cannot lose it.
+  const create = $api.useMutation("post", "/api/v1/admin/users", {
+    gcTime: 0,
+    onSuccess: (data) => {
+      onCreated(data.user.email, data.reset_url);
+      // The page takes over the link and closes the dialog; drop the secret from
+      // the mutation cache at once (D-L-5).
+      create.reset();
+    },
+  });
+  return create;
+}
+
+type CreateUserMutation = ReturnType<typeof useCreateUser>;
 
 export function AddUserDialog({
   open,
@@ -26,24 +42,48 @@ export function AddUserDialog({
   onOpenChange: (open: boolean) => void;
   onCreated: (email: string, resetUrl: string) => void;
 }) {
+  // The mutation lives here, not in the form: a close mid-request must not lose the link.
+  const create = useCreateUser(onCreated);
+  const close = () => {
+    create.reset();
+    onOpenChange(false);
+  };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // While the request runs, the account may already exist on the server: closing
+        // now would reset the mutation and lose the link. Esc and outside clicks wait.
+        if (!next && !create.isPending) {
+          close();
+        }
+      }}
+    >
+      <DialogContent
+        onEscapeKeyDown={(event) => {
+          if (create.isPending) {
+            event.preventDefault();
+          }
+        }}
+        onPointerDownOutside={(event) => {
+          if (create.isPending) {
+            event.preventDefault();
+          }
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Add user</DialogTitle>
           <DialogDescription>
             The account has no password. You get a link that lets them set one.
           </DialogDescription>
         </DialogHeader>
-        {open ? <AddUserForm onCreated={onCreated} /> : null}
+        {open && !create.data ? <AddUserForm create={create} onCancel={close} /> : null}
       </DialogContent>
     </Dialog>
   );
 }
 
-function AddUserForm({ onCreated }: { onCreated: (email: string, resetUrl: string) => void }) {
-  // gcTime 0: the response holds the password link, a secret shown once (D-L-5).
-  const create = $api.useMutation("post", "/api/v1/admin/users", { gcTime: 0 });
+function AddUserForm({ create, onCancel }: { create: CreateUserMutation; onCancel: () => void }) {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [admin, setAdmin] = useState(false);
@@ -70,20 +110,19 @@ function AddUserForm({ onCreated }: { onCreated: (email: string, resetUrl: strin
 
   function submit(event: FormEvent) {
     event.preventDefault();
+    setLocalError(undefined);
+    create.reset();
     if (email.trim().length === 0) {
       setLocalError("Enter an email address.");
       return;
     }
-    create.mutate(
-      {
-        body: {
-          email: email.trim(),
-          ...(name.trim() ? { name: name.trim() } : {}),
-          ...(admin ? { is_instance_admin: true } : {}),
-        },
+    create.mutate({
+      body: {
+        email: email.trim(),
+        ...(name.trim() ? { name: name.trim() } : {}),
+        ...(admin ? { is_instance_admin: true } : {}),
       },
-      { onSuccess: (data) => onCreated(data.user.email, data.reset_url) },
-    );
+    });
   }
 
   return (
@@ -125,11 +164,9 @@ function AddUserForm({ onCreated }: { onCreated: (email: string, resetUrl: strin
       {/* The footer sits inside the form: jsdom only finds a submit button for
           Enter that is a DOM descendant of the form. */}
       <DialogFooter>
-        <DialogClose asChild>
-          <Button type="button" variant="outline">
-            Cancel
-          </Button>
-        </DialogClose>
+        <Button type="button" variant="outline" disabled={create.isPending} onClick={onCancel}>
+          Cancel
+        </Button>
         <SubmitButton pending={create.isPending}>Add user</SubmitButton>
       </DialogFooter>
     </form>

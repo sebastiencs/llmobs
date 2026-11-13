@@ -63,7 +63,9 @@ function ApiKeysList({
   onCreate: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [revoking, setRevoking] = useState<Schema<"ApiKey"> | undefined>();
+  // Never cleared on close, so the dialog does not blank while it animates out.
+  const [revokeTarget, setRevokeTarget] = useState<Schema<"ApiKey"> | undefined>();
+  const [revokeOpen, setRevokeOpen] = useState(false);
   const query = $api.useInfiniteQuery(
     "get",
     "/api/v1/projects/{project}/api-keys",
@@ -163,7 +165,8 @@ function ApiKeysList({
                       <DropdownMenuItem
                         className="text-destructive"
                         onSelect={() => {
-                          setRevoking(key);
+                          setRevokeTarget(key);
+                          setRevokeOpen(true);
                         }}
                       >
                         Revoke
@@ -191,18 +194,18 @@ function ApiKeysList({
         </Button>
       ) : null}
       <ConfirmDialog
-        open={revoking !== undefined}
+        open={revokeOpen}
         onOpenChange={(open) => {
           if (!open) {
-            setRevoking(undefined);
+            setRevokeOpen(false);
             revoke.reset();
           }
         }}
         title="Revoke key?"
         description={
           <>
-            Requests that use <span className="font-mono">{revoking?.prefix}</span>… fail at once.
-            This cannot be undone.
+            Requests that use <span className="font-mono">{revokeTarget?.prefix}</span>… fail at
+            once. This cannot be undone.
           </>
         }
         confirmLabel="Revoke key"
@@ -210,18 +213,18 @@ function ApiKeysList({
         pending={revoke.isPending}
         error={revoke.error ? problemMessage(revoke.error, "Could not revoke the key.") : undefined}
         onConfirm={() => {
-          if (!revoking) {
+          if (!revokeTarget) {
             return;
           }
           revoke.mutate(
             {
               params: {
-                path: { project: projectRef(org, project), id: revoking.id },
+                path: { project: projectRef(org, project), id: revokeTarget.id },
               },
             },
             {
               onSuccess: () => {
-                setRevoking(undefined);
+                setRevokeOpen(false);
                 revoke.reset();
                 void queryClient.invalidateQueries({ queryKey: apiKeysKey(org, project) });
               },

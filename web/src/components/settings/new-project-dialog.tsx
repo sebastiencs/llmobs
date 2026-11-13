@@ -18,6 +18,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+function useCreateProject() {
+  return $api.useMutation("post", "/api/v1/orgs/{org}/projects");
+}
+
+type CreateProjectMutation = ReturnType<typeof useCreateProject>;
+
 export function NewProjectDialog({
   org,
   open,
@@ -27,23 +33,55 @@ export function NewProjectDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  // The mutation lives here, not in the form, so the dialog knows when a request is
+  // in flight and can stay open until it settles (README § Pitfalls).
+  const create = useCreateProject();
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // The project may already exist on the server while the request runs: closing
+        // now would drop the success handling. Esc and outside clicks wait.
+        if (next || !create.isPending) {
+          onOpenChange(next);
+        }
+      }}
+    >
+      <DialogContent
+        onEscapeKeyDown={(event) => {
+          if (create.isPending) {
+            event.preventDefault();
+          }
+        }}
+        onPointerDownOutside={(event) => {
+          if (create.isPending) {
+            event.preventDefault();
+          }
+        }}
+      >
         <DialogHeader>
           <DialogTitle>New project</DialogTitle>
           <DialogDescription>
             Projects keep their traces, keys and settings apart.
           </DialogDescription>
         </DialogHeader>
-        {open ? <NewProjectForm org={org} onDone={() => onOpenChange(false)} /> : null}
+        {open ? (
+          <NewProjectForm org={org} create={create} onDone={() => onOpenChange(false)} />
+        ) : null}
       </DialogContent>
     </Dialog>
   );
 }
 
-function NewProjectForm({ org, onDone }: { org: string; onDone: () => void }) {
-  const mutation = $api.useMutation("post", "/api/v1/orgs/{org}/projects");
+function NewProjectForm({
+  org,
+  create,
+  onDone,
+}: {
+  org: string;
+  create: CreateProjectMutation;
+  onDone: () => void;
+}) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [name, setName] = useState("");
@@ -60,7 +98,7 @@ function NewProjectForm({ org, onDone }: { org: string; onDone: () => void }) {
     setSlugError(undefined);
     setRetentionError(undefined);
     setError(undefined);
-    mutation.reset();
+    create.reset();
     const trimmed = name.trim();
     let nextNameError: string | undefined;
     let nextRetentionError: string | undefined;
@@ -86,7 +124,7 @@ function NewProjectForm({ org, onDone }: { org: string; onDone: () => void }) {
     if (retentionDays) {
       body.retention_days = Number(retentionDays);
     }
-    mutation.mutate(
+    create.mutate(
       { params: { path: { org } }, body },
       {
         onSuccess: async (data) => {
@@ -129,7 +167,7 @@ function NewProjectForm({ org, onDone }: { org: string; onDone: () => void }) {
         required
         maxLength={100}
         error={nameError}
-        disabled={mutation.isPending}
+        disabled={create.isPending}
         onChange={setName}
       />
       <TextField
@@ -139,7 +177,7 @@ function NewProjectForm({ org, onDone }: { org: string; onDone: () => void }) {
         maxLength={48}
         description="Lowercase letters, digits and dashes. Leave empty to derive it from the name."
         error={slugError}
-        disabled={mutation.isPending}
+        disabled={create.isPending}
         onChange={setSlug}
       />
       <TextField
@@ -149,15 +187,15 @@ function NewProjectForm({ org, onDone }: { org: string; onDone: () => void }) {
         value={retention}
         description="Leave empty to keep data forever."
         error={retentionError}
-        disabled={mutation.isPending}
+        disabled={create.isPending}
         onChange={setRetention}
       />
       <FormError message={error} />
       <DialogFooter>
-        <Button type="button" variant="outline" disabled={mutation.isPending} onClick={onDone}>
+        <Button type="button" variant="outline" disabled={create.isPending} onClick={onDone}>
           Cancel
         </Button>
-        <SubmitButton pending={mutation.isPending}>Create project</SubmitButton>
+        <SubmitButton pending={create.isPending}>Create project</SubmitButton>
       </DialogFooter>
     </form>
   );

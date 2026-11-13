@@ -240,10 +240,10 @@ The `Settings` icon comes from `lucide-react`. Change nothing else in the file. 
 export function NewOrgDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void })
 ```
 
-- A shadcn `Dialog` (`open`, `onOpenChange`). Its `DialogContent` holds `DialogHeader` with `DialogTitle` `New organization` and `DialogDescription` `You will be its owner.`, then `{open ? <NewOrgForm onDone={() => onOpenChange(false)} /> : null}`.
-- `NewOrgForm({ onDone }: { onDone: () => void })`, in the same file, owns all the state:
+- A shadcn `Dialog` (`open`, `onOpenChange`). Its `DialogContent` holds `DialogHeader` with `DialogTitle` `New organization` and `DialogDescription` `You will be its owner.`, then `{open ? <NewOrgForm create={create} onDone={() => onOpenChange(false)} /> : null}`.
+- The mutation lives in `NewOrgDialog` (`useCreateOrg()` in the same file, typed as `ReturnType<typeof useCreateOrg>`), so the dialog knows when a request is in flight: while `create.isPending` the root `onOpenChange(false)` is ignored and `DialogContent`'s `onEscapeKeyDown` / `onPointerDownOutside` call `event.preventDefault()`, so Esc, outside clicks and the X button leave the dialog open until the request settles. `NewOrgForm` receives `create` as a prop.
+- `NewOrgForm({ create, onDone }: { create: CreateOrgMutation; onDone: () => void })`, in the same file, owns all the state:
   - `name`, `slug`, `nameError`, `slugError`, `error`;
-  - `mutation = $api.useMutation("post", "/api/v1/orgs")`;
   - `queryClient = useQueryClient()`, `navigate = useNavigate()`.
 - `NewOrgForm` renders one `<form noValidate className="flex flex-col gap-4">` with:
   - `TextField` id `new-org-name`, label `Name`, `required`, `maxLength={100}`;
@@ -263,7 +263,7 @@ export function NewOrgDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   - else, when `fieldErrors(error).slug === "reserved slug"` → `slugError` `This slug is reserved. Choose another.`;
   - else any other `slug` or `name` field error → shown under that field, as the server wrote it;
   - else `error` = `problemMessage(error, "Could not create the organization.")`.
-- Closing in any way unmounts `NewOrgForm`, so fields, errors and the mutation are dropped (README § Pitfalls). Do not add a reset effect.
+- Closing in any way unmounts `NewOrgForm`, so fields and errors are dropped (README § Pitfalls). The mutation now outlives the form in `NewOrgDialog`, but `create.reset()` at the start of every submit clears its previous result. Do not add a reset effect.
 
 ### 9. `web/src/components/org-switcher.tsx`
 
@@ -471,6 +471,10 @@ const patch = $api.useMutation("patch", "/api/v1/orgs/{org}/members/{user}", {
   onSuccess: () => {
     void queryClient.invalidateQueries({ queryKey: orgMembersKey(org) });
     void queryClient.invalidateQueries({ queryKey: meQuery.queryKey });
+    // The new org role changes project access. `$api` query keys are `[method, path, init?]`,
+    // so these two prefixes hit every cached project and project-member entry.
+    void queryClient.invalidateQueries({ queryKey: ["get", "/api/v1/projects/{project}"] });
+    void queryClient.invalidateQueries({ queryKey: ["get", "/api/v1/projects/{project}/members"] });
   },
   onError: (error) => {
     const status = problemOf(error)?.status;
@@ -495,17 +499,17 @@ function changeRole(member: Schema<"OrgMember">, value: string) {
 ```
 
 Remove or leave:
-- Selecting the menu item stores the member in `removing` state and opens a `ConfirmDialog`:
+- Selecting the menu item stores the member in `removeTarget` state (never cleared on close, so the dialog does not blank while Radix animates it out), sets `removeOpen` to true, and opens a `ConfirmDialog` (`open={removeOpen}`; `onOpenChange(false)` sets it back to false and resets the mutation; the next `onRemove` replaces the target):
   - Remove: title `Remove member?`, description `{name or email} loses access to every project in this organization.`, confirm label `Remove`, `destructive`.
   - Leave: title `Leave organization?`, description `You will lose access to every project in this organization.`, confirm label `Leave`, `destructive`.
 - `remove = $api.useMutation("delete", "/api/v1/orgs/{org}/members/{user}")`. The dialog blocks the page while it is open, so its callbacks go in `remove.mutate(…, { onSuccess, onError })`.
 - `onSuccess`:
-  - Remove: set `removing` to undefined and invalidate `orgMembersKey(org)`.
-  - Leave: set `removing` to undefined, then `await queryClient.refetchQueries({ queryKey: meQuery.queryKey, type: "all" })` (README § Pitfalls), then `void navigate({ to: "/" })`.
+  - Remove: close the dialog (`setRemoveOpen(false)` plus `remove.reset()`) and invalidate `orgMembersKey(org)`.
+  - Leave: close the dialog the same way, then `await queryClient.refetchQueries({ queryKey: meQuery.queryKey, type: "all" })` (README § Pitfalls), then `void navigate({ to: "/" })`.
 - `onError`: the dialog stays open and shows, through its `error` prop:
   - 409 → `An organization needs at least one owner. Make someone else an owner first.`;
   - else `problemMessage(error, "Could not remove the member.")`.
-- The dialog's `onOpenChange(false)` sets `removing` to undefined and calls `remove.reset()`.
+- The dialog's `onOpenChange(false)` sets `removeOpen` to false and calls `remove.reset()`; `removeTarget` keeps the member (the pattern of `disableTarget` in `routes/admin/users.tsx`).
 
 ### 5. `OrgInvites` — `web/src/components/settings/org-invites.tsx`
 
@@ -523,7 +527,7 @@ Props: `org: string; actorRole: OrgRole | undefined`. It is always admin or owne
   - `Invited by` (`invite.invited_by?.name ?? invite.invited_by?.email ?? "—"`);
   - `Expires` (`TimeText` with `style="datetime"`);
   - the actions column.
-- The actions dropdown (trigger `Actions for {email}`) has one item, `Revoke invitation`. It opens a `ConfirmDialog`:
+- The actions dropdown (trigger `Actions for {email}`) has one item, `Revoke invitation`. It stores the invite in `revokeTarget` (never cleared on close, so the description keeps the email during the exit animation), sets `revokeOpen` to true, and opens a `ConfirmDialog`:
   - title `Revoke invitation?`, description `The link sent to {email} stops working.`, confirm `Revoke`, destructive;
   - the call is `$api.useMutation("delete", "/api/v1/orgs/{org}/invites/{id}")` with `params: { path: { org, id: invite.id } }`;
   - success: close and invalidate `orgInvitesKey(org)`;
@@ -535,15 +539,13 @@ Props: `org: string; actorRole: OrgRole | undefined`. It is always admin or owne
 
 Props: `org: string; actorRole: OrgRole | undefined; open: boolean; onOpenChange: (open: boolean) => void`.
 
-- `InviteDialog` renders `<Dialog open={open} onOpenChange={onOpenChange}><DialogContent>{open ? <InviteForm org={org} actorRole={actorRole} onDone={() => onOpenChange(false)} /> : null}</DialogContent></Dialog>`.
-- Closing in any way (Done, Cancel, Esc, an outside click) unmounts `InviteForm`, which drops the email, the role and the accept link (README § Pitfalls).
+- The mutation lives in `InviteDialog` (`useCreateInvite(org)` in the same file, typed as `ReturnType<typeof useCreateInvite>`), not in the form: a close mid-request must not lose the accept link. Its third-argument options are `{ gcTime: 0 }` (required: `accept_url` carries the invitation token, the only response that contains it, and TanStack's mutation cache must not keep it — README § Privacy, D-L-5) plus an `onSuccess` that invalidates `orgInvitesKey(org)`. `onSuccess` sits on the hook so a close mid-request cannot drop the invalidation.
+- `InviteDialog` closes through one `close()` helper that calls `create.reset()` and `onOpenChange(false)`. While `create.isPending` closing is blocked: the root `onOpenChange(false)` is ignored and `DialogContent`'s `onEscapeKeyDown` / `onPointerDownOutside` call `event.preventDefault()` (README § Pitfalls). Closing in any way (Done, Cancel, Esc, an outside click) unmounts `InviteForm` and resets the mutation, which drops the email, the role and the accept link.
+- `InviteDialog` renders `<Dialog open={open} …><DialogContent …>{open && !create.data ? <InviteForm org={org} actorRole={actorRole} create={create} onCancel={close} /> : null}{open && create.data ? <InviteResult created={create.data} onDone={close} /> : null}</DialogContent></Dialog>`.
 - `InviteForm` owns the state:
   - `email`;
   - `role` (`OrgRole`, initially `"member"`);
-  - `emailError`, `error`;
-  - `config = useQuery(authConfigQuery)`, for `smtp_enabled`; while it loads, SMTP counts as off;
-  - `mutation = $api.useMutation("post", "/api/v1/orgs/{org}/invites", { gcTime: 0 })`. `gcTime: 0` is required: `accept_url` carries the invitation token, the only response that contains it, and TanStack's mutation cache must not keep it (README § Privacy, D-L-5);
-  - `queryClient`.
+  - `emailError`, `error`.
 - **Form view**, while `!mutation.data`:
   - `DialogHeader`: `DialogTitle` `Invite member` and `DialogDescription` `They get the role you choose when they accept.`.
   - A `<form noValidate className="flex flex-col gap-4">` with:
@@ -552,21 +554,22 @@ Props: `org: string; actorRole: OrgRole | undefined; open: boolean; onOpenChange
     - `FormError`;
     - a `DialogFooter` with `Button variant="outline" type="button"` `Cancel` (calls `onDone()`) and `SubmitButton` `Send invitation`.
   - Submit:
-    1. Clear the errors and call `mutation.reset()`.
+    1. Clear the errors and call `create.reset()`.
     2. Empty trimmed email → `emailError` `Enter an email address.`; stop.
-    3. Otherwise `mutation.mutate({ params: { path: { org } }, body: { email: trimmed, role } }, { onSuccess: () => void queryClient.invalidateQueries({ queryKey: orgInvitesKey(org) }), onError })`.
+    3. Otherwise `create.mutate({ params: { path: { org } }, body: { email: trimmed, role } }, { onError })`; the invalidation is the hook's `onSuccess`.
   - `onError(error)`:
     - 409 → `emailError` `This person is already a member.`;
     - 403 → `error` `You can't invite with that role.`;
     - else a `fieldErrors(error).email` → under Email, as written (e.g. `invalid email`);
     - else a `role` field error → `error`;
     - else `error` = `problemMessage(error, "Could not create the invitation.")`.
-- **Result view**, when `mutation.data` (a `CreatedInvite`) is set:
+- **Result view** (`InviteResult({ created, onDone })`, rendered by `InviteDialog` when `create.data` (a `CreatedInvite`) is set):
+  - `config = useQuery(authConfigQuery)` for `smtp_enabled`; while it loads, SMTP counts as off.
   - `DialogHeader`: `DialogTitle` `Invitation created`. The `DialogDescription` is the paragraph, which has inline content only:
-    - SMTP on: `We emailed an invitation to <strong>{mutation.data.invite.email}</strong>. You can also send them this link:`;
-    - SMTP off: `Email is not configured on this server, so no email was sent. Send this link to <strong>{mutation.data.invite.email}</strong>:`.
-  - Then a row with a read-only `Input` (`aria-label="Invitation link"`, `className="font-mono text-xs"`, value `mutation.data.accept_url`) and `<CopyButton value={mutation.data.accept_url} label="invitation link" />`.
-  - Then `<p className="text-xs text-muted-foreground">The link expires <TimeText value={mutation.data.invite.expires_at} style="datetime" />.</p>`.
+    - SMTP on: `We emailed an invitation to <strong>{created.invite.email}</strong>. You can also send them this link:`;
+    - SMTP off: `Email is not configured on this server, so no email was sent. Send this link to <strong>{created.invite.email}</strong>:`.
+  - Then a row with a read-only `Input` (`aria-label="Invitation link"`, `className="font-mono text-xs"`, value `created.accept_url`) and `<CopyButton value={created.accept_url} label="invitation link" />`.
+  - Then `<p className="text-xs text-muted-foreground">The link expires <TimeText value={created.invite.expires_at} style="datetime" />.</p>`.
   - Footer: one `Button` `Done` that calls `onDone()`.
 
 ## States
@@ -668,6 +671,7 @@ The first assertion of every test is `await screen.findByRole("table", { name: "
 19. `it("shows a failed revoke in the dialog")`: DELETE `/api/v1/orgs/:org/invites/:id` answers `HttpResponse.error()` (a network failure, so the error is not a problem); open `Actions for guest@example.com`, `Revoke invitation`, `Revoke`; `within(await screen.findByRole("alertdialog", { name: "Revoke invitation?" })).getByRole("alert")` has the text `Could not revoke the invitation.`; the dialog stays open.
 20. `it("explains an invitation above the caller's role")`: POST `/api/v1/orgs/:org/invites` answers `problemResponse(403, "forbidden")`; open the dialog, type `guest@example.com`, submit; `getByRole("alert")` has `You can't invite with that role.`.
 21. `it("offers an admin only roles up to admin when inviting")`: `server.use(meAs("admin"))`; click `Invite member`, open the combobox `Role`; the option names are exactly `Admin`, `Member`, `Viewer`.
+22. `it("keeps the invite dialog open while the request runs")`: POST `/api/v1/orgs/:org/invites` returns a promise the test resolves by hand; open the dialog, type `guest@example.com`, submit, press `{Escape}` — the dialog `Invite member` is still open; resolve the POST with `inviteCreated` (201); the dialog `Invitation created` shows the link.
 
 ## Commands
 
@@ -827,15 +831,17 @@ Submit:
 Props: `org: string; open: boolean; onOpenChange: (open: boolean) => void`. The structure is the same as `NewOrgDialog` (L13 step 8):
 - `Dialog`;
 - `DialogHeader` with `DialogTitle` `New project` and `DialogDescription` `Projects keep their traces, keys and settings apart.`;
-- `{open ? <NewProjectForm org={org} onDone={() => onOpenChange(false)} /> : null}`.
+- `{open ? <NewProjectForm org={org} create={create} onDone={() => onOpenChange(false)} /> : null}`.
 
-`NewProjectForm` owns its state and the mutation:
+As in L13 step 8, the mutation lives in the dialog component (`useCreateProject()`), and Esc, outside clicks and the X button are ignored while `create.isPending`.
+
+`NewProjectForm` owns its state and receives `create`:
 - Fields:
   - `TextField` id `new-project-name`, label `Name`, `required`, `maxLength={100}`;
   - `TextField` id `new-project-slug`, label `Slug (optional)`, `maxLength={48}`, description `Lowercase letters, digits and dashes. Leave empty to derive it from the name.`;
   - `TextField` id `new-project-retention`, `type="number"`, label `Retention in days (optional)`, description `Leave empty to keep data forever.`.
 - `FormError`; a footer with `Cancel` (calls `onDone()`) and `SubmitButton` `Create project`.
-- `mutation = $api.useMutation("post", "/api/v1/orgs/{org}/projects")`.
+- `mutation = $api.useMutation("post", "/api/v1/orgs/{org}/projects")`, in `NewProjectDialog` (see above).
 - Submit:
   1. Clear the errors and call `mutation.reset()`.
   2. Name required: `Enter a name.`.

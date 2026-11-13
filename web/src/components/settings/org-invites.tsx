@@ -29,7 +29,9 @@ import { type OrgRole, roleLabel } from "@/lib/roles";
 export function OrgInvites({ org, actorRole }: { org: string; actorRole: OrgRole | undefined }) {
   const queryClient = useQueryClient();
   const [inviting, setInviting] = useState(false);
-  const [revoking, setRevoking] = useState<Schema<"Invite"> | undefined>();
+  // Never cleared on close, so the dialog does not blank while it animates out.
+  const [revokeTarget, setRevokeTarget] = useState<Schema<"Invite"> | undefined>();
+  const [revokeOpen, setRevokeOpen] = useState(false);
   const query = $api.useInfiniteQuery("get", "/api/v1/orgs/{org}/invites", orgInvitesInit(org), {
     pageParamName: "cursor",
     initialPageParam: null,
@@ -100,7 +102,8 @@ export function OrgInvites({ org, actorRole }: { org: string; actorRole: OrgRole
                       <DropdownMenuItem
                         className="text-destructive"
                         onSelect={() => {
-                          setRevoking(invite);
+                          setRevokeTarget(invite);
+                          setRevokeOpen(true);
                         }}
                       >
                         Revoke invitation
@@ -128,15 +131,15 @@ export function OrgInvites({ org, actorRole }: { org: string; actorRole: OrgRole
         </Button>
       ) : null}
       <ConfirmDialog
-        open={revoking !== undefined}
+        open={revokeOpen}
         onOpenChange={(open) => {
           if (!open) {
-            setRevoking(undefined);
+            setRevokeOpen(false);
             revoke.reset();
           }
         }}
         title="Revoke invitation?"
-        description={<>The link sent to {revoking?.email} stops working.</>}
+        description={<>The link sent to {revokeTarget?.email} stops working.</>}
         confirmLabel="Revoke"
         destructive
         pending={revoke.isPending}
@@ -146,14 +149,14 @@ export function OrgInvites({ org, actorRole }: { org: string; actorRole: OrgRole
             : undefined
         }
         onConfirm={() => {
-          if (!revoking) {
+          if (!revokeTarget) {
             return;
           }
           revoke.mutate(
-            { params: { path: { org, id: revoking.id } } },
+            { params: { path: { org, id: revokeTarget.id } } },
             {
               onSuccess: () => {
-                setRevoking(undefined);
+                setRevokeOpen(false);
                 revoke.reset();
                 void queryClient.invalidateQueries({ queryKey: orgInvitesKey(org) });
               },
