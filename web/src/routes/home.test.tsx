@@ -187,6 +187,33 @@ it("stays on the home page when the user has no orgs", async () => {
   const { router } = await renderApp("/");
   expect(router.state.location.pathname).toBe("/");
   expect(screen.getByText("You are not a member of any organization yet.")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Create an organization" })).toHaveAttribute(
+    "href",
+    "/setup/workspace",
+  );
+  expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
+});
+
+it("signs out from the home page without an org", async () => {
+  let signedOut = false;
+  server.use(
+    http.post("/api/auth/logout", () => {
+      signedOut = true;
+      return new HttpResponse(null, { status: 204 });
+    }),
+    http.get("/api/auth/me", () =>
+      signedOut
+        ? HttpResponse.json(
+            { type: "about:blank", title: "Unauthorized", status: 401, code: "unauthorized" },
+            { status: 401 },
+          )
+        : HttpResponse.json({ user: USER, orgs: [] }),
+    ),
+  );
+
+  const { router, user } = await renderApp("/");
+  await user.click(screen.getByRole("button", { name: "Sign out" }));
+  await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
 });
 
 it("switches orgs", async () => {

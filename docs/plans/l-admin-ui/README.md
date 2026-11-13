@@ -1,4 +1,4 @@
-Status: L1–L5 done on 2026-11-13; L6–L20 not started
+Status: L1–L6 done on 2026-11-13; L7–L20 not started
 
 # L · Admin UI
 
