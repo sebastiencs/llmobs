@@ -2,7 +2,7 @@
 
 Track G connects the Wave 1 areas into a running product: OTLP ingest into storage, the read API over A2's queries, score writes, live updates, and the embedded UI on the real API. It runs first and alone in Wave 2 because it settles the wiring every later track extends: the server's state and route table, `openapi.json`, the `fixtures/api` manifest and the web router (`docs/roadmap.md` § Wave 2).
 
-This document holds the decisions, the architecture, the interfaces later tracks build on, and the milestones. Each milestone gets its own plan of small sub-phases: [`01-m1-otlp-http-ingest.md`](01-m1-otlp-http-ingest.md) and [`02-m2-read-api.md`](02-m2-read-api.md) so far.
+This document holds the decisions, the architecture, the interfaces later tracks build on, and the milestones. Each milestone gets its own plan of small sub-phases: [`01-m1-otlp-http-ingest.md`](01-m1-otlp-http-ingest.md), [`02-m2-read-api.md`](02-m2-read-api.md) and [`03-m3-writes-grpc-usage.md`](03-m3-writes-grpc-usage.md) so far.
 
 **Status.** Design, M1 and M2 plans written. M1 implemented (PR #43), M2 implemented (branch `claude/g-m2-impl`). The A2 fixes M2 needs are merged (PR #48). The C review findings that touch G are in § Review findings, with the milestone each fix must precede.
 
@@ -39,6 +39,11 @@ All are in `docs/mvp-decisions.md` § Track G. The user chose the option marked 
 | D-G-23 | **Read error contract.** The read operations declare `422` and `503`; `get_media` declares `503`; a new problem code `range_not_satisfiable` (416). (User's choice.) |
 | D-G-24 | **Media ranges from a whole read.** `GET /media` reads the whole blob (≤ `media.max_bytes`) and slices one `bytes=` range; anything else gets `200`. (User's choice; A1 is asked for a size-only lookup.) |
 | D-G-25 | **Example generator.** `just api-examples` is a unit test in `llmobs-server` over `fixtures/api/dataset`; `GET /schema` is checked against `static/schema.json`; `GET /metrics` uses a fixed window and an empty manifest query. |
+| D-G-26 | **Score `created_at`.** UUIDv7 ids give it from their time; other ids look up the live version with storage's `scores_by_id`. (User's choice.) |
+| D-G-27 | **Score sources by caller.** Session → `human`; PAT or key → `api` or `sdk`; key route → `sdk`; feedback → `end_user`. (User's choice.) |
+| D-G-28 | **Score write contract.** `{scores: […]}` 1–1000, `200 {score_ids}`; UUIDv8 derived ids; DELETE `204`; feedback `200 {score_id}`. (User's choice of the answer.) |
+| D-G-29 | **OTLP/gRPC** with a tonic `transport::Server`, gzip, `authorization` metadata. |
+| D-G-30 | **Usage counters** through `CommitTarget` and score writes, flushed to `usage_daily`. |
 
 ## Scope
 
@@ -75,7 +80,9 @@ All are in `docs/mvp-decisions.md` § Track G. The user chose the option marked 
 | `ingest` | `crate::ingest::Ingest` | M1 | price table, in-flight budget, ingest limits |
 | `usage` | `crate::usage::Usage` | M3 | in-memory counters, flushed to `usage_daily` |
 | `live` | `crate::live::LiveBus` | M4 | broadcast sender and the event id counter |
-| `feedback_limits` | `crate::routes::feedback::FeedbackLimits` | M3 | 10/s per (key, IP) buckets |
+| `metrics_cache` | `crate::routes::metrics::MetricsCache` | M2 | `GET /metrics` answers, 10 s |
+
+The feedback limiter (10/s per key and IP) is a field of D's `auth::Limits` (D-G-30).
 
 `Ingest` is a plain struct; it holds no `AppState` and takes what it needs as arguments, so `commit` can be called from a background task in track I.
 
@@ -163,7 +170,7 @@ impl Ingest {
 }
 
 /// M3. Org and raw size for the usage counters.
-pub(crate) struct CommitTarget { pub(crate) org_id: OrgId, pub(crate) project_id: ProjectId, pub(crate) request_bytes: u64 }
+pub(crate) struct CommitTarget { pub(crate) org_id: OrgId, pub(crate) project_id: ProjectId, pub(crate) request_bytes: u64, pub(crate) now_ns: i64 }
 pub(crate) struct CommitReceipt { pub(crate) accepted: usize, pub(crate) media: usize }
 ```
 
