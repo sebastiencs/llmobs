@@ -23,5 +23,5 @@ export async function renderApp(url: string) {
     </QueryClientProvider>,
   );
   await router.load();
-  return { router, user: userEvent.setup(), ...view };
+  return { router, user: userEvent.setup(), queryClient, ...view };
 }

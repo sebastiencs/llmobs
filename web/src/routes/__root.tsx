@@ -1,4 +1,5 @@
 import { createRootRouteWithContext, Outlet } from "@tanstack/react-router";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { RouterContext } from "@/router";
 
 export const Route = createRootRouteWithContext<RouterContext>()({
@@ -6,5 +7,9 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 });
 
 function RootLayout() {
-  return <Outlet />;
+  return (
+    <TooltipProvider>
+      <Outlet />
+    </TooltipProvider>
+  );
 }

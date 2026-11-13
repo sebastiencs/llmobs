@@ -18,3 +18,21 @@ export function isProblem(value: unknown): value is Problem {
 export function problemOf(error: unknown): Problem | undefined {
   return isProblem(error) ? error : undefined;
 }
+
+/** The first message for each field of a `400` problem; `{}` for anything else. */
+export function fieldErrors(error: unknown): Record<string, string> {
+  const problem = problemOf(error);
+  const result: Record<string, string> = {};
+  for (const item of problem?.errors ?? []) {
+    if (result[item.field] === undefined) {
+      result[item.field] = item.message;
+    }
+  }
+  return result;
+}
+
+/** Text for a form-level error: the problem's detail, else its title, else `fallback`. */
+export function problemMessage(error: unknown, fallback: string): string {
+  const problem = problemOf(error);
+  return problem?.detail ?? problem?.title ?? fallback;
+}

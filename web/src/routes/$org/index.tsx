@@ -15,6 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { roleLabel } from "@/lib/roles";
 
 export const Route = createFileRoute("/$org/")({
   loader: ({ context, params }) =>
@@ -102,7 +103,7 @@ function ProjectTable({ org, rows }: { org: string; rows: Schema<"Project">[] })
             </TableCell>
             <TableCell className="font-mono">{project.slug}</TableCell>
             <TableCell>
-              <Badge variant="secondary">{roleLabel(project.role)}</Badge>
+              <Badge variant="secondary">{project.role ? roleLabel(project.role) : ""}</Badge>
             </TableCell>
             <TableCell>{retentionLabel(project.retention_days)}</TableCell>
           </TableRow>
@@ -121,13 +122,6 @@ function ProjectsPending() {
       <Skeleton className="h-10 w-full" />
     </main>
   );
-}
-
-function roleLabel(role: Schema<"OrgRole"> | undefined): string {
-  if (role == null) {
-    return "";
-  }
-  return role.charAt(0).toUpperCase() + role.slice(1);
 }
 
 function retentionLabel(days: number | null | undefined): string {
