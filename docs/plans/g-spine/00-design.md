@@ -4,7 +4,7 @@ Track G connects the Wave 1 areas into a running product: OTLP ingest into stora
 
 This document holds the decisions, the architecture, the interfaces later tracks build on, and the milestones. Each milestone gets its own plan of small sub-phases (`01-m1-…md` onwards). The first is [`01-m1-otlp-http-ingest.md`](01-m1-otlp-http-ingest.md).
 
-**Status.** Design and M1 plan written. G's code waits for the A2 and C reviews (in progress at the time of writing); findings from those reviews that touch G are folded into the milestone plans before they start.
+**Status.** Design and M1 plan written. The A2 and C review findings that touch G are in § Review findings, with the milestone each fix must precede; M1 depends on none of them.
 
 **Read first:** `AGENTS.md`; `docs/mvp-decisions.md` (D39–D51, D60, D64, D69–D76, D83–D101, D103, D105, D108, D111, D135–D151, D152–D154, D161, D-F-1, D-F-2, D-F-16, D-A1-6, D-A1-7 and the Track G section); specs 01, 02, 03 §1–2 and §9–10, 05, 08, 09, 11, 12; the research note [`docs/research/spine/competitors-ingest-ui.md`](../../research/spine/competitors-ingest-ui.md).
 
@@ -35,6 +35,7 @@ All are in `docs/mvp-decisions.md` § Track G. The user chose the option marked 
 | D-G-19 | **G builds a minimal login page.** `/login` (email and password) and the API client's `401` handling, so the UI runs on the real API before track L; L later restyles it and adds setup, signup and reset. (User's choice; the recommended option was to wait for L.) |
 | D-G-20 | **End-to-end test.** In `just check`: a Rust test starts the real server on ephemeral ports, sends the SDK conformance fixtures over OTLP/HTTP (protobuf and JSON) and gRPC, signs in and reads them back through the UI API. `just e2e` runs the real Python and TypeScript SDKs against `llmobs serve`, as its own CI job. |
 | D-G-21 | **Ports.** `/v1/traces` is served on `http_addr` (8080) and on `otlp_http_addr` (4318, only that route; empty disables it). gRPC `TraceService/Export` is served by `tonic` on `grpc_addr` (4317; empty disables it). |
+| D-G-22 | **Stream requests are validated before streaming.** `/traces/stream` accepts `search` as well as `filter`, `include_eval` and `include_experiments`, and applies both on each re-read. The filter and search are checked when the stream opens: an invalid filter answers `400 invalid_filter` as a problem, not a stream, so `EventSource` closes without retrying. A re-read that fails later (timeout, memory cap) sends `resync` and logs the error kind. (From the C review, U27.) |
 
 ## Scope
 
@@ -194,7 +195,8 @@ Sizes are strings with a binary unit, as `[storage]` (D90).
 
 - `LiveBus` wraps `broadcast::Sender<Arc<LiveEvent>>` with capacity 1024 and an `AtomicU64` event id. `LiveEvent { id, project_id, spans: Vec<SpanSummary>, trace_ids: Vec<TraceId> }` is built once per committed batch from the light columns (spec 09 § Response shapes), after `append_spans` returns.
 - `GET /traces/{id}/stream`: filters events on project and trace id and sends one `span` event per matching span, with the event's `id`. It closes after 10 minutes without a matching event.
-- `GET /traces/stream` (D-G-13): collects touched trace ids of its project; every second, if any, runs `trace_list` with the request's `filter`, `include_eval`, `include_experiments`, plus `trace_id IN (…)` (at most 500 ids per tick; more is a `resync`), and sends one `trace` event per row.
+- `GET /traces/stream` (D-G-13, D-G-22): at open, compiles `filter` and `search` with A2 (an error answers `400 invalid_filter` / `bad_request` before any event); then collects touched trace ids of its project and every second, if any, runs `trace_list` with the request's `filter`, `search`, `include_eval`, `include_experiments`, plus `trace_id IN (…)` (at most 500 ids per tick; more is a `resync`), and sends one `trace` event per row. A failed re-read sends `resync`. `TraceStreamParams` gains `search` in M4 (an `openapi.json` and `schema.gen.ts` change).
+- Server-side bounds: one broadcast channel of 1024 events; per stream at most 500 trace ids per tick and one `trace_list` page (`limit` 500); nothing is buffered per client beyond the socket. Client-side bounds on rows and the paused buffer are C's fix (see § Review findings).
 - Both: `ping` every 15 s; a request with `Last-Event-ID`, or a `RecvError::Lagged`, sends `resync` first (data `{}`); at most 100 open streams per user (`429` problem `rate_limited` beyond, counted per user id, keys per key id); access `ProjectPerm::View`.
 - The UI already speaks this protocol (D134, `web/src/mocks/sse.ts`).
 
@@ -227,6 +229,24 @@ Metrics results are cached 10 s per `(project, params)` (spec 05) in a small `Mu
 
 `crates/cli/tests/e2e.rs`: bind the real server (`serve::bind` with ports 0, a temp `data_dir`, `init.*` creating the admin, org, project and an `sk` key), send every `fixtures/otlp/llmobs/sdk-*` case over OTLP/HTTP protobuf, OTLP/HTTP JSON (a second project) and gRPC (a third), sign in with `POST /api/auth/login`, and read each trace through `GET /traces`, `GET /traces/{id}` and `GET /traces/{id}/spans/{span_id}`, comparing with `insta` snapshots whose ids and times are redacted. `just e2e` starts `llmobs serve` on free ports and runs `sdks/python` and `sdks/typescript` integration tests against it (spec 10 § Testing); a CI job `e2e` runs it.
 
+## Review findings from A2 and C
+
+The A2 and C reviews (`docs/reviews/a2-query.md`, `docs/reviews/c-web-ui.md` on their review branches) found issues that touch G. Their fixes belong to their own tracks and are expected to land before the G milestone that needs them; G plans no workaround for them. M1 needs none of them.
+
+| Finding | Effect on G | Needed before |
+|---|---|---|
+| A2 B-1 (uncounted operator chains abort the process), B-2 (size-generating scalars bypass the memory pool) | None in G: no G handler runs user SQL. G's handlers pass `filter` (the DSL, 4 KiB, which the review found safe) and `search` to A2's reads only. `/sql` and MCP `query_sql` are track H, which depends on both fixes. | H |
+| A2 M-4 (float sort keys such as `cost_total` unstable across cursor pages) | G's list handlers pass A2's opaque cursors through; their paging contract (no repeated or skipped row) holds only once the fix lands in A1/A2. | M2 |
+| A2 M-3 (session and user detail collect every row to test existence) | Reached by `GET /sessions/{id}` and `GET /users/{id}`. | M2 |
+| A2 M-2 (`bucket=auto` has no bucket cap) | Reached by `GET /metrics`; the cap is recorded in spec 05 by the fix. | M2 |
+| A2 M-1 (Parquet export buffers the whole file) | None: G serves no export (H). | H |
+| C U27 (live mode ignores `search`; unbounded rows and paused buffer; retries forever on an invalid filter) | G's side is D-G-22: the stream applies `search`, validates at open with a `400`, and bounds its own work. The client must pass `search`, not open a stream while the filter is invalid, and bound its rows and buffer. | M4 (server), M5 (client) |
+| C U11/U12 (the filter bar's chips can change a filter's meaning: OR precedence, `BETWEEN`, bare `AND` appends) | The server's `invalid_filter` and spec 05's semantics stay the source of truth; G changes nothing. | M5 |
+| C U18 (the external-media gate can be bypassed: upper-case schemes, `//host`) | G serves media only same-origin, at `GET /api/v1/projects/{p}/media/{sha256}` with `Content-Security-Policy: sandbox` and `nosniff`, and the UI's CSP allows media from `self` only (§ Embedded UI), which blocks external loads even if the gate is bypassed. The gate fix is still needed. | M5 |
+| C: `j`/`k` after a deep link, the table header not scrolling horizontally, the default saved view re-applied on every empty search | UI-only. | M5 |
+
+M2's plan starts by checking that the A2 fixes it needs are merged; M5's plan starts by checking the C fixes. If one is not merged, that milestone waits or the coordinator decides to ship without it.
+
 ## Testing
 
 - HTTP tests drive the router with `oneshot` (D151); listener tests bind ephemeral ports.
@@ -235,7 +255,7 @@ Metrics results are cached 10 s per `(project, params)` (spec 05) in a small `Mu
 - **Access (M1, M3):** `Access::Key` routes join D's generated authorization suite.
 - **Read API (M2):** the generated examples are the test: `just api-examples` output must equal the committed files, and every file is checked against `openapi.json` (the existing checks in `api_examples.rs`).
 - **Concurrency (M1):** concurrent ingests into one project; the budget refuses with 503 and recovers; a shutdown during ingest loses no acknowledged span.
-- **SSE (M4):** event order, filters, ping (manual clock or paused tokio time), resync on lag and on `Last-Event-ID`, stream cap.
+- **SSE (M4):** event order, filters and search, ping (manual clock or paused tokio time), resync on lag, on `Last-Event-ID` and on a failed re-read, `400 invalid_filter` at open, stream cap.
 - **Web (M5):** page tests stay on MSW. The login page and the 401 redirect get tests. `pnpm dev:server` against `just run serve` is the manual check.
 
 ## Milestones
@@ -245,7 +265,7 @@ Metrics results are cached 10 s per `(project, params)` (spec 05) in a small `Mu
 | **M1** | **OTLP/HTTP ingest end to end.** Config (`[ingest]`, `[media]`, `otlp_http_addr`); `Access::Key`; body handling; OTLP responses; `Ingest` with built-in prices, budget, `accept` and `commit` (media, append); `POST /v1/traces` on 8080 and 4318; golden and limit tests. | An OTel exporter pointed at `llmobs serve` with an `sk` key gets `200` and its spans are queryable through storage. |
 | **M2** | **Read API.** `api::convert`; the 12 read handlers; the metrics cache; `fixtures/api` regenerated by the real handlers (D-G-17). | Every declared read operation has a handler; the committed examples equal the real responses; `openapi.json` unchanged. |
 | **M3** | **Writes, gRPC, usage.** Score create/delete, the key score route, public feedback (contract added to `openapi.json`); `tonic` gRPC on 4317; `usage_daily` counters. | The SDKs' score route and the browser feedback helper work against the server; gRPC exporters work; usage rows grow. |
-| **M4** | **Live updates.** `LiveBus`, `commit` publishes, both SSE routes. | The UI's live mode works against the real server. |
+| **M4** | **Live updates.** `LiveBus`, `commit` publishes, both SSE routes, `search` on the trace stream (D-G-22). | The UI's live mode works against the real server. |
 | **M5** | **UI on the real API and the end-to-end test.** `llmobs-ui`, SPA fallback and headers, minimal login, 401 handling, the e2e test, `just e2e` and its CI job, `just build-release` builds the web. | `llmobs serve` serves the UI; a user signs in, sees ingested traces live; `just check` runs the e2e test. |
 
 M2 and M3 are independent of each other after M1; they stay in order because G runs alone.
@@ -262,8 +282,8 @@ M2 and M3 are independent of each other after M1; they stay in order because G r
 - **B1 (`llmobs-otel`):** cap the MIME type of an extracted blob at 255 bytes (storage's `put_media` limit; `is_mime` checks characters only), falling back to `application/octet-stream`. Until then G answers such a request `400`.
 - **A1:** the doc comment of `AppendError` (`crates/storage/src/error.rs`) still says `Backpressure` is answered `429`; D-G-3 makes it `503`.
 - **A1 (M6):** when disk-full handling lands, report it as an `AppendError` variant (or `MediaError`) so G maps it to 503; keep `Backpressure` meaning "retry soon".
-- **A2 / coordinator:** none blocking. The read handlers depend on A2's request types as merged; the A2 review's findings are folded into the M2 plan.
-- **C / coordinator:** C's R2 (batch span payloads) and R3 (autocomplete values) are not in G; they need A2 reads first.
+- **A2 / A1:** the review fixes listed in § Review findings (M-2, M-3, M-4 before M2; B-1, B-2, M-1 before H).
+- **C:** the review fixes listed in § Review findings, before M5. C's R2 (batch span payloads) and R3 (autocomplete values) are not in G; they need A2 reads first.
 - **Coordinator:** assign `model_prices` and `/models` (D-G-10) to a track.
 - **L:** restyle G's `/login` and add setup, signup, reset and settings pages (D-G-19).
 - **I:** call `Ingest::commit` for judge traces (D-G-8); hold `usage` and `live` the same way.

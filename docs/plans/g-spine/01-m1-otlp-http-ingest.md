@@ -2,7 +2,7 @@
 
 Implementation plan for milestone M1 of track G, split into sub-phases. Each sub-phase is done by one agent in one go, in order, and ends with `just check` green and one commit.
 
-**Prerequisites:** the G design (`docs/plans/g-spine/00-design.md`), its decisions (`docs/mvp-decisions.md` § Track G) and its spec edits are merged; the A2 and C reviews are merged or their G-relevant findings are folded into this plan.
+**Prerequisites:** the G design (`docs/plans/g-spine/00-design.md`), its decisions (`docs/mvp-decisions.md` § Track G) and its spec edits are merged. M1 needs none of the A2 and C review fixes (design § Review findings): it touches neither A2's reads nor the web.
 
 **Read first:**
 - `AGENTS.md`, all of it.
