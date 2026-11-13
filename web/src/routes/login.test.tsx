@@ -334,3 +334,20 @@ it("hides the sign-up link unless sign-up is open", async () => {
   await screen.findByRole("heading", { name: "Sign in" });
   expect(screen.queryByRole("link", { name: "Create an account" })).toBeNull();
 });
+
+it("links to the reset page when password sign-in is on", async () => {
+  signedOut();
+  await renderApp("/login");
+  expect(await screen.findByRole("link", { name: "Forgot password?" })).toHaveAttribute(
+    "href",
+    "/reset",
+  );
+});
+
+it("hides the reset link when password sign-in is off", async () => {
+  signedOut();
+  withConfig({ password_enabled: false });
+  await renderApp("/login");
+  await screen.findByRole("heading", { name: "Sign in" });
+  expect(screen.queryByRole("link", { name: "Forgot password?" })).toBeNull();
+});

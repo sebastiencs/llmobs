@@ -86,13 +86,24 @@ function LoginPage() {
     <AuthLayout
       title="Sign in"
       footer={
-        config.signup === "open" ? (
-          <p>
-            Don't have an account?{" "}
-            <Link to="/signup" className={AUTH_LINK_CLASS}>
-              Create an account
-            </Link>
-          </p>
+        config.password_enabled || config.signup === "open" ? (
+          <>
+            {config.password_enabled ? (
+              <p>
+                <Link to="/reset" className={AUTH_LINK_CLASS}>
+                  Forgot password?
+                </Link>
+              </p>
+            ) : null}
+            {config.signup === "open" ? (
+              <p>
+                Don't have an account?{" "}
+                <Link to="/signup" className={AUTH_LINK_CLASS}>
+                  Create an account
+                </Link>
+              </p>
+            ) : null}
+          </>
         ) : undefined
       }
     >
