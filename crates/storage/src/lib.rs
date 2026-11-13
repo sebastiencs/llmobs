@@ -6,7 +6,6 @@
 //!
 //! # What this crate does not do yet
 //!
-//! - retention, media blobs and project drop are absent;
 //! - the query runtime uses DataFusion's default memory pool.
 //!   Parquet footers and page indexes use DataFusion's built-in metadata cache.
 

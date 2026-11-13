@@ -714,6 +714,7 @@ mod tests {
     };
     use crate::hooks::HookPoint;
     use crate::memtable::MemBatch;
+    use crate::test_support::{object_rows, trace_ids_of};
     use crate::wal::{Table, spans_named};
 
     fn batch(starts: &[i64], name: &str) -> MemBatch {
@@ -812,37 +813,6 @@ mod tests {
                     .collect(),
             },
         }
-    }
-
-    /// The rows stored in one catalogued file's Parquet object.
-    fn object_rows(dir: &Path, file: &crate::catalog::FileMeta) -> arrow::array::RecordBatch {
-        let bytes = std::fs::read(dir.join("objects").join(&file.path)).unwrap();
-        let builder = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
-            bytes::Bytes::from(bytes),
-        )
-        .unwrap();
-        let schema = Arc::clone(builder.schema());
-        let batches: Vec<arrow::array::RecordBatch> = builder
-            .build()
-            .unwrap()
-            .map(|batch| batch.unwrap())
-            .collect();
-        arrow::compute::concat_batches(&schema, &batches).unwrap()
-    }
-
-    fn trace_ids_of(rows: &arrow::array::RecordBatch) -> Vec<[u8; 16]> {
-        use arrow::array::Array;
-
-        let column = rows
-            .column_by_name(llmobs_core::schema::spans::TRACE_ID)
-            .unwrap();
-        let array = column
-            .as_any()
-            .downcast_ref::<arrow::array::FixedSizeBinaryArray>()
-            .unwrap();
-        (0..array.len())
-            .map(|row| <[u8; 16]>::try_from(array.value(row)).unwrap())
-            .collect()
     }
 
     fn values_of(rows: &arrow::array::RecordBatch, column: &str) -> Vec<String> {

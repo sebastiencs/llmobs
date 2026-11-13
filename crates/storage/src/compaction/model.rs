@@ -1,5 +1,6 @@
-//! The model test: append, restart, compaction and GC against a simple model
-//! of the rows. "Rows in = rows out", the M4 exit criterion.
+//! The model test: append, restart, compaction, GC, deletion and retention
+//! against a simple model of the rows. "Rows in = rows out", the M4 exit
+//! criterion, plus "covered rows go and the rest stay" for M5.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -8,12 +9,14 @@ use std::time::Duration;
 use arrow::array::AsArray;
 use chrono::{Datelike, Days, NaiveDate};
 use datafusion::execution::context::{SessionConfig, SessionContext};
+use llmobs_core::ids::TraceId;
 use proptest::prelude::*;
 
 use crate::Storage;
 use crate::config::{
     CompactionConfig, FlushConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig, WalConfig,
 };
+use crate::deletion::{Deletion, DeletionScope, DeletionStatus};
 use crate::test_support::{span_row, span_rows};
 
 const DAY_NS: i64 = 86_400_000_000_000;
@@ -28,14 +31,24 @@ enum Op {
     Compact { hours: u8 },
     /// collect_obsolete(Duration::ZERO).
     Gc,
+    /// `register_deletion` of the trace, cut off at the op's own ingest value.
+    Delete { trace: u8 },
+    /// One deletion pass at the model clock.
+    ApplyDeletions,
+    /// `apply_retention(project, D + days)`.
+    Retention { days: u8 },
 }
 
+/// The weights give a 40-op case about 3 deletions and 1 retention.
 fn model_ops() -> impl Strategy<Value = Vec<Op>> {
     let op = prop_oneof![
-        (0u8..6, 0u8..12).prop_map(|(trace, span)| Op::Append { trace, span }),
-        Just(Op::Restart),
-        (0u8..72).prop_map(|hours| Op::Compact { hours }),
-        Just(Op::Gc),
+        30 => (0u8..6, 0u8..12).prop_map(|(trace, span)| Op::Append { trace, span }),
+        2 => Just(Op::Restart),
+        2 => (0u8..72).prop_map(|hours| Op::Compact { hours }),
+        1 => Just(Op::Gc),
+        3 => (0u8..6).prop_map(|trace| Op::Delete { trace }),
+        1 => Just(Op::ApplyDeletions),
+        1 => (0u8..4).prop_map(|days| Op::Retention { days }),
     ];
     proptest::collection::vec(op, 1..=40)
 }
@@ -46,6 +59,13 @@ fn day() -> NaiveDate {
 
 fn midnight(date: NaiveDate) -> i64 {
     (i64::from(date.num_days_from_ce()) - 719_163) * DAY_NS
+}
+
+/// The trace's day: `D + trace % 3`.
+fn trace_day(trace: u8) -> NaiveDate {
+    day()
+        .checked_add_days(Days::new(u64::from(trace % 3)))
+        .unwrap_or(day())
 }
 
 fn project() -> llmobs_core::ids::ProjectId {
@@ -146,6 +166,12 @@ fn key_bytes(trace: u8, span: u8) -> (Vec<u8>, Vec<u8>) {
     (trace_bytes.to_vec(), vec![span + 1; 8])
 }
 
+/// The trace id `span_row` builds for `trace`.
+fn trace_id(trace: u8) -> TraceId {
+    let (bytes, _) = key_bytes(trace, 0);
+    TraceId::from_bytes(bytes.as_slice().try_into().unwrap()).unwrap()
+}
+
 /// Distinct keys and their greatest `ingest_time`, against the model.
 fn check_spans(rows: &[(Vec<u8>, Vec<u8>, i64)], model: &BTreeMap<(u8, u8), i64>) {
     let mut maxima: BTreeMap<(Vec<u8>, Vec<u8>), i64> = BTreeMap::new();
@@ -171,6 +197,10 @@ async fn run_case(ops: Vec<Op>) {
     // The clock starts at D 01:00.
     let mut clock = midnight(day()) + 3_600 * 1_000_000_000;
     let mut model: BTreeMap<(u8, u8), i64> = BTreeMap::new();
+    // The retention watermark, and every registered deletion
+    // `(trace, cutoff, id)`.
+    let mut keep_from: Option<NaiveDate> = None;
+    let mut deletions: Vec<(u8, i64, uuid::Uuid)> = Vec::new();
 
     for (index, op) in ops.iter().enumerate() {
         match op.clone() {
@@ -189,7 +219,11 @@ async fn run_case(ops: Vec<Op>) {
                     )
                     .await
                     .unwrap();
-                model.insert((trace, span), ingest);
+                // Storage hides a row of a day the watermark has dropped and
+                // never flushes it (spec 03 §8), so the model never has it.
+                if keep_from.is_none_or(|keep| trace_day(trace) >= keep) {
+                    model.insert((trace, span), ingest);
+                }
             }
             Op::Restart => {
                 storage.shutdown().await.unwrap();
@@ -202,22 +236,69 @@ async fn run_case(ops: Vec<Op>) {
             Op::Gc => {
                 storage.collect_obsolete(Duration::ZERO).await.unwrap();
             }
+            Op::Delete { trace } => {
+                // Every row of the trace so far is covered: each was appended
+                // at a lower index, and the clock only rises.
+                let cutoff = clock + index as i64;
+                let id = uuid::Uuid::now_v7();
+                storage
+                    .register_deletion(Deletion {
+                        id,
+                        project: project(),
+                        cutoff,
+                        scope: DeletionScope::Traces {
+                            trace_ids: vec![trace_id(trace)],
+                        },
+                    })
+                    .await
+                    .unwrap();
+                deletions.push((trace, cutoff, id));
+                model.retain(|(key_trace, _), _| *key_trace != trace);
+            }
+            Op::ApplyDeletions => {
+                let report = storage.apply_deletions(clock).await.unwrap();
+                assert_eq!(report.failed, 0, "a deletion job failed");
+            }
+            Op::Retention { days } => {
+                let keep = day()
+                    .checked_add_days(Days::new(u64::from(days)))
+                    .unwrap_or(day());
+                storage.apply_retention(project(), keep).await.unwrap();
+                keep_from = Some(keep_from.map_or(keep, |current| current.max(keep)));
+                model.retain(|(trace, _), _| trace_day(*trace) >= keep);
+            }
         }
         check_spans(&stored_spans(&storage).await, &model);
     }
 
-    // Quiesce: everything in files, every day closed, nothing obsolete. The
-    // clock must be past the newest ingest by `close_delay` too, or a late L0
-    // file is legitimately not closed yet (G13) and `compact` at a fixed clock
-    // can never make progress.
+    // Quiesce, in this order:
+    // 1. everything in files, so no memtable batch blocks "applied";
     storage.shutdown().await.unwrap();
     storage = Storage::open(config.clone()).await.unwrap();
+    // 2. the clock must be past the newest ingest by `close_delay` too, or a
+    //    late L0 file is legitimately not closed yet (G13) and `compact` at a
+    //    fixed clock can never make progress.
     let sixth = day().checked_add_days(Days::new(6)).unwrap_or(day());
     let close_delay = i64::try_from(config.compaction.close_delay.as_nanos()).unwrap_or(i64::MAX);
     clock = clock
         .max(midnight(sixth))
         .saturating_add(close_delay)
         .saturating_add(1_000_000);
+    // 3. every deletion applied: while one is pending, the `traces` view
+    //    hides a covered trace's partials whole and the checks below would
+    //    not match.
+    for _ in 0..10 {
+        let report = storage.apply_deletions(clock).await.unwrap();
+        assert_eq!(report.failed, 0, "a deletion job failed");
+        if deletions_status(&storage, &deletions).await {
+            break;
+        }
+    }
+    assert!(
+        deletions_status(&storage, &deletions).await,
+        "a deletion is still pending after 10 passes"
+    );
+    // 4. every partition one file;
     for _ in 0..10 {
         let report = storage.compact(clock).await.unwrap();
         assert_eq!(report.failed, 0, "a compaction job failed");
@@ -225,9 +306,10 @@ async fn run_case(ops: Vec<Op>) {
             break;
         }
     }
+    // 5. nothing obsolete.
     storage.collect_obsolete(Duration::ZERO).await.unwrap();
 
-    // One row per key, at the model's version.
+    // 6. One row per key, at the model's version.
     let rows = stored_spans(&storage).await;
     check_spans(&rows, &model);
     let mut by_key: BTreeMap<(Vec<u8>, Vec<u8>), i64> = BTreeMap::new();
@@ -261,13 +343,42 @@ async fn run_case(ops: Vec<Op>) {
     }
     assert_eq!(merged, expected, "{partials:?}");
 
+    // 7. No row a registered deletion covers remains in any active file.
+    for file in storage.catalog_files(crate::wal::Table::Spans) {
+        let rows = crate::test_support::object_rows(dir.path(), &file);
+        let traces = crate::test_support::trace_ids_of(&rows);
+        let ingests = rows
+            .column_by_name(llmobs_core::schema::spans::INGEST_TIME)
+            .unwrap()
+            .as_primitive::<arrow::datatypes::TimestampNanosecondType>();
+        for (row, trace) in traces.iter().enumerate() {
+            let covered = deletions.iter().any(|(deleted, cutoff, _)| {
+                *trace == *trace_id(*deleted).as_bytes() && ingests.value(row) <= *cutoff
+            });
+            assert!(!covered, "a covered row remains in {}", file.path);
+        }
+    }
+
     storage.shutdown().await.unwrap();
+}
+
+/// Whether every registered deletion is `Applied`.
+async fn deletions_status(storage: &Storage, deletions: &[(u8, i64, uuid::Uuid)]) -> bool {
+    let mut all = true;
+    for (_, _, id) in deletions {
+        match storage.deletion_status(*id).await.unwrap() {
+            DeletionStatus::Applied { .. } => {}
+            DeletionStatus::Pending => all = false,
+        }
+    }
+    all
 }
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(16))]
 
-    /// Append, restart, compaction and GC keep the rows the model expects.
+    /// Append, restart, compaction, GC, deletion and retention keep the rows
+    /// the model expects.
     #[test]
     fn compaction_matches_the_model(ops in model_ops()) {
         let runtime = tokio::runtime::Builder::new_multi_thread()
