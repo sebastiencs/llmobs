@@ -78,6 +78,7 @@ export function DataTable<Row extends RowData>({
   notice,
 }: DataTableProps<Row>) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
   const [columnSizing, setColumnSizing] = useState(() => readColumnSizes(tableId));
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
   const stopDrag = useRef<(() => void) | null>(null);
@@ -153,7 +154,9 @@ export function DataTable<Row extends RowData>({
     if (rows.length === 0) {
       return;
     }
-    const origin = focusedIndex ?? -1;
+    const selectedIndex =
+      selectedRowId === undefined ? -1 : rows.findIndex((row) => getRowId(row) === selectedRowId);
+    const origin = focusedIndex ?? selectedIndex;
     if (matchesBinding(event, "row-next")) {
       event.preventDefault();
       moveFocus(origin + 1);
@@ -199,6 +202,9 @@ export function DataTable<Row extends RowData>({
   const template = headerGroup
     ? headerGroup.headers.map((header) => `${header.getSize()}px`).join(" ")
     : undefined;
+  const totalWidth = headerGroup
+    ? headerGroup.headers.reduce((sum, header) => sum + header.getSize(), 0)
+    : undefined;
   const model = table.getRowModel().rows;
 
   return (
@@ -212,83 +218,96 @@ export function DataTable<Row extends RowData>({
       onKeyDown={onKeyDown}
     >
       {headerGroup ? (
-        <div
-          role="row"
-          aria-rowindex={1}
-          className="grid h-row shrink-0 items-center border-b bg-background text-[11px] font-medium text-muted-foreground uppercase"
-          style={{ gridTemplateColumns: template }}
-        >
-          {headerGroup.headers.map((header) => {
-            const sorted = header.column.getIsSorted();
-            const canSort = header.column.getCanSort();
-            const label =
-              typeof header.column.columnDef.header === "string"
-                ? header.column.columnDef.header
-                : "column";
-            return (
-              <div
-                key={header.id}
-                role="columnheader"
-                aria-labelledby={`${tableId}-${header.id}-label`}
-                aria-sort={
-                  canSort
-                    ? sorted === "asc"
-                      ? "ascending"
-                      : sorted === "desc"
-                        ? "descending"
-                        : "none"
-                    : undefined
-                }
-                className={cn(
-                  "relative flex h-full min-w-0 items-center px-2",
-                  header.column.columnDef.meta?.align === "right" && "justify-end",
-                )}
-              >
-                {canSort && onSortingChange ? (
-                  <button
-                    type="button"
-                    id={`${tableId}-${header.id}-label`}
-                    className="inline-flex min-w-0 items-center gap-1"
-                    onClick={() => {
-                      if (sorting?.id !== header.column.id) {
-                        onSortingChange({ id: header.column.id, desc: true });
-                        return;
-                      }
-                      if (sorting.desc) {
-                        onSortingChange({ id: header.column.id, desc: false });
-                        return;
-                      }
-                      onSortingChange(null);
-                    }}
-                  >
-                    <span className="truncate">
+        <div ref={headerRef} className="shrink-0 overflow-hidden [scrollbar-gutter:stable]">
+          <div
+            role="row"
+            aria-rowindex={1}
+            className="grid h-row items-center border-b bg-background text-[11px] font-medium text-muted-foreground uppercase"
+            style={{ gridTemplateColumns: template, minWidth: totalWidth }}
+          >
+            {headerGroup.headers.map((header) => {
+              const sorted = header.column.getIsSorted();
+              const canSort = header.column.getCanSort();
+              const label =
+                typeof header.column.columnDef.header === "string"
+                  ? header.column.columnDef.header
+                  : "column";
+              return (
+                <div
+                  key={header.id}
+                  role="columnheader"
+                  aria-labelledby={`${tableId}-${header.id}-label`}
+                  aria-sort={
+                    canSort
+                      ? sorted === "asc"
+                        ? "ascending"
+                        : sorted === "desc"
+                          ? "descending"
+                          : "none"
+                      : undefined
+                  }
+                  className={cn(
+                    "relative flex h-full min-w-0 items-center px-2",
+                    header.column.columnDef.meta?.align === "right" && "justify-end",
+                  )}
+                >
+                  {canSort && onSortingChange ? (
+                    <button
+                      type="button"
+                      id={`${tableId}-${header.id}-label`}
+                      className="inline-flex min-w-0 items-center gap-1"
+                      onClick={() => {
+                        if (sorting?.id !== header.column.id) {
+                          onSortingChange({ id: header.column.id, desc: true });
+                          return;
+                        }
+                        if (sorting.desc) {
+                          onSortingChange({ id: header.column.id, desc: false });
+                          return;
+                        }
+                        onSortingChange(null);
+                      }}
+                    >
+                      <span className="truncate">
+                        {flexRender(header.column.columnDef.header, header.getContext())}
+                      </span>
+                      <SortArrow direction={sorted} />
+                    </button>
+                  ) : (
+                    <span id={`${tableId}-${header.id}-label`} className="min-w-0 truncate">
                       {flexRender(header.column.columnDef.header, header.getContext())}
                     </span>
-                    <SortArrow direction={sorted} />
-                  </button>
-                ) : (
-                  <span id={`${tableId}-${header.id}-label`} className="min-w-0 truncate">
-                    {flexRender(header.column.columnDef.header, header.getContext())}
-                  </span>
-                )}
-                <div
-                  role="separator"
-                  aria-orientation="vertical"
-                  aria-label={`Resize ${label}`}
-                  className="absolute inset-y-0 right-0 w-1 cursor-col-resize"
-                  onPointerDown={(event) => beginResize(event, header.column.id, header.getSize())}
-                  onDoubleClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    commit(columnSizesAfterReset(columnSizing, header.column.id));
-                  }}
-                />
-              </div>
-            );
-          })}
+                  )}
+                  <div
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label={`Resize ${label}`}
+                    className="absolute inset-y-0 right-0 w-1 cursor-col-resize"
+                    onPointerDown={(event) =>
+                      beginResize(event, header.column.id, header.getSize())
+                    }
+                    onDoubleClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      commit(columnSizesAfterReset(columnSizing, header.column.id));
+                    }}
+                  />
+                </div>
+              );
+            })}
+          </div>
         </div>
       ) : null}
-      <div ref={scrollRef} data-scroll-container className="relative min-h-0 flex-1 overflow-auto">
+      <div
+        ref={scrollRef}
+        data-scroll-container
+        className="relative min-h-0 flex-1 overflow-auto [scrollbar-gutter:stable]"
+        onScroll={(event) => {
+          if (headerRef.current) {
+            headerRef.current.scrollLeft = event.currentTarget.scrollLeft;
+          }
+        }}
+      >
         {notice ? (
           <div className="sticky top-2 z-10 flex h-0 justify-center">
             <div className="pointer-events-auto">{notice}</div>
@@ -327,6 +346,7 @@ export function DataTable<Row extends RowData>({
                     height: ROW_HEIGHT,
                     transform: `translateY(${item.start}px)`,
                     gridTemplateColumns: template,
+                    minWidth: totalWidth,
                   }}
                   onClick={() => {
                     setFocusedIndex(item.index);

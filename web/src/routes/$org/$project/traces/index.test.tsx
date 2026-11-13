@@ -150,6 +150,54 @@ it("moves with j and k and activates the focused row", async () => {
   );
 });
 
+it("scrolls the header with the rows", async () => {
+  await renderApp("/acme/support-bot/traces?range=1h");
+  const grid = await screen.findByRole("grid", { name: "Traces" });
+  const scroller = grid.querySelector("[data-scroll-container]");
+  if (!(scroller instanceof HTMLElement)) {
+    throw new Error("missing scroll container");
+  }
+  const [header, firstRow] = within(grid).getAllByRole("row");
+  if (!header || !firstRow) {
+    throw new Error("missing rows");
+  }
+  expect(header.style.minWidth).toMatch(/^\d+px$/);
+  expect(firstRow.style.minWidth).toBe(header.style.minWidth);
+  scroller.scrollLeft = 300;
+  fireEvent.scroll(scroller);
+  expect(header.parentElement?.scrollLeft).toBe(300);
+});
+
+it("moves from the open trace after a deep link", async () => {
+  const { router } = await renderApp(
+    "/acme/support-bot/traces?range=1h&trace=a1000000000000000000000000000003",
+  );
+  const list = await screen.findByRole("grid", { name: "Traces" });
+  await screen.findByRole("grid", { name: "Trace" });
+  list.focus();
+  fireEvent.keyDown(list, { key: "j" });
+  await waitFor(() => {
+    expect(router.state.location.search.trace).toBe("a1000000000000000000000000000002");
+  });
+  fireEvent.keyDown(list, { key: "k" });
+  await waitFor(() => {
+    expect(router.state.location.search.trace).toBe("a1000000000000000000000000000003");
+  });
+});
+
+it("moves up from the open trace after a deep link", async () => {
+  const { router } = await renderApp(
+    "/acme/support-bot/traces?range=1h&trace=a1000000000000000000000000000003",
+  );
+  const list = await screen.findByRole("grid", { name: "Traces" });
+  await screen.findByRole("grid", { name: "Trace" });
+  list.focus();
+  fireEvent.keyDown(list, { key: "k" });
+  await waitFor(() => {
+    expect(router.state.location.search.trace).toBe("a1000000000000000000000000000004");
+  });
+});
+
 it("persists a column width and restores the default on double-click", async () => {
   await renderApp("/acme/support-bot/traces");
   const handle = await screen.findByRole("separator", { name: "Resize Name" });
