@@ -1113,7 +1113,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         // The tombstones still hide the row: the file is gated at query time.
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let ctx = datafusion::execution::context::SessionContext::new_with_config_rt(
             datafusion::execution::context::SessionConfig::new(),
             Arc::clone(&query.runtime),

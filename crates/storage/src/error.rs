@@ -142,6 +142,10 @@ pub enum QueryError {
     /// DataFusion rejected the session or the scan.
     #[error(transparent)]
     DataFusion(#[from] datafusion::error::DataFusionError),
+    /// No query memory came free within `query.admission_wait`. The server
+    /// maps this to 503 `busy` (spec 09).
+    #[error("too many queries are running")]
+    Busy,
 }
 
 /// Inserting a batch into a memtable failed.

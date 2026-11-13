@@ -991,11 +991,19 @@ async fn trace_benchmark() {
         .await
         .unwrap();
     let ctx = QueryContext::new(
-        storage.query(project(), QueryOptions::default()).unwrap(),
+        storage
+            .query(project(), QueryOptions::default())
+            .await
+            .unwrap(),
         None,
     )
     .unwrap();
-    let range = no_rule(&storage.query(project(), QueryOptions::default()).unwrap());
+    let range = no_rule(
+        &storage
+            .query(project(), QueryOptions::default())
+            .await
+            .unwrap(),
+    );
 
     // Confirm A2's real `trace_list` — the `traces` view plus its default
     // environment / experiment exclusions — is rewritten to list mode. The
@@ -1070,6 +1078,7 @@ async fn trace_benchmark() {
                             around: Some(*start),
                         },
                     )
+                    .await
                     .unwrap();
                 let c = QueryContext::new(q, None).unwrap();
                 let found = trace_detail(&c, id, TIMEOUT).await.unwrap();

@@ -217,6 +217,11 @@ impl MediaGc {
         )
         .map_err(|error| match error {
             QueryError::DataFusion(error) => MediaError::Query(error),
+            // `live_set` calls `project_query` directly, not `Storage::query`,
+            // so no admission happens here.
+            QueryError::Busy => MediaError::Query(DataFusionError::Internal(
+                "query admission in the media collection".to_owned(),
+            )),
         })?;
         let context = SessionContext::new_with_config_rt(
             SessionConfig::new().with_target_partitions(self.target_partitions.get()),

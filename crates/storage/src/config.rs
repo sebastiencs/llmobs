@@ -137,6 +137,38 @@ impl StorageConfig {
                 "must be greater than 0 and at most 24h",
             ));
         }
+        if self.query.max_memory < ByteSize::mib(1) {
+            return Err(ConfigError::invalid(
+                "storage.query.max_memory",
+                "must be at least 1MiB",
+            ));
+        }
+        if self.query.initial_memory < ByteSize::mib(1) {
+            return Err(ConfigError::invalid(
+                "storage.query.initial_memory",
+                "must be at least 1MiB",
+            ));
+        }
+        if self.query.initial_memory > self.query.max_memory {
+            return Err(ConfigError::invalid(
+                "storage.query.initial_memory",
+                "must be at most storage.query.max_memory",
+            ));
+        }
+        if let Some(total) = self.query.max_memory_total
+            && total < self.query.max_memory
+        {
+            return Err(ConfigError::invalid(
+                "storage.query.max_memory_total",
+                "must be at least storage.query.max_memory",
+            ));
+        }
+        if self.query.admission_wait > Duration::from_secs(60) {
+            return Err(ConfigError::invalid(
+                "storage.query.admission_wait",
+                "must be at most 60s",
+            ));
+        }
         if let Some(window) = self.anchor.window
             && !valid_window(window)
         {
@@ -354,7 +386,7 @@ impl Default for MemtableConfig {
     }
 }
 
-/// `[storage.query]` fields used before the memory pool lands (M6).
+/// `[storage.query]`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueryConfig {
@@ -369,6 +401,19 @@ pub struct QueryConfig {
     /// Look-back for trace lists, and the default anchor window (D90, D86).
     #[serde(default = "default_trace_lookback", with = "humantime_serde")]
     pub trace_lookback: Duration,
+    /// Memory shared by all queries. Absent means half of the machine's memory
+    /// (its cgroup limit when lower), at most 8 GiB, resolved at open.
+    #[serde(default)]
+    pub max_memory_total: Option<ByteSize>,
+    /// Most memory one query may hold. Default 2 GiB.
+    #[serde(default = "default_query_max_memory")]
+    pub max_memory: ByteSize,
+    /// Memory a query takes from the shared pool before it starts. Default 64 MiB.
+    #[serde(default = "default_initial_memory")]
+    pub initial_memory: ByteSize,
+    /// How long a query waits for its initial memory before failing as busy. Default 5 s.
+    #[serde(default = "default_admission_wait", with = "humantime_serde")]
+    pub admission_wait: Duration,
 }
 
 impl Default for QueryConfig {
@@ -377,6 +422,10 @@ impl Default for QueryConfig {
             target_partitions: default_target_partitions(),
             metadata_cache_bytes: default_metadata_cache_bytes(),
             trace_lookback: default_trace_lookback(),
+            max_memory_total: None,
+            max_memory: default_query_max_memory(),
+            initial_memory: default_initial_memory(),
+            admission_wait: default_admission_wait(),
         }
     }
 }
@@ -395,6 +444,18 @@ fn default_metadata_cache_bytes() -> ByteSize {
 
 fn default_trace_lookback() -> Duration {
     Duration::from_secs(60 * 60)
+}
+
+fn default_query_max_memory() -> ByteSize {
+    ByteSize::gib(2)
+}
+
+fn default_initial_memory() -> ByteSize {
+    ByteSize::mib(64)
+}
+
+fn default_admission_wait() -> Duration {
+    Duration::from_secs(5)
 }
 
 fn default_gc_grace() -> Duration {
@@ -794,6 +855,26 @@ mod tests {
                 "storage.query.trace_lookback: must be greater than 0 and at most 24h",
             ),
             (
+                r#"{"data_dir":"/data","query":{"max_memory":"512KiB"}}"#,
+                "storage.query.max_memory: must be at least 1MiB",
+            ),
+            (
+                r#"{"data_dir":"/data","query":{"initial_memory":"512KiB"}}"#,
+                "storage.query.initial_memory: must be at least 1MiB",
+            ),
+            (
+                r#"{"data_dir":"/data","query":{"max_memory":"8MiB","initial_memory":"16MiB"}}"#,
+                "storage.query.initial_memory: must be at most storage.query.max_memory",
+            ),
+            (
+                r#"{"data_dir":"/data","query":{"max_memory_total":"1MiB"}}"#,
+                "storage.query.max_memory_total: must be at least storage.query.max_memory",
+            ),
+            (
+                r#"{"data_dir":"/data","query":{"admission_wait":"61s"}}"#,
+                "storage.query.admission_wait: must be at most 60s",
+            ),
+            (
                 r#"{"data_dir":"/data","anchor":{"window":"0s"}}"#,
                 "storage.anchor.window: must be greater than 0 and at most 24h",
             ),
@@ -928,6 +1009,50 @@ mod tests {
         upper.validate().unwrap();
         assert_eq!(upper.flush.max_age, Duration::from_secs(60 * 60));
         assert_eq!(upper.flush.upload_concurrency, 64);
+    }
+
+    #[test]
+    fn query_memory_bounds_at_the_limit_pass() {
+        let config = parse(
+            r#"{
+                "data_dir": "/data",
+                "query": {
+                    "max_memory_total": "1MiB",
+                    "max_memory": "1MiB",
+                    "initial_memory": "1MiB",
+                    "admission_wait": "60s"
+                }
+            }"#,
+        )
+        .unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.query.admission_wait, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn query_memory_fields_parse_and_default() {
+        let config = parse(
+            r#"{
+                "data_dir": "/data",
+                "query": {
+                    "max_memory_total": "1GiB",
+                    "max_memory": "256MiB",
+                    "initial_memory": "8MiB",
+                    "admission_wait": "2s"
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(config.query.max_memory_total, Some(ByteSize::gib(1)));
+        assert_eq!(config.query.max_memory, ByteSize::mib(256));
+        assert_eq!(config.query.initial_memory, ByteSize::mib(8));
+        assert_eq!(config.query.admission_wait, Duration::from_secs(2));
+
+        let defaults = parse(r#"{"data_dir":"/data"}"#).unwrap();
+        assert_eq!(defaults.query.max_memory_total, None);
+        assert_eq!(defaults.query.max_memory, ByteSize::gib(2));
+        assert_eq!(defaults.query.initial_memory, ByteSize::mib(64));
+        assert_eq!(defaults.query.admission_wait, Duration::from_secs(5));
     }
 
     #[test]

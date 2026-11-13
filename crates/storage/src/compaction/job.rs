@@ -710,7 +710,7 @@ pub(crate) mod tests {
     }
 
     async fn view_rows(storage: &Storage, sql: &str) -> Vec<Vec<String>> {
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let ctx = QueryContext::new(query, None).unwrap();
         text_rows(&rows(&ctx, sql).await)
     }
@@ -741,7 +741,7 @@ pub(crate) mod tests {
 
     /// Rows of the raw provider behind the `traces` view, read with SQL.
     async fn raw_traces(storage: &Storage, columns: &str) -> Vec<RecordBatch> {
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let ctx =
             SessionContext::new_with_config_rt(SessionConfig::new(), Arc::clone(&query.runtime));
         ctx.register_table("traces", Arc::clone(&query.traces))
@@ -1315,11 +1315,13 @@ pub(crate) mod tests {
             )
             .await;
         }
-        let pinned = storage.query(project(), Default::default()).unwrap();
+        let pinned = storage.query(project(), Default::default()).await.unwrap();
         let before = {
-            let ctx =
-                QueryContext::new(storage.query(project(), Default::default()).unwrap(), None)
-                    .unwrap();
+            let ctx = QueryContext::new(
+                storage.query(project(), Default::default()).await.unwrap(),
+                None,
+            )
+            .unwrap();
             text_rows(&rows(&ctx, "SELECT trace_id, span_id FROM spans ORDER BY span_id").await)
         };
 

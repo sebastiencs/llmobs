@@ -46,7 +46,8 @@ pub struct ProjectQuery {
     pub traces: Arc<dyn TableProvider>,
     /// Stored `scores` schema. Live rows only: last writer wins, tombstones dropped.
     pub scores: Arc<dyn TableProvider>,
-    /// Per-query memory pool and spill directory.
+    /// This query's runtime: its own memory pool over the process-wide one, and
+    /// the shared spill directory and caches.
     pub runtime: Arc<RuntimeEnv>,
     /// DataFusion `target_partitions` for this query.
     pub target_partitions: NonZeroUsize,
