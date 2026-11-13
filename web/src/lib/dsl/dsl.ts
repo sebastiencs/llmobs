@@ -133,17 +133,32 @@ export function tokenize(text: string): Token[] {
   return tokens;
 }
 
-/** Splits on top-level AND. Trims each piece and drops empty ones. */
+/** Splits on top-level AND. A text with a top-level OR is one conjunct, and the AND of a BETWEEN is never a cut. Trims each piece and drops empty ones. */
 export function splitConjuncts(text: string): Conjunct[] {
+  if (hasTopLevelOr(text)) {
+    const trimmed = text.trim();
+    if (trimmed.length === 0) {
+      return [];
+    }
+    const start = text.length - text.trimStart().length;
+    return [{ text: trimmed, start, end: start + trimmed.length }];
+  }
   const cuts = [0];
   let depth = 0;
+  let skipNextAnd = false;
   for (const token of tokenize(text)) {
     if (token.kind === "lparen" || token.kind === "lbracket") {
       depth += 1;
     } else if (token.kind === "rparen" || token.kind === "rbracket") {
       depth = Math.max(0, depth - 1);
+    } else if (depth === 0 && isName(token, "between")) {
+      skipNextAnd = true;
     } else if (depth === 0 && isKeyword(token, "and")) {
-      cuts.push(token.start, token.end);
+      if (skipNextAnd) {
+        skipNextAnd = false;
+      } else {
+        cuts.push(token.start, token.end);
+      }
     }
   }
   cuts.push(text.length);
@@ -484,7 +499,7 @@ function quote(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
-function hasTopLevelOr(text: string): boolean {
+export function hasTopLevelOr(text: string): boolean {
   let depth = 0;
   for (const token of tokenize(text)) {
     if (token.kind === "lparen" || token.kind === "lbracket") {

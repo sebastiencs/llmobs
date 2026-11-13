@@ -103,3 +103,28 @@ it("appends a status comparison from the row", async () => {
   });
   expect(router.state.location.search.trace).toBeUndefined();
 });
+
+it("shows a filter with a top-level OR as one chip and removes it whole", async () => {
+  const filter = "a = 1 OR b = 2 AND c = 3";
+  const { router, user } = await renderApp(
+    `/acme/support-bot/traces?range=1h&filter=${encodeURIComponent(filter)}`,
+  );
+  const remove = await screen.findByRole("button", { name: `Remove ${filter}` });
+  expect(screen.queryByRole("button", { name: "Remove c = 3" })).not.toBeInTheDocument();
+  await user.click(remove);
+  await waitFor(() => {
+    expect(router.state.location.search.filter).toBeUndefined();
+  });
+  expect(router.state.location.search.range).toBe("1h");
+});
+
+it("parenthesizes an OR filter before appending from a row", async () => {
+  const { router, user } = await renderApp(
+    `/acme/support-bot/traces?range=1h&filter=${encodeURIComponent("a = 1 OR b = 2")}`,
+  );
+  await screen.findByRole("grid", { name: "Traces" });
+  await user.click(screen.getByRole("button", { name: "Filter by status error" }));
+  await waitFor(() => {
+    expect(router.state.location.search.filter).toBe("(a = 1 OR b = 2) AND status = 'error'");
+  });
+});

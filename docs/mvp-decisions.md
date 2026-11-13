@@ -269,6 +269,14 @@ Decisions from blessing and reviewing the 51 captured fixtures (`fixtures/otlp`,
 | D-A1-6 | Media | **`put_media` verifies the SHA-256 of the bytes and refreshes `last_seen_at` on every call; media GC keeps blobs seen in the last hour and runs daily and for a project as soon as one of its deletions is applied.** The guard counts from the last `put_media` instead of the first, so a reused blob is never collected under new spans, and one hour covers the gap between a blob's put and its span's append. Running on deletion keeps media within `deletion.max_delay` too. On S3 a blob is a plain `PutObject`: its name is its hash, so an overwrite writes the same bytes and no conditional put is needed (spec 03 §9). |
 | D-A1-7 | Project drop | **Appends to a dropped project fail with `AppendError::ProjectDropped`.** `drop_project` holds new appends while it commits; the commit obsoletes the project's files (GC deletes them), records it in `projects`, removes its watermark and marks its pending deletions applied; then its media is deleted. The committer refuses files of a dropped project, and files older than a retention watermark, so a flush or compaction prepared earlier cannot bring data back (spec 03 §4, §7, §8). |
 
+## Track C — Web UI
+
+Decisions from the review of track C (`docs/reviews/c-web-ui.md`) and its fixes (`docs/plans/c-fixes/`).
+
+| # | Topic | Decision |
+|---|---|---|
+| D-C-1 | OR in the filter bar | **A filter with a top-level `OR` is one raw chip.** `AND` binds tighter than `OR`, so splitting `a OR b AND c` on `AND` and re-joining the chips would apply `(a OR b) AND c`. `splitConjuncts` returns the whole text as one conjunct when it has a top-level `OR`; the `AND` of `[NOT] BETWEEN x AND y` is never a split point; click-to-filter wraps a filter with a top-level `OR` in parentheses before appending `AND`. Refines D129. |
+
 ## Open
 
 - License (D9).
