@@ -276,6 +276,7 @@ Decisions from the review of track C (`docs/reviews/c-web-ui.md`) and its fixes 
 | # | Topic | Decision |
 |---|---|---|
 | D-C-1 | OR in the filter bar | **A filter with a top-level `OR` is one raw chip.** `AND` binds tighter than `OR`, so splitting `a OR b AND c` on `AND` and re-joining the chips would apply `(a OR b) AND c`. `splitConjuncts` returns the whole text as one conjunct when it has a top-level `OR`; the `AND` of `[NOT] BETWEEN x AND y` is never a split point; click-to-filter wraps a filter with a top-level `OR` in parentheses before appending `AND`. Refines D129. |
+| D-C-3 | Chart keyboard | **Each dashboard chart is one tab stop** (`role="group"`, `aria-roledescription="chart"`). ←/→ move between buckets (from none: the first or the last), Home/End jump, Enter/Space opens the bucket's traces like a click, Escape clears; the bucket is announced in a polite live region (time and each series' value) and marked with a reference line. The per-point click targets stay for the mouse with `tabIndex=-1` inside an `aria-hidden` `foreignObject`, and Recharts' own keyboard layer is off (`accessibilityLayer={false}`). |
 
 ## Open
 
