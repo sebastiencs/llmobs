@@ -10,7 +10,7 @@ P3 then makes sure functions the planner inserts on its own, and the `||` operat
 
 **The guard only takes effect once the query pool is bounded.** Today `Storage::open` builds the process-wide query runtime with `RuntimeEnvBuilder::new().with_metadata_cache_limit(..)` (`crates/storage/src/lib.rs`, `build_runtime`), whose pool is DataFusion's `UnboundedMemoryPool`. Spec 03 § 6 says "the memory pool stays the default until M6".
 
-The user decided that this plan depends on A1 M6 bounding that pool. Until then only the deny-list protects production. The tests below use bounded pools, so the guard is fully tested now.
+The user decided that this plan depends on A1 M6 bounding that pool; M6.1 (`docs/plans/a1-storage/11-m6a-resources-hardening.md`, on `main`) does. Until it lands, only the deny-list protects production. The tests below use bounded pools, so the guard is fully tested now.
 
 **Edit only:**
 - new `crates/storage/src/views/guard.rs`;
@@ -31,7 +31,7 @@ The user decided that this plan depends on A1 M6 bounding that pool. Until then 
 
   Both succeeded.
 - `query_error::classify` already maps `DataFusionError::ResourcesExhausted` to `RunError::TooLarge`. `ScalarFunctionExpr::evaluate` passes a function's error through unwrapped.
-- The pool is `ProjectQuery::runtime.memory_pool` (`Arc<dyn MemoryPool>`, a public field of `RuntimeEnv`). `QueryContext::new` passes `source.runtime` to `session_state(runtime, …)`. In production that runtime is **process-wide**: every query shares one pool. A reservation here therefore competes with all running queries, which is the intended meaning of "the pool has room".
+- The pool is `ProjectQuery::runtime.memory_pool` (`Arc<dyn MemoryPool>`, a public field of `RuntimeEnv`). `QueryContext::new` passes `source.runtime` to `session_state(runtime, …)`. Today that runtime is process-wide and its pool unbounded. From A1 M6.1 each query gets a `RuntimeEnv` of its own whose pool is capped at `query.max_memory` and draws from a shared pool, so a reservation here competes with the query's own operators and, through the shared pool, with other queries. That is the intended meaning of "the pool has room".
 - Other code matches functions **by name**:
   - the hex rule (`func.name() != "encode"`);
   - A1's `query/trace_list.rs` (`function.fun().name() != "encode"`);
