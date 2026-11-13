@@ -508,7 +508,10 @@ fn parse_json_or_string(text: String) -> Value {
     serde_json::from_str(&text).unwrap_or(Value::String(text))
 }
 
-fn stored_payload(format: Option<PayloadFormat>, text: Option<String>) -> Option<Payload> {
+pub(crate) fn stored_payload(
+    format: Option<PayloadFormat>,
+    text: Option<String>,
+) -> Option<Payload> {
     match (format, text) {
         (Some(format), Some(text)) => Some(Payload::from_stored(format, text)),
         (None, Some(text)) => Some(Payload::Text(text)),

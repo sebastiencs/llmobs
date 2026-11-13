@@ -3,22 +3,24 @@
 //! Columns are read by name. A column whose type differs from the one listed
 //! in `docs/plans/g-spine/02-m2-read-api.md` is cast first. Strings may be
 //! `Utf8View`, so every string read goes through the same cast.
-#![cfg_attr(not(test), allow(dead_code))] // handlers call these from G2.3 on
 
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Float64Array, Int64Array, ListArray, MapArray, RecordBatch,
-    StringArray, StructArray, TimestampNanosecondArray,
+    Array, ArrayRef, BooleanArray, FixedSizeBinaryArray, Float64Array, Int64Array, ListArray,
+    MapArray, RecordBatch, StringArray, StructArray, TimestampNanosecondArray, UInt16Array,
 };
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, TimeUnit};
-use llmobs_core::enums::{ScoreDataType, ScoreSource, SpanKind, SpanStatus};
-use llmobs_core::ids::{SpanId, TraceId};
-use llmobs_core::schema::{scores, spans, traces};
+use llmobs_core::enums::{
+    Convention, CostSource, PayloadFormat, ScoreDataType, ScoreSource, SpanKind, SpanStatus,
+};
+use llmobs_core::ids::{ProjectId, SpanId, TraceId};
+use llmobs_core::schema::{event_field, link_field, scores, spans, traces};
 use llmobs_core::score::ScoreValue;
+use llmobs_core::span::{Span, SpanEvent, SpanLink};
 use uuid::Uuid;
 
 use super::traces::{ScoreBrief, SpanSummary, TraceSummary};
@@ -403,6 +405,213 @@ fn span_batch(batch: &RecordBatch) -> Result<Vec<SpanSummary>, ConvertError> {
         });
     }
     Ok(out)
+}
+
+/// The one span of a `span_detail` batch. `project_id` comes from the caller.
+///
+/// A batch without rows is `Null(span_id)`. Row 0 is read.
+pub(crate) fn span(batch: &RecordBatch, project_id: ProjectId) -> Result<Span, ConvertError> {
+    if batch.num_rows() == 0 {
+        return Err(ConvertError::Null(spans::SPAN_ID));
+    }
+    let row = 0;
+    let trace_id = strings(batch, spans::TRACE_ID)?;
+    let span_id = strings(batch, spans::SPAN_ID)?;
+    let parent_span_id = strings(batch, spans::PARENT_SPAN_ID)?;
+    let name = strings(batch, spans::NAME)?;
+    let span_kind = strings(batch, spans::SPAN_KIND)?;
+    let start_time = times(batch, spans::START_TIME)?;
+    let end_time = times(batch, spans::END_TIME)?;
+    let status = strings(batch, spans::STATUS)?;
+    let status_message = strings(batch, spans::STATUS_MESSAGE)?;
+    let service_name = strings(batch, spans::SERVICE_NAME)?;
+    let session_id = strings(batch, spans::SESSION_ID)?;
+    let user_id = strings(batch, spans::USER_ID)?;
+    let environment = strings(batch, spans::ENVIRONMENT)?;
+    let release = strings(batch, spans::RELEASE)?;
+    let tags = lists(batch, spans::TAGS)?;
+    let metadata = maps(batch, spans::METADATA)?;
+    let provider = strings(batch, spans::PROVIDER)?;
+    let request_model = strings(batch, spans::REQUEST_MODEL)?;
+    let response_model = strings(batch, spans::RESPONSE_MODEL)?;
+    let operation = strings(batch, spans::OPERATION)?;
+    let input_tokens = ints(batch, spans::INPUT_TOKENS)?;
+    let output_tokens = ints(batch, spans::OUTPUT_TOKENS)?;
+    let cache_read_tokens = ints(batch, spans::CACHE_READ_TOKENS)?;
+    let cache_write_tokens = ints(batch, spans::CACHE_WRITE_TOKENS)?;
+    let reasoning_tokens = ints(batch, spans::REASONING_TOKENS)?;
+    let total_tokens = ints(batch, spans::TOTAL_TOKENS)?;
+    let cost_input = floats(batch, spans::COST_INPUT)?;
+    let cost_output = floats(batch, spans::COST_OUTPUT)?;
+    let cost_total = floats(batch, spans::COST_TOTAL)?;
+    let cost_source = strings(batch, spans::COST_SOURCE)?;
+    let ttft_ns = ints(batch, spans::TTFT_NS)?;
+    let request_params = strings(batch, spans::REQUEST_PARAMS)?;
+    let input = strings(batch, spans::INPUT)?;
+    let input_format = strings(batch, spans::INPUT_FORMAT)?;
+    let output = strings(batch, spans::OUTPUT)?;
+    let output_format = strings(batch, spans::OUTPUT_FORMAT)?;
+    let input_preview = strings(batch, spans::INPUT_PREVIEW)?;
+    let output_preview = strings(batch, spans::OUTPUT_PREVIEW)?;
+    let system_instructions = strings(batch, spans::SYSTEM_INSTRUCTIONS)?;
+    let tool_definitions = strings(batch, spans::TOOL_DEFINITIONS)?;
+    let attributes = maps(batch, spans::ATTRIBUTES)?;
+    let resource_attributes = maps(batch, spans::RESOURCE_ATTRIBUTES)?;
+    let scope_name = strings(batch, spans::SCOPE_NAME)?;
+    let scope_version = strings(batch, spans::SCOPE_VERSION)?;
+    let events = lists(batch, spans::EVENTS)?;
+    let links = lists(batch, spans::LINKS)?;
+    let media_refs = lists(batch, spans::MEDIA_REFS)?;
+    let truncated = lists(batch, spans::TRUNCATED)?;
+    let conventions = lists(batch, spans::CONVENTIONS)?;
+    let ingest_time = times(batch, spans::INGEST_TIME)?;
+    let schema_version = downcast::<UInt16Array>(
+        &column(batch, spans::SCHEMA_VERSION, &DataType::UInt16)?,
+        spans::SCHEMA_VERSION,
+    )?;
+
+    Ok(Span {
+        project_id,
+        trace_id: req_parsed(&trace_id, row, spans::TRACE_ID, TraceId::from_str)?,
+        span_id: req_parsed(&span_id, row, spans::SPAN_ID, SpanId::from_str)?,
+        parent_span_id: opt_parsed(
+            &parent_span_id,
+            row,
+            spans::PARENT_SPAN_ID,
+            SpanId::from_str,
+        )?,
+        name: req_string(&name, row, spans::NAME)?,
+        span_kind: req_parsed(&span_kind, row, spans::SPAN_KIND, SpanKind::parse)?,
+        start_time: req_time(&start_time, row, spans::START_TIME)?,
+        end_time: req_time(&end_time, row, spans::END_TIME)?,
+        status: req_parsed(&status, row, spans::STATUS, SpanStatus::parse)?,
+        status_message: opt_string(&status_message, row),
+        service_name: opt_string(&service_name, row),
+        session_id: opt_string(&session_id, row),
+        user_id: opt_string(&user_id, row),
+        environment: opt_string(&environment, row),
+        release: opt_string(&release, row),
+        tags: list_strings(&tags, row, spans::TAGS)?,
+        metadata: map_strings(&metadata, row, spans::METADATA)?,
+        provider: opt_string(&provider, row),
+        request_model: opt_string(&request_model, row),
+        response_model: opt_string(&response_model, row),
+        operation: opt_string(&operation, row),
+        input_tokens: opt_i64(&input_tokens, row),
+        output_tokens: opt_i64(&output_tokens, row),
+        cache_read_tokens: opt_i64(&cache_read_tokens, row),
+        cache_write_tokens: opt_i64(&cache_write_tokens, row),
+        reasoning_tokens: opt_i64(&reasoning_tokens, row),
+        total_tokens: opt_i64(&total_tokens, row),
+        cost_input: opt_f64(&cost_input, row),
+        cost_output: opt_f64(&cost_output, row),
+        cost_total: opt_f64(&cost_total, row),
+        cost_source: opt_parsed(&cost_source, row, spans::COST_SOURCE, CostSource::parse)?,
+        ttft_ns: opt_i64(&ttft_ns, row),
+        request_params: opt_string(&request_params, row),
+        input: opt_string(&input, row),
+        input_format: opt_parsed(
+            &input_format,
+            row,
+            spans::INPUT_FORMAT,
+            PayloadFormat::parse,
+        )?,
+        output: opt_string(&output, row),
+        output_format: opt_parsed(
+            &output_format,
+            row,
+            spans::OUTPUT_FORMAT,
+            PayloadFormat::parse,
+        )?,
+        input_preview: opt_string(&input_preview, row),
+        output_preview: opt_string(&output_preview, row),
+        system_instructions: opt_string(&system_instructions, row),
+        tool_definitions: opt_string(&tool_definitions, row),
+        attributes: map_strings(&attributes, row, spans::ATTRIBUTES)?,
+        resource_attributes: map_strings(&resource_attributes, row, spans::RESOURCE_ATTRIBUTES)?,
+        scope_name: opt_string(&scope_name, row),
+        scope_version: opt_string(&scope_version, row),
+        events: span_events(&events, row)?,
+        links: span_links(&links, row)?,
+        media_refs: list_strings(&media_refs, row, spans::MEDIA_REFS)?,
+        truncated: list_strings(&truncated, row, spans::TRUNCATED)?,
+        conventions: span_conventions(&conventions, row)?,
+        ingest_time: req_time(&ingest_time, row, spans::INGEST_TIME)?,
+        schema_version: (!schema_version.is_null(row))
+            .then(|| schema_version.value(row))
+            .ok_or(ConvertError::Null(spans::SCHEMA_VERSION))?,
+    })
+}
+
+/// `events` items: `time`, `name` and a nullable `attributes` JSON text.
+fn span_events(list: &ListArray, row: usize) -> Result<Vec<SpanEvent>, ConvertError> {
+    if list.is_null(row) {
+        return Ok(Vec::new());
+    }
+    let items = list.value(row);
+    let items = downcast::<StructArray>(&items, spans::EVENTS)?;
+    let time_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()));
+    let time = downcast::<TimestampNanosecondArray>(
+        &child(&items, event_field::TIME, &time_type)?,
+        spans::EVENTS,
+    )?;
+    let name = downcast::<StringArray>(
+        &child(&items, event_field::NAME, &DataType::Utf8)?,
+        spans::EVENTS,
+    )?;
+    let attributes = downcast::<StringArray>(
+        &child(&items, event_field::ATTRIBUTES, &DataType::Utf8)?,
+        spans::EVENTS,
+    )?;
+    let mut out = Vec::with_capacity(items.len());
+    for index in 0..items.len() {
+        out.push(SpanEvent {
+            time: req_time(&time, index, spans::EVENTS)?,
+            name: req_string(&name, index, spans::EVENTS)?,
+            attributes: opt_string(&attributes, index),
+        });
+    }
+    Ok(out)
+}
+
+/// `links` items: `FixedSizeBinary` ids and a nullable `attributes` JSON text.
+fn span_links(list: &ListArray, row: usize) -> Result<Vec<SpanLink>, ConvertError> {
+    if list.is_null(row) {
+        return Ok(Vec::new());
+    }
+    let items = list.value(row);
+    let items = downcast::<StructArray>(&items, spans::LINKS)?;
+    let trace_id = downcast::<FixedSizeBinaryArray>(
+        &child(&items, link_field::TRACE_ID, &DataType::FixedSizeBinary(16))?,
+        spans::LINKS,
+    )?;
+    let span_id = downcast::<FixedSizeBinaryArray>(
+        &child(&items, link_field::SPAN_ID, &DataType::FixedSizeBinary(8))?,
+        spans::LINKS,
+    )?;
+    let attributes = downcast::<StringArray>(
+        &child(&items, link_field::ATTRIBUTES, &DataType::Utf8)?,
+        spans::LINKS,
+    )?;
+    let mut out = Vec::with_capacity(items.len());
+    for index in 0..items.len() {
+        out.push(SpanLink {
+            trace_id: TraceId::from_slice(trace_id.value(index))
+                .map_err(|_| ConvertError::Value(spans::LINKS))?,
+            span_id: SpanId::from_slice(span_id.value(index))
+                .map_err(|_| ConvertError::Value(spans::LINKS))?,
+            attributes: opt_string(&attributes, index),
+        });
+    }
+    Ok(out)
+}
+
+/// `conventions` items, each parsed with `Convention::parse`.
+fn span_conventions(list: &ListArray, row: usize) -> Result<Vec<Convention>, ConvertError> {
+    list_strings(list, row, spans::CONVENTIONS)?
+        .iter()
+        .map(|text| Convention::parse(text).map_err(|_| ConvertError::Value(spans::CONVENTIONS)))
+        .collect()
 }
 
 /// Latest-score rows grouped by `target_key`. Each group keeps row order.

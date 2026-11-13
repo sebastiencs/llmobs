@@ -13,3 +13,4 @@ pub(crate) mod otlp;
 pub(crate) mod projects;
 pub(crate) mod read;
 pub(crate) mod tokens;
+pub(crate) mod traces;

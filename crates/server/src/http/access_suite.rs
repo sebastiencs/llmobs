@@ -367,6 +367,14 @@ fn concrete_path(route: &RouteDef, world: &World) -> String {
         .path
         .replace("{org}", &world.org_slug)
         .replace("{project}", &world.project_a)
+        .replace("{trace_id}", "a1000000000000000000000000000001")
+        .replace("{span_id}", "b100000000000011")
+        .replace("{session_id}", "sess-001")
+        .replace("{user_id}", "user-42")
+        .replace(
+            "{sha256}",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        )
         .replace("{user}", &world.member_id.to_string())
         .replace("{id}", id)
         .replace("{token}", TOKEN)

@@ -4,9 +4,11 @@
 use std::time::Duration;
 
 use llmobs_core::ids::ProjectId;
-use llmobs_storage::{ListScope, QueryContext, QueryOptions, TimeWindow};
+use llmobs_storage::{ListScope, QueryContext, QueryOptions, ScoreTargets, TimeWindow};
 
 use crate::api::common::{Limit, SortOrder, TimeParam};
+use crate::api::convert;
+use crate::api::traces::TraceSummary;
 use crate::http::AppState;
 use crate::http::error::ApiError;
 
@@ -65,6 +67,30 @@ pub(crate) fn sort_order(order: SortOrder) -> llmobs_storage::SortOrder {
         SortOrder::Asc => llmobs_storage::SortOrder::Asc,
         SortOrder::Desc => llmobs_storage::SortOrder::Desc,
     }
+}
+
+/// Fills `scores` of each trace with its latest score per name (spec 09 § Response shapes).
+///
+/// Callers pass at most 1,000 traces.
+pub(crate) async fn attach_trace_scores(
+    ctx: &QueryContext,
+    traces: &mut [TraceSummary],
+) -> Result<(), ApiError> {
+    if traces.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<String> = traces
+        .iter()
+        .map(|trace| trace.trace_id.to_string())
+        .collect();
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let batches =
+        llmobs_storage::latest_scores(ctx, ScoreTargets::Traces(&refs), READ_TIMEOUT).await?;
+    let mut briefs = convert::score_briefs(&batches)?;
+    for (trace, id) in traces.iter_mut().zip(&ids) {
+        trace.scores = briefs.remove(id).unwrap_or_default();
+    }
+    Ok(())
 }
 
 #[cfg(test)]
