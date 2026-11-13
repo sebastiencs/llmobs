@@ -3,6 +3,8 @@
 
 pub(crate) mod body;
 pub(crate) mod environment;
+#[cfg(test)]
+mod fixtures_tests;
 pub(crate) mod otlp;
 
 use std::sync::{Arc, PoisonError, RwLock};
