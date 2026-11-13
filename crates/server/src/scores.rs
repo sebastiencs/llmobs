@@ -954,4 +954,141 @@ mod tests {
         assert_eq!(rows[0].created_at, now);
         assert_eq!(rows[0].updated_at, now + 1);
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn v7_time_must_be_inside_the_project_retention() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let (short, _) = app.add_project(&seeded, "short", Some(1)).await;
+        let now = app.state.clock.now_ns();
+        let cutoff = now - DAY_NS;
+        // The last whole millisecond before the cutoff, and the first one at or after it.
+        let outside = v7_at(u64::try_from(cutoff / 1_000_000 - 1).unwrap());
+        let inside = v7_at(u64::try_from((cutoff + 999_999) / 1_000_000).unwrap());
+        let with_id = |id: Uuid| ScoreCreate {
+            score_id: Some(id),
+            ..item("accuracy", 0.5)
+        };
+
+        let errors = refused(write(&app.state, &short, api_writer(), vec![with_id(outside)]).await);
+        assert_eq!(
+            errors,
+            vec![(
+                "scores[0].score_id".to_owned(),
+                "score_id time is older than the project's retention".to_owned()
+            )]
+        );
+        let written = write(&app.state, &short, api_writer(), vec![with_id(inside)])
+            .await
+            .unwrap();
+        assert_eq!(written, vec![inside]);
+        // A project without retention keeps the old id.
+        let written = write(
+            &app.state,
+            &seeded.project,
+            api_writer(),
+            vec![with_id(outside)],
+        )
+        .await
+        .unwrap();
+        assert_eq!(written, vec![outside]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn v7_time_beyond_the_timestamp_range_is_in_the_future() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let largest = v7_at(u64::MAX >> 16);
+        let errors = refused(
+            write(
+                &app.state,
+                &seeded.project,
+                api_writer(),
+                vec![ScoreCreate {
+                    score_id: Some(largest),
+                    ..item("accuracy", 0.5)
+                }],
+            )
+            .await,
+        );
+        assert_eq!(
+            errors,
+            vec![(
+                "scores[0].score_id".to_owned(),
+                "score_id time is in the future".to_owned()
+            )]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_thousand_scores_are_accepted_in_one_request() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let items: Vec<ScoreCreate> = (0..MAX_SCORES)
+            .map(|index| item(&format!("score-{index}"), 0.5))
+            .collect();
+        let ids = write(&app.state, &seeded.project, api_writer(), items)
+            .await
+            .unwrap();
+        assert_eq!(ids.len(), MAX_SCORES);
+        let distinct: std::collections::BTreeSet<Uuid> = ids.into_iter().collect();
+        assert_eq!(distinct.len(), MAX_SCORES);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sdk_writer_without_a_body_source_stores_sdk() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let id = v4(5);
+        write(
+            &app.state,
+            &seeded.project,
+            Writer::Sdk { key_id: author() },
+            vec![ScoreCreate {
+                score_id: Some(id),
+                ..item("accuracy", 0.5)
+            }],
+        )
+        .await
+        .unwrap();
+        let rows = stored(&app, seeded.project.id).await;
+        let row = rows.iter().find(|row| row.score_id == id).unwrap();
+        assert_eq!(row.source, ScoreSource::Sdk);
+        assert_eq!(row.author_user_id, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn session_target_drops_the_body_session_id() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let on_session = v4(6);
+        let on_span = v4(7);
+        write(
+            &app.state,
+            &seeded.project,
+            api_writer(),
+            vec![
+                ScoreCreate {
+                    score_id: Some(on_session),
+                    target: ScoreTarget::Session {
+                        session_id: "chat-42".to_owned(),
+                    },
+                    session_id: Some("chat-42".to_owned()),
+                    ..item("session-score", 0.5)
+                },
+                ScoreCreate {
+                    score_id: Some(on_span),
+                    session_id: Some("chat-42".to_owned()),
+                    ..item("span-score", 0.5)
+                },
+            ],
+        )
+        .await
+        .unwrap();
+        let rows = stored(&app, seeded.project.id).await;
+        let session = rows.iter().find(|row| row.score_id == on_session).unwrap();
+        assert_eq!(session.session_id, None);
+        let span = rows.iter().find(|row| row.score_id == on_span).unwrap();
+        assert_eq!(span.session_id.as_deref(), Some("chat-42"));
+    }
 }
