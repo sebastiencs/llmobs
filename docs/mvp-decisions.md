@@ -256,6 +256,7 @@ Decisions from blessing and reviewing the 51 captured fixtures (`fixtures/otlp`,
 | D-B1-7 | Cost without tokens | **A priced `llm`/`embedding` span with neither input nor output tokens has null cost and `cost_source = none`**, not a computed $0. The matched row still infers the provider. |
 | D-B1-8 | Google ADK call_llm | **ADK 2.x `call_llm` (no `gen_ai.operation.name`, `gcp.vertex.agent.llm_request` present) is `chain`:** its `generate_content` child carries the same usage. `gen_ai.system = gcp.vertex.agent` is not a provider (skipped, left unread), and `gcp.vertex.agent.session_id` is a `session_id` source (`google_adk/*`). |
 | D-B1-9 | OpenInference response model | **`llm.response.model_name` fills `response_model`**, after the GenAI and Vercel keys, as MLflow reads it. |
+| D-B1-10 | OpenInference redaction | **`__REDACTED__` is not captured content.** OpenInference (Python and TypeScript) writes it in place of hidden inputs, outputs and message text (`hideInputs`, `hideInputText`, …). The normalizer treats it like an empty value: `input`/`output` stay empty, a redacted message keeps its role and tool calls with no text part, and the placeholder is not kept in `attributes`. |
 
 ## Track A1 — Storage engine
 
