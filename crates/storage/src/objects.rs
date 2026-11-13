@@ -464,9 +464,10 @@ impl Objects {
                             async move {
                                 let mut buffer = vec![0_u8; MULTIPART_PART];
                                 let mut file = reader.lock().await;
-                                let read = file.read(&mut buffer).await.map_err(|source| {
-                                    ObjectError::io("reading output", &temp, source)
-                                })?;
+                                let read =
+                                    read_part(&mut *file, &mut buffer).await.map_err(|source| {
+                                        ObjectError::io("reading output", &temp, source)
+                                    })?;
                                 if read == 0 {
                                     Ok(None)
                                 } else {
@@ -924,8 +925,47 @@ fn object_key(path: &str) -> Result<ObjectPath, ObjectError> {
     ObjectPath::parse(path).map_err(|_| ObjectError::InvalidPath)
 }
 
+/// Reads until `buffer` is full or the reader ends, and returns the bytes read.
+///
+/// A single `read` may return less than asked, and S3 refuses a multipart part
+/// other than the last under 5 MiB, so each part is filled before it is sent.
+async fn read_part<R>(reader: &mut R, buffer: &mut [u8]) -> io::Result<usize>
+where
+    R: tokio::io::AsyncRead + Unpin + ?Sized,
+{
+    let mut filled = 0;
+    while filled < buffer.len() {
+        let read = reader.read(&mut buffer[filled..]).await?;
+        if read == 0 {
+            break;
+        }
+        filled += read;
+    }
+    Ok(filled)
+}
+
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn a_multipart_part_is_filled_across_short_reads() {
+        use tokio::io::AsyncReadExt as _;
+        // Three sources chained: each `read` stops at a source boundary.
+        let first = [1_u8; 3];
+        let second = [2_u8; 4];
+        let third = [3_u8; 5];
+        let mut reader = (&first[..]).chain(&second[..]).chain(&third[..]);
+        let mut buffer = [0_u8; 10];
+        assert_eq!(
+            super::read_part(&mut reader, &mut buffer).await.unwrap(),
+            10
+        );
+        assert_eq!(buffer, [1, 1, 1, 2, 2, 2, 2, 3, 3, 3]);
+        let mut rest = [0_u8; 10];
+        assert_eq!(super::read_part(&mut reader, &mut rest).await.unwrap(), 2);
+        assert_eq!(rest[..2], [3, 3]);
+        assert_eq!(super::read_part(&mut reader, &mut rest).await.unwrap(), 0);
+    }
+
     use bytesize::ByteSize;
     use std::io::Write;
     use std::sync::Arc;
