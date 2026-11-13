@@ -6,6 +6,7 @@
 use serde_json::{Map, Value as Json};
 
 use crate::bag::AttrBag;
+use crate::conventions::openinference::captured_text;
 use crate::value::as_str;
 
 /// OpenAI-shaped messages from `prefix` (`llm.input_messages.` or `llm.output_messages.`).
@@ -73,8 +74,8 @@ fn message(bag: &AttrBag<'_>, prefix: &str, index: usize) -> Json {
                 if !calls.iter().any(|known| same_call(known, &call)) {
                     calls.push(call);
                 }
-            } else {
-                parts.push(content_part(bag, &contents_prefix, index));
+            } else if let Some(part) = content_part(bag, &contents_prefix, index) {
+                parts.push(part);
             }
         }
         message.insert("content".to_owned(), Json::Array(parts));
@@ -93,7 +94,8 @@ fn same_call(known: &Json, call: &Json) -> bool {
     }
 }
 
-fn content_part(bag: &AttrBag<'_>, prefix: &str, index: usize) -> Json {
+/// `None` for a text part with no text (empty or redacted).
+fn content_part(bag: &AttrBag<'_>, prefix: &str, index: usize) -> Option<Json> {
     let base = format!("{prefix}{index}.message_content.");
     let kind = string_at(bag, &format!("{base}type"));
     let text = string_at(bag, &format!("{base}text"));
@@ -101,21 +103,22 @@ fn content_part(bag: &AttrBag<'_>, prefix: &str, index: usize) -> Json {
     if let Some(url) = url
         && kind.as_deref() != Some("text")
     {
-        return Json::Object(Map::from_iter([
+        return Some(Json::Object(Map::from_iter([
             ("type".to_owned(), Json::String("image_url".to_owned())),
             (
                 "image_url".to_owned(),
                 Json::Object(Map::from_iter([("url".to_owned(), Json::String(url))])),
             ),
-        ]));
+        ])));
+    }
+    let kind = kind.unwrap_or_else(|| "text".to_owned());
+    if kind == "text" && text.is_none() {
+        return None;
     }
     let mut part = Map::new();
-    part.insert(
-        "type".to_owned(),
-        Json::String(kind.unwrap_or_else(|| "text".to_owned())),
-    );
+    part.insert("type".to_owned(), Json::String(kind));
     insert_string(&mut part, "text", text);
-    Json::Object(part)
+    Some(Json::Object(part))
 }
 
 /// One OpenAI tool call from the keys under `base` (`….tool_call.`).
@@ -146,13 +149,10 @@ fn insert_string(object: &mut Map<String, Json>, key: &str, value: Option<String
     }
 }
 
+/// Redacted content (`__REDACTED__`) reads as absent, like an empty string.
 fn string_at(bag: &AttrBag<'_>, key: &str) -> Option<String> {
     let text = as_str(bag.get(key)?)?;
-    if text.is_empty() {
-        None
-    } else {
-        Some(text.to_owned())
-    }
+    captured_text(text).then(|| text.to_owned())
 }
 
 #[cfg(test)]
@@ -191,6 +191,35 @@ mod tests {
         assert_eq!(
             messages_to_json(&messages),
             r#"[{"role":"tool","parts":[{"type":"tool_call_response","id":"call_1","response":{"temp":18}}]}]"#
+        );
+    }
+
+    #[test]
+    fn redacted_text_is_not_content() {
+        let attrs = [
+            string_attr("llm.input_messages.0.message.role", "system"),
+            string_attr("llm.input_messages.0.message.content", "__REDACTED__"),
+            string_attr("llm.input_messages.1.message.role", "user"),
+            string_attr(
+                "llm.input_messages.1.message.contents.0.message_content.type",
+                "text",
+            ),
+            string_attr(
+                "llm.input_messages.1.message.contents.0.message_content.text",
+                "__REDACTED__",
+            ),
+            string_attr(
+                "llm.input_messages.1.message.contents.1.message_content.text",
+                "kept",
+            ),
+        ];
+        let mut warnings = Warnings::default();
+        let bag = AttrBag::new(&attrs, &mut warnings);
+        let raw = flattened_messages(&bag, "llm.input_messages.").expect("messages");
+        let messages = openai_messages(&serde_json::Value::Array(raw)).expect("converted");
+        assert_eq!(
+            messages_to_json(&messages),
+            r#"[{"role":"system","parts":[]},{"role":"user","parts":[{"type":"text","content":"kept"}]}]"#
         );
     }
 
