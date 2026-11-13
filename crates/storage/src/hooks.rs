@@ -134,6 +134,8 @@ mod fault {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
+    use tokio::runtime::RuntimeFlavor;
+
     use super::HookPoint;
 
     /// Per-storage test seam. Cloning shares the pause and fault state.
@@ -200,12 +202,28 @@ mod fault {
                 return;
             }
             self.inner.waiting_at[index].fetch_add(1, Ordering::SeqCst);
-            while held.contains(&point) {
-                held = self
-                    .inner
-                    .cv
-                    .wait(held)
-                    .unwrap_or_else(PoisonError::into_inner);
+            let wait = || {
+                while held.contains(&point) {
+                    held = self
+                        .inner
+                        .cv
+                        .wait(held)
+                        .unwrap_or_else(PoisonError::into_inner);
+                }
+            };
+            // Async tasks pause too, which blocks a tokio worker. A task the
+            // caller just woke sits in that worker's LIFO slot, which other
+            // workers never steal; if the test waits on it before releasing,
+            // it deadlocks. `block_in_place` hands the slot and the worker's
+            // core to another thread. It panics on a current-thread runtime,
+            // where the plain wait stays; on blocking-pool threads it just
+            // runs the closure.
+            let multi_thread = tokio::runtime::Handle::try_current()
+                .is_ok_and(|handle| handle.runtime_flavor() == RuntimeFlavor::MultiThread);
+            if multi_thread {
+                tokio::task::block_in_place(wait);
+            } else {
+                wait();
             }
             self.inner.waiting_at[index].fetch_sub(1, Ordering::SeqCst);
         }
@@ -313,6 +331,71 @@ mod tests {
         hooks.release(HookPoint::AfterWalSync);
         thread.join().unwrap();
         assert_eq!(hooks.waiting(), 0);
+    }
+
+    /// A task woken just before a worker parks on a held point sits in that
+    /// worker's LIFO slot, which other workers never steal. The pause must hand
+    /// the slot to another thread, or a test that waits on the woken task
+    /// before releasing the point deadlocks.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_task_woken_before_a_held_pause_still_runs() {
+        use tokio::sync::oneshot;
+        use tokio::time::timeout;
+
+        let hooks = Hooks::default();
+        hooks.hold(HookPoint::FlushAfterWrite);
+
+        // The woken task: polled once so it waits on `wake`, then reports.
+        let (ready_tx, ready_rx) = oneshot::channel::<()>();
+        let (wake_tx, wake_rx) = oneshot::channel::<()>();
+        let (ran_tx, ran_rx) = oneshot::channel::<()>();
+        let woken = tokio::spawn(async move {
+            ready_tx.send(()).unwrap();
+            wake_rx.await.unwrap();
+            // The receiver is gone if the timeout already fired.
+            let _ = ran_tx.send(());
+        });
+        ready_rx.await.unwrap();
+
+        // The pausing task wakes it from a worker (LIFO slot), then parks.
+        let parked = hooks.clone();
+        let pausing = tokio::spawn(async move {
+            wake_tx.send(()).unwrap();
+            parked.pause(HookPoint::FlushAfterWrite);
+        });
+
+        let ran = timeout(Duration::from_secs(5), ran_rx).await;
+        // Release before asserting, so a regression fails instead of hanging.
+        hooks.release(HookPoint::FlushAfterWrite);
+        pausing.await.unwrap();
+        woken.await.unwrap();
+        assert!(
+            ran.is_ok(),
+            "the woken task did not run while the pause was held"
+        );
+    }
+
+    #[test]
+    fn a_pause_on_a_current_thread_runtime_waits_in_place() {
+        let hooks = Hooks::default();
+        hooks.hold(HookPoint::FlushAfterWrite);
+        let parked = hooks.clone();
+        let thread = thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            runtime.block_on(async move { parked.pause(HookPoint::FlushAfterWrite) });
+        });
+        let started = Instant::now();
+        while hooks.waiting() == 0 {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "pause did not block"
+            );
+            thread::yield_now();
+        }
+        hooks.release(HookPoint::FlushAfterWrite);
+        thread.join().unwrap();
     }
 
     #[test]
