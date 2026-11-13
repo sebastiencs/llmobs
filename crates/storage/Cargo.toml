@@ -25,6 +25,7 @@ humantime-serde.workspace = true
 # `fs` is already a default feature of the pin. `aws` is the S3 backend (D119).
 object_store = { workspace = true, features = ["fs", "aws"] }
 parquet.workspace = true
+rustix = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = { workspace = true }
@@ -38,3 +39,4 @@ uuid.workspace = true
 [dev-dependencies]
 proptest.workspace = true
 tempfile.workspace = true
+toml.workspace = true

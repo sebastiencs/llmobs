@@ -49,6 +49,7 @@ mod compaction;
 pub mod config;
 pub(crate) mod dedup;
 pub(crate) mod deletion;
+pub(crate) mod disk;
 pub mod error;
 mod filter;
 pub(crate) mod flush;
@@ -165,6 +166,9 @@ pub struct Storage {
     spans_flush: FlushHandle,
     scores_flush: FlushHandle,
     gc: gc::GcHandle,
+    /// Free disk and compaction reservations (spec 03 §10).
+    disk: Arc<disk::Disk>,
+    disk_monitor: disk::DiskHandle,
     /// Media collection, cloned into the GC and compaction tasks.
     media: MediaGc,
     /// Shared by the background task and [`Self::compact`].
@@ -268,6 +272,9 @@ impl Storage {
             })??;
         let committer = Arc::new(Committer::open(&data_dir, share_hooks(&hooks)).await?);
         let objects = open_objects(&config, &hooks, remote).await?;
+        let mut disk_paths = vec![data_dir.clone()];
+        disk_paths.extend(objects.local_root().map(Path::to_path_buf));
+        let disk = Arc::new(disk::Disk::open(disk_paths, config.min_free_bytes.0)?);
         let objects_for_cleanup = Arc::clone(&objects);
         let removed = tokio::task::spawn_blocking(move || objects_for_cleanup.remove_temp_files())
             .await
@@ -355,6 +362,7 @@ impl Storage {
             Arc::new(compaction::job::Compactor::new(
                 Arc::clone(&committer),
                 Arc::clone(&objects),
+                Arc::clone(&disk),
                 Arc::clone(&published),
                 compaction::merge::MergeContext {
                     runtime,
@@ -450,6 +458,7 @@ impl Storage {
             grace: config.gc.grace,
             media: MediaGc::clone(&media),
         });
+        let disk_monitor = disk::spawn(Arc::clone(&disk));
         let compaction = compaction::task::spawn(
             Arc::clone(&compactor),
             MediaGc::clone(&media),
@@ -468,6 +477,8 @@ impl Storage {
             spans_flush,
             scores_flush,
             gc,
+            disk,
+            disk_monitor,
             media,
             compactor,
             compaction,
@@ -643,6 +654,9 @@ impl Storage {
     pub async fn put_media(&self, project: ProjectId, blob: MediaBlob) -> Result<(), MediaError> {
         if self.published.load().projects.is_dropped(project) {
             return Err(MediaError::ProjectDropped);
+        }
+        if self.disk.low() {
+            return Err(MediaError::DiskFull);
         }
         let now = catalog::now_ns();
         if blob.mime_type.is_empty() || blob.mime_type.len() > 255 || !blob.mime_type.is_ascii() {
@@ -842,6 +856,7 @@ impl Storage {
             .stop_and_wait(std::time::Duration::from_secs(30))
             .await;
         self.gc.abort();
+        self.disk_monitor.abort();
         let spans = self.spans.shutdown().await;
         let scores = self.scores.shutdown().await;
         self.finish_flushes().await;
@@ -909,6 +924,9 @@ impl Storage {
         if self.published.load().projects.is_dropped(project) {
             return Err(AppendError::ProjectDropped);
         }
+        if self.disk.low() {
+            return Err(AppendError::DiskFull);
+        }
         validate_batch(table, &project, &batch)?;
         let bytes = batch.get_array_memory_size();
         let adding = u64::try_from(bytes).unwrap_or(u64::MAX);
@@ -923,6 +941,12 @@ impl Storage {
             Table::Spans => &self.spans,
             Table::Scores => &self.scores,
         }
+    }
+
+    /// Free disk and the reservations of the compaction jobs.
+    #[cfg(test)]
+    pub(crate) fn disk(&self) -> &disk::Disk {
+        &self.disk
     }
 
     /// Pause and fault points shared with the writers. A no-op outside tests.
@@ -1002,6 +1026,7 @@ impl Drop for Storage {
         self.compactor.stop();
         self.compaction.abort();
         self.gc.abort();
+        self.disk_monitor.abort();
     }
 }
 
@@ -1513,9 +1538,11 @@ mod tests {
 
     use super::*;
     use crate::catalog::FileTable;
+    use crate::compaction::job::tests as jobs;
     use crate::config::{FlushConfig, MemtableConfig, QueryConfig, S3Config, WalConfig};
     use crate::error::StorageError;
     use crate::hooks::HookPoint;
+    use crate::media::MediaBlob;
     use crate::partials::partials_from_spans;
     use crate::test_support::{span_row, span_rows};
     use crate::views::QueryContext;
@@ -1532,6 +1559,7 @@ mod tests {
     fn config_in(dir: &Path) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            min_free_bytes: ByteSize::b(0),
             object_store: None,
             s3: S3Config::default(),
             wal: WalConfig::default(),
@@ -1965,6 +1993,81 @@ mod tests {
         config.query.initial_memory = ByteSize::mib(mib);
         config.query.admission_wait = Duration::from_millis(100);
         config
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn appends_fail_while_the_disk_is_low() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_in(dir.path());
+        config.min_free_bytes = ByteSize::b(1000);
+        let storage = Storage::open(config).await.unwrap();
+        let bytes = bytes::Bytes::from_static(b"media bytes");
+        let blob = MediaBlob {
+            sha256: Sha256::digest(&bytes).into(),
+            mime_type: "text/plain".to_owned(),
+            bytes,
+        };
+
+        storage.disk().set_free_for_test(Some(10));
+        assert_eq!(
+            storage
+                .append_spans(project(), spans_at(&[1]))
+                .await
+                .unwrap_err(),
+            AppendError::DiskFull
+        );
+        assert_eq!(
+            storage
+                .append_scores(project(), score_batch("accuracy"))
+                .await
+                .unwrap_err(),
+            AppendError::DiskFull
+        );
+        assert!(matches!(
+            storage.put_media(project(), blob.clone()).await,
+            Err(MediaError::DiskFull)
+        ));
+
+        storage.disk().set_free_for_test(Some(10_000));
+        storage
+            .append_spans(project(), spans_at(&[1]))
+            .await
+            .unwrap();
+        storage
+            .append_scores(project(), score_batch("accuracy"))
+            .await
+            .unwrap();
+        storage.put_media(project(), blob).await.unwrap();
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_compaction_job_that_does_not_fit_is_deferred() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = jobs::config_in(
+            dir.path(),
+            jobs::quiet_compaction(2),
+            Duration::from_secs(3_600),
+        );
+        let mut storage = Storage::open(config.clone()).await.unwrap();
+        for index in 0..2_u8 {
+            let base = jobs::at(10, 0, 0) + i64::from(index) * 60 * 1_000_000_000;
+            let batch = span_rows(&[span_row(0, 10 + index, base, base + 1_000_000_000)]);
+            storage = jobs::flush_cycle(&config, storage, batch).await;
+        }
+        let before = storage.catalog_paths(FileTable::Spans);
+        assert_eq!(before.len(), 2);
+
+        storage.disk().set_free_for_test(Some(0));
+        let report = storage.compact(jobs::at(11, 0, 0)).await.unwrap();
+        assert_eq!((report.jobs, report.failed), (0, 1), "{report:?}");
+        assert_eq!(storage.catalog_paths(FileTable::Spans), before);
+
+        storage.disk().set_free_for_test(None);
+        let report = storage.compact(jobs::at(11, 0, 0)).await.unwrap();
+        assert_eq!((report.jobs, report.failed), (1, 0), "{report:?}");
+        assert_eq!(storage.catalog_files(Table::Spans).len(), 1);
+        storage.shutdown().await.unwrap();
     }
 
     #[tokio::test]

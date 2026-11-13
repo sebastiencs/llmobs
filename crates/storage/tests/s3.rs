@@ -55,6 +55,7 @@ fn project() -> ProjectId {
 fn config(dir: &std::path::Path, bucket: &str, prefix: &str, endpoint: &str) -> StorageConfig {
     StorageConfig {
         data_dir: dir.to_path_buf(),
+        min_free_bytes: ByteSize::b(0),
         object_store: Some(ObjectStoreUrl::S3 {
             bucket: bucket.to_owned(),
             prefix: prefix.to_owned(),

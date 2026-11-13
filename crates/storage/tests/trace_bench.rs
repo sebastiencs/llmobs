@@ -475,6 +475,7 @@ fn build_spans(plan: &TracePlan, group: &GroupPlan) -> Vec<Span> {
 fn config(dir: &Path, max_bytes: ByteSize) -> StorageConfig {
     StorageConfig {
         data_dir: dir.to_path_buf(),
+        min_free_bytes: ByteSize::b(0),
         object_store: None,
         s3: S3Config::default(),
         wal: WalConfig {

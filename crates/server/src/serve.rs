@@ -438,6 +438,8 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 
+    use bytesize::ByteSize;
+
     use super::*;
     use crate::config::{AuthSettings, InitConfig, LogConfig, PublicUrl};
 
@@ -642,6 +644,7 @@ mod tests {
             trusted_proxies: Vec::new(),
             storage: StorageConfig {
                 data_dir: data_dir.to_path_buf(),
+                min_free_bytes: ByteSize::b(0),
                 object_store: None,
                 s3: S3Config::default(),
                 wal: WalConfig::default(),

@@ -106,6 +106,14 @@ impl Objects {
         }
     }
 
+    /// The local object root, `None` for a remote store.
+    pub(crate) fn local_root(&self) -> Option<&Path> {
+        match &self.kind {
+            Kind::Local { root } => Some(root),
+            Kind::Remote => None,
+        }
+    }
+
     /// Remote store for tests. `store` is usually [`crate::test_support::FaultStore`].
     #[cfg(test)]
     pub(crate) fn remote_for_test(
@@ -848,6 +856,7 @@ fn object_key(path: &str) -> Result<ObjectPath, ObjectError> {
 
 #[cfg(test)]
 mod tests {
+    use bytesize::ByteSize;
     use std::io::Write;
     use std::sync::Arc;
     use std::time::Duration;
@@ -873,6 +882,7 @@ mod tests {
     fn local_config(dir: &std::path::Path) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            min_free_bytes: ByteSize::b(0),
             object_store: Some(ObjectStoreUrl::Local(dir.join("objects"))),
             s3: S3Config::default(),
             wal: WalConfig::default(),

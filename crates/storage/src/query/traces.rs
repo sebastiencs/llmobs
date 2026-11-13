@@ -1337,6 +1337,7 @@ fn project_final(
 
 #[cfg(test)]
 mod tests {
+    use bytesize::ByteSize;
     use std::collections::BTreeMap;
     use std::path::Path;
     use std::sync::Arc;
@@ -1388,6 +1389,7 @@ mod tests {
     fn config_in(dir: &Path) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            min_free_bytes: ByteSize::b(0),
             object_store: None,
             s3: S3Config::default(),
             wal: WalConfig::default(),

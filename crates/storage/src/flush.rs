@@ -697,6 +697,7 @@ fn log_truncate(table: Table, error: &std::io::Error) {
 
 #[cfg(test)]
 mod tests {
+    use bytesize::ByteSize;
     use std::path::Path;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -766,6 +767,7 @@ mod tests {
     fn anchor_config(dir: &Path) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            min_free_bytes: ByteSize::b(0),
             object_store: None,
             s3: S3Config::default(),
             wal: WalConfig::default(),
@@ -787,6 +789,7 @@ mod tests {
     fn config_in(dir: &Path) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            min_free_bytes: ByteSize::b(0),
             object_store: None,
             s3: S3Config::default(),
             wal: WalConfig::default(),

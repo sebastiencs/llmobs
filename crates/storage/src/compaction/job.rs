@@ -17,6 +17,7 @@ use crate::compaction::merge::{MergeContext, merge_slice};
 use crate::compaction::plan::{Job, JobKind, Policy, plan};
 use crate::compaction::slice::{slice_count, slices, time_values};
 use crate::deletion::covered_predicate;
+use crate::disk::Disk;
 use crate::error::{CommitError, CompactionError, ObjectError};
 use crate::hooks::{HookPoint, Hooks};
 use crate::objects::Objects;
@@ -27,6 +28,8 @@ use crate::read_state::{Published, publish_catalog};
 pub(crate) struct Compactor {
     pub(super) committer: Arc<Committer>,
     pub(super) objects: Arc<Objects>,
+    /// Free disk: every job reserves its inputs' size before it reads anything.
+    pub(super) disk: Arc<Disk>,
     pub(super) published: Arc<Published>,
     pub(super) merge: MergeContext,
     /// Read at the start of each pass. Tests replace it ([`Storage::set_policy`]).
@@ -136,9 +139,11 @@ impl Drop for ClaimGuard {
 impl Compactor {
     /// Built once in `Storage::open`. `merge` carries the compaction runtime
     /// with the `compaction.max_memory` pool and the registered object store.
+    #[allow(clippy::too_many_arguments)] // the shared handles of one job, as spec 03 §5 lists them
     pub(crate) fn new(
         committer: Arc<Committer>,
         objects: Arc<Objects>,
+        disk: Arc<Disk>,
         published: Arc<Published>,
         merge: MergeContext,
         policy: Policy,
@@ -148,6 +153,7 @@ impl Compactor {
         Self {
             committer,
             objects,
+            disk,
             published,
             merge,
             policy: Mutex::new(policy),
@@ -217,6 +223,16 @@ impl Compactor {
                             %error,
                             "compaction job lost a conflict; a later pass redoes it"
                         );
+                    } else if matches!(error, CompactionError::DiskFull) {
+                        tracing::info!(
+                            table,
+                            project,
+                            day,
+                            kind,
+                            inputs,
+                            error = error.label(),
+                            "compaction job deferred: not enough free disk"
+                        );
                     } else {
                         tracing::warn!(
                             table,
@@ -276,6 +292,16 @@ impl Compactor {
         job: Job,
         policy: Policy,
     ) -> Result<CompactionReport, CompactionError> {
+        // Reserved before anything is read; released when `run` returns, with
+        // the job's claims (spec 03 §5, D-A1-9).
+        let reserved = job
+            .inputs
+            .iter()
+            .fold(0_u64, |sum, file| sum.saturating_add(file.size));
+        let _reservation = self
+            .disk
+            .try_reserve(reserved)
+            .ok_or(CompactionError::DiskFull)?;
         // The deletions pending when the job started (spec 03 §7): their rows
         // are dropped from the output, which records the highest sequence
         // known now. A deletion registered later is not applied, so the output
@@ -595,6 +621,7 @@ fn kind_label(kind: JobKind) -> &'static str {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use bytesize::ByteSize;
     use std::path::Path;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -645,6 +672,7 @@ pub(crate) mod tests {
     ) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            min_free_bytes: ByteSize::b(0),
             object_store: None,
             s3: S3Config::default(),
             wal: WalConfig::default(),
@@ -1486,8 +1514,8 @@ pub(crate) mod tests {
     async fn write_amplification_of_a_synthetic_day() {
         let dir = tempfile::tempdir().unwrap();
         let mut config = config_in(dir.path(), quiet_compaction(8), Duration::from_secs(3_600));
-        config.compaction.target_file_size = bytesize::ByteSize::mib(64);
-        config.compaction.l0_bytes = bytesize::ByteSize::mib(64);
+        config.compaction.target_file_size = ByteSize::mib(64);
+        config.compaction.l0_bytes = ByteSize::mib(64);
         let wa_policy = Policy::from(&config.compaction);
         let mut storage = Storage::open(config.clone()).await.unwrap();
 

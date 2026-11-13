@@ -84,7 +84,7 @@ pub enum OpenError {
 /// `append_spans` or `append_scores` failed.
 ///
 /// The server maps these to HTTP: `Backpressure` is 429, `WalFailed` and
-/// `ShuttingDown` are 503, and `InvalidBatch` is a bug in the caller.
+/// `ShuttingDown` and `DiskFull` are 503, and `InvalidBatch` is a bug in the caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AppendError {
     /// The batch is empty, has the wrong schema, or names another project.
@@ -105,6 +105,9 @@ pub enum AppendError {
     /// The project was dropped (spec 03 §7). The server maps it to 404.
     #[error("project is dropped")]
     ProjectDropped,
+    /// Free disk is under `storage.min_free_bytes` (spec 03 §10). The server maps it to 503.
+    #[error("free disk is under storage.min_free_bytes")]
+    DiskFull,
 }
 
 /// Shutdown failed, or a later maintenance call failed.
@@ -377,6 +380,9 @@ pub enum MediaError {
     /// The project is dropped (spec 03 §7).
     #[error("project is dropped")]
     ProjectDropped,
+    /// Free disk is under `storage.min_free_bytes` (spec 03 §10). The server maps it to 503.
+    #[error("free disk is under storage.min_free_bytes")]
+    DiskFull,
 }
 
 impl MediaError {
@@ -394,6 +400,7 @@ impl MediaError {
             Self::Query(_) => "query",
             Self::Fault => "fault",
             Self::ProjectDropped => "project_dropped",
+            Self::DiskFull => "disk_full",
         }
     }
 }
@@ -618,6 +625,10 @@ pub enum CompactionError {
         /// Static reason. Never a cell value.
         reason: &'static str,
     },
+    /// Free disk minus the other jobs' reservations is less than the job's
+    /// inputs. A later pass retries the job (spec 03 §5, §10).
+    #[error("not enough free disk for the job")]
+    DiskFull,
 }
 
 impl CompactionError {
@@ -638,6 +649,7 @@ impl CompactionError {
             Self::Fault => "fault",
             Self::Stopped => "stopped",
             Self::Deletion { .. } => "deletion",
+            Self::DiskFull => "disk_full",
         }
     }
 }

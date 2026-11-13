@@ -347,6 +347,16 @@ async fn check_and_rewrite(
                     %error,
                     "compaction job lost a conflict; a later pass redoes it"
                 );
+            } else if matches!(error, CompactionError::DiskFull) {
+                tracing::info!(
+                    table,
+                    project,
+                    day,
+                    kind = "rewrite",
+                    inputs = 1,
+                    error = error.label(),
+                    "compaction job deferred: not enough free disk"
+                );
             } else {
                 tracing::warn!(
                     table,
@@ -847,6 +857,53 @@ mod tests {
             scalar(&storage, "SELECT count(*) FROM spans").await,
             0,
             "the view is empty"
+        );
+        storage.shutdown().await.unwrap();
+    }
+
+    // 5b. A rewrite that does not fit the free disk is deferred: the deletion
+    //     stays pending, and a later pass rewrites the file.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_rewrite_that_does_not_fit_is_deferred() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(dir.path(), quiet_compaction(8), Duration::from_secs(3_600));
+        let mut storage = Storage::open(config.clone()).await.unwrap();
+        let time = at(10, 0, 0);
+        storage = flush_cycle(
+            &config,
+            storage,
+            span_rows(&[
+                span_row(1, 0, time, time + 1),
+                span_row(2, 0, time, time + 1),
+            ]),
+        )
+        .await;
+        let deletion = traces_deletion(&[1], at(11, 0, 0));
+        storage.register_deletion(deletion.clone()).await.unwrap();
+        let before = storage.catalog_paths(FileTable::Spans);
+
+        storage.disk().set_free_for_test(Some(0));
+        let report = storage.apply_deletions(at(11, 0, 0)).await.unwrap();
+        assert_eq!(
+            (report.rewritten, report.applied, report.failed),
+            (0, 0, 1),
+            "{report:?}"
+        );
+        assert_eq!(status(&storage, &deletion).await, DeletionStatus::Pending);
+        assert_eq!(storage.catalog_paths(FileTable::Spans), before);
+
+        storage.disk().set_free_for_test(None);
+        let report = storage.apply_deletions(at(11, 0, 0)).await.unwrap();
+        assert_eq!(
+            (report.rewritten, report.applied, report.failed),
+            (1, 1, 0),
+            "{report:?}"
+        );
+        assert_eq!(
+            status(&storage, &deletion).await,
+            DeletionStatus::Applied {
+                applied_at: at(11, 0, 0)
+            }
         );
         storage.shutdown().await.unwrap();
     }

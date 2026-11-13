@@ -25,6 +25,9 @@ const OBJECT_STORE_RULE: &str = "must be file://<absolute path> or s3://<bucket>
 pub struct StorageConfig {
     /// Directory that holds `LOCK`, `wal/`, and `catalog.db`.
     pub data_dir: PathBuf,
+    /// Ingestion is refused while free disk is under this (spec 03 §10). Default 2 GiB.
+    #[serde(default = "default_min_free_bytes")]
+    pub min_free_bytes: ByteSize,
     /// Object store root. Absent means `file://<data_dir>/objects`, resolved by
     /// [`Self::object_store_url`].
     #[serde(default, deserialize_with = "deserialize_object_store")]
@@ -310,6 +313,10 @@ where
 {
     let raw = String::deserialize(deserializer)?;
     WalSync::parse(&raw).map_err(serde::de::Error::custom)
+}
+
+fn default_min_free_bytes() -> ByteSize {
+    ByteSize::gib(2)
 }
 
 fn default_sync() -> WalSync {
@@ -1183,6 +1190,21 @@ mod tests {
             ObjectStoreUrl::Local(PathBuf::from("/data/objects"))
         );
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn min_free_bytes_parses_from_toml_and_defaults_to_two_gib() {
+        let config: StorageConfig = toml::from_str(
+            r#"
+            data_dir = "/data"
+            min_free_bytes = "5GiB"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.min_free_bytes, ByteSize::gib(5));
+
+        let defaults = parse(r#"{"data_dir":"/data"}"#).unwrap();
+        assert_eq!(defaults.min_free_bytes, ByteSize::gib(2));
     }
 
     #[test]

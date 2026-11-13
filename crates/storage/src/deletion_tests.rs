@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow::array::{Array, RecordBatch};
+use bytesize::ByteSize;
 use llmobs_core::ids::ProjectId;
 use llmobs_core::score::ScoreTarget;
 use uuid::Uuid;
@@ -23,6 +24,7 @@ fn project() -> ProjectId {
 fn config_in(dir: &Path) -> StorageConfig {
     StorageConfig {
         data_dir: dir.to_path_buf(),
+        min_free_bytes: ByteSize::b(0),
         object_store: None,
         s3: S3Config::default(),
         wal: WalConfig::default(),

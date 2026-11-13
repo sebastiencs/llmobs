@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arrow::array::AsArray;
+use bytesize::ByteSize;
 use chrono::{Datelike, Days, NaiveDate};
 use datafusion::execution::context::{SessionConfig, SessionContext};
 use llmobs_core::ids::TraceId;
@@ -75,6 +76,7 @@ fn project() -> llmobs_core::ids::ProjectId {
 fn config_in(dir: &std::path::Path) -> StorageConfig {
     StorageConfig {
         data_dir: dir.to_path_buf(),
+        min_free_bytes: ByteSize::b(0),
         object_store: None,
         s3: S3Config::default(),
         wal: WalConfig::default(),

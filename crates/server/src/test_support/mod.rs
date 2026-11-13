@@ -15,6 +15,7 @@ use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
+use bytesize::ByteSize;
 use llmobs_core::names::PRODUCT;
 use llmobs_storage::Storage;
 use llmobs_storage::config::{
@@ -191,6 +192,7 @@ fn default_config(data_dir: &std::path::Path) -> ServerConfig {
         trusted_proxies: Vec::new(),
         storage: StorageConfig {
             data_dir: data_dir.to_path_buf(),
+            min_free_bytes: ByteSize::b(0),
             object_store: None,
             s3: S3Config::default(),
             wal: WalConfig::default(),
