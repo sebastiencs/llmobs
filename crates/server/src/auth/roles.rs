@@ -92,6 +92,8 @@ pub(crate) enum ProjectPerm {
     ManageSettings,
     /// Project member overrides.
     ManageMembers,
+    /// Write and delete scores (spec 08: member and above).
+    Annotate,
 }
 
 /// Scope on a project API key. Track D enforces [`Self::Read`] (D140).
@@ -185,6 +187,7 @@ impl ProjectPerm {
     pub(crate) fn min_role(self) -> Role {
         match self {
             Self::View => Role::Viewer,
+            Self::Annotate => Role::Member,
             Self::ManageSettings | Self::ManageMembers => Role::Admin,
         }
     }
@@ -193,6 +196,7 @@ impl ProjectPerm {
     pub(crate) fn key_scope(self) -> Option<KeyScope> {
         match self {
             Self::View => Some(KeyScope::Read),
+            Self::Annotate => Some(KeyScope::Write),
             Self::ManageSettings | Self::ManageMembers => None,
         }
     }
@@ -253,6 +257,16 @@ mod tests {
         assert_eq!(ProjectPerm::View.key_scope(), Some(KeyScope::Read));
         assert!(ProjectPerm::ManageSettings.key_scope().is_none());
         assert!(ProjectPerm::ManageMembers.key_scope().is_none());
+        // Score writes: viewer no; member, admin and owner yes.
+        assert_eq!(ProjectPerm::Annotate.min_role(), Role::Member);
+        assert_eq!(ProjectPerm::Annotate.key_scope(), Some(KeyScope::Write));
+        let viewer =
+            effective_project_role(OrgRole::Viewer, None).expect("viewer sees the project");
+        assert!(viewer < ProjectPerm::Annotate.min_role());
+        for org in [OrgRole::Member, OrgRole::Admin, OrgRole::Owner] {
+            let role = effective_project_role(org, None).expect("member sees the project");
+            assert!(role >= ProjectPerm::Annotate.min_role(), "{org:?}");
+        }
         assert_eq!(org_rank(OrgRole::Viewer), 0);
         assert!(org_rank(OrgRole::Viewer) < org_rank(OrgRole::Member));
         assert!(org_rank(OrgRole::Member) < org_rank(OrgRole::Admin));

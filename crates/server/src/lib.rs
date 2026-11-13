@@ -17,6 +17,7 @@ pub(crate) mod http;
 pub(crate) mod ingest;
 pub(crate) mod meta;
 pub(crate) mod routes;
+pub(crate) mod scores;
 pub mod serve;
 
 #[cfg(test)]
