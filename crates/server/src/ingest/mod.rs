@@ -16,8 +16,8 @@ use llmobs_core::error::CoreError;
 use llmobs_core::ids::ProjectId;
 use llmobs_core::media::MediaBlob as CoreBlob;
 use llmobs_otel::{
-    DecodeError, IngestContext, IngestLimits, Normalized, PriceTable, decode_json, decode_protobuf,
-    normalize,
+    DecodeError, ExportTraceServiceRequest, IngestContext, IngestLimits, Normalized, PriceTable,
+    decode_json, decode_protobuf, normalize,
 };
 use llmobs_storage::error::{AppendError, MediaError};
 use llmobs_storage::{MediaBlob, Storage};
@@ -124,9 +124,15 @@ impl Ingest {
         let amount = content_length
             .and_then(|length| usize::try_from(length).ok())
             .filter(|length| *length <= self.max_request_bytes)
-            .unwrap_or(self.max_request_bytes)
-            .max(1);
-        let amount = u32::try_from(amount).map_err(|_| IngestError::Busy)?;
+            .unwrap_or(self.max_request_bytes);
+        self.reserve_exact(u64::try_from(amount).unwrap_or(u64::MAX))
+    }
+
+    /// Reserves exactly `bytes` (at least 1) of budget, for gRPC, where tonic has already
+    /// read the message. Never waits: a count that does not fit a `u32` or the free budget
+    /// is `Busy`.
+    pub(crate) fn reserve_exact(&self, bytes: u64) -> Result<Reservation, IngestError> {
+        let amount = u32::try_from(bytes.max(1)).map_err(|_| IngestError::Busy)?;
         self.budget
             .clone()
             .try_acquire_many_owned(amount)
@@ -162,19 +168,7 @@ impl Ingest {
                 .map_err(|_| IngestError::Busy)?;
             reservation.0.merge(extra);
         }
-        let prices: Arc<PriceTable> = self
-            .prices
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        let ctx = IngestContext {
-            project_id: project.id,
-            ingest_time: now_ns,
-            retention_days: project.retention_days,
-            limits: self.limits,
-        };
         let max_bytes = self.max_request_bytes;
-        let max_spans = self.max_spans_per_request;
         let semaphore = Arc::clone(&self.budget);
         let work = tokio::task::spawn_blocking(move || -> Result<_, IngestError> {
             let decompressed = {
@@ -201,6 +195,47 @@ impl Ingest {
                 BodyFormat::Json => decode_json(&decompressed),
             }
             .map_err(IngestError::Decode)?;
+            Ok((request, decompressed_bytes, reservation))
+        });
+        let (request, decompressed_bytes, reservation) = match work.await {
+            Ok(result) => result?,
+            Err(error) => return Err(IngestError::Join(error)),
+        };
+        self.accept_request(
+            request,
+            reservation,
+            u64::try_from(request_bytes).unwrap_or(u64::MAX),
+            u64::try_from(decompressed_bytes).unwrap_or(u64::MAX),
+            project,
+            now_ns,
+        )
+        .await
+    }
+
+    /// Counts, normalizes and rewrites a decoded request (D-G-2, D-G-7). Used by OTLP/HTTP after
+    /// decoding and by gRPC, whose request tonic decodes.
+    pub(crate) async fn accept_request(
+        &self,
+        request: ExportTraceServiceRequest,
+        reservation: Reservation,
+        request_bytes: u64,
+        decompressed_bytes: u64,
+        project: &ProjectRow,
+        now_ns: i64,
+    ) -> Result<Accepted, IngestError> {
+        let prices: Arc<PriceTable> = self
+            .prices
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let ctx = IngestContext {
+            project_id: project.id,
+            ingest_time: now_ns,
+            retention_days: project.retention_days,
+            limits: self.limits,
+        };
+        let max_spans = self.max_spans_per_request;
+        let work = tokio::task::spawn_blocking(move || -> Result<_, IngestError> {
             let spans = request
                 .resource_spans
                 .iter()
@@ -213,16 +248,16 @@ impl Ingest {
             }
             let mut normalized = normalize(&request, &ctx, &prices);
             let rewritten = rewrite_reserved_environment(&mut normalized.spans);
-            Ok((normalized, decompressed_bytes, rewritten, reservation))
+            Ok((normalized, rewritten))
         });
-        let (normalized, decompressed_bytes, rewritten, reservation) = match work.await {
+        let (normalized, rewritten) = match work.await {
             Ok(result) => result?,
             Err(error) => return Err(IngestError::Join(error)),
         };
         Ok(Accepted {
             normalized,
-            request_bytes: u64::try_from(request_bytes).unwrap_or(u64::MAX),
-            decompressed_bytes: u64::try_from(decompressed_bytes).unwrap_or(u64::MAX),
+            request_bytes,
+            decompressed_bytes,
             rewritten,
             reservation,
         })
@@ -647,6 +682,54 @@ mod tests {
         .await
         .expect("accepted");
         assert_eq!(accepted.normalized, unpriced);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn accept_request_gives_what_accept_gives_for_the_same_bytes() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let json = fixture("genai/openai-v2-chat-tool/input.json");
+        let request = decode_json(&json).expect("fixture decodes");
+        let len = u64::try_from(json.len()).unwrap_or(u64::MAX);
+        let reservation = app.state.ingest.reserve_exact(len).expect("reserved");
+        let via_request = app
+            .state
+            .ingest
+            .accept_request(
+                request,
+                reservation,
+                len,
+                len,
+                &seeded.project,
+                app.state.clock.now_ns(),
+            )
+            .await
+            .expect("accepted");
+        let via_bytes = accept_body(
+            &app,
+            &seeded.project,
+            json,
+            BodyFormat::Json,
+            BodyEncoding::Identity,
+        )
+        .await
+        .expect("accepted");
+        assert_eq!(via_request.normalized, via_bytes.normalized);
+        assert_eq!(via_request.rewritten, via_bytes.rewritten);
+        assert_eq!(via_request.request_bytes, len);
+        assert_eq!(via_request.decompressed_bytes, len);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reserve_exact_refuses_a_count_that_does_not_fit_a_u32() {
+        let app = TestApp::new().await;
+        let ingest = &app.state.ingest;
+        assert!(matches!(
+            ingest.reserve_exact(u64::MAX),
+            Err(IngestError::Busy)
+        ));
+        let minimum = ingest.reserve_exact(0).expect("zero reserves one byte");
+        assert_eq!(minimum.0.num_permits(), 1);
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -769,7 +769,7 @@ mod tests {
         std::fs::write(
             &path,
             format!(
-                "data_dir = \"{}\"\nhttp_addr = \"127.0.0.1:0\"\notlp_http_addr = \"\"\n",
+                "data_dir = \"{}\"\nhttp_addr = \"127.0.0.1:0\"\notlp_http_addr = \"\"\ngrpc_addr = \"\"\n",
                 dir.path().display()
             ),
         )
@@ -821,6 +821,7 @@ mod tests {
             http_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             trusted_proxies: Vec::new(),
             otlp_http_addr: None,
+            grpc_addr: None,
             storage: StorageConfig {
                 data_dir: data_dir.to_path_buf(),
                 min_free_bytes: ByteSize::b(0),

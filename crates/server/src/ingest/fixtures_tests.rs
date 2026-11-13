@@ -436,6 +436,7 @@ fn serve_config(data_dir: &Path) -> ServerConfig {
         http_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
         trusted_proxies: Vec::new(),
         otlp_http_addr: None,
+        grpc_addr: None,
         storage: StorageConfig {
             data_dir: data_dir.to_path_buf(),
             object_store: None,

@@ -461,6 +461,8 @@ fn default_config(data_dir: &std::path::Path) -> ServerConfig {
         trusted_proxies: Vec::new(),
         // Tests must not bind the OTLP port (4318).
         otlp_http_addr: None,
+        // Tests must not bind the gRPC port (4317).
+        grpc_addr: None,
         storage: StorageConfig {
             data_dir: data_dir.to_path_buf(),
             min_free_bytes: ByteSize::b(0),

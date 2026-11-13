@@ -158,11 +158,20 @@ sysinfo = { version = "0.39.6", default-features = false, features = ["system"] 
 rustix = { version = "1.1.6", default-features = false, features = ["std", "fs"] }
 # Same prost as `opentelemetry-proto` 0.33.1 (`Cargo.lock`). Decode only; no `derive`.
 prost = { version = "0.14.4", default-features = false, features = ["std"] }
-# OTLP messages for fixture validation. Default features stay off: `full` enables the tonic service.
+# OTLP messages and the tonic `TraceService` (server and test client).
 opentelemetry-proto = { version = "0.33.1", default-features = false, features = [
+    "gen-tonic",
     "gen-tonic-messages",
     "trace",
     "with-serde",
+] }
+# gRPC server for `TraceService/Export` (D-G-29). `router` is needed for `Server::builder().add_service`.
+# No `zstd`: tonic's pulls `zstd` 0.14 next to the workspace's 0.13, and spec 02 asks for gzip only.
+tonic = { version = "0.14.9", default-features = false, features = [
+    "server",
+    "router",
+    "codegen",
+    "gzip",
 ] }
 regex = "1.13.1"
 # Normalized Levenshtein for the similarity check (D164). Unicode scalar values.
