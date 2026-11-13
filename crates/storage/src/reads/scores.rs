@@ -6,6 +6,7 @@
 
 use std::time::Duration;
 
+use arrow::record_batch::RecordBatch;
 use datafusion::common::ScalarValue;
 use datafusion::functions_window::expr_fn::row_number;
 use datafusion::logical_expr::{Expr, ExprFunctionExt, col, lit};
@@ -107,7 +108,7 @@ pub async fn latest_scores(
     ctx: &QueryContext,
     targets: ScoreTargets<'_>,
     timeout: Duration,
-) -> Result<Vec<arrow::record_batch::RecordBatch>, RunError> {
+) -> Result<Vec<RecordBatch>, RunError> {
     let Some(prepared) = prepare_keys(targets)? else {
         return Ok(Vec::new());
     };
@@ -120,6 +121,58 @@ pub async fn latest_scores(
         Err(_) => Err(RunError::Timeout),
         Ok(result) => result,
     }
+}
+
+/// The live version of each score in `ids` (scores-view columns), in no particular order.
+///
+/// Ids are UUID strings, either case. An empty list returns no batches and runs no query.
+///
+/// # Errors
+///
+/// [`RunError::InvalidRequest`] for more than [`MAX_PAGE`] ids or an id that is not a UUID.
+/// [`RunError::Timeout`] when the query exceeds `timeout`.
+pub async fn scores_by_id(
+    ctx: &QueryContext,
+    ids: &[&str],
+    timeout: Duration,
+) -> Result<Vec<RecordBatch>, RunError> {
+    let Some(keys) = prepare_score_ids(ids)? else {
+        return Ok(Vec::new());
+    };
+    match tokio::time::timeout(timeout, by_id(ctx, &keys)).await {
+        Err(_) => Err(RunError::Timeout),
+        Ok(result) => result,
+    }
+}
+
+/// `None` is an empty id list: the caller returns no batches and runs nothing.
+fn prepare_score_ids(ids: &[&str]) -> Result<Option<Vec<String>>, RunError> {
+    if ids.len() > MAX_PAGE {
+        return Err(RunError::InvalidRequest("at most 1000 ids".to_owned()));
+    }
+    if ids.is_empty() {
+        return Ok(None);
+    }
+    let mut keys = Vec::with_capacity(ids.len());
+    for id in ids {
+        let uuid = uuid::Uuid::parse_str(id)
+            .map_err(|_| RunError::InvalidRequest("invalid score_id".to_owned()))?;
+        keys.push(uuid.to_string());
+    }
+    Ok(Some(keys))
+}
+
+async fn by_id(ctx: &QueryContext, keys: &[String]) -> Result<Vec<RecordBatch>, RunError> {
+    let keys: Vec<Expr> = keys.iter().map(|key| lit(key.as_str())).collect();
+    ctx.session()
+        .table(LIST)
+        .await
+        .map_err(classify)?
+        .filter(col(scores::SCORE_ID).in_list(keys, false))
+        .map_err(classify)?
+        .collect()
+        .await
+        .map_err(|error| ctx.fail(error))
 }
 
 struct PreparedKeys {
@@ -217,7 +270,7 @@ async fn latest(
     kind: ScoreTargetKind,
     key_column: &str,
     keys: &[String],
-) -> Result<Vec<arrow::record_batch::RecordBatch>, RunError> {
+) -> Result<Vec<RecordBatch>, RunError> {
     let keys: Vec<Expr> = keys.iter().map(|key| lit(key.as_str())).collect();
     let frame = ctx
         .session()
@@ -302,7 +355,10 @@ mod tests {
     use llmobs_core::time_serde::parse_rfc3339;
     use serde_json::{Value, json};
 
-    use super::{LATEST_SCORE_COLUMNS, ScoreListRequest, ScoreTargets, latest_scores, score_list};
+    use super::{
+        LATEST_SCORE_COLUMNS, ScoreListRequest, ScoreTargets, latest_scores, score_list,
+        scores_by_id,
+    };
     use crate::query_error::RunError;
     use crate::reads::Page;
     use crate::test_support::{
@@ -678,6 +734,70 @@ mod tests {
                 }
                 other => panic!("unexpected data_type {other:?}"),
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn scores_by_id_returns_the_live_rows() {
+        let ctx = context();
+        let listed = fixture("scores.json");
+        let expected: Vec<Value> = listed["data"]
+            .as_array()
+            .expect("data")
+            .iter()
+            .filter(|score| {
+                matches!(
+                    score["score_id"].as_str(),
+                    Some(
+                        "01900000-0000-7000-8000-000000000301"
+                            | "01900000-0000-7000-8000-000000000302"
+                    )
+                )
+            })
+            .cloned()
+            .collect();
+        assert_eq!(expected.len(), 2);
+
+        let wanted = [
+            "01900000-0000-7000-8000-000000000301",
+            "01900000-0000-7000-8000-000000000302",
+        ];
+        let batches = scores_by_id(&ctx, &wanted, TIMEOUT).await.expect("by id");
+        let actual = json_rows(&batches);
+        assert_eq!(actual.len(), 2);
+        let mut found = ids(&actual);
+        found.sort();
+        assert_eq!(found, wanted);
+        for score in &expected {
+            let row = actual
+                .iter()
+                .find(|row| row["score_id"] == score["score_id"])
+                .expect("row");
+            assert_view_rows(std::slice::from_ref(row), std::slice::from_ref(score));
+        }
+
+        let upper = wanted.map(str::to_ascii_uppercase);
+        let upper: Vec<&str> = upper.iter().map(String::as_str).collect();
+        let batches = scores_by_id(&ctx, &upper, TIMEOUT).await.expect("upper");
+        assert_eq!(json_rows(&batches).len(), 2);
+
+        let unknown = ["0190aaaa-0000-7000-8000-000000000001"];
+        let batches = scores_by_id(&ctx, &unknown, TIMEOUT)
+            .await
+            .expect("unknown");
+        assert!(json_rows(&batches).is_empty());
+
+        let empty = scores_by_id(&ctx, &[], TIMEOUT).await.expect("empty");
+        assert!(empty.is_empty());
+
+        match scores_by_id(&ctx, &["nope"], TIMEOUT).await {
+            Err(RunError::InvalidRequest(message)) => assert_eq!(message, "invalid score_id"),
+            other => panic!("expected an invalid score_id, got {other:?}"),
+        }
+        let many = vec!["01900000-0000-7000-8000-000000000301"; 1001];
+        match scores_by_id(&ctx, &many, TIMEOUT).await {
+            Err(RunError::InvalidRequest(message)) => assert_eq!(message, "at most 1000 ids"),
+            other => panic!("expected too many ids, got {other:?}"),
         }
     }
 

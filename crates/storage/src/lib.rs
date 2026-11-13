@@ -85,7 +85,7 @@ pub use reads::{
     Series, SeriesName, SessionDetailData, SessionListRequest, SessionSort, SortOrder,
     SpanListRequest, SpanSort, TraceDetailData, TraceListRequest, TraceSort, USER_COLUMNS,
     UserDetailData, UserListRequest, UserSort, latest_scores, metrics::metrics, score_list,
-    session_detail, session_list, span_detail, span_list, trace_detail, trace_list,
+    scores_by_id, session_detail, session_list, span_detail, span_list, trace_detail, trace_list,
     trace_list_plan, user_detail, user_list,
 };
 pub use sql::{EXPORT_MAX_ROWS, ExportFormat, SQL_MAX_ROWS, SqlColumn, SqlJson, SqlRequest};

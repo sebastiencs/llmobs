@@ -23,7 +23,9 @@ pub use metrics::{
     Bucket, BucketWidth, Kpi, KpiName, MetricsData, MetricsGroupBy, MetricsRequest, ModelUsageRow,
     Point, Series, SeriesName,
 };
-pub use scores::{LATEST_SCORE_COLUMNS, ScoreListRequest, ScoreTargets, latest_scores, score_list};
+pub use scores::{
+    LATEST_SCORE_COLUMNS, ScoreListRequest, ScoreTargets, latest_scores, score_list, scores_by_id,
+};
 pub use sessions::{
     MAX_SESSION_TURNS, SessionDetailData, SessionListRequest, SessionSort, session_detail,
     session_list,
