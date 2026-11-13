@@ -498,8 +498,7 @@ function withoutConstraints(search: TracesSearch): TracesSearch {
     view: _view,
     ...rest
   } = search;
-  // An empty search would reapply the default saved view and put the filter back.
-  return Object.keys(rest).length === 0 ? { range: "24h" } : rest;
+  return rest;
 }
 
 function withoutTrace(search: TracesSearch): TracesSearch {

@@ -113,7 +113,11 @@ export function CommandPalette() {
           return;
         }
         event.preventDefault();
-        void navigate({ to: destination, params: { org, project } });
+        void navigate({
+          to: destination,
+          params: { org, project },
+          state: (current) => ({ ...current, applyDefaultView: true }),
+        });
         return;
       }
       dispatchShortcut(action, event);
@@ -206,7 +210,11 @@ export function CommandPalette() {
                       value={item.label}
                       onSelect={() => {
                         closePalette();
-                        void navigate({ to: item.to, params: { org, project } });
+                        void navigate({
+                          to: item.to,
+                          params: { org, project },
+                          state: (current) => ({ ...current, applyDefaultView: true }),
+                        });
                       }}
                     >
                       <item.icon />
@@ -236,6 +244,7 @@ export function CommandPalette() {
                       void navigate({
                         to: "/$org/$project/traces",
                         params: { org, project: item.slug },
+                        state: (current) => ({ ...current, applyDefaultView: true }),
                       });
                     }}
                   >

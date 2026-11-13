@@ -43,7 +43,11 @@ export function ProjectSwitcher() {
         <DropdownMenuRadioGroup
           value={project ?? ""}
           onValueChange={(slug) => {
-            void navigate({ to: "/$org/$project/traces", params: { org, project: slug } });
+            void navigate({
+              to: "/$org/$project/traces",
+              params: { org, project: slug },
+              state: (current) => ({ ...current, applyDefaultView: true }),
+            });
           }}
         >
           {rows.map((item) => (

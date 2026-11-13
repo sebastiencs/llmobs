@@ -485,7 +485,7 @@ it("clears a filter and shows onboarding when nothing is left", async () => {
   await waitFor(() => {
     expect(router.state.location.search.filter).toBeUndefined();
   });
-  expect(router.state.location.search.range).toBe("24h");
+  expect(router.state.location.search).toEqual({});
   expect(await screen.findByRole("tab", { name: "OTel env vars" })).toBeInTheDocument();
 });
 
