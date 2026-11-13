@@ -1124,6 +1124,10 @@ mod tests {
             }
             .unwrap_or_else(|| panic!("missing {} {}", route.method, route.path));
             let expected = match route.access {
+                // Key routes are bearer-only (D-G-15).
+                Access::Key { .. } => {
+                    Some(vec![SecurityRequirement::new("bearer", [] as [&str; 0])])
+                }
                 Access::Public => Some(Vec::new()),
                 Access::InstanceAdmin
                 | Access::User { session_only: true }
@@ -1143,10 +1147,7 @@ mod tests {
                 | Access::Project {
                     session_only: false,
                     ..
-                }
-                // M1's only key route is undocumented. M3 documents
-                // `POST /api/v1/scores` and revisits this arm.
-                | Access::Key { .. } => None,
+                } => None,
             };
             assert!(
                 operation.security == expected,

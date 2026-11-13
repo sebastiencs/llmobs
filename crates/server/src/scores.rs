@@ -1,6 +1,6 @@
 //! Score write core: validation, ids, times and append (spec 06 § Scores; D-G-26 to D-G-28).
 //!
-//! Every write path ends in [`write`] or [`delete`]. No route calls them yet (G3.4).
+//! Every write path ends in [`write`] or [`delete`]. The score routes call them (G3.4).
 #![cfg_attr(not(test), allow(dead_code))]
 
 use std::collections::HashMap;
