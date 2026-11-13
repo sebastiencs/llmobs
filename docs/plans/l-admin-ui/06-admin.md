@@ -314,7 +314,7 @@ It renders a `DropdownMenu`:
 
 ### 7. Add-user dialog — `web/src/components/admin/add-user-dialog.tsx`
 
-Two components in this file. The form lives in an inner component that is mounted only while the dialog is open, so its state and its mutation start fresh on every open (README § Pitfalls: no reset `useEffect`).
+Two components in this file. The form lives in an inner component that is mounted only while the dialog is open, so its state starts fresh on every open (README § Pitfalls: no reset `useEffect`). The mutation lives in `AddUserDialog` (`useCreateUser(onCreated)` in the same file, typed as `ReturnType<typeof useCreateUser>`), so a close mid-request cannot lose the link.
 
 ```tsx
 export function AddUserDialog({
@@ -326,45 +326,61 @@ export function AddUserDialog({
   onOpenChange: (open: boolean) => void;
   onCreated: (email: string, resetUrl: string) => void;
 }) {
+  const create = useCreateUser(onCreated);
+  const close = () => {
+    create.reset();
+    onOpenChange(false);
+  };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // While the request runs, the account may already exist on the server:
+        // closing now would reset the mutation and lose the link. Esc and outside clicks wait.
+        if (!next && !create.isPending) close();
+      }}
+    >
+      <DialogContent
+        onEscapeKeyDown={(event) => {
+          if (create.isPending) event.preventDefault();
+        }}
+        onPointerDownOutside={(event) => {
+          if (create.isPending) event.preventDefault();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Add user</DialogTitle>
           <DialogDescription>The account has no password. You get a link that lets them set one.</DialogDescription>
         </DialogHeader>
-        {open ? <AddUserForm onCreated={onCreated} /> : null}
+        {open && !create.data ? <AddUserForm create={create} onCancel={close} /> : null}
       </DialogContent>
     </Dialog>
   );
 }
 ```
 
-`AddUserForm({ onCreated })` (not exported):
-- **Mutation:** `const create = $api.useMutation("post", "/api/v1/admin/users", { gcTime: 0 })`. Its response carries the password link, a secret, so `gcTime: 0` drops it from the mutation cache once the form unmounts (D-L-5). It belongs to this inner component, so closing the dialog unmounts it and drops its state; nothing calls `create.reset()`.
+`AddUserForm({ create, onCancel })` (not exported):
+- **Mutation:** `const create = useCreateUser(onCreated)` with `{ gcTime: 0 }`; its response carries the password link, a secret, so `gcTime: 0` plus the resets below drop it from the mutation cache (D-L-5). The hook's `onSuccess` calls `onCreated(data.user.email, data.reset_url)` and then `create.reset()` — the page takes over the link and closes the dialog, and the secret leaves the cache at once. Every other close path (Esc, outside, X, Cancel) goes through `close()`, which also resets, so the next open starts clean.
 - **State:** `email` and `name` (strings, `""`), `admin` (boolean, `false`), `localError` (`string | undefined`, `undefined`). Typing in "Email" clears `localError`.
 - **Markup:** a `<form noValidate onSubmit={submit} className="flex flex-col gap-4">` with:
   - `TextField id="add-user-email" label="Email" type="email" autoComplete="off" required value={email} onChange={(value) => { setEmail(value); setLocalError(undefined); }} error={emailError} disabled={create.isPending}`. No `autoFocus`: Radix focuses the first field (README § Pitfalls).
   - `TextField id="add-user-name" label="Name (optional)" autoComplete="off" value={name} onChange={setName} maxLength={100} error={errors.name} disabled={create.isPending}`;
   - a row `<div className="flex items-center gap-2">` with a `Checkbox` (`id="add-user-admin"`, `checked={admin}`, `onCheckedChange={(value) => setAdmin(value === true)}`, `disabled={create.isPending}`) and `<Label htmlFor="add-user-admin">Instance admin</Label>`;
   - `<FormError message={formError} />`;
-  - `DialogFooter` with a `DialogClose asChild` outline `Button` "Cancel" (`type="button"`) and `<SubmitButton pending={create.isPending}>Add user</SubmitButton>`.
-- **`submit(event)`:** `event.preventDefault()`. If `email.trim()` is empty, set `localError = "Enter an email address."` and stop. Otherwise call:
+  - `DialogFooter` with an outline `Button` "Cancel" (`type="button"`, `disabled={create.isPending}`, `onClick={onCancel}`) and `<SubmitButton pending={create.isPending}>Add user</SubmitButton>`.
+- **`submit(event)`:** `event.preventDefault()`, `setLocalError(undefined)` and `create.reset()` (the mutation now outlives the form, so its previous error must not show). If `email.trim()` is empty, set `localError = "Enter an email address."` and stop. Otherwise call:
 
   ```ts
-  create.mutate(
-    {
-      body: {
-        email: email.trim(),
-        ...(name.trim() ? { name: name.trim() } : {}),
-        ...(admin ? { is_instance_admin: true } : {}),
-      },
+  create.mutate({
+    body: {
+      email: email.trim(),
+      ...(name.trim() ? { name: name.trim() } : {}),
+      ...(admin ? { is_instance_admin: true } : {}),
     },
-    { onSuccess: (data) => onCreated(data.user.email, data.reset_url) },
-  );
+  });
   ```
 
-  `onCreated` closes the dialog, which unmounts this form.
+  The hook's `onSuccess` closes the dialog, which unmounts this form.
 - **Errors**, with `errors = fieldErrors(create.error)` and `problem = problemOf(create.error)`:
   - `emailError` is the first that applies:
     1. `localError`;
@@ -472,6 +488,7 @@ The other strings are in the steps above.
 | "disables the reset link for a disabled user" | `listWith([ADA, { ...BOB, disabled: true }])` | Bob's "Create reset link" has `aria-disabled="true"`; the text "Enable the account to create a reset link" is shown |
 | "adds a user and shows the link" | A POST on `/api/v1/admin/users` recording the body and answering `201` with the content of `admin-user-created.json` (inline); a list handler counting calls | Click "Add user". Type `new@example.com` in "Email" and `New User` in "Name (optional)". Check "Instance admin" and press Enter in the email field. The body is `{ email: "new@example.com", name: "New User", is_instance_admin: true }`. Dialog "User created" shows `reset_url`. The list is fetched again. Click "Done"; the secret left TanStack's mutation cache (D-L-5): with `queryClient` from `renderApp`, `await waitFor(() => expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => m.state.data ?? null))).not.toContain("token=EXAMPLE0"))`. |
 | "leaves out an empty name and the admin flag" | A POST recorder | Type only the email and click "Add user" (the submit button inside the dialog: `within(getByRole("dialog")).getByRole("button", { name: "Add user" })`). The body is exactly `{ email: "new@example.com" }`. |
+| "keeps the add-user dialog open while the request runs" | A POST on `/api/v1/admin/users` that returns a promise the test resolves by hand | Open the dialog, type `new@example.com`, submit, press `{Escape}` — the dialog "Add user" is still open. Resolve the POST with `201` and the `admin-user-created.json` content: the dialog is gone and the "User created" dialog shows the link. |
 | "says when the email is taken" | A POST answering `problemResponse(409, "conflict", { detail: "email already registered" })` | After submit, the dialog stays open. The "Email" field has `aria-invalid="true"` and its description contains "An account with this email already exists." |
 | "requires an email" | A POST recorder | Click "Add user", then click `within(dialog).getByRole("button", { name: "Add user" })` with the fields empty. The text "Enter an email address." is shown and no request was recorded. |
 | "explains an invalid email" | A POST answering `problemResponse(400, "bad_request", { errors: [{ field: "email", message: "invalid email" }] })` | Type `nope` and submit. The "Email" field has `aria-invalid="true"` and `toHaveAccessibleDescription("Enter a valid email address.")`. |

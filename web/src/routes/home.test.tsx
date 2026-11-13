@@ -1,12 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
 import { ThemeProvider } from "@/components/theme-provider";
 import { server } from "@/mocks/node";
 import { createAppRouter } from "@/router";
+import { problemResponse } from "@/test/problem";
 import { renderApp } from "@/test/render";
+import projectsFixture from "../../../fixtures/api/static/projects.json";
 
 const USER = {
   id: "01900000-0000-7000-8000-000000000100",
@@ -130,7 +132,7 @@ it("renders not found for an unknown org", async () => {
   expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("href", "/");
 });
 
-it("shows the signed-out state for a 401", async () => {
+it("sends a signed-out user to the login page", async () => {
   server.use(
     http.get("/api/auth/me", () =>
       HttpResponse.json(
@@ -140,9 +142,10 @@ it("shows the signed-out state for a 401", async () => {
     ),
   );
 
-  await renderApp("/");
-  expect(screen.getByRole("heading", { name: "You are signed out" })).toBeInTheDocument();
-  expect(screen.getByText("Sign in again to continue.")).toBeInTheDocument();
+  const { router } = await renderApp("/");
+  expect(router.state.location.pathname).toBe("/login");
+  expect(router.state.location.search).toEqual({ redirect: "/" });
+  expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
 });
 
 it("shows a problem and retries it", async () => {
@@ -186,6 +189,33 @@ it("stays on the home page when the user has no orgs", async () => {
   const { router } = await renderApp("/");
   expect(router.state.location.pathname).toBe("/");
   expect(screen.getByText("You are not a member of any organization yet.")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Create an organization" })).toHaveAttribute(
+    "href",
+    "/setup/workspace",
+  );
+  expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
+});
+
+it("signs out from the home page without an org", async () => {
+  let signedOut = false;
+  server.use(
+    http.post("/api/auth/logout", () => {
+      signedOut = true;
+      return new HttpResponse(null, { status: 204 });
+    }),
+    http.get("/api/auth/me", () =>
+      signedOut
+        ? HttpResponse.json(
+            { type: "about:blank", title: "Unauthorized", status: 401, code: "unauthorized" },
+            { status: 401 },
+          )
+        : HttpResponse.json({ user: USER, orgs: [] }),
+    ),
+  );
+
+  const { router, user } = await renderApp("/");
+  await user.click(screen.getByRole("button", { name: "Sign out" }));
+  await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
 });
 
 it("switches orgs", async () => {
@@ -225,3 +255,112 @@ function project(name: string, slug: string, retention?: number) {
     ...(retention === undefined ? {} : { retention_days: retention }),
   };
 }
+
+it("creates a project and opens its traces", async () => {
+  let body: unknown;
+  const created = { ...projectsFixture.data[0], slug: "new-bot", name: "New bot" };
+  server.use(
+    http.post("/api/v1/orgs/:org/projects", async ({ request }) => {
+      body = await request.json();
+      return HttpResponse.json(created, { status: 201 });
+    }),
+    http.get("/api/v1/projects/:project", () => HttpResponse.json(created)),
+    http.get("/api/v1/projects/:project/traces", () =>
+      HttpResponse.json({ data: [], next_cursor: null }),
+    ),
+  );
+
+  const { router, user } = await renderApp("/acme");
+  await user.click(screen.getByRole("button", { name: "New project" }));
+  const dialog = await screen.findByRole("dialog", { name: "New project" });
+  await user.type(within(dialog).getByLabelText("Name"), "New bot");
+  await user.click(within(dialog).getByRole("button", { name: "Create project" }));
+
+  await waitFor(() => expect(body).toEqual({ name: "New bot" }));
+  await waitFor(() => expect(router.state.location.pathname).toBe("/acme/new-bot/traces"));
+});
+
+it("sends the slug and retention", async () => {
+  let body: unknown;
+  const created = { ...projectsFixture.data[0], slug: "new-bot", name: "New bot" };
+  server.use(
+    http.post("/api/v1/orgs/:org/projects", async ({ request }) => {
+      body = await request.json();
+      return HttpResponse.json(created, { status: 201 });
+    }),
+    http.get("/api/v1/projects/:project", () => HttpResponse.json(created)),
+    http.get("/api/v1/projects/:project/traces", () =>
+      HttpResponse.json({ data: [], next_cursor: null }),
+    ),
+  );
+
+  const { user } = await renderApp("/acme");
+  await user.click(screen.getByRole("button", { name: "New project" }));
+  const dialog = await screen.findByRole("dialog", { name: "New project" });
+  await user.type(within(dialog).getByLabelText("Name"), "New bot");
+  await user.type(within(dialog).getByLabelText("Slug (optional)"), "bot-2");
+  await user.type(within(dialog).getByLabelText("Retention in days (optional)"), "14");
+  await user.click(within(dialog).getByRole("button", { name: "Create project" }));
+
+  await waitFor(() => expect(body).toEqual({ name: "New bot", slug: "bot-2", retention_days: 14 }));
+});
+
+it("shows a taken slug and a refusal", async () => {
+  server.use(
+    http.post("/api/v1/orgs/:org/projects", () =>
+      problemResponse(409, "conflict", { detail: "slug taken" }),
+    ),
+  );
+
+  const { user } = await renderApp("/acme");
+  await user.click(screen.getByRole("button", { name: "New project" }));
+  const dialog = await screen.findByRole("dialog", { name: "New project" });
+  await user.type(within(dialog).getByLabelText("Name"), "New bot");
+  await user.click(within(dialog).getByRole("button", { name: "Create project" }));
+  expect(await screen.findByText("This slug is taken.")).toBeInTheDocument();
+
+  server.use(http.post("/api/v1/orgs/:org/projects", () => problemResponse(403, "forbidden")));
+  await user.click(within(dialog).getByRole("button", { name: "Create project" }));
+  expect(
+    await screen.findByText("Only admins and owners can create projects."),
+  ).toBeInTheDocument();
+});
+
+it("rejects a bad retention without calling the server", async () => {
+  const { user } = await renderApp("/acme");
+  await user.click(screen.getByRole("button", { name: "New project" }));
+  const dialog = await screen.findByRole("dialog", { name: "New project" });
+  await user.type(within(dialog).getByLabelText("Name"), "New bot");
+  await user.type(within(dialog).getByLabelText("Retention in days (optional)"), "0");
+  await user.click(within(dialog).getByRole("button", { name: "Create project" }));
+
+  expect(
+    await screen.findByText("Enter a whole number of days from 1 to 36500."),
+  ).toBeInTheDocument();
+});
+
+it("asks for a project name without calling the server", async () => {
+  const { user } = await renderApp("/acme");
+  await user.click(screen.getByRole("button", { name: "New project" }));
+  const dialog = await screen.findByRole("dialog", { name: "New project" });
+  await user.click(within(dialog).getByRole("button", { name: "Create project" }));
+
+  expect(await screen.findByText("Enter a name.")).toBeInTheDocument();
+  expect(within(dialog).getByLabelText("Name")).toHaveAttribute("aria-invalid", "true");
+});
+
+it("disables New project for a member", async () => {
+  server.use(
+    http.get("/api/auth/me", () =>
+      HttpResponse.json({ user: USER, orgs: [{ ...ACME, role: "member" }] }),
+    ),
+  );
+
+  await renderApp("/acme");
+
+  const button = screen.getByRole("button", { name: "New project" });
+  expect(button).toBeDisabled();
+  expect(button.parentElement).toHaveAccessibleDescription(
+    "Only admins and owners can create projects",
+  );
+});

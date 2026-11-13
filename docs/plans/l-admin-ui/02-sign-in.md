@@ -329,7 +329,7 @@ export const Route = createFileRoute("/login")({
    - `clientErrors: { email?: string; password?: string }`;
    - `resendDone: boolean`.
 3. Mutations:
-   - `login = $api.useMutation("post", "/api/auth/login")`;
+   - `login = $api.useMutation("post", "/api/auth/login", { gcTime: 0 })`. The request carries the password, so its `variables` must leave TanStack's mutation cache as soon as the page unmounts (README § Pitfalls);
    - `resend = $api.useMutation("post", "/api/auth/email/verify/resend")`.
 4. Render `<AuthLayout title="Sign in">` containing, in this order:
    1. `<FormError message={search.error ? oauthErrorMessage(search.error) : undefined} />`.
@@ -451,14 +451,15 @@ Every element that appears after a request (an alert, a success text, the resend
 
 1. `it("signs in and returns to the redirect target")`:
    - Setup: `signedOut()`. A `http.post("/api/auth/login", …)` handler pushes `await request.json()` into `bodies` and returns `HttpResponse.json(meFixture)`.
-   - Act: `renderApp("/login?redirect=%2Facme")`, then `fillAndSubmit(user, "ada@example.com", "correct horse battery")`.
-   - Assert: `await waitFor(() => expect(router.state.location.pathname).toBe("/acme"))`, and `bodies` equals `[{ email: "ada@example.com", password: "correct horse battery" }]`. The org home renders from the `me` set by the page, although `GET /api/auth/me` still answers 401.
+   - Act: `renderApp("/login?redirect=%2Facme%2Fsupport-bot%2Ftraces")`, then `fillAndSubmit(user, "ada@example.com", "correct horse battery")`. The redirect target is not the page `/` lands on, so the test fails if the redirect is ignored (README § Pitfalls).
+   - Assert: `await waitFor(() => expect(router.state.location.pathname).toBe("/acme/support-bot/traces"))`, and `bodies` equals `[{ email: "ada@example.com", password: "correct horse battery" }]`. The traces page renders from the `me` set by the page, although `GET /api/auth/me` still answers 401.
+   - With `queryClient` from `renderApp`: once the page has unmounted, the mutation cache holds neither the password nor the signed-in user (`waitFor` on `JSON.stringify(queryClient.getMutationCache().getAll().map((m) => ({ data: m.state.data ?? null, variables: m.state.variables ?? null })))` not containing `"correct horse battery"` nor `"ada@example.com"`).
 2. `it("goes home after signing in without a redirect")`: same setup with `renderApp("/login")`. The final pathname is `/acme`, because `/` redirects to the first org.
 3. `it("ignores an unsafe redirect")`:
    - `signedOut()`; `renderApp("/login?redirect=%2F%2Fevil.example")`.
    - The link "Continue with GitHub" has `href` exactly `/api/auth/authorize/github` (no `?redirect=`), because the validated search has no `redirect`. Do not assert on `router.state.location.search`: TanStack keeps dropped keys there.
-   - Sign in (login handler as in 1). `await waitFor(() => expect(router.state.location.pathname).toBe("/acme"))`.
-4. `it("sends a user who is already signed in to the redirect target")`: no `signedOut()`. `renderApp("/login?redirect=%2Facme")` ends with pathname `/acme`, and no "Sign in" heading is shown.
+   - Sign in (login handler as in 1). `await waitFor(() => expect(router.state.location.href).toBe("/acme"))`: the app stays on its origin and lands on the default page, which is not the page a honoured redirect would open.
+4. `it("sends a user who is already signed in to the redirect target")`: no `signedOut()`. `renderApp("/login?redirect=%2Facme%2Fsupport-bot%2Ftraces")` ends with pathname `/acme/support-bot/traces`, and no "Sign in" heading is shown.
 5. `it("shows a button per identity provider")`:
    - `signedOut()`; `renderApp("/login?redirect=%2Facme")`.
    - The link named "Continue with GitHub" has `href` `/api/auth/authorize/github?redirect=%2Facme`.
@@ -714,13 +715,14 @@ const received =
       }
       return (data?.data.length ?? 0) > 0;
     },
-    refetchInterval: (query) => (query.state.data === true ? false : onboardingPollMs()),
+    refetchInterval: (query) =>
+      query.state.status === "error" || query.state.data === true ? false : onboardingPollMs(),
   }).data === true;
 ```
 
 - `from` and `to` are recomputed on every poll, so a trace that arrives after the screen opened is still inside the window.
 - `onboardingPollMs` comes from `@/components/onboarding/poll` (5 s; tests shorten it).
-- A failed poll keeps the waiting line, and the next poll tries again. A `401` is handled by L5's middleware once L5 lands.
+- A failed poll keeps the waiting line and stops the polling. A `401` is handled by L5's middleware once L5 lands.
 - The secret is a read-only `TextField` (L1) labelled "Secret key", not a `<code>` with `aria-label`: Biome rejects `aria-label` on `<code>` (`useAriaPropsSupportedByRole`). Tests read it with `getByLabelText("Secret key")` and `toHaveValue(…)`. `onChange={() => {}}` is needed because L1's `TextField` requires it.
 
 The secret is only in props, never in the query key or the URL. Leaving the screen loses it, by design (D-L-5).
@@ -767,8 +769,8 @@ export const Route = createFileRoute("/setup/")({
 
 Two components, so that every hook runs before any branch:
 
-- `SetupPage` reads the config with `useSuspenseQuery(authConfigQuery)` and `token` with `Route.useSearch()`. Without a token it renders State A. With one it renders `<SetupForm token={token} config={config} />`.
-- `SetupForm({ token, config }: { token: string; config: Schema<"AuthConfig"> })` holds all the state (`name`, `email`, `password`, `confirm`, `orgName`, `projectName`, `clientErrors`, `created`), the mutation and `queryClient = useQueryClient()`, at its top. It renders State C when `created` is set, otherwise State B. `token` is a `string` there, so the request body needs no narrowing.
+- `SetupPage` reads the config with `useSuspenseQuery(authConfigQuery)` and `token` with `Route.useSearch()`, and holds `created` (`useState`): while it is set, State C shows, whatever the token is — the screen survives the token leaving the URL after a success. Otherwise, without a token it renders State A, and with one `<SetupForm token={token} config={config} onCreated={setCreated} />`.
+- `SetupForm({ token, config, onCreated }: { token: string; config: Schema<"AuthConfig">; onCreated: (created: Created) => void })` holds the state (`name`, `email`, `password`, `confirm`, `orgName`, `projectName`, `clientErrors`), the mutation and `queryClient = useQueryClient()` at its top. `token` is a `string` there, so the request body needs no narrowing. `Created` is `{ org: string; project: string; projectName: string; secret: string }`, defined next to `SetupPage`.
 
 **State A — no token.** Render:
 
@@ -835,38 +837,28 @@ if (projectName.trim().length === 0) errors.project_name = "Enter a project name
 setClientErrors(errors);
 if (Object.keys(errors).length > 0) return;
 const trimmedName = name.trim();
-setup.mutate(
-  {
-    body: {
-      setup_token: token,
-      email: email.trim(),
-      password,
-      org_name: orgName.trim(),
-      project_name: projectName.trim(),
-      ...(trimmedName.length > 0 ? { name: trimmedName } : {}),
-    },
+setup.mutate({
+  body: {
+    setup_token: token,
+    email: email.trim(),
+    password,
+    org_name: orgName.trim(),
+    project_name: projectName.trim(),
+    ...(trimmedName.length > 0 ? { name: trimmedName } : {}),
   },
-  {
-    onSuccess: (created) => {
-      void queryClient.invalidateQueries({ queryKey: authConfigQuery.queryKey });
-      queryClient.removeQueries({ queryKey: meQuery.queryKey });
-      setCreated({
-        org: created.org.slug,
-        project: created.project.slug,
-        projectName: created.project.name,
-        secret: created.secret_key,
-      });
-      setup.reset();
-    },
-  },
-);
+});
 ```
 
-- `setup = $api.useMutation("post", "/api/auth/setup", { gcTime: 0 })`. With `gcTime: 0`, `setup.reset()` detaches the mutation and TanStack drops it from the mutation cache at once, with the secret (D-L-5). `reset()` alone would leave it there for the default 5 minutes. The secret lives only in `created`, which is component state.
+- `setup = $api.useMutation("post", "/api/auth/setup", { gcTime: 0, onSuccess: (created) => { … } })`. With `gcTime: 0`, `setup.reset()` detaches the mutation and TanStack drops it from the mutation cache at once, with the secret key, the password and the setup token (D-L-5, README § Pitfalls). `reset()` alone would leave them there for the default 5 minutes. The success callback lives in the hook options, because it navigates and so unmounts the form; a callback passed to `mutate` would be dropped (README § Pitfalls). It runs, in this order:
+  1. `void queryClient.invalidateQueries({ queryKey: authConfigQuery.queryKey })`;
+  2. `queryClient.removeQueries({ queryKey: meQuery.queryKey })`;
+  3. `onCreated({ org: created.org.slug, project: created.project.slug, projectName: created.project.name, secret: created.secret_key })`;
+  4. `setup.reset()`;
+  5. `void navigate({ to: "/setup", search: { token: undefined }, replace: true })`, so the one-time token leaves the URL while `created` in `SetupPage` keeps State C showing. The search-only navigation does not re-run the route's `beforeLoad` (no `reloadOnSearch`), so the invalidated config cannot redirect the page. `navigate` is `useNavigate()`.
 - The config is invalidated, not removed: `SetupPage` observes it, and removing an observed query makes the page suspend (README § Pitfalls). The refetch makes the next `/login` visit see `setup_required: false`.
 - Removing `me` (nothing observes it here) makes the gate (L5) read the new session.
 
-**State C — created.** Render `<FirstTraceScreen org={created.org} project={created.project} projectName={created.projectName} secret={created.secret} />`.
+**State C — created.** `SetupPage` renders `<FirstTraceScreen org={created.org} project={created.project} projectName={created.projectName} secret={created.secret} />`.
 
 ### 5. `/login` sends the user to setup — `web/src/routes/login.tsx`
 
@@ -988,7 +980,8 @@ Two notes on `getByLabelText`:
      - `expect(screen.getByLabelText("Secret key")).toHaveValue("sk-llmobs-EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0")`;
      - the link "Go to project" has `href` `/acme/support-bot/traces`;
      - `await screen.findByText("First trace received")`, because the fixture traces list is not empty;
-     - the secret is not kept in TanStack's mutation cache: `const { queryClient } = await renderApp(…)` at the start, then `await waitFor(() => expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => m.state.data ?? null))).not.toContain("sk-llmobs-EXAMPLE0"))`.
+     - the token left the URL: `await waitFor(() => expect(router.state.location.href).toBe("/setup"))` (`router` from `renderApp`), and the "Send your first trace" heading is still shown;
+     - the mutation cache holds neither the secret nor the request that carried the password and the setup token: `const { queryClient } = await renderApp(…)` at the start, then `await waitFor(() => expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => ({ data: m.state.data ?? null, variables: m.state.variables ?? null }))).not.toContain("sk-llmobs-EXAMPLE0"))`, and the same string not containing `"correct horse battery"` nor `"tok123"`. `reset()` alone would leave all three for the default 5 minutes.
 6. `it("leaves the name out when it is empty")`: same as 5 without a name. The body has no `name` key (`expect(body).not.toHaveProperty("name")`).
 7. `it("shows the server's field errors")`:
    - The setup handler returns `problemResponse(400, "bad_request", { errors: [{ field: "password", message: "password is too common" }] })`.
@@ -1001,6 +994,7 @@ Two notes on `getByLabelText`:
     - Submit a valid form (setup handler as in 5).
     - "Waiting for the first trace…" is shown first; then `await screen.findByText("First trace received")`.
     - Each call's URL has `limit=1` and both `from` and `to`.
+10b. `it("stops polling when the traces list errors")`: as 10, but the traces handler counts its calls and always answers `problemResponse(500, "internal")`. After the submit, `WAITING_LINE` shows; `await waitFor(() => expect(calls).toBe(1))`; after `await act(async () => { await new Promise((resolve) => setTimeout(resolve, 120)); })`, `calls` is still 1 and the waiting line is still shown.
 11. `it("checks that the passwords match")`: `needsSetup()`; `const bodies = setupAnswers(() => HttpResponse.json(setupResponse, { status: 201 }))`. Fill the form but type `correct horse batterx` in "Confirm password". Submit. "The passwords do not match." is shown and `bodies` is empty.
 12. `it("offers only single sign-on when passwords are off")`: `needsSetup({ password_enabled: false })`; `renderApp("/setup?token=tok123")`. The link "Continue with GitHub" exists, `queryByLabelText("Email")` is null, and `queryByText("or")` is null.
 13. `it("says when no sign-in method is configured")`: `needsSetup({ password_enabled: false, providers: [] })`; `renderApp("/setup?token=tok123")`. `screen.getByText(NO_SIGN_IN_METHOD)` exists.
@@ -1074,6 +1068,21 @@ let handler: UnauthorizedHandler | undefined;
 /** The router registers the one handler (D-L-1). A later call replaces it. */
 export function setUnauthorizedHandler(next: UnauthorizedHandler | undefined): void {
   handler = next;
+}
+
+let signingOut = false;
+
+export function setSigningOut(value: boolean): void {
+  signingOut = value;
+}
+
+/**
+ * True from the moment a sign-out starts until its navigation is done. The handler
+ * ignores 401s meanwhile, so a poll that fails mid-sign-out cannot race the sign-out's
+ * own navigation to `/login` with a `/login?redirect=…`.
+ */
+export function isSigningOut(): boolean {
+  return signingOut;
 }
 
 /**
@@ -1168,6 +1177,10 @@ export function createAppRouter(options: { queryClient: QueryClient; history?: R
     if (apiPath === "/api/auth/me" && router.state.status === "pending") {
       return;
     }
+    // A poll's 401 during sign-out must not race the sign-out's own navigation to /login.
+    if (isSigningOut()) {
+      return;
+    }
     const location = router.state.location;
     if (isPublicPath(location.pathname)) {
       return;
@@ -1175,7 +1188,7 @@ export function createAppRouter(options: { queryClient: QueryClient; history?: R
     const target = safeRedirect(location.href);
     void router
       .navigate({ to: "/login", search: target === undefined ? {} : { redirect: target } })
-      .then(() => {
+      .finally(() => {
         clearUserData(options.queryClient);
       });
   });
@@ -1183,7 +1196,7 @@ export function createAppRouter(options: { queryClient: QueryClient; history?: R
 }
 ```
 
-- The cache is cleared after the navigation, so the page that got the `401` is gone before its queries are. Clearing first would make its suspense queries refetch and fail again. `clearUserData` (L3) keeps the auth config that `/login` observes.
+- The cache is cleared after the navigation (`.finally`, so a rejected navigation still clears it), so the page that got the `401` is gone before its queries are. Clearing first would make its suspense queries refetch and fail again. `clearUserData` (L3) keeps the auth config that `/login` observes.
 - A `401` on `GET /api/auth/me` while the router is loading comes from the gate (`requireSession`) or from `/login`'s own check; the gate redirects by itself (to `/login`, or to `/setup` on a new server), so the handler must not race it with a second navigation. A `401` on `me` while the router is idle is a refetch during use: it redirects like any `/api/v1/*` call. `router.state.status` is `"pending" | "idle"` in router-core 1.17x.
 - Several `401`s in a row call the handler several times. Once the location is `/login` the guard returns, and two navigations to the same URL are harmless.
 - `setUnauthorizedHandler` comes from `@/api/session`; `isPublicPath` and `safeRedirect` from `@/lib/redirect`; `clearUserData` from `@/api/auth`.
@@ -1198,32 +1211,36 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { clearUserData } from "@/api/auth";
 import { $api } from "@/api/client";
+import { setSigningOut } from "@/api/session";
 
 /** POST /api/auth/logout, then /login. A failed logout still leaves the page. */
 export function useSignOut(): { signOut: () => void; pending: boolean } {
-  const logout = $api.useMutation("post", "/api/auth/logout");
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  // onSettled in the hook options: the navigation unmounts the caller, which would
+  // drop a callback passed to `mutate` (README § Pitfalls).
+  const logout = $api.useMutation("post", "/api/auth/logout", {
+    onSettled: () => {
+      void navigate({ to: "/login" }).finally(() => {
+        clearUserData(queryClient);
+        setSigningOut(false);
+      });
+    },
+  });
   return {
     pending: logout.isPending,
     signOut: () => {
-      logout.mutate(
-        {},
-        {
-          onSettled: () => {
-            void navigate({ to: "/login" }).then(() => {
-              clearUserData(queryClient);
-            });
-          },
-        },
-      );
+      // From here until the navigation is done, the 401 handler must stay quiet.
+      setSigningOut(true);
+      logout.mutate({});
     },
   };
 }
 ```
 
-- `logout.mutate({}, …)`: `post_logout` has no body and no parameters, and `{}` is the empty init that `openapi-react-query` accepts.
-- `onSettled` runs on success and on failure: the user asked to leave.
+- `logout.mutate({})`: `post_logout` has no body and no parameters, and `{}` is the empty init that `openapi-react-query` accepts.
+- `onSettled` runs on success and on failure: the user asked to leave. It sits in the hook options because it navigates, which unmounts the component that called `mutate`.
+- `signOut` sets the signing-out flag before the request, and the navigation's `.finally` clears it and the user data even when the navigation rejects.
 - `/login`'s `beforeLoad` asks the server for `me` with `staleTime: 0` (L3), so the cached `me` cannot send the user back before `clearUserData` runs.
 
 In `web/src/components/user-menu.tsx`, call `const { signOut, pending } = useSignOut();` at the top of `UserMenu`, and at the end of `DropdownMenuContent`, after the "Show times in UTC" item, add:
@@ -1291,7 +1308,7 @@ afterEach(() => {
 
 ### `web/src/test/auth-gate.test.tsx`
 
-Imports: `screen`, `waitFor` from `@testing-library/react`; `HttpResponse`, `http` from `msw`; `expect`, `it` from `vitest`; `authConfig` from `../../../fixtures/api/static/auth-config.json`; `meFixture` from `../../../fixtures/api/static/me.json`; `api` from `@/api/client`; `server` from `@/mocks/node`; `problemResponse` from `@/test/problem`; `renderApp` from `@/test/render`. Each test destructures what it needs from `await renderApp(…)`.
+Imports: `act`, `screen`, `waitFor` from `@testing-library/react`; `HttpResponse`, `http` from `msw`; `expect`, `it`, `vi` from `vitest`; `authConfig` from `../../../fixtures/api/static/auth-config.json`; `meFixture` from `../../../fixtures/api/static/me.json`; `api` from `@/api/client`; `setSigningOut` from `@/api/session`; `server` from `@/mocks/node`; `problemResponse` from `@/test/problem`; `renderApp` from `@/test/render`. Each test destructures what it needs from `await renderApp(…)`.
 
 1. `it("redirects to login with the page to come back to")`:
    - `/api/auth/me` answers 401;
@@ -1318,18 +1335,23 @@ Imports: `screen`, `waitFor` from `@testing-library/react`; `HttpResponse`, `htt
      ```
 
      The gate sees a valid `me`; the org home's loader then calls `list_projects` through `api`, and the middleware sees the `401`. `/login` asks for `me` with `staleTime: 0` and gets the `401`, so it stays.
-   - `const { router, queryClient } = await renderApp("/acme")`.
+   - `const { router, queryClient } = await renderApp("/acme?x=1")`, so the `?redirect=` the gate builds (`/acme?x=1`) is not the page `/` lands on.
    - `await waitFor(() => expect(router.state.location.pathname).toBe("/login"))`.
-   - `expect(await screen.findByRole("link", { name: "Continue with GitHub" })).toHaveAttribute("href", "/api/auth/authorize/github?redirect=%2Facme")` (the validated `redirect`; the login page may mount after the pathname changes).
+   - `expect(await screen.findByRole("link", { name: "Continue with GitHub" })).toHaveAttribute("href", "/api/auth/authorize/github?redirect=%2Facme%3Fx%3D1")` (the validated `redirect`; the login page may mount after the pathname changes).
    - The cache was cleared: `await waitFor(() => expect(queryClient.getQueryCache().findAll({ queryKey: ["get", "/api/v1/orgs/{org}/projects"] })).toHaveLength(0))`, and the config is still cached: `queryClient.getQueryData(["get", "/api/auth/config"])` is defined.
 5. `it("does not redirect when the login form gets a 401")`:
    - Signed out (`/api/auth/me` 401). The login handler answers `problemResponse(401, "unauthorized")`.
-   - `renderApp("/login?redirect=%2Facme")`. Type `ada@example.com` in "Email" and `wrong password` in "Password", click "Sign in" (the steps of `login.test.tsx`'s `fillAndSubmit`, written out here: that helper is private to its file).
-   - `expect(await screen.findByRole("alert")).toHaveTextContent("Incorrect email or password.")`, the pathname is still `/login`, and "Continue with GitHub" still has `href` `/api/auth/authorize/github?redirect=%2Facme`.
+   - `renderApp("/login?redirect=%2Facme%2Fsupport-bot%2Ftraces")`. Type `ada@example.com` in "Email" and `wrong password` in "Password", click "Sign in" (the steps of `login.test.tsx`'s `fillAndSubmit`, written out here: that helper is private to its file).
+   - `expect(await screen.findByRole("alert")).toHaveTextContent("Incorrect email or password.")`, the pathname is still `/login`, and "Continue with GitHub" still has `href` `/api/auth/authorize/github?redirect=%2Facme%2Fsupport-bot%2Ftraces`.
 6. `it("ignores a session 401 on a public page")`:
    - Signed out (`/api/auth/me` 401); `server.use(http.get("/api/v1/orgs", () => problemResponse(401, "unauthorized")))`.
-   - `const { router } = await renderApp("/login?redirect=%2Facme")`; then `await api.GET("/api/v1/orgs")` in the test.
-   - The pathname is still `/login`, and the "Continue with GitHub" link still carries `redirect=%2Facme`.
+   - `const { router } = await renderApp("/login?redirect=%2Facme%2Fsupport-bot%2Ftraces")`; `const navigate = vi.spyOn(router, "navigate")` (an instance spy, not a module mock); then `await api.GET("/api/v1/orgs")` in the test.
+   - `navigate` was not called, the pathname is still `/login`, and the "Continue with GitHub" link still carries `redirect=%2Facme%2Fsupport-bot%2Ftraces`.
+6b. `it("ignores a poll's 401 while signing out")`:
+   - `http.post("/api/auth/logout", …)` sets two flags and returns a promise the test resolves later; `/api/auth/me` answers 401 once the logout was called.
+   - `renderApp("/acme")`; wait for the "Acme" heading; install the `/api/v1/orgs` 401 handler (after the load, so it cannot fire before the sign-out); open the user menu and click "Sign out"; wait for the logout request to have started.
+   - `await api.GET("/api/v1/orgs")`: the pathname is still `/acme` (the 401 did not navigate).
+   - Resolve the logout promise with `204`: the pathname becomes `/login` with an empty search — no `?redirect=`. Reset the signing-out flag in a `finally`, so a failure cannot leak it to the other tests.
 7. `it("sends a session that ends on a new server to setup")`:
    - As test 4, plus `server.use(http.get("/api/auth/config", () => HttpResponse.json({ ...authConfig, setup_required: true })))`.
    - `renderApp("/acme")` ends, via `/login`'s `beforeLoad`, on pathname `/setup` (`waitFor`).
@@ -1639,7 +1661,7 @@ A response that fails once and then succeeds is a closure counter: `let n = 0; c
      - `keyCalls` equals `[{ project: "acme/support-bot", body: { kind: "secret", name: "Default" } }]`;
      - `await screen.findByRole("heading", { name: "Send your first trace" })`;
      - `expect(screen.getByLabelText("Secret key")).toHaveValue("sk-llmobs-EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0")`;
-     - the secret left TanStack's mutation cache: with `queryClient` from `renderApp`, `await waitFor(() => expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => m.state.data ?? null))).not.toContain("sk-llmobs-EXAMPLE0"))`.
+     - the key mutation left TanStack's cache entirely, data and variables: with `queryClient` from `renderApp`, `await waitFor(() => expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => ({ data: m.state.data ?? null, variables: m.state.variables ?? null }))).not.toContain("sk-llmobs-EXAMPLE0"))`, and the same string not containing `"name":"Default"` (the request that made the key). `reset()` alone would leave both for the default 5 minutes.
 2. `it("does not create the org again when the project fails")`:
    - `handlers({ project })`, where `project` returns `problemResponse(503, "busy")` on the first call and the fixture after.
    - Submit once. `expect(await screen.findByRole("alert")).toHaveTextContent("Service Unavailable")`, "Organization name" is disabled with the description "Created.", and the button reads "Try again".

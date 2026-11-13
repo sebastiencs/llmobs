@@ -6,6 +6,8 @@ import { problemOf } from "@/api/problem";
 import { projectRef } from "@/api/project-ref";
 import { projectInit, projectQuery, traceDetailQuery } from "@/api/queries";
 import { openTraceId, rememberTrace } from "@/components/command/recent-traces";
+import { isProjectSettingsPath } from "@/components/settings/settings-nav";
+import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { ProjectProvider, useProject } from "@/components/shell/project-context";
 import { ProjectSidebar } from "@/components/shell/project-sidebar";
 
@@ -51,13 +53,21 @@ function ProjectLayout() {
     "/api/v1/projects/{project}",
     projectInit(org, project),
   );
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const inSettings = isProjectSettingsPath(pathname, org, project);
 
   return (
     <ProjectProvider value={{ org, project, ref: projectRef(org, project), data }}>
       <RememberOpenTrace />
-      <ProjectSidebar>
-        <Outlet />
-      </ProjectSidebar>
+      {inSettings ? (
+        <SettingsSidebar org={org} project={{ slug: project, role: data.role }}>
+          <Outlet />
+        </SettingsSidebar>
+      ) : (
+        <ProjectSidebar>
+          <Outlet />
+        </ProjectSidebar>
+      )}
     </ProjectProvider>
   );
 }

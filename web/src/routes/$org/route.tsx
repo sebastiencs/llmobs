@@ -1,6 +1,6 @@
 import { createFileRoute, notFound, Outlet } from "@tanstack/react-router";
 import { meQuery } from "@/api/queries";
-import { TopBar } from "@/components/shell/top-bar";
+import { TopBarLayout } from "@/components/shell/top-bar-layout";
 
 export const Route = createFileRoute("/$org")({
   loader: async ({ context, params }) => {
@@ -14,11 +14,8 @@ export const Route = createFileRoute("/$org")({
 
 function OrgLayout() {
   return (
-    <div className="flex h-dvh flex-col overflow-hidden">
-      <TopBar />
-      <div className="flex min-h-0 flex-1 flex-col">
-        <Outlet />
-      </div>
-    </div>
+    <TopBarLayout>
+      <Outlet />
+    </TopBarLayout>
   );
 }

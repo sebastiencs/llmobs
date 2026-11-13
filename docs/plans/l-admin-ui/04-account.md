@@ -196,7 +196,7 @@ const currentError =
 1. `event.preventDefault()`, then `setDone(false)` and `change.reset()` (so a stale server error never sits next to a new client error).
 2. `const problems = passwordProblems(next, confirm); setClientErrors(problems);`. If `problems` has any key, send nothing.
 3. `change.mutate({ body: current.length > 0 ? { current_password: current, new_password: next } : { new_password: next } }, { onSuccess })`. `current` is sent untrimmed, because passwords are never trimmed.
-4. `onSuccess`: clear `current` and both new-password fields, then `setDone(true)`.
+4. `onSuccess`: `change.reset()` (the form stays mounted, so the passwords only leave the mutation's `variables` through the reset), then clear `current` and both new-password fields, and `setDone(true)`.
 
 The current session stays signed in. The server revokes only the other sessions and the personal access tokens. Do not navigate.
 
@@ -295,7 +295,7 @@ Every test starts with `const { user, router } = await renderApp("/account");` (
      - `http.patch("/api/v1/me", …)` captures the body and answers `HttpResponse.json({ id: "01900000-0000-7000-8000-000000000100", email: "ada@example.com", name: "Ada Lovelace", is_instance_admin: true })`;
      - `http.get("/api/auth/me", …)` does `meCalls += 1` and answers the `me.json` shape (`{ user: { id, email: "ada@example.com", name: "Ada Lovelace", is_instance_admin: true }, orgs: [{ id: "01900000-0000-7000-8000-000000000010", slug: "acme", name: "Acme", role: "owner" }] }`).
    - Clear the name field (`user.clear`), type `  Ada Lovelace  `, and click "Save name".
-   - Expect the body to equal `{ name: "Ada Lovelace" }` and `findByText("Name saved.")`.
+   - Expect `findByText("Name saved.")` first, then the body to equal `{ name: "Ada Lovelace" }`.
    - `await waitFor(() => expect(meCalls).toBeGreaterThanOrEqual(1))`: the overrides were installed after the gate's load, so this counts only the refetch.
    - `await screen.findByRole("button", { name: "Ada Lovelace" })`: the user menu now shows the new name.
 4. **"clears the display name with an empty body"**
@@ -313,13 +313,14 @@ Every test starts with `const { user, router } = await renderApp("/account");` (
    - Expect the body `{ current_password: "old-password-1", new_password: "correct-horse-battery" }`.
    - Expect `findByText("Password changed. Your other sessions and personal access tokens were signed out.")`.
    - The current-password field is empty again.
+   - No mutation in `queryClient.getMutationCache()` has the password in `state.variables` or `state.data`: the form stays mounted, so only the `change.reset()` in `onSuccess` clears it.
 7. **"omits the current password when it is empty"**
    - Same as test 6 without typing a current password.
    - Expect the body `{ new_password: "correct-horse-battery" }`.
 8. **"does not send mismatched passwords"**
    - Register an `http.post("/api/v1/me/password", …)` handler that pushes to a `calls` array.
    - Type different values into the two new-password fields and submit.
-   - The confirm field has `aria-invalid="true"`, and `calls` stays empty.
+   - The confirm field has `aria-invalid="true"`, and `calls` stays empty. Assert that only after a tick (`await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); })`): the submit handler runs synchronously, but a request would only appear after the event loop turns.
 9. **"shows a wrong current password under its field"**
    - The POST answers `problemResponse(403, "forbidden")` (the server's answer to a wrong current password).
    - Type `wrong-password-1` as the current password and valid new passwords, and submit.
@@ -444,7 +445,7 @@ export function expiresAt(expiry: TokenExpiry, now: number): string | undefined 
 
 ### 3. `web/src/components/account/create-token-dialog.tsx` (new)
 
-Two components in one file. Import `Schema` from `@/api/types`. The outer one owns the `Dialog`; the inner one owns the form state and the mutation and is mounted only while the dialog is open, so every opening starts from the defaults with no reset effect.
+Two components in one file. Import `Schema` from `@/api/types`. The outer one owns the `Dialog`; the inner one owns the `DialogContent`, the form state and the mutation, and is mounted only while the dialog is open, so every opening starts from the defaults with no reset effect.
 
 ```tsx
 // Signatures only; no return type annotations (React 19 has no global JSX namespace).
@@ -459,7 +460,7 @@ export function CreateTokenDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>{open ? <CreateTokenForm onOpenChange={onOpenChange} onCreated={onCreated} /> : null}</DialogContent>
+      {open ? <CreateTokenForm onOpenChange={onOpenChange} onCreated={onCreated} /> : null}
     </Dialog>
   );
 }
@@ -473,9 +474,9 @@ function CreateTokenForm({
 }) { … }
 ```
 
-`CreateTokenForm`:
+`CreateTokenForm` renders the `DialogContent` itself, with `onEscapeKeyDown` and `onInteractOutside` handlers that `preventDefault()` while `create.isPending`, so the dialog cannot close while the secret is on its way.
 
-**Data:** `const create = $api.useMutation("post", "/api/v1/me/tokens", { gcTime: 0 });`. Its response holds the secret, so `gcTime: 0` lets TanStack drop it from the mutation cache as soon as the form unmounts (D-L-5).
+**Data:** `const create = $api.useMutation("post", "/api/v1/me/tokens", { gcTime: 0, onSuccess: (data) => { onCreated(data); onOpenChange(false); } });`. Its response holds the secret, so `gcTime: 0` lets TanStack drop it from the mutation cache as soon as the form unmounts (D-L-5), and `onSuccess` sits on the hook, not on `mutate`, so closing the dialog mid-request cannot lose the secret (README § Pitfalls).
 
 **State** (initial values are the defaults; unmounting on close discards them):
 - `name`: `""`;
@@ -483,7 +484,7 @@ function CreateTokenForm({
 - `expiry`: `TokenExpiry`, `"90"`;
 - `nameError`: `string | undefined`.
 
-**Render** (a fragment inside the outer `DialogContent`):
+**Render** (inside its own `DialogContent`):
 1. `DialogHeader`, with `DialogTitle` "New personal access token" and `DialogDescription` "The token acts as you in the CLI and MCP clients."
 2. A `<form id="create-token-form" noValidate>` with `className="flex flex-col gap-4"`, containing:
    - `TextField`: id `token-name`, label "Name", value `name`, `maxLength={100}`, placeholder "Laptop CLI", `error={nameError ?? fieldErrors(create.error).name}`, `disabled={create.isPending}`. No `autoFocus`: Radix focuses the first focusable element of the dialog, which is this input.
@@ -497,16 +498,16 @@ function CreateTokenForm({
      - Its `SelectTrigger` has `id="token-expiry"` and `aria-label="Expires"`, and contains `<SelectValue />`, so it shows the chosen option's label ("90 days" at first).
      - Its `SelectContent` holds one `SelectItem` per `EXPIRY_OPTIONS` entry, in that order.
    - `<FormError message={…} />`, when `create.error` is set and has no `name` field error: `fieldErrors(create.error).expires_at ?? fieldErrors(create.error).scopes ?? problemMessage(create.error, "Could not create the token. Try again.")`.
-3. `DialogFooter`, with a `Button variant="outline" type="button"` "Cancel" that calls `onOpenChange(false)`, then `<SubmitButton pending={create.isPending} form="create-token-form">Create token</SubmitButton>` (L1's `SubmitButton` forwards `form`).
+3. `DialogFooter`, with a `Button variant="outline" type="button"` "Cancel" that calls `onOpenChange(false)` and is disabled while `create.isPending`, then `<SubmitButton pending={create.isPending} form="create-token-form">Create token</SubmitButton>` (L1's `SubmitButton` forwards `form`).
 
 **Submit:**
 1. `event.preventDefault()`, then `create.reset()`.
 2. `const trimmed = name.trim();` If it is empty, `setNameError("Enter a name.")` and stop. Otherwise `setNameError(undefined)`.
 3. `const expires = expiresAt(expiry, Date.now());`
-4. Call `create.mutate({ body: { name: trimmed, scopes: scopesFor(access), ...(expires ? { expires_at: expires } : {}) } }, { onSuccess: (data) => { … } })`.
-5. In `onSuccess`, call `onCreated(data)` and then `onOpenChange(false)`. Closing unmounts `CreateTokenForm` and its mutation with it, so the dialog's mutation never keeps the secret (D-L-5).
+4. Call `create.mutate({ body: { name: trimmed, scopes: scopesFor(access), ...(expires ? { expires_at: expires } : {}) } })`.
+5. The hook-level `onSuccess` calls `onCreated(data)` and then `onOpenChange(false)`. Closing unmounts `CreateTokenForm` and its mutation with it, so the dialog's mutation never keeps the secret (D-L-5).
 
-**Keyboard:** Enter in the name field submits. Esc closes (Radix), which unmounts the form and drops a failed attempt's error. Focus returns to "New token" (Radix).
+**Keyboard:** Enter in the name field submits. Esc closes (Radix), which unmounts the form and drops a failed attempt's error — but not while `create.isPending`, when the Esc and outside-click handlers `preventDefault()` and Cancel is disabled. Focus returns to "New token" (Radix).
 
 ### 4. `web/src/components/account/personal-tokens.tsx` (new)
 
@@ -533,7 +534,8 @@ const revoke = $api.useMutation("delete", "/api/v1/me/tokens/{id}");
 1. A row with `<p className="text-sm text-muted-foreground">Tokens let the CLI and MCP clients act as you. Treat them like passwords.</p>` and, right-aligned, `<Button type="button" onClick={() => setCreating(true)}><Plus />New token</Button>`.
 2. The states:
    - `tokens.isPending`: three `Skeleton className="h-8 w-full"`;
-   - `tokens.error`: `throw tokens.error;` (the route's `ErrorState` renders it with "Try again"; a `401` was already redirected by L5's middleware);
+   - `tokens.error` with `tokens.data === undefined` (the first page failed): `throw tokens.error;` (the route's `ErrorState` renders it with "Try again"; a `401` was already redirected by L5's middleware);
+   - `tokens.error` with data already loaded (a failed "Load more"): the rows stay and a `FormError` "Could not load more tokens." is rendered under the table;
    - no rows: `EmptyState` with icon `KeyRound`, title "No personal access tokens" and description "Create one to use the CLI or an MCP client.";
    - rows: the table below.
 
@@ -636,8 +638,8 @@ Imports: `screen`, `waitFor`, `within` from `@testing-library/react`; `HttpRespo
    - Click "New token" and type "Laptop" in "Name". Keep "Read only".
    - Open "Expires" and choose "Never" (`user.click(getByRole("combobox", { name: "Expires" }))`, then `user.click(getByRole("option", { name: "Never" }))`).
    - Click "Create token".
-   - Expect the body to equal `{ name: "Laptop", scopes: ["read"] }`, with no `expires_at`.
-   - `const dialog = await screen.findByRole("dialog", { name: "Personal access token created" })`, and `expect(within(dialog).getByLabelText("Secret")).toHaveValue("pat-llmobs-NEWTOKEN0NEWTOKEN0NEWTOKEN0NEWT")` (L2 shows the secret as an input value, not as text).
+   - `const dialog = await screen.findByRole("dialog", { name: "Personal access token created" })` first, then expect the body to equal `{ name: "Laptop", scopes: ["read"] }`, with no `expires_at`.
+   - `expect(within(dialog).getByLabelText("Secret")).toHaveValue("pat-llmobs-NEWTOKEN0NEWTOKEN0NEWTOKEN0NEWT")` (L2 shows the secret as an input value, not as text).
    - The dialog's text contains `Copy it now. You won't see it again.`.
    - The token list was refetched: the call count grew.
    - Click "Done". `queryByRole("dialog", { name: "Personal access token created" })` is `null`, and `screen.queryByDisplayValue("pat-llmobs-NEWTOKEN0NEWTOKEN0NEWTOKEN0NEWT")` is `null`.
@@ -665,7 +667,7 @@ Imports: `screen`, `waitFor`, `within` from `@testing-library/react`; `HttpRespo
    - The list override answers the fixture first and an empty page after the delete.
    - Open "Actions for CLI", click "Revoke", and see `findByRole("alertdialog", { name: "Revoke token?" })`.
    - Click the dialog's "Revoke" button (`within(dialog).getByRole("button", { name: "Revoke" })`).
-   - Expect `ids` to equal `[TOKEN_ID]`. The dialog closes, and `findByText("No personal access tokens")`.
+   - Expect `findByText("No personal access tokens")` first (the dialog closes and the list refetches), then `ids` to equal `[TOKEN_ID]`.
 11. **"keeps the dialog open with the error when revoking fails"**
    - The DELETE answers `problemResponse(500, "internal")`.
    - After confirming, `within(dialog).findByRole("alert")` has the text "Internal Server Error". `problemMessage` falls back to the title when there is no detail.
@@ -680,6 +682,14 @@ Imports: `screen`, `waitFor`, `within` from `@testing-library/react`; `HttpRespo
 14. **"shows the error page when the list fails"**
     - `http.get("/api/v1/me/tokens", () => problemResponse(500, "internal"))`.
     - `findByRole("button", { name: "Try again" })` (the route's `ErrorState`).
+15. **"keeps the secret reachable when the dialog is closed while creating"**
+    - The POST handler returns a promise the test resolves by hand, so the create stays pending.
+    - Click "New token", type "Laptop", click "Create token": it is disabled.
+    - Click "Cancel" (disabled, so nothing happens) and press Escape (prevented): the "New personal access token" dialog is still open.
+    - Resolve the POST with the `201` of test 4: `findByRole("dialog", { name: "Personal access token created" })` shows the secret. The close never happened while pending, and the hook-level `onSuccess` owns the delivery.
+16. **"shows an inline error when loading more fails"**
+    - The first page (no `cursor`) answers the fixture with `next_cursor: "c2"`; the call with `cursor=c2` answers `problemResponse(500, "internal")`.
+    - Click "Load more". `findByRole("alert")` has the text "Could not load more tokens.", and the table with its `CLI` row is still there (no error page).
 
 ## Status line
 
@@ -754,6 +764,8 @@ const PORT = /^[1-9]\d{3,4}$/;
 const STATE = /^[A-Za-z0-9_-]{1,256}$/;
 /** D-L-9: at least one non-digit, so the router's JSON parsing (README § Conventions, Search params) never turns it into a number. */
 const HAS_NON_DIGIT = /[^0-9]/;
+/** D-L-9: a state that JSON-parses to a number (`1e5`) would come back as `100000`, so it is refused too. */
+const JSON_NUMBER = /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i;
 const HOST = /^[A-Za-z0-9.-]{1,64}$/;
 
 /**
@@ -784,7 +796,12 @@ export function parseCliRequest(search: CliAuthSearch): CliRequest | undefined {
   if (portNumber < 1024 || portNumber > 65535) {
     return undefined;
   }
-  if (state === undefined || !STATE.test(state) || !HAS_NON_DIGIT.test(state)) {
+  if (
+    state === undefined ||
+    !STATE.test(state) ||
+    !HAS_NON_DIGIT.test(state) ||
+    JSON_NUMBER.test(state)
+  ) {
     return undefined;
   }
   if (host !== undefined && !HOST.test(host)) {
@@ -897,7 +914,7 @@ pnpm gen:routes
    - accepts `{ port: "1024", state: "a" }` and `{ port: "65535", state: "A_b-9", host: "my-host.local" }`;
    - returns `undefined` for each of these:
      - port `"1023"`, `"65536"`, `"80"`, `"12a45"`, `"01024"` or missing;
-     - state missing, `""`, `"has space"`, 257 × `"a"`, or all digits (`"12345678901234567890"`, `"7"`);
+     - state missing, `""`, `"has space"`, 257 × `"a"`, all digits (`"12345678901234567890"`, `"7"`), or a JSON number (`"1e5"`, `"1E5"`, `"-123"`, `"123e10"`);
      - host `"bad/host"`, `""`, or 65 × `"a"`.
 3. `cliTokenName({ port: 5000, state: "s" })` is `"CLI"`. With `host: "laptop"` it is `"CLI on laptop"`.
 4. `cliCallbackUrl({ port: 54321, state: "xyz" }, { token: "pat-llmobs-A+B" })` is `"http://127.0.0.1:54321/callback?token=pat-llmobs-A%2BB&state=xyz"`.
@@ -966,6 +983,10 @@ Each test destructures what it uses from `await renderApp(url)`. The heading che
    - `const { router } = await renderApp("/cli-auth?port=54321&state=s1");`
    - `await waitFor(() => expect(router.state.location.pathname).toBe("/login"))`.
    - `router.state.location.search` has `redirect` equal to `"/cli-auth?port=54321&state=s1"`. Use plain `s1`: a value the router would JSON-parse (such as a quoted string) is re-serialized differently in `href`, which is why the page itself reads `router.history.location.search`.
+11. **"reads the host from the raw query string"**
+   - Answer the POST as in test 2. Render `/cli-auth?port=54321&state=s1&host=1e3`.
+   - The page text says `CLI on 1e3` — not `1000`, which is what the router's JSON parsing of search values would make of `host=1e3` — proving the page reads the raw query string.
+   - Click "Authorize". The POST body's `name` is `"CLI on 1e3"`.
 
 ## Status line
 

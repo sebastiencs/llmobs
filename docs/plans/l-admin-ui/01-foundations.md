@@ -750,7 +750,7 @@ The dialog keeps the secret only in its props. Callers render it only while they
 ### 5. `secret-dialog.test.tsx`
 
 - Render with `render` from `@testing-library/react`. No `TooltipProvider` is needed.
-- Use a wrapper component `Harness({ secret, showSnippets, onDone, description })`, defined at module level. Its `useState(true)` controls `open`, its `onDone` calls the given `vi.fn()` and sets `open` to false, and it renders `{open ? <SecretDialog open … /> : <button type="button" onClick={() => setOpen(true)}>Reopen</button>}`.
+- Use a wrapper component `Harness({ secret, showSnippets, onDone, description })`, defined at module level. Its `useState(true)` controls `open`, its `onDone` calls the given `vi.fn()` and sets `open` to false, and it renders the `SecretDialog` and a `<button type="button" onClick={() => setOpen(true)}>Reopen</button>` side by side, both always mounted: the dialog's body keeps its state across a close and a reopen, so the reopen test exercises `finish()` resetting it, not a remount.
 - Call `const user = userEvent.setup()` **first**, then set `navigator.clipboard` as `copy-button.test.tsx` does, with a `writeText` that resolves. `userEvent.setup()` installs its own clipboard stub, so the order matters.
 
 | Test | Steps and assertions |
@@ -763,7 +763,7 @@ The dialog keeps the secret only in its props. Callers render it only while they
 | `"closes on Escape after a copy"` | Click "Copy secret", then `await act(async () => { await Promise.resolve(); })`. Press `{Escape}`. `onDone` was called exactly once. |
 | `"asks before an outside click closes an uncopied secret"` | First wait a tick: `await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); })` (Radix registers its listener in a `setTimeout(0)`). Then `fireEvent.pointerDown(document.body); fireEvent.click(document.body);` (not `user.click`: Radix sets `pointer-events: none` on `body` and user-event refuses; and Radix dismisses only when the click follows). The alert appears and `onDone` was not called. Click "Copy secret", flush as above, then fire the same `pointerDown` and `click` again: `onDone` was called once. |
 | `"puts the description before the warning line"` | With `description="Shown once."`: `expect(screen.getByRole("dialog")).toHaveTextContent("Shown once. Copy it now. You won't see it again.")`. |
-| `"starts clean when reopened"` | Press `{Escape}`, click "Close anyway", then click "Reopen". The dialog is there and `queryByRole("alert")` is null. |
+| `"starts clean when reopened"` | Press `{Escape}`, click "Close anyway", then click "Reopen". The dialog is there and `queryByRole("alert")` is null — the same component instance, so only `finish()` resetting the state can make this pass. |
 | `"resets the warning when the secret changes"` | Press `{Escape}` so the alert shows, then `rerender` the harness with another secret. `queryByRole("alert")` is null. |
 
 ## Commands

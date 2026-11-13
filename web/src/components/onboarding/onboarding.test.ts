@@ -1,7 +1,9 @@
 import { expect, it } from "vitest";
 import {
+  API_KEY_ASK_NOTE,
   API_KEY_NOTE,
   otelSnippet,
+  PLACEHOLDER_KEY,
   pythonSnippet,
   typescriptSnippet,
   vercelSnippet,
@@ -30,6 +32,16 @@ it("uses the spec init names and env vars", () => {
   expect(typescriptSnippet(ORIGIN)).toContain(`baseUrl: "${ORIGIN}"`);
   expect(vercelSnippet(ORIGIN)).toContain("experimental_telemetry: llmobs.aiTelemetry()");
   expect(API_KEY_NOTE).toBe("Create a secret key in Settings → API keys");
+  expect(API_KEY_ASK_NOTE).toBe("Ask a project admin for a secret key");
+});
+
+it("fills a real key into every snippet", () => {
+  const key = "sk-llmobs-EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0";
+  expect(otelSnippet(ORIGIN, key)).toContain(`Authorization=Bearer ${key}`);
+  expect(pythonSnippet(ORIGIN, key)).toContain(`api_key="${key}"`);
+  expect(typescriptSnippet(ORIGIN, key)).toContain(`apiKey: "${key}"`);
+  expect(vercelSnippet(ORIGIN, key)).toContain(`apiKey: "${key}"`);
+  expect(PLACEHOLDER_KEY).toBe("sk-llmobs-…");
 });
 
 it("keeps onboarding for a preset and drops it when the list is constrained", () => {

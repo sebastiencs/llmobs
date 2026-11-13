@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useMatch } from "@tanstack/react-router";
 import { CommandPalette } from "@/components/command/palette";
 import { OrgSwitcher } from "@/components/org-switcher";
 import { ProjectSwitcher } from "@/components/shell/project-switcher";
@@ -7,6 +7,7 @@ import { UserMenu } from "@/components/user-menu";
 import { PRODUCT_NAME } from "@/product";
 
 export function TopBar() {
+  const inOrg = useMatch({ from: "/$org", shouldThrow: false }) !== undefined;
   return (
     <header className="flex h-[40px] shrink-0 items-center gap-2 border-b px-3">
       <Link
@@ -15,13 +16,17 @@ export function TopBar() {
       >
         {PRODUCT_NAME}
       </Link>
-      <OrgSwitcher />
-      <span aria-hidden="true" className="text-muted-foreground">
-        /
-      </span>
-      <ProjectSwitcher />
+      {inOrg ? (
+        <>
+          <OrgSwitcher />
+          <span aria-hidden="true" className="text-muted-foreground">
+            /
+          </span>
+          <ProjectSwitcher />
+        </>
+      ) : null}
       <div className="flex-1" />
-      <CommandPalette />
+      {inOrg ? <CommandPalette /> : null}
       <ThemeToggle />
       <UserMenu />
     </header>

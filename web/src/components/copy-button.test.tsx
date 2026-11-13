@@ -30,4 +30,34 @@ describe("CopyButton", () => {
     });
     expect(button.querySelector(".lucide-copy")).toBeInTheDocument();
   });
+
+  it("calls onCopied after a successful write", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const onCopied = vi.fn();
+    render(<CopyButton value="abc" label="secret" onCopied={onCopied} />);
+    fireEvent.click(screen.getByRole("button", { name: "Copy secret" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(onCopied).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call onCopied when the write fails", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const onCopied = vi.fn();
+    render(<CopyButton value="abc" label="secret" onCopied={onCopied} />);
+    fireEvent.click(screen.getByRole("button", { name: "Copy secret" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(onCopied).not.toHaveBeenCalled();
+  });
 });
