@@ -16,8 +16,11 @@ Configuration keys named in this spec (`wal.sync`, `flush.max_bytes`, …) live 
   wal/
     spans/00000000000000000042.wal
     scores/00000000000000000007.wal
-  tmp/                    query spill files; tmp/compaction/ holds S3-mode compaction outputs being written
+  tmp/
+    query/                query spill files (§6), emptied at open
+    compaction/           S3-mode compaction outputs being written (§5)
   cache/                  S3 read cache (§6), only with an S3 object store
+    <file name>/size, <file name>/<block index>
   objects/                only when object store = local
     tables/<table>/project=<project_id>/day=<YYYY-MM-DD>/<level>-<uuidv7>.parquet
     media/<project_id>/<sha256>
@@ -228,7 +231,8 @@ FileMeta { id, path, level, size, footer_size, rows, min_time, max_time,
 - the files to add, whose paths must be in `staged_objects`;
 - the files to remove, with their expected state (normally `active`);
 - optionally a new `flushed_seq` (compare-and-set: it must be greater);
-- optionally files whose `deletions_applied_seq` rises without a rewrite (§7); each must be active and the new value greater.
+- optionally files whose `deletions_applied_seq` rises without a rewrite (§7); each must be active and the new value greater;
+- optionally active files to mark `quarantined` (§10), under the same dependants rule as removed files.
 
 An added file is refused when its project is dropped (§7) or its day is before the project's retention watermark (§8), so a flush or compaction prepared before a drop or a retention cannot bring the data back. Retention and project drop commit through the same path, with their own rows (`retention_watermarks`, `projects`, `deletions`) written in the same transaction.
 
@@ -236,7 +240,7 @@ If a precondition fails, the transaction rolls back and the job gets a conflict:
 
 **Claims.** Background jobs claim their input files in memory before reading them, so compaction and the deletion rewriter never work on the same file. Claims don't survive a restart and need not: an interrupted job is simply redone.
 
-**Metadata cache.** One process-wide DataFusion `RuntimeEnv`, built at open and returned by every `Storage::query`. `query.metadata_cache_bytes` (default 512 MiB; zero disables it) is `CacheManagerConfig`'s file-metadata cache limit. The cache stores decoded Parquet footers. With a cache configured, DataFusion also loads column and offset indexes into that metadata. Bloom-filter bitsets are not part of it: the footer records their offsets, and a pruning read fetches the bitset from the object. Files are immutable, so entries never go stale. There is no custom `ParquetFileReaderFactory`.
+**Metadata cache.** One process-wide DataFusion `RuntimeEnv` is built at open; each `Storage::query` derives its own from it with a different memory pool (§6), sharing the caches, the object store and the spill directory. `query.metadata_cache_bytes` (default 512 MiB; zero disables it) is `CacheManagerConfig`'s file-metadata cache limit. The cache stores decoded Parquet footers. With a cache configured, DataFusion also loads column and offset indexes into that metadata. Bloom-filter bitsets are not part of it: the footer records their offsets, and a pruning read fetches the bitset from the object. Files are immutable, so entries never go stale. There is no custom `ParquetFileReaderFactory`.
 
 ## 5. Compaction
 
@@ -263,7 +267,7 @@ Times below are wall-clock nanoseconds (`now`). A file's age is `now` minus its 
 **Resources:**
 - A merge streams its inputs (one batch per input at a time) instead of sorting a whole slice in memory. Merge memory across running jobs is capped by `compaction.max_memory` (default 1 GiB), a DataFusion memory pool of its own.
 - Each `spans` and `scores` output is written while it is merged, into a temp file, then published durably. On local disk the temp file sits in the target directory and is synced and renamed like any object write. With S3 it is `<data_dir>/tmp/compaction/<uuidv7>.parquet`, uploaded, then removed. `traces` outputs are small and are built in memory (D-A1-2).
-- Reserving disk before a merge is part of the disk-full handling of §10, not of compaction (D-A1-2).
+- Before it reads anything, every job (merges and rewrites, local and S3 mode alike, since outputs stream through a local temp file in both) reserves the sum of its `spans`/`scores` input sizes against free disk minus the other running jobs' reservations. A job that doesn't fit fails as deferred and a later pass retries it (§10, D-A1-9).
 
 **Commit:** one catalog edit (§4) adds the outputs (`spans` with their `traces`, or `scores`) and the `file_sources` rows of the new pairs, and marks the inputs and the `traces` files derived from them `obsolete` with `obsoleted_at` = the committer's wall clock at commit. Shutdown stops compaction between slices or before a commit, never inside one. The committer refuses an edit that removes a `spans` file without its active `traces` file, or a `traces` file without every one of its sources.
 
@@ -315,20 +319,25 @@ Scan, then `ROW_NUMBER() OVER (PARTITION BY score_id ORDER BY updated_at DESC) =
 
 ### Resource limits
 
-- **Memory:** one process-wide DataFusion memory pool of `query.max_memory_total` (default 50% of RAM, at most 8 GiB), with each query capped at `query.max_memory` (default 2 GiB) and spilling to `tmp/`.
-- **Admission:** a query that cannot reserve its initial memory waits up to `query.admission_wait` (default 5 s), then fails as busy (503).
+- **Memory:** one process-wide pool of `query.max_memory_total` (default 50% of RAM or of the cgroup limit, at most 8 GiB). Each query has a DataFusion memory pool of its own over it, capped at `query.max_memory` (default 2 GiB). Sorts, repartitions and spillable aggregates spill to `tmp/query/`; an operator that can't spill fails the query as too large (422). Compaction has its own pool (§5) and is not counted here.
+- **Admission:** `Storage::query` first takes `query.initial_memory` (default 64 MiB) from the process-wide pool, waiting up to `query.admission_wait` (default 5 s) for it, then fails as busy (503). The query's pool uses those bytes first and takes more as it grows; everything goes back when the query's runtime is dropped (D-A1-8).
 - **Parallelism:** `target_partitions = cores`.
 - **Timeouts:** UI 30 s, SQL console 60 s, MCP 30 s.
 
 ### S3 read cache
 
-With an S3 object store, every page read is a ranged GET. A bounded on-disk cache under `cache/` holds byte ranges of data files, keyed by file id and range:
+With an S3 object store, every page read is a ranged GET. The S3 store is wrapped by a cache store, so queries, compaction and the media GC all read through it (D-A1-11):
+- data files (`tables/…`) are cached in 1 MiB blocks under `cache/<file name>/<block index>`, each ending with a CRC-32C of its bytes; a block that fails its check is fetched again. `cache/<file name>/size` holds the object size (one HEAD per file, the first time). Media blobs, writes and listings pass through;
+- a range read serves the blocks it has and fetches the missing ones in one coalesced request;
 - files are immutable, so entries never go stale;
-- eviction is LRU by bytes (`query.read_cache_bytes`, default 10% of the disk, at most 100 GiB);
-- entries of a file are dropped when GC deletes it;
-- flush and compaction also write their fresh outputs into the cache, since recent data is what gets read.
+- eviction is LRU by block, within `query.read_cache_bytes` (default 10% of the file system holding `data_dir`, at most 100 GiB; 0 turns it off);
+- a delete through the store (GC) drops the file's blocks;
+- flush and compaction write their fresh outputs into the cache after uploading them, since recent data is what gets read;
+- the cache survives a restart: open rebuilds its index from the files, oldest first by modification time;
+- it writes nothing while free disk is under `2 × storage.min_free_bytes`, and gives blocks back while free disk is under `storage.min_free_bytes` (§10);
+- verification of a suspect file (§10) reads the S3 store directly, never the cache.
 
-There is no custom `ParquetFileReaderFactory`; the metadata cache is DataFusion's built-in one (§4). This read cache is not built yet. With a local object store it stays off.
+There is no custom `ParquetFileReaderFactory`; the metadata cache is DataFusion's built-in one (§4). With a local object store there is no cache.
 
 ## 7. Deletion (GDPR)
 
@@ -392,6 +401,7 @@ After each compaction pass, the compaction task runs a **deletion pass** (D-A1-5
 2. **Check:** a scan of the file's key columns with the predicate pushed down (statistics, and the bloom filters on `trace_id`, plus `user_id` and `session_id` for `spans`, skip row groups) and `LIMIT 1`.
    - A covered row: the file is **rewritten** without its covered rows by a compaction job of kind `rewrite`: same level, same `fully_merged`, the `traces` file derived from it recomputed (§3), committed like a compaction (§4). A file left with no row is removed with its `traces` file and nothing replaces it.
    - No covered row: its `deletions_applied_seq` is raised to the known sequence in one catalog edit, without a rewrite.
+   - **Quarantined files** (§10) can't be rewritten: the quarantined `spans` and `scores` files of the project that a pending deletion may cover (same rule) are marked `obsolete`, with the quarantined `traces` files derived from them, and GC deletes them.
 3. **Applied:** a deletion is applied once:
    - every active `spans` and `scores` file of the project with `min_ingest_time ≤ cut-off` has `deletions_applied_seq ≥` its `deletion_seq` (`traces` files follow their source `spans` files, §3);
    - no memtable batch of the project has `min_ingest_time ≤ cut-off`. A batch that held covered rows is dropped by the next flush, which writes none of them.
@@ -406,7 +416,7 @@ Compaction and the rewriter never run on the same file (claims, §4), and a comp
 
 `drop_project(project)` (D-A1-7):
 1. waits for appends in flight, and holds new ones, while it commits;
-2. commits one edit that obsoletes every file of the project in all three tables, records the project as `dropping` in `projects`, removes its retention watermark, and marks its pending deletions applied and erases their scope rows;
+2. commits one edit that obsoletes every file of the project in all three tables (quarantined files included), records the project as `dropping` in `projects`, removes its retention watermark, and marks its pending deletions applied and erases their scope rows;
 3. publishes the read state without the project: its queries return empty tables, and `append_*` for it fail with `ProjectDropped`;
 4. deletes its media objects and `media` rows, then sets the project `dropped`.
 
@@ -415,7 +425,7 @@ GC removes the obsolete files like any others (§5), so no listing of the `proje
 ## 8. Retention
 
 Each project has `retention_days` in `meta.db` (null means keep forever). The server calls `apply_retention(project, keep_from = today − retention_days)` hourly. Storage then:
-- commits one catalog edit that obsoletes every file of the project in days before the watermark, across `spans`, `traces` and `scores` (no file is rewritten, because partitions are per day);
+- commits one catalog edit that obsoletes every file of the project in days before the watermark, across `spans`, `traces` and `scores`, quarantined files included (no file is rewritten, because partitions are per day);
 - records the watermark in `retention_watermarks`, in the same transaction. The watermark is the later of the stored one and `keep_from`: it never moves back.
 
 From then on, a flush drops rows of that project older than the watermark, queries don't show memtable rows older than it, and the committer refuses a file older than it (§4), so late rows cannot recreate a dropped day. Memtable `spans` are keyed by each row's own day and files by the anchor day, so a span next to midnight at the watermark can be hidden in the memtable and kept by the flush, or the reverse; the file is what counts. Retention is day-granular. Since a trace lives in one anchor day (§ Trace anchor), it is dropped as a whole.
@@ -434,12 +444,12 @@ A dropped project's media is deleted by `drop_project` (§7).
 
 | Situation | Behaviour |
 |---|---|
-| Free disk under `storage.min_free_bytes` (default 2 GiB) | ingestion answers 503; compaction keeps running (it reclaims space). In local mode a compaction job first reserves its estimated output size (the sum of its input sizes) against free disk, and waits while it doesn't fit; flushes don't reserve (§5, D-A1-2, implemented with the rest of this row in M6) |
+| Free disk under `storage.min_free_bytes` (default 2 GiB) | Free disk is measured every second: the least free of the file systems holding `data_dir` and, in local mode, the object store root. Below the threshold `append_spans`, `append_scores` and `put_media` fail with `DiskFull` (503). Flush, compaction, GC, retention and deletions keep running: they reclaim space. A compaction job reserves its input size before it starts and is deferred to a later pass when it doesn't fit (§5); flushes don't reserve (D-A1-9) |
 | WAL write or fsync error | pending and new appends fail with `WalFailed` (503), health reports it, restart required (§1) |
 | Object store errors during flush | retry after 1 s, doubling up to 60 s (§2), while the memtable keeps the data and backpressure applies past the hard limit |
 | Ambiguous upload (error reported, object may exist) | retried under a new name; the old one is collected from `staged_objects` (§2) |
 | Crash | WAL replay before ingestion opens; staged objects are GC'd |
-| Corrupted Parquet file | it is quarantined (state `quarantined`, excluded from snapshots) and an error is logged; data is lost only for that file |
+| Corrupted Parquet file | A read that fails with a decode error makes the files it read **suspects**: compaction and rewrite jobs (their inputs), the deletion pass's check scan, the anchor rebuild at open (which skips the file instead of failing), the media GC and queries (every file the query scanned). After each deletion pass, a verify pass reads each suspect again, whole, from the object store (never the read cache). A store error puts it back in the queue; a file read whole with the catalog's row count is healthy and isn't re-verified for an hour; a decode error, a wrong size or row count, or a missing object makes it **corrupt**, logged as an error. A corrupt `spans` file is quarantined with its `traces` file, a corrupt `scores` file alone: state `quarantined`, out of every snapshot, object kept for inspection, its rows lost. A corrupt `traces` file is rebuilt from its `spans` file by a rewrite job instead; nothing is lost. Quarantined files become `obsolete` (and GC deletes them) when retention drops their day, when their project is dropped, or when a pending deletion may cover them (§7). There is no periodic scrub (D-A1-10) |
 
 ## 11. Toward multi-node
 

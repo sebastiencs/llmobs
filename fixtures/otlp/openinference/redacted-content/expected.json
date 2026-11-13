@@ -1,0 +1,68 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "8a3c1f0e2b4d6a7958c1e2f3a4b5c6d7",
+      "span_id": "c1d2e3f4a5b6c7d8",
+      "name": "agent",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:51.000000000Z",
+      "status": "unset",
+      "service_name": "weather-agent",
+      "attributes": {
+        "openinference.span.kind": "CHAIN"
+      },
+      "scope_name": "@arizeai/openinference-instrumentation-openai",
+      "scope_version": "3.0.0",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "8a3c1f0e2b4d6a7958c1e2f3a4b5c6d7",
+      "span_id": "b2c3d4e5f6a7b8c9",
+      "parent_span_id": "c1d2e3f4a5b6c7d8",
+      "name": "ChatCompletion",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.100000000Z",
+      "end_time": "2025-12-31T23:59:50.900000000Z",
+      "status": "unset",
+      "service_name": "weather-agent",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "input_tokens": 25,
+      "output_tokens": 12,
+      "total_tokens": 37,
+      "cost_input": 0.000025,
+      "cost_output": 0.000048,
+      "cost_total": 0.000073,
+      "cost_source": "computed",
+      "input": "[{\"role\":\"system\",\"parts\":[]},{\"role\":\"user\",\"parts\":[]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_1\",\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}]}]",
+      "output_format": "messages",
+      "attributes": {
+        "llm.model_name": "gpt-4o-mini-2024-07-18",
+        "llm.provider": "openai",
+        "llm.system": "openai",
+        "llm.token_count.completion": "12",
+        "llm.token_count.prompt": "25",
+        "llm.token_count.total": "37",
+        "openinference.span.kind": "LLM"
+      },
+      "scope_name": "@arizeai/openinference-instrumentation-openai",
+      "scope_version": "3.0.0",
+      "conventions": [
+        "openinference"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

@@ -1,0 +1,9 @@
+{
+  "description": "OpenInference spans with hidden content: `__REDACTED__` in input.value/output.value and in message text reads as not captured, while roles and tool calls are kept.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "02 § Mapping tables / Input / output",
+    "02 § Normalization rules"
+  ],
+  "notes": "OpenInference writes __REDACTED__ (Python and TypeScript) when hideInputs/hideOutputs or hideInputText/hideOutputText are set; mime types are dropped by the instrumentation."
+}

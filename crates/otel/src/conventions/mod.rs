@@ -9,7 +9,7 @@ mod genai;
 mod laminar;
 mod langfuse;
 mod llmobs;
-mod openinference;
+pub(crate) mod openinference;
 mod openllmetry;
 mod vercel;
 
