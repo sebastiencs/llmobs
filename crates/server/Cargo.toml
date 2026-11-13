@@ -19,6 +19,7 @@ serde_json.workspace = true
 uuid.workspace = true
 figment.workspace = true
 ipnet.workspace = true
+bytesize.workspace = true
 url.workspace = true
 lettre.workspace = true
 minijinja.workspace = true
@@ -42,7 +43,6 @@ reqwest.workspace = true
 hmac.workspace = true
 
 [dev-dependencies]
-bytesize.workspace = true
 tower.workspace = true
 tracing-subscriber.workspace = true
 insta.workspace = true

@@ -28,7 +28,9 @@ use tower::ServiceExt;
 use crate::api::common::Problem;
 use crate::auth::Limits;
 use crate::clock::Clock;
-use crate::config::{AuthSettings, InitConfig, LogConfig, PublicUrl, ServerConfig};
+use crate::config::{
+    AuthSettings, IngestConfig, InitConfig, LogConfig, MediaConfig, PublicUrl, ServerConfig,
+};
 use crate::http::access::RouteDef;
 use crate::http::{AppInner, AppState, router, router_with, serve_router};
 use crate::meta::MetaDb;
@@ -189,6 +191,8 @@ fn default_config(data_dir: &std::path::Path) -> ServerConfig {
         public_url: PublicUrl::default(),
         http_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
         trusted_proxies: Vec::new(),
+        // Tests must not bind the OTLP port (4318).
+        otlp_http_addr: None,
         storage: StorageConfig {
             data_dir: data_dir.to_path_buf(),
             object_store: None,
@@ -202,6 +206,8 @@ fn default_config(data_dir: &std::path::Path) -> ServerConfig {
             compaction: Default::default(),
             deletion: Default::default(),
         },
+        ingest: IngestConfig::default(),
+        media: MediaConfig::default(),
         auth: AuthSettings::default(),
         smtp_url: None,
         email_from: None,

@@ -15,11 +15,13 @@ use std::fmt;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+use bytesize::ByteSize;
 use figment::providers::{Format, Serialized, Toml};
 use figment::value::{Dict, Map, Value};
 use figment::{Figment, Metadata, Profile, Provider};
 use ipnet::IpNet;
 use lettre::message::Mailbox;
+use llmobs_otel::IngestLimits;
 use llmobs_storage::config::StorageConfig;
 use serde::Deserialize;
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
@@ -39,6 +41,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("LLMOBS_DATA_DIR", "data_dir"),
     ("LLMOBS_PUBLIC_URL", "public_url"),
     ("LLMOBS_HTTP_ADDR", "http_addr"),
+    ("LLMOBS_OTLP_HTTP_ADDR", "otlp_http_addr"),
     ("LLMOBS_TRUSTED_PROXIES", "trusted_proxies"),
     ("LLMOBS_OBJECT_STORE", "storage.object_store"),
     ("LLMOBS_SMTP_URL", "smtp_url"),
@@ -403,11 +406,69 @@ pub struct SmtpUrl {
     pub credentials: Option<(String, Secret<String>)>,
 }
 
+/// `[ingest]` (spec 02 § Limits, spec 12).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct IngestConfig {
+    /// Raw and decompressed body cap. Default 10 MiB.
+    pub max_request_bytes: ByteSize,
+    /// Spans per request after decoding. Default 50 000.
+    pub max_spans_per_request: u32,
+    /// Single attribute value before truncation. Default 8 MiB.
+    pub max_attribute_bytes: ByteSize,
+    /// Decompressed bytes processed at once, all requests (D-G-5). Default 256 MiB.
+    pub max_inflight_bytes: ByteSize,
+}
+
+impl Default for IngestConfig {
+    fn default() -> Self {
+        Self {
+            max_request_bytes: ByteSize::mib(10),
+            max_spans_per_request: 50_000,
+            max_attribute_bytes: ByteSize::mib(8),
+            max_inflight_bytes: ByteSize::mib(256),
+        }
+    }
+}
+
+impl IngestConfig {
+    /// The normalizer's limits, with the `[media]` bounds.
+    ///
+    /// Sizes were checked by [`validate_ingest`], so the conversions do not
+    /// clip in practice; `unwrap_or(usize::MAX)` only avoids an `expect`.
+    pub fn limits(&self, media: &MediaConfig) -> IngestLimits {
+        IngestLimits {
+            max_attribute_bytes: usize_or_max(self.max_attribute_bytes),
+            media_min_bytes: usize_or_max(media.min_bytes),
+            media_max_bytes: usize_or_max(media.max_bytes),
+        }
+    }
+}
+
+/// `[media]` (spec 02 § Media extraction).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct MediaConfig {
+    /// Blobs below this stay inline. Default 4 KiB.
+    pub min_bytes: ByteSize,
+    /// Blobs above this are dropped. Default 32 MiB.
+    pub max_bytes: ByteSize,
+}
+
+impl Default for MediaConfig {
+    fn default() -> Self {
+        Self {
+            min_bytes: ByteSize::kib(4),
+            max_bytes: ByteSize::mib(32),
+        }
+    }
+}
+
 /// Everything `llmobs serve` reads from the environment and `llmobs.toml`.
 ///
 /// Keys that spec 12 lists for later work (gRPC listen address, encryption key,
-/// ingest, evaluation workers, telemetry, compaction, gc, deletion, anchor)
-/// are not fields. Setting one is an unknown-key error.
+/// evaluation workers, telemetry, compaction, gc, deletion, anchor) are not
+/// fields. Setting one is an unknown-key error.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
@@ -426,12 +487,24 @@ pub struct ServerConfig {
     /// Proxies whose `X-Forwarded-For` is trusted (D142).
     #[serde(default, deserialize_with = "deserialize_proxies")]
     pub trusted_proxies: Vec<IpNet>,
+    /// OTLP/HTTP-only listener (D-G-21). `None` when the value is an empty string.
+    #[serde(
+        default = "default_otlp_http_addr",
+        deserialize_with = "deserialize_optional_socket_addr"
+    )]
+    pub otlp_http_addr: Option<SocketAddr>,
     /// `[storage]` table. `data_dir` is copied from the top-level field.
     ///
     /// `StorageConfig` requires `data_dir` and denies unknown fields, so the
     /// loader rejects a user-set `storage.data_dir`, injects the top-level
     /// directory, then deserializes this table as [`StorageConfig`].
     pub storage: StorageConfig,
+    /// `[ingest]` limits.
+    #[serde(default)]
+    pub ingest: IngestConfig,
+    /// `[media]` extraction bounds.
+    #[serde(default)]
+    pub media: MediaConfig,
     /// Sign-up policy and the auth flags from spec 08.
     #[serde(default)]
     pub auth: AuthSettings,
@@ -515,6 +588,10 @@ fn default_data_dir() -> PathBuf {
 
 fn default_http_addr() -> SocketAddr {
     SocketAddr::from(([0, 0, 0, 0], 8080))
+}
+
+fn default_otlp_http_addr() -> Option<SocketAddr> {
+    Some(SocketAddr::from(([0, 0, 0, 0], 4318)))
 }
 
 fn default_signup() -> SignupPolicy {
@@ -657,6 +734,13 @@ fn validate(config: &mut ServerConfig) -> Result<(), ConfigError> {
     }
     validate_auth(&mut config.auth)?;
     validate_init(&config.init)?;
+    if config.otlp_http_addr == Some(config.http_addr) {
+        return Err(ConfigError::Invalid {
+            key: "otlp_http_addr",
+            reason: "must differ from http_addr",
+        });
+    }
+    validate_ingest(&config.ingest, &config.media)?;
     config.storage.validate().map_err(|error| match error {
         llmobs_storage::error::ConfigError::Invalid { field, rule } => ConfigError::Invalid {
             key: field,
@@ -664,6 +748,71 @@ fn validate(config: &mut ServerConfig) -> Result<(), ConfigError> {
         },
     })?;
     Ok(())
+}
+
+/// The bounds of spec 12 and D-G-5. Messages name the key and the rule only.
+fn validate_ingest(ingest: &IngestConfig, media: &MediaConfig) -> Result<(), ConfigError> {
+    let sizes = [
+        ("ingest.max_request_bytes", ingest.max_request_bytes),
+        ("ingest.max_attribute_bytes", ingest.max_attribute_bytes),
+        ("ingest.max_inflight_bytes", ingest.max_inflight_bytes),
+        ("media.min_bytes", media.min_bytes),
+        ("media.max_bytes", media.max_bytes),
+    ];
+    for (key, size) in sizes {
+        if usize::try_from(size.as_u64()).is_err() {
+            return Err(ConfigError::Invalid {
+                key,
+                reason: "too large for this platform",
+            });
+        }
+    }
+    let request = ingest.max_request_bytes;
+    if request < ByteSize::kib(1) || request > ByteSize::gib(1) {
+        return Err(invalid_size(
+            "ingest.max_request_bytes",
+            "must be between 1KiB and 1GiB",
+        ));
+    }
+    if ingest.max_spans_per_request < 1 {
+        return Err(ConfigError::Invalid {
+            key: "ingest.max_spans_per_request",
+            reason: "must be at least 1",
+        });
+    }
+    let attribute = ingest.max_attribute_bytes;
+    if attribute < ByteSize::kib(1) || attribute > ByteSize::mib(64) {
+        return Err(invalid_size(
+            "ingest.max_attribute_bytes",
+            "must be between 1KiB and 64MiB",
+        ));
+    }
+    // The budget is a semaphore counted in bytes, and tokio takes a `u32` count.
+    let inflight = ingest.max_inflight_bytes;
+    if inflight < request || inflight.as_u64() > u64::from(u32::MAX) {
+        return Err(invalid_size(
+            "ingest.max_inflight_bytes",
+            "must be at least max_request_bytes and below 4GiB",
+        ));
+    }
+    if media.min_bytes < ByteSize::b(1) || media.min_bytes > media.max_bytes {
+        return Err(invalid_size(
+            "media.min_bytes",
+            "must be at least 1 byte and at most media.max_bytes",
+        ));
+    }
+    if media.max_bytes > ByteSize::gib(1) {
+        return Err(invalid_size("media.max_bytes", "must be at most 1GiB"));
+    }
+    Ok(())
+}
+
+fn invalid_size(key: &'static str, reason: &'static str) -> ConfigError {
+    ConfigError::Invalid { key, reason }
+}
+
+fn usize_or_max(size: ByteSize) -> usize {
+    usize::try_from(size.as_u64()).unwrap_or(usize::MAX)
 }
 
 fn normalize_domains(key: &'static str, domains: &mut [String]) -> Result<(), ConfigError> {
@@ -1100,6 +1249,21 @@ fn deserialize_socket_addr<'de, D: Deserializer<'de>>(
         .map_err(|_error| de::Error::custom("invalid socket address"))
 }
 
+/// An empty (or blank) string is `None`: the listener is disabled.
+fn deserialize_optional_socket_addr<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<SocketAddr>, D::Error> {
+    let raw = String::deserialize(deserializer)?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    trimmed
+        .parse()
+        .map(Some)
+        .map_err(|_error| de::Error::custom("invalid socket address"))
+}
+
 fn deserialize_proxies<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<IpNet>, D::Error> {
     let items = deserialize_string_list(deserializer)?;
     items
@@ -1266,7 +1430,9 @@ mod tests {
     use bytesize::ByteSize;
     use llmobs_storage::config::{ObjectStoreUrl, WalSync};
 
-    use super::{ConfigError, LogFormat, ServerConfig, SmtpUrl, Tls, load_from};
+    use super::{
+        ConfigError, IngestConfig, LogFormat, MediaConfig, ServerConfig, SmtpUrl, Tls, load_from,
+    };
     use crate::api::account::SignupPolicy;
 
     fn socket(raw: &str) -> SocketAddr {
@@ -1975,4 +2141,155 @@ client_secret = "entra-secret-value"
 scopes = ["openid", "email"]
 link_existing_by_email = true
 "#;
+
+    #[test]
+    fn ingest_media_and_otlp_defaults_match_spec() {
+        let config = load_from(None, &[]).unwrap();
+        assert_eq!(
+            config.ingest,
+            IngestConfig {
+                max_request_bytes: ByteSize::mib(10),
+                max_spans_per_request: 50_000,
+                max_attribute_bytes: ByteSize::mib(8),
+                max_inflight_bytes: ByteSize::mib(256),
+            }
+        );
+        assert_eq!(
+            config.media,
+            MediaConfig {
+                min_bytes: ByteSize::kib(4),
+                max_bytes: ByteSize::mib(32),
+            }
+        );
+        assert_eq!(config.otlp_http_addr, Some(socket("0.0.0.0:4318")));
+
+        let limits = config.ingest.limits(&config.media);
+        assert_eq!(limits.max_attribute_bytes, 8 * 1024 * 1024);
+        assert_eq!(limits.media_min_bytes, 4 * 1024);
+        assert_eq!(limits.media_max_bytes, 32 * 1024 * 1024);
+    }
+
+    #[test]
+    fn ingest_toml_and_split_env_both_apply() {
+        let config = load_from(
+            Some("[ingest]\nmax_request_bytes = \"2MiB\"\n"),
+            &[("LLMOBS_INGEST__MAX_SPANS_PER_REQUEST", "10")],
+        )
+        .unwrap();
+        assert_eq!(config.ingest.max_request_bytes, ByteSize::mib(2));
+        assert_eq!(config.ingest.max_spans_per_request, 10);
+        assert_eq!(config.ingest.max_attribute_bytes, ByteSize::mib(8));
+    }
+
+    #[test]
+    fn otlp_http_addr_empty_disables_the_listener() {
+        let toml = load_from(Some("otlp_http_addr = \"\"\n"), &[]).unwrap();
+        assert_eq!(toml.otlp_http_addr, None);
+
+        let env = load_from(None, &[("LLMOBS_OTLP_HTTP_ADDR", "")]).unwrap();
+        assert_eq!(env.otlp_http_addr, None);
+
+        let blank = load_from(None, &[("LLMOBS_OTLP_HTTP_ADDR", "  ")]).unwrap();
+        assert_eq!(blank.otlp_http_addr, None);
+
+        let set = load_from(None, &[("LLMOBS_OTLP_HTTP_ADDR", "127.0.0.1:9999")]).unwrap();
+        assert_eq!(set.otlp_http_addr, Some(socket("127.0.0.1:9999")));
+
+        let error = load_from(None, &[("LLMOBS_OTLP_HTTP_ADDR", "nope")]).unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("invalid socket address"), "{text}");
+        assert!(text.contains("otlp_http_addr"), "{text}");
+        assert!(!text.contains("nope"), "{text}");
+    }
+
+    #[test]
+    fn ingest_and_media_reject_unknown_keys() {
+        // A spec 12 key for later work is still an unknown key here.
+        let ingest =
+            load_from(Some("[ingest]\nmax_grpc_message_bytes = \"1MiB\"\n"), &[]).unwrap_err();
+        assert!(
+            ingest.to_string().contains("max_grpc_message_bytes"),
+            "{ingest}"
+        );
+
+        let media = load_from(Some("[media]\nnope = 1\n"), &[]).unwrap_err();
+        assert!(media.to_string().contains("nope"), "{media}");
+    }
+
+    #[test]
+    fn ingest_and_media_bounds_are_checked() {
+        // (TOML, the key and reason the error must be, the rejected value that must not appear).
+        let cases = [
+            (
+                "[ingest]\nmax_request_bytes = \"512B\"\n",
+                "ingest.max_request_bytes: must be between 1KiB and 1GiB",
+                "512B",
+            ),
+            (
+                "[ingest]\nmax_request_bytes = \"2GiB\"\n",
+                "ingest.max_request_bytes: must be between 1KiB and 1GiB",
+                "2GiB",
+            ),
+            (
+                "[ingest]\nmax_spans_per_request = 0\n",
+                "ingest.max_spans_per_request: must be at least 1",
+                "0",
+            ),
+            (
+                "[ingest]\nmax_attribute_bytes = \"100MiB\"\n",
+                "ingest.max_attribute_bytes: must be between 1KiB and 64MiB",
+                "100MiB",
+            ),
+            (
+                "[ingest]\nmax_inflight_bytes = \"1KiB\"\n",
+                "ingest.max_inflight_bytes: must be at least max_request_bytes and below 4GiB",
+                "1KiB",
+            ),
+            (
+                "[ingest]\nmax_inflight_bytes = \"8GiB\"\n",
+                "ingest.max_inflight_bytes: must be at least max_request_bytes and below 4GiB",
+                "8GiB",
+            ),
+            (
+                "[media]\nmin_bytes = \"0B\"\n",
+                "media.min_bytes: must be at least 1 byte and at most media.max_bytes",
+                "0B",
+            ),
+            (
+                "[media]\nmin_bytes = \"64MiB\"\n",
+                "media.min_bytes: must be at least 1 byte and at most media.max_bytes",
+                "64MiB",
+            ),
+            (
+                "[media]\nmax_bytes = \"2GiB\"\n",
+                "media.max_bytes: must be at most 1GiB",
+                "2GiB",
+            ),
+            (
+                "http_addr = \"127.0.0.1:7070\"\notlp_http_addr = \"127.0.0.1:7070\"\n",
+                "otlp_http_addr: must differ from http_addr",
+                "7070",
+            ),
+        ];
+        for (toml, expected, rejected) in cases {
+            let error = load_from(Some(toml), &[]).unwrap_err();
+            let text = error.to_string();
+            assert_eq!(text, expected, "{toml}");
+            assert!(!text.contains(rejected), "{text}");
+        }
+    }
+
+    #[test]
+    fn ingest_and_media_accept_the_edges() {
+        let config = load_from(
+            Some(
+                "[ingest]\nmax_request_bytes = \"1KiB\"\nmax_attribute_bytes = \"1KiB\"\nmax_inflight_bytes = \"1KiB\"\n\n[media]\nmin_bytes = \"1B\"\nmax_bytes = \"1GiB\"\n",
+            ),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(config.ingest.max_request_bytes, ByteSize::kib(1));
+        assert_eq!(config.media.min_bytes, ByteSize::b(1));
+        assert_eq!(config.media.max_bytes, ByteSize::gib(1));
+    }
 }

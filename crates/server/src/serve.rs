@@ -439,7 +439,9 @@ mod tests {
     use tokio::net::TcpStream;
 
     use super::*;
-    use crate::config::{AuthSettings, InitConfig, LogConfig, PublicUrl};
+    use crate::config::{
+        AuthSettings, IngestConfig, InitConfig, LogConfig, MediaConfig, PublicUrl,
+    };
 
     #[tokio::test]
     async fn an_empty_database_logs_the_setup_url_once() {
@@ -640,6 +642,7 @@ mod tests {
             public_url: PublicUrl::default(),
             http_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             trusted_proxies: Vec::new(),
+            otlp_http_addr: None,
             storage: StorageConfig {
                 data_dir: data_dir.to_path_buf(),
                 object_store: None,
@@ -653,6 +656,8 @@ mod tests {
                 compaction: Default::default(),
                 deletion: Default::default(),
             },
+            ingest: IngestConfig::default(),
+            media: MediaConfig::default(),
             auth: AuthSettings::default(),
             smtp_url: None,
             email_from: None,
