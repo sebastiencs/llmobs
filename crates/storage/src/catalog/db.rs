@@ -480,7 +480,7 @@ mod tests {
             .fetch_one(&mut connection)
             .await
             .unwrap();
-        assert_eq!(versions, 4);
+        assert_eq!(versions, 5);
     }
 
     #[tokio::test]
@@ -492,6 +492,7 @@ mod tests {
         // migration from 0003 on, newest first, then let open_catalog_db
         // re-apply them.
         for statement in [
+            "DROP TABLE media",
             "DROP TABLE retention_watermarks",
             "DROP INDEX deletions_pending",
             "DROP TABLE deletion_sessions",
@@ -528,6 +529,7 @@ mod tests {
             "deletion_users",
             "deletion_sessions",
             "retention_watermarks",
+            "media",
         ] {
             let count: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",

@@ -17,6 +17,7 @@ use tokio::task::JoinHandle;
 use crate::catalog::{Committer, FileId, ObsoleteRemoval, StagedRemoval, now_ns};
 use crate::error::GcError;
 use crate::hooks::Hooks;
+use crate::media::{MEDIA_INTERVAL, MediaGc};
 use crate::objects::Objects;
 
 /// How often the background task collects, after the pass at open.
@@ -60,6 +61,8 @@ pub(crate) struct GcStart {
     pub hooks: Hooks,
     /// `storage.gc.grace`, how long an obsolete file outlives its commit.
     pub grace: Duration,
+    /// Media collection, once a day (spec 03 §9).
+    pub media: MediaGc,
 }
 
 /// Starts the periodic task. The caller already ran one pass at open.
@@ -68,6 +71,7 @@ pub(crate) fn spawn(start: GcStart) -> GcHandle {
     let task = tokio::spawn(async move {
         let mut interval =
             tokio::time::interval_at(tokio::time::Instant::now() + INTERVAL, INTERVAL);
+        let mut next_media = tokio::time::Instant::now() + MEDIA_INTERVAL;
         loop {
             tokio::select! {
                 biased;
@@ -103,6 +107,17 @@ pub(crate) fn spawn(start: GcStart) -> GcHandle {
                         tracing::warn!("obsolete file collection failed");
                         tracing::debug!(%error, "obsolete file collection error");
                     }
+                    if tokio::time::Instant::now() >= next_media {
+                        if let Err(error) = start.media.collect_all(now_ns()).await {
+                            // The label only: the error names an object path,
+                            // which holds the blob's hash (spec 03 §9).
+                            tracing::warn!(
+                                error = error.label(),
+                                "media collection failed"
+                            );
+                        }
+                        next_media = tokio::time::Instant::now() + MEDIA_INTERVAL;
+                    }
                 }
             }
         }
@@ -128,7 +143,7 @@ pub(crate) async fn collect_once(
     let mut conflicts = 0_u64;
     for path in &paths {
         match committer
-            .collect_staged_path(path, hooks, || objects.delete_len(path))
+            .collect_staged_path(path, hooks, cutoff, || objects.delete_len(path))
             .await?
         {
             StagedRemoval::Deleted { bytes: size } => {

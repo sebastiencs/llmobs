@@ -63,11 +63,18 @@ pub(crate) enum HookPoint {
     CompactionAfterWrite,
     /// After the catalog commit that publishes a job's outputs.
     CompactionAfterCommit,
+    /// After a media blob's object is durable, before its row is inserted.
+    ///
+    /// A fault here leaves the object staged and no `media` row: staged-object
+    /// GC deletes the object.
+    MediaAfterPut,
+    /// Before GC deletes an unreferenced media blob's object.
+    MediaBeforeDelete,
 }
 
 #[cfg(test)]
 impl HookPoint {
-    const COUNT: usize = 21;
+    const COUNT: usize = 23;
 
     const fn index(self) -> usize {
         match self {
@@ -92,6 +99,8 @@ impl HookPoint {
             Self::CompactionAfterStage => 18,
             Self::CompactionAfterWrite => 19,
             Self::CompactionAfterCommit => 20,
+            Self::MediaAfterPut => 21,
+            Self::MediaBeforeDelete => 22,
         }
     }
 }

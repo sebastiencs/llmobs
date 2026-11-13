@@ -25,8 +25,9 @@ use super::db::{
 use super::{Catalog, FileId, FileMeta, FileState, FileTable, table_index};
 use crate::RetentionReport;
 use crate::deletion::{Deletion, DeletionScope, DeletionStatus, PendingDeletion, Tombstones};
-use crate::error::{CatalogError, CommitError, DeletionError, GcError};
+use crate::error::{CatalogError, CommitError, DeletionError, GcError, MediaError, ObjectError};
 use crate::hooks::{HookPoint, Hooks};
+use crate::objects::Objects;
 use crate::projects::ProjectStates;
 use crate::wal::Table;
 
@@ -364,6 +365,218 @@ impl Committer {
         }
     }
 
+    /// Refreshes the blob's `last_seen_at` to `max(last_seen_at, now)` (spec 03
+    /// §9). `true` when the row exists.
+    pub(crate) async fn touch_media(
+        &self,
+        project: ProjectId,
+        sha: &str,
+        now: i64,
+    ) -> Result<bool, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        let updated = sqlx::query(
+            "UPDATE media SET last_seen_at = MAX(last_seen_at, ?)
+             WHERE project_id = ? AND sha256 = ?",
+        )
+        .bind(now)
+        .bind(project.to_string())
+        .bind(sha)
+        .execute(&mut inner.connection)
+        .await
+        .map_err(CatalogError::db)?;
+        Ok(updated.rows_affected() == 1)
+    }
+
+    /// `INSERT OR REPLACE` the blob's path in `staged_objects`: two puts of one
+    /// blob may race.
+    pub(crate) async fn stage_media(&self, path: &str, now: i64) -> Result<(), CatalogError> {
+        let mut inner = self.inner.lock().await;
+        sqlx::query("INSERT OR REPLACE INTO staged_objects (path, created_at) VALUES (?, ?)")
+            .bind(path)
+            .bind(now)
+            .execute(&mut inner.connection)
+            .await
+            .map_err(CatalogError::db)?;
+        Ok(())
+    }
+
+    /// In one transaction: `INSERT OR IGNORE` the `media` row (`first_seen_at =
+    /// last_seen_at = now`), then delete the `staged_objects` row of `path`
+    /// (spec 03 §9).
+    pub(crate) async fn insert_media(
+        &self,
+        project: ProjectId,
+        sha: &str,
+        mime_type: &str,
+        size: u64,
+        path: &str,
+        now: i64,
+    ) -> Result<(), CatalogError> {
+        let stored_size = i64::try_from(size)
+            .map_err(|_| CatalogError::corrupt("integer does not fit the catalog"))?;
+        let mut inner = self.inner.lock().await;
+        let mut transaction = inner.connection.begin().await.map_err(CatalogError::db)?;
+        if let Err(error) = sqlx::query(
+            "INSERT OR IGNORE INTO media (
+                project_id, sha256, mime_type, size_bytes, first_seen_at, last_seen_at
+             ) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(project.to_string())
+        .bind(sha)
+        .bind(mime_type)
+        .bind(stored_size)
+        .bind(now)
+        .bind(now)
+        .execute(transaction.as_mut())
+        .await
+        .map_err(CatalogError::db)
+        {
+            let _ = transaction.rollback().await;
+            return Err(error);
+        }
+        if let Err(error) = sqlx::query("DELETE FROM staged_objects WHERE path = ?")
+            .bind(path)
+            .execute(transaction.as_mut())
+            .await
+            .map_err(CatalogError::db)
+        {
+            let _ = transaction.rollback().await;
+            return Err(error);
+        }
+        transaction.commit().await.map_err(CatalogError::db)?;
+        Ok(())
+    }
+
+    /// `(mime_type, size)` of the blob's row, or `None`.
+    pub(crate) async fn media_row(
+        &self,
+        project: ProjectId,
+        sha: &str,
+    ) -> Result<Option<(String, u64)>, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        let row: Option<(String, i64)> = sqlx::query_as(
+            "SELECT mime_type, size_bytes FROM media WHERE project_id = ? AND sha256 = ?",
+        )
+        .bind(project.to_string())
+        .bind(sha)
+        .fetch_optional(&mut inner.connection)
+        .await
+        .map_err(CatalogError::db)?;
+        row.map(|(mime_type, size)| {
+            let size = u64::try_from(size).map_err(|_| CatalogError::corrupt("invalid size"))?;
+            Ok((mime_type, size))
+        })
+        .transpose()
+    }
+
+    /// Projects with at least one media row, in id order.
+    pub(crate) async fn media_projects(&self) -> Result<Vec<ProjectId>, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        let rows: Vec<String> =
+            sqlx::query_scalar("SELECT DISTINCT project_id FROM media ORDER BY project_id")
+                .fetch_all(&mut inner.connection)
+                .await
+                .map_err(CatalogError::db)?;
+        rows.into_iter()
+            .map(|project| {
+                project
+                    .parse()
+                    .map_err(|_| CatalogError::corrupt("media project_id"))
+            })
+            .collect()
+    }
+
+    /// Hashes of the project's rows with `last_seen_at < before`, in hash order.
+    pub(crate) async fn stale_media(
+        &self,
+        project: ProjectId,
+        before: i64,
+    ) -> Result<Vec<String>, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        sqlx::query_scalar(
+            "SELECT sha256 FROM media WHERE project_id = ? AND last_seen_at < ? ORDER BY sha256",
+        )
+        .bind(project.to_string())
+        .bind(before)
+        .fetch_all(&mut inner.connection)
+        .await
+        .map_err(CatalogError::db)
+    }
+
+    /// Deletes one stale blob (spec 03 §9), under the mutex and in this order:
+    /// 1. if the row is gone or has `last_seen_at >= before`, return `Ok(None)`;
+    /// 2. in one transaction, delete the `media` row and `INSERT OR REPLACE` a
+    ///    `staged_objects` row for its path with `created_at = 0`;
+    /// 3. hook `MediaBeforeDelete` (pause, then fail → [`MediaError::Fault`]);
+    /// 4. run `delete` (the object);
+    /// 5. delete the `staged_objects` row.
+    ///
+    /// Returns the bytes deleted. A crash after step 2 leaves a staged path
+    /// with no row, which staged-object GC deletes; never a row without its
+    /// object.
+    pub(crate) async fn collect_media<F, Fut>(
+        &self,
+        project: ProjectId,
+        sha: &str,
+        before: i64,
+        hooks: &Hooks,
+        delete: F,
+    ) -> Result<Option<u64>, MediaError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<u64, ObjectError>>,
+    {
+        let mut inner = self.inner.lock().await;
+        let last_seen: Option<i64> = sqlx::query_scalar(
+            "SELECT last_seen_at FROM media WHERE project_id = ? AND sha256 = ?",
+        )
+        .bind(project.to_string())
+        .bind(sha)
+        .fetch_optional(&mut inner.connection)
+        .await
+        .map_err(CatalogError::db)?;
+        let Some(last_seen) = last_seen else {
+            return Ok(None);
+        };
+        if last_seen >= before {
+            return Ok(None);
+        }
+        let path = Objects::media_path(project, sha);
+        let mut transaction = inner.connection.begin().await.map_err(CatalogError::db)?;
+        if let Err(error) = sqlx::query("DELETE FROM media WHERE project_id = ? AND sha256 = ?")
+            .bind(project.to_string())
+            .bind(sha)
+            .execute(transaction.as_mut())
+            .await
+            .map_err(CatalogError::db)
+        {
+            let _ = transaction.rollback().await;
+            return Err(error.into());
+        }
+        if let Err(error) =
+            sqlx::query("INSERT OR REPLACE INTO staged_objects (path, created_at) VALUES (?, 0)")
+                .bind(&path)
+                .execute(transaction.as_mut())
+                .await
+                .map_err(CatalogError::db)
+        {
+            let _ = transaction.rollback().await;
+            return Err(error.into());
+        }
+        transaction.commit().await.map_err(CatalogError::db)?;
+        hooks.pause(HookPoint::MediaBeforeDelete);
+        if hooks.fail(HookPoint::MediaBeforeDelete).is_some() {
+            return Err(MediaError::Fault);
+        }
+        let bytes = delete().await?;
+        sqlx::query("DELETE FROM staged_objects WHERE path = ?")
+            .bind(&path)
+            .execute(&mut inner.connection)
+            .await
+            .map_err(CatalogError::db)?;
+        Ok(Some(bytes))
+    }
+
     /// Paths still in `staged_objects`, in path order.
     #[cfg(test)]
     pub(crate) async fn staged_paths(&self) -> Result<Vec<String>, CatalogError> {
@@ -542,21 +755,26 @@ impl Committer {
             .map_err(CatalogError::db)
     }
 
-    /// Delete one staged object that is not a catalog file, then its row.
+    /// Delete one staged object that is not a catalog file or a stored media
+    /// blob, then its row.
     ///
     /// `delete` runs while this mutex is held, so a commit cannot publish the
     /// same path between the check and the delete. A missing object is success
     /// and still drops the row. A path that is also in `data_files` is left
-    /// untouched.
+    /// untouched, and so is the object of a path with a `media` row: only its
+    /// staged row goes (spec 03 §9). A staged row re-created at or after
+    /// `before` (a `put_media` re-staged it since the listing) is left
+    /// completely alone.
     pub(crate) async fn collect_staged_path<F, Fut>(
         &self,
         path: &str,
         hooks: &Hooks,
+        before: i64,
         delete: F,
     ) -> Result<StagedRemoval, GcError>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<u64, crate::error::ObjectError>>,
+        Fut: Future<Output = Result<u64, ObjectError>>,
     {
         let mut inner = self.inner.lock().await;
         let published: Option<i64> = sqlx::query_scalar("SELECT 1 FROM data_files WHERE path = ?")
@@ -567,11 +785,30 @@ impl Committer {
         if published.is_some() {
             return Ok(StagedRemoval::Published);
         }
-        let staged: Option<i64> = sqlx::query_scalar("SELECT 1 FROM staged_objects WHERE path = ?")
-            .bind(path)
-            .fetch_optional(&mut inner.connection)
-            .await
-            .map_err(CatalogError::db)?;
+        if let Some((project, sha)) = media_path_parts(path) {
+            let stored: Option<i64> =
+                sqlx::query_scalar("SELECT 1 FROM media WHERE project_id = ? AND sha256 = ?")
+                    .bind(project)
+                    .bind(sha)
+                    .fetch_optional(&mut inner.connection)
+                    .await
+                    .map_err(CatalogError::db)?;
+            if stored.is_some() {
+                sqlx::query("DELETE FROM staged_objects WHERE path = ?")
+                    .bind(path)
+                    .execute(&mut inner.connection)
+                    .await
+                    .map_err(CatalogError::db)?;
+                return Ok(StagedRemoval::Published);
+            }
+        }
+        let staged: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM staged_objects WHERE path = ? AND created_at < ?")
+                .bind(path)
+                .bind(before)
+                .fetch_optional(&mut inner.connection)
+                .await
+                .map_err(CatalogError::db)?;
         if staged.is_none() {
             return Ok(StagedRemoval::Gone);
         }
@@ -648,7 +885,7 @@ impl Committer {
     ) -> Result<ObsoleteRemoval, GcError>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<u64, crate::error::ObjectError>>,
+        Fut: Future<Output = Result<u64, ObjectError>>,
     {
         let mut inner = self.inner.lock().await;
         if let Some(retired) = inner.retired.get(&file.id)
@@ -749,6 +986,24 @@ pub(crate) fn now_ns() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX))
         .unwrap_or(0)
+}
+
+/// `(project_id, sha256)` when `path` is a media path, `media/<project>/<64
+/// hex>` (spec 03 §9). Anything else is not a media path.
+fn media_path_parts(path: &str) -> Option<(&str, &str)> {
+    let mut parts = path.split('/');
+    if parts.next()? != "media" {
+        return None;
+    }
+    let project = parts.next()?;
+    let sha = parts.next()?;
+    if parts.next().is_some()
+        || sha.len() != 64
+        || !sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some((project, sha))
 }
 
 /// The body of [`Committer::commit`] up to and including the SQLite commit
@@ -1199,7 +1454,7 @@ mod tests {
             .fetch_one(&mut again)
             .await
             .unwrap();
-        assert_eq!(migrations, 4);
+        assert_eq!(migrations, 5);
         let indexes: Vec<String> = sqlx::query_scalar(
             "SELECT name FROM sqlite_master
              WHERE type = 'index' AND name LIKE 'data_files_%'
@@ -2364,5 +2619,36 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    // M5.6 test 7: a put that re-staged a path since GC's listing is left
+    // alone, because the race sits between the listing and this per-path check.
+    #[tokio::test]
+    async fn a_re_staged_media_path_is_left_alone() {
+        let (dir, committer) = opened().await;
+        let sha = "ab".repeat(32);
+        let path = Objects::media_path(project("018f6b4e-7c1a-7c1a-8c1a-000000000089"), &sha);
+        committer.stage_media(&path, 100).await.unwrap();
+        // A second put re-staged the path after GC listed it with cut-off 500.
+        committer.stage_media(&path, 1_000).await.unwrap();
+        let hooks = Hooks::default();
+        let mut deleted = 0_u32;
+        let removal = committer
+            .collect_staged_path(&path, &hooks, 500, || {
+                deleted += 1;
+                async { Ok(0_u64) }
+            })
+            .await
+            .unwrap();
+        assert_eq!(removal, StagedRemoval::Gone);
+        assert_eq!(deleted, 0, "the object was deleted anyway");
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let created_at: i64 =
+            sqlx::query_scalar("SELECT created_at FROM staged_objects WHERE path = ?")
+                .bind(&path)
+                .fetch_one(&mut connection)
+                .await
+                .unwrap();
+        assert_eq!(created_at, 1_000, "the staged row was removed or aged");
     }
 }

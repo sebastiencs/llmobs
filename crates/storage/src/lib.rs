@@ -15,6 +15,7 @@
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::num::NonZeroUsize;
+use std::ops::Range;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -23,16 +24,19 @@ use arrow::array::{Array, RecordBatch, StringArray};
 use chrono::NaiveDate;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use llmobs_core::ids::ProjectId;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::catalog::{Committer, Registered};
 use crate::config::StorageConfig;
 use crate::config::WalSync;
 use crate::error::{
-    AppendError, DeletionError, MemtableError, OpenError, QueryError, StorageError, WalError,
+    AppendError, DeletionError, MediaError, MemtableError, OpenError, QueryError, StorageError,
+    WalError,
 };
 use crate::flush::FlushHandle;
-use crate::hooks::Hooks;
+use crate::hooks::{HookPoint, Hooks};
+use crate::media::MediaGc;
 use crate::memtable::{MemSnapshot, Memtable};
 use crate::objects::Objects;
 use crate::read_state::{Published, ReadState};
@@ -51,6 +55,7 @@ pub mod error;
 mod filter;
 pub(crate) mod flush;
 pub(crate) mod gc;
+pub(crate) mod media;
 pub(crate) mod objects;
 pub(crate) mod parquet;
 pub(crate) mod partials;
@@ -67,6 +72,7 @@ pub use crate::compaction::rewrite::DeletionReport;
 pub use crate::deletion::{Deletion, DeletionScope, DeletionStatus};
 pub use crate::error::CompactionError;
 pub use crate::gc::ObsoleteReport;
+pub use crate::media::{MediaBlob, MediaRead, MediaReport};
 pub use query_error::{InvalidQuery, Position, RunError};
 pub use reads::{
     Bucket, BucketWidth, Kpi, KpiName, LATEST_SCORE_COLUMNS, ListScope, MAX_PAGE,
@@ -153,6 +159,8 @@ pub struct Storage {
     spans_flush: FlushHandle,
     scores_flush: FlushHandle,
     gc: gc::GcHandle,
+    /// Media collection, cloned into the GC and compaction tasks.
+    media: MediaGc,
     /// Shared by the background task and [`Self::compact`].
     compactor: Arc<compaction::job::Compactor>,
     compaction: compaction::task::CompactionHandle,
@@ -384,14 +392,27 @@ impl Storage {
             tracing::warn!("obsolete file collection failed");
             tracing::debug!(%error, "obsolete file collection error");
         }
+        let media = MediaGc {
+            committer: Arc::clone(&committer),
+            objects: Arc::clone(&objects),
+            published: Arc::clone(&published),
+            runtime: Arc::clone(&runtime),
+            target_partitions,
+            lookback,
+            hooks: share_hooks(&hooks),
+        };
         let gc = gc::spawn(gc::GcStart {
             committer: Arc::clone(&committer),
             objects: Arc::clone(&objects),
             hooks: share_hooks(&hooks),
             grace: config.gc.grace,
+            media: MediaGc::clone(&media),
         });
-        let compaction =
-            compaction::task::spawn(Arc::clone(&compactor), config.compaction.interval);
+        let compaction = compaction::task::spawn(
+            Arc::clone(&compactor),
+            MediaGc::clone(&media),
+            config.compaction.interval,
+        );
         Ok(Self {
             hard_limit,
             target_partitions,
@@ -404,6 +425,7 @@ impl Storage {
             spans_flush,
             scores_flush,
             gc,
+            media,
             compactor,
             compaction,
             objects,
@@ -451,73 +473,14 @@ impl Storage {
         project: ProjectId,
         options: QueryOptions,
     ) -> Result<ProjectQuery, QueryError> {
-        let state = self.published.load();
-        let partitions = self.target_partitions.get();
-        let deletions = state.tombstones.for_project(project);
-        let keep_from = state.projects.keep_from(project);
-        let has_late = |snapshot: &MemSnapshot| {
-            keep_from.is_some_and(|keep| {
-                snapshot
-                    .partitions
-                    .keys()
-                    .any(|key| key.project == project && key.day < keep)
-            })
-        };
-        let (spans_snapshot, scores_snapshot) =
-            if deletions.is_empty() && !has_late(&state.spans) && !has_late(&state.scores) {
-                (Arc::clone(&state.spans), Arc::clone(&state.scores))
-            } else {
-                (
-                    deletion::project_snapshot(
-                        Table::Spans,
-                        &state.spans,
-                        project,
-                        keep_from,
-                        &deletions,
-                    )?,
-                    deletion::project_snapshot(
-                        Table::Scores,
-                        &state.scores,
-                        project,
-                        keep_from,
-                        &deletions,
-                    )?,
-                )
-            };
-        let spans = Arc::new(query::SpansProvider::new(
+        project_query(
+            &self.published.load(),
             project,
-            Arc::clone(&spans_snapshot),
-            Arc::clone(&state.catalog),
-            partitions,
-            options.around,
-            Arc::clone(&deletions),
-        ));
-        let scores = Arc::new(query::ScoresProvider::new(
-            project,
-            scores_snapshot,
-            Arc::clone(&state.catalog),
-            partitions,
-            Arc::clone(&deletions),
-        ));
-        // The traces provider reads the filtered spans snapshot too, so its
-        // memtable partials are computed from the rows that remain.
-        let traces = Arc::new(query::TracesProvider::new(
-            project,
-            Arc::clone(&state.catalog),
-            spans_snapshot,
             options,
+            &self.runtime,
+            self.target_partitions,
             self.lookback,
-            partitions,
-            deletions,
-        ));
-        Ok(ProjectQuery {
-            spans,
-            traces,
-            scores,
-            runtime: Arc::clone(&self.runtime),
-            target_partitions: self.target_partitions,
-            optimizer_rules: vec![Arc::new(query::TraceListRule)],
-        })
+        )
     }
 
     /// Registers a `traces` or `user` deletion. Idempotent by `deletion.id`.
@@ -581,6 +544,72 @@ impl Storage {
         Ok(report)
     }
 
+    /// Stores `blob` under `media/<project>/<sha256>` once (spec 03 §9, D-A1-6).
+    /// Writing an existing hash refreshes its `last_seen_at` and writes nothing
+    /// else.
+    ///
+    /// The blob's object is durable before this returns; its `media` row and
+    /// the staged row's removal share one transaction.
+    pub async fn put_media(&self, project: ProjectId, blob: MediaBlob) -> Result<(), MediaError> {
+        let now = catalog::now_ns();
+        if blob.mime_type.is_empty() || blob.mime_type.len() > 255 || !blob.mime_type.is_ascii() {
+            return Err(MediaError::Invalid {
+                reason: "mime type",
+            });
+        }
+        if blob.bytes.is_empty() {
+            return Err(MediaError::Invalid {
+                reason: "empty blob",
+            });
+        }
+        let digest = Sha256::digest(blob.bytes.as_ref());
+        if digest.as_slice() != blob.sha256.as_slice() {
+            return Err(MediaError::HashMismatch);
+        }
+        let sha = hex::encode(blob.sha256);
+        if self.committer.touch_media(project, &sha, now).await? {
+            return Ok(());
+        }
+        let path = Objects::media_path(project, &sha);
+        self.committer.stage_media(&path, now).await?;
+        let size = u64::try_from(blob.bytes.len()).unwrap_or(u64::MAX);
+        self.objects.put_media(&path, blob.bytes).await?;
+        self.hooks.pause(HookPoint::MediaAfterPut);
+        if self.hooks.fail(HookPoint::MediaAfterPut).is_some() {
+            return Err(MediaError::Fault);
+        }
+        self.committer
+            .insert_media(project, &sha, &blob.mime_type, size, &path, now)
+            .await?;
+        Ok(())
+    }
+
+    /// The blob of `sha256`, whole or `range` of it (end exclusive), with its
+    /// MIME type and the whole blob's size (spec 03 §9).
+    pub async fn get_media(
+        &self,
+        project: ProjectId,
+        sha256: &[u8; 32],
+        range: Option<Range<u64>>,
+    ) -> Result<MediaRead, MediaError> {
+        let sha = hex::encode(sha256);
+        let Some((mime_type, size)) = self.committer.media_row(project, &sha).await? else {
+            return Err(MediaError::NotFound);
+        };
+        if let Some(range) = &range
+            && (range.start >= range.end || range.end > size)
+        {
+            return Err(MediaError::InvalidRange);
+        }
+        let path = Objects::media_path(project, &sha);
+        let bytes = self.objects.get_range(&path, range).await?;
+        Ok(MediaRead {
+            mime_type,
+            size,
+            bytes,
+        })
+    }
+
     /// Writer flags and memtable accounting. Does not touch the disk.
     pub fn health(&self) -> StorageHealth {
         let spans = self.spans.shared().memtable_bytes();
@@ -635,9 +664,30 @@ impl Storage {
 
     /// One deletion pass at `now` (ns), run to completion: rewrites, raises, and
     /// marks applied. The background task runs one after each compaction pass.
+    /// After a deletion is applied, its project's unreferenced media is
+    /// collected at the same `now` (D-A1-6); a media error changes nothing here.
     #[doc(hidden)]
     pub async fn apply_deletions(&self, now: i64) -> Result<DeletionReport, CompactionError> {
-        self.compactor.deletion_pass(now).await
+        let report = self.compactor.deletion_pass(now).await?;
+        for project in &report.applied_projects {
+            if let Err(error) = self.media.collect(*project, now).await {
+                // The label only: the error names an object path, which holds
+                // the blob's hash (spec 03 §9).
+                tracing::warn!(
+                    project = %project,
+                    error = error.label(),
+                    "media collection failed"
+                );
+            }
+        }
+        Ok(report)
+    }
+
+    /// One media collection over every project at `now` (ns). The background
+    /// task runs one daily.
+    #[doc(hidden)]
+    pub async fn collect_media(&self, now: i64) -> Result<MediaReport, MediaError> {
+        self.media.collect_all(now).await
     }
 
     /// Replaces the compaction policy read at the start of each pass.
@@ -841,6 +891,80 @@ impl Drop for Storage {
         self.compaction.abort();
         self.gc.abort();
     }
+}
+
+/// The body of [`Storage::query`]: providers for `project` over one published
+/// `state`. `Storage::query` and the media collection's live set both call it.
+pub(crate) fn project_query(
+    state: &ReadState,
+    project: ProjectId,
+    options: QueryOptions,
+    runtime: &Arc<RuntimeEnv>,
+    target_partitions: NonZeroUsize,
+    lookback: i64,
+) -> Result<ProjectQuery, QueryError> {
+    let partitions = target_partitions.get();
+    let deletions = state.tombstones.for_project(project);
+    let keep_from = state.projects.keep_from(project);
+    let has_late = |snapshot: &MemSnapshot| {
+        keep_from.is_some_and(|keep| {
+            snapshot
+                .partitions
+                .keys()
+                .any(|key| key.project == project && key.day < keep)
+        })
+    };
+    let (spans_snapshot, scores_snapshot) = if deletions.is_empty()
+        && !has_late(&state.spans)
+        && !has_late(&state.scores)
+    {
+        (Arc::clone(&state.spans), Arc::clone(&state.scores))
+    } else {
+        (
+            deletion::project_snapshot(Table::Spans, &state.spans, project, keep_from, &deletions)?,
+            deletion::project_snapshot(
+                Table::Scores,
+                &state.scores,
+                project,
+                keep_from,
+                &deletions,
+            )?,
+        )
+    };
+    let spans = Arc::new(query::SpansProvider::new(
+        project,
+        Arc::clone(&spans_snapshot),
+        Arc::clone(&state.catalog),
+        partitions,
+        options.around,
+        Arc::clone(&deletions),
+    ));
+    let scores = Arc::new(query::ScoresProvider::new(
+        project,
+        scores_snapshot,
+        Arc::clone(&state.catalog),
+        partitions,
+        Arc::clone(&deletions),
+    ));
+    // The traces provider reads the filtered spans snapshot too, so its
+    // memtable partials are computed from the rows that remain.
+    let traces = Arc::new(query::TracesProvider::new(
+        project,
+        Arc::clone(&state.catalog),
+        spans_snapshot,
+        options,
+        lookback,
+        partitions,
+        deletions,
+    ));
+    Ok(ProjectQuery {
+        spans,
+        traces,
+        scores,
+        runtime: Arc::clone(runtime),
+        target_partitions,
+        optimizer_rules: vec![Arc::new(query::TraceListRule)],
+    })
 }
 
 struct Recovered {

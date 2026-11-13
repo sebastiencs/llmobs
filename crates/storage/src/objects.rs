@@ -25,7 +25,9 @@ use object_store::aws::AmazonS3Builder;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as ObjectPath;
 use object_store::prefix::PrefixStore;
-use object_store::{MultipartUpload, ObjectStore, ObjectStoreExt, PutPayload};
+use object_store::{
+    GetOptions, GetRange, MultipartUpload, ObjectStore, ObjectStoreExt, PutPayload,
+};
 use uuid::Uuid;
 
 use crate::catalog::{FileId, FileTable};
@@ -153,6 +155,11 @@ impl Objects {
         (path, id)
     }
 
+    /// `media/<project_id>/<sha256 hex>` (spec 03 §9).
+    pub(crate) fn media_path(project: ProjectId, sha256_hex: &str) -> String {
+        format!("media/{project}/{sha256_hex}")
+    }
+
     /// Writes `bytes` so a later reader sees all of them or nothing.
     ///
     /// Local writes run on `spawn_blocking`. An existing final file is
@@ -184,6 +191,45 @@ impl Objects {
             Err(object_store::Error::NotFound { .. }) => Ok(()),
             Err(source) => Err(ObjectError::store("deleting object", path, source)),
         }
+    }
+
+    /// Writes a media blob under `path` (spec 03 §9).
+    ///
+    /// The name is the content's hash, so an existing object holds the same
+    /// bytes: local [`ObjectError::AlreadyExists`] is success, and remote is a
+    /// plain overwrite with no conditional put.
+    pub(crate) async fn put_media(&self, path: &str, bytes: Bytes) -> Result<(), ObjectError> {
+        match &self.kind {
+            Kind::Local { .. } => match self.put_durable(path, bytes).await {
+                Ok(()) => Ok(()),
+                Err(ObjectError::AlreadyExists { .. }) => Ok(()),
+                Err(error) => Err(error),
+            },
+            Kind::Remote => put_remote(&self.store, path, bytes).await,
+        }
+    }
+
+    /// Reads `path`, whole or the byte `range` (end exclusive).
+    pub(crate) async fn get_range(
+        &self,
+        path: &str,
+        range: Option<std::ops::Range<u64>>,
+    ) -> Result<Bytes, ObjectError> {
+        validate_key(path)?;
+        let location = object_key(path)?;
+        let options = GetOptions {
+            range: range.map(GetRange::Bounded),
+            ..GetOptions::default()
+        };
+        let result = self
+            .store
+            .get_opts(&location, options)
+            .await
+            .map_err(|source| ObjectError::store("reading object", path, source))?;
+        result
+            .bytes()
+            .await
+            .map_err(|source| ObjectError::store("reading object", path, source))
     }
 
     /// Size of `path`, then [`Self::delete`]. A missing object is `0`.
@@ -390,8 +436,8 @@ impl Objects {
             })?
     }
 
-    /// Deletes leftover temp files: under `tables/` in local mode, every file
-    /// of the spill directory in remote mode.
+    /// Deletes leftover temp files: under `tables/` and `media/` in local
+    /// mode, every file of the spill directory in remote mode.
     ///
     /// This walks the filesystem on the calling thread; open calls it from
     /// `spawn_blocking`.
@@ -400,6 +446,7 @@ impl Objects {
             Kind::Local { root } => {
                 let mut removed = 0;
                 remove_temps(&root.join("tables"), &mut removed)?;
+                remove_temps(&root.join("media"), &mut removed)?;
                 Ok(removed)
             }
             Kind::Remote => {

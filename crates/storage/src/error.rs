@@ -330,6 +330,59 @@ pub enum DeletionError {
     Catalog(#[from] CatalogError),
 }
 
+/// `put_media`, `get_media` or a media collection failed (spec 03 §9).
+///
+/// [`MediaError::Object`] names the object key, which holds the blob's hash:
+/// media code logs [`MediaError::label`] instead of the error text.
+#[derive(Debug, thiserror::Error)]
+pub enum MediaError {
+    /// The blob is malformed. `reason` is static.
+    #[error("invalid media: {reason}")]
+    Invalid {
+        /// Static reason. Never blob content.
+        reason: &'static str,
+    },
+    /// The given hash does not match the bytes.
+    #[error("media hash does not match its bytes")]
+    HashMismatch,
+    /// No `media` row for this hash.
+    #[error("media not found")]
+    NotFound,
+    /// The requested byte range is outside the blob.
+    #[error("media range is outside the blob")]
+    InvalidRange,
+    /// The object store rejected the read or the write.
+    #[error(transparent)]
+    Object(#[from] ObjectError),
+    /// `catalog.db` failed.
+    #[error(transparent)]
+    Catalog(#[from] CatalogError),
+    /// Reading the live set failed.
+    #[error("media query: {0}")]
+    Query(#[from] datafusion::error::DataFusionError),
+    /// An injected test fault.
+    #[error("injected fault")]
+    Fault,
+}
+
+impl MediaError {
+    /// The variant name in snake case. Media logs print this instead of the
+    /// error text: [`MediaError::Object`] displays an object path, which holds
+    /// the blob's hash (spec 03 §9).
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            Self::Invalid { .. } => "invalid",
+            Self::HashMismatch => "hash_mismatch",
+            Self::NotFound => "not_found",
+            Self::InvalidRange => "invalid_range",
+            Self::Object(_) => "object",
+            Self::Catalog(_) => "catalog",
+            Self::Query(_) => "query",
+            Self::Fault => "fault",
+        }
+    }
+}
+
 /// An object-store read, write, or delete failed.
 ///
 /// `path` is an object key or a filesystem path. The message never includes
