@@ -62,6 +62,10 @@ impl Compactor {
     /// One deletion pass at `now` (spec 03 §7): check the candidate files,
     /// rewrite the covered ones, raise the clean ones, then mark every
     /// deletion applied whose rows are gone.
+    ///
+    /// The pass itself never fails: a candidate or commit that fails is
+    /// counted in [`DeletionReport::failed`] and a later pass redoes it, so
+    /// one bad file never blocks the other deletions.
     pub(crate) async fn deletion_pass(
         self: &Arc<Self>,
         now: i64,
@@ -142,9 +146,11 @@ impl Compactor {
         }
 
         // 5. Check and rewrite, at most `threads` at a time. Each guard moves
-        // into its task; the claim is released when the task ends.
+        // into its task; the claim is released when the task ends. A file
+        // whose check fails is counted and left to a later pass, so it cannot
+        // abort the other candidates or the steps below.
         let semaphore = Arc::new(Semaphore::new(self.threads.max(1)));
-        let mut set: JoinSet<Result<Checked, CompactionError>> = JoinSet::new();
+        let mut set: JoinSet<(FileId, Result<Checked, CompactionError>)> = JoinSet::new();
         for (file, guard) in claimed {
             let permit = match Arc::clone(&semaphore).acquire_owned().await {
                 Ok(permit) => permit,
@@ -156,16 +162,29 @@ impl Compactor {
             set.spawn(async move {
                 let _permit = permit;
                 let _guard = guard;
-                check_and_rewrite(&compactor, &tombstones, &file, policy).await
+                (
+                    file.id,
+                    check_and_rewrite(&compactor, &tombstones, &file, policy).await,
+                )
             });
         }
         let mut clean: Vec<(FileId, u64)> = Vec::new();
         while let Some(joined) = set.join_next().await {
             match joined {
-                Ok(Ok(Checked::Rewritten)) => report.rewritten += 1,
-                Ok(Ok(Checked::Clean { id, applied })) => clean.push((id, applied)),
-                Ok(Ok(Checked::Failed)) => report.failed += 1,
-                Ok(Err(error)) => return Err(error),
+                Ok((_, Ok(Checked::Rewritten))) => report.rewritten += 1,
+                Ok((_, Ok(Checked::Clean { id, applied }))) => clean.push((id, applied)),
+                Ok((_, Ok(Checked::Failed))) => report.failed += 1,
+                Ok((id, Err(error))) => {
+                    // The label only: a DataFusion error raised by a plan
+                    // holding the covered-row predicate may quote its
+                    // literals (spec 03 §7).
+                    report.failed += 1;
+                    tracing::warn!(
+                        file = %id,
+                        error = error.label(),
+                        "checking a file for deleted rows failed"
+                    );
+                }
                 Err(_) => {
                     report.failed += 1;
                     tracing::warn!("deletion task failed");
@@ -452,6 +471,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use arrow::array::{Array, RecordBatch};
+    use llmobs_core::ids::ProjectId;
     use llmobs_core::score::ScoreTarget;
     use uuid::Uuid;
 
@@ -470,9 +490,14 @@ mod tests {
 
     /// One `traces` deletion of the given traces, cut off at `cutoff`.
     fn traces_deletion(traces: &[u16], cutoff: i64) -> Deletion {
+        traces_deletion_in(project(), traces, cutoff)
+    }
+
+    /// [`traces_deletion`] for another project than the fixed test one.
+    fn traces_deletion_in(project: ProjectId, traces: &[u16], cutoff: i64) -> Deletion {
         Deletion {
             id: Uuid::now_v7(),
-            project: project(),
+            project,
             cutoff,
             scope: DeletionScope::Traces {
                 trace_ids: traces
@@ -481,6 +506,11 @@ mod tests {
                     .collect(),
             },
         }
+    }
+
+    /// The second fixed test project, for two-project tests.
+    fn other_project() -> ProjectId {
+        "018f6b4e-7c1a-7c1a-8c1a-000000000002".parse().unwrap()
     }
 
     fn trace_bytes(trace: u16) -> [u8; 16] {
@@ -1138,6 +1168,101 @@ mod tests {
             stored[0].0.ends_with("11"),
             "the session score survives the merge: {stored:?}"
         );
+        storage.shutdown().await.unwrap();
+    }
+
+    // A read error on one candidate fails that file only; the other
+    // projects' deletions still run.
+    #[tokio::test]
+    async fn a_corrupt_file_fails_only_its_own_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(dir.path(), quiet_compaction(8), Duration::from_secs(3_600));
+        let storage = Storage::open(config.clone()).await.unwrap();
+        let time = at(10, 0, 0);
+        let broken_row = span_row(1, 0, time, time + 1);
+        let mut covered_row = span_row(2, 0, time, time + 1);
+        covered_row.project_id = other_project();
+        let mut kept_row = span_row(3, 0, time, time + 1);
+        kept_row.project_id = other_project();
+        storage
+            .append_spans(project(), span_rows(&[broken_row]))
+            .await
+            .unwrap();
+        storage
+            .append_spans(other_project(), span_rows(&[covered_row, kept_row]))
+            .await
+            .unwrap();
+        storage.shutdown().await.unwrap();
+        let storage = Storage::open(config).await.unwrap();
+        let files = storage.catalog_files(Table::Spans);
+        assert_eq!(files.len(), 2);
+        let broken = files
+            .iter()
+            .find(|file| file.project == project())
+            .unwrap()
+            .clone();
+        let good_id = files
+            .iter()
+            .find(|file| file.project == other_project())
+            .unwrap()
+            .id;
+
+        // Garbage bytes under the same key: the file's check will fail on read.
+        std::fs::write(
+            dir.path().join("objects").join(&broken.path),
+            b"not a parquet object",
+        )
+        .unwrap();
+
+        let broken_deletion = traces_deletion(&[1], time + 1);
+        let good_deletion = traces_deletion_in(other_project(), &[2], time + 1);
+        storage
+            .register_deletion(broken_deletion.clone())
+            .await
+            .unwrap();
+        storage
+            .register_deletion(good_deletion.clone())
+            .await
+            .unwrap();
+
+        let report = storage.apply_deletions(at(11, 0, 0)).await.unwrap();
+        assert_eq!(
+            (report.rewritten, report.applied, report.failed),
+            (1, 1, 1),
+            "{report:?}"
+        );
+        assert_eq!(
+            status(&storage, &good_deletion).await,
+            DeletionStatus::Applied {
+                applied_at: at(11, 0, 0)
+            }
+        );
+        assert_eq!(
+            status(&storage, &broken_deletion).await,
+            DeletionStatus::Pending
+        );
+
+        // The healthy project's file was rewritten without its covered row;
+        // the broken one is untouched.
+        let good = storage
+            .catalog_files(Table::Spans)
+            .into_iter()
+            .find(|file| file.project == other_project())
+            .unwrap();
+        assert_ne!(good.id, good_id, "the covered file was rewritten");
+        // The known sequence spans projects: Q's deletion is the second one.
+        assert_eq!(good.deletions_applied_seq, 2);
+        assert_eq!(
+            spans_trace_ids(dir.path(), &good),
+            vec![trace_bytes(3)],
+            "only the uncovered row remains"
+        );
+        let still_broken = storage
+            .catalog_files(Table::Spans)
+            .into_iter()
+            .find(|file| file.id == broken.id)
+            .unwrap();
+        assert_eq!(still_broken.deletions_applied_seq, 0);
         storage.shutdown().await.unwrap();
     }
 }
