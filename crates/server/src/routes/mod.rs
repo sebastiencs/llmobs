@@ -12,5 +12,7 @@ pub(crate) mod orgs;
 pub(crate) mod otlp;
 pub(crate) mod projects;
 pub(crate) mod read;
+pub(crate) mod sessions;
 pub(crate) mod tokens;
 pub(crate) mod traces;
+pub(crate) mod users;

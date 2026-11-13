@@ -23,13 +23,24 @@ use llmobs_core::score::ScoreValue;
 use llmobs_core::span::{Span, SpanEvent, SpanLink};
 use uuid::Uuid;
 
-use super::traces::{ScoreBrief, SpanSummary, TraceSummary};
+use super::payload::Payload;
+use super::sessions::SessionSummary;
+use super::traces::{ScoreBrief, SpanSummary, TraceSummary, stored_payload};
+use super::users::EndUserSummary;
 use crate::http::error::ApiError;
 
 /// `duration_ns` of the traces view. The spans table has the same name.
 const TRACE_DURATION_NS: &str = "duration_ns";
 /// `target_key` of `latest_scores` (`LATEST_SCORE_COLUMNS`).
 const TARGET_KEY: &str = "target_key";
+/// `trace_count` of the sessions and users views.
+const TRACE_COUNT: &str = "trace_count";
+/// `session_count` of the users view.
+const SESSION_COUNT: &str = "session_count";
+/// `first_seen` of the users view.
+const FIRST_SEEN: &str = "first_seen";
+/// `last_seen` of the users view.
+const LAST_SEEN: &str = "last_seen";
 
 /// A stored row does not have the shape the API expects. The text names the column, never a value.
 #[derive(Debug, thiserror::Error)]
@@ -612,6 +623,127 @@ fn span_conventions(list: &ListArray, row: usize) -> Result<Vec<Convention>, Con
         .iter()
         .map(|text| Convention::parse(text).map_err(|_| ConvertError::Value(spans::CONVENTIONS)))
         .collect()
+}
+
+/// Session list rows (sessions view), in row order across batches.
+pub(crate) fn session_summaries(
+    batches: &[RecordBatch],
+) -> Result<Vec<SessionSummary>, ConvertError> {
+    let mut out = Vec::new();
+    for batch in batches {
+        out.extend(session_batch(batch)?);
+    }
+    Ok(out)
+}
+
+fn session_batch(batch: &RecordBatch) -> Result<Vec<SessionSummary>, ConvertError> {
+    let session_id = strings(batch, traces::SESSION_ID)?;
+    let start_time = times(batch, traces::START_TIME)?;
+    let end_time = times(batch, traces::END_TIME)?;
+    let duration_ns = ints(batch, TRACE_DURATION_NS)?;
+    let trace_count = ints(batch, TRACE_COUNT)?;
+    let error_count = ints(batch, traces::ERROR_COUNT)?;
+    let total_tokens = ints(batch, traces::TOTAL_TOKENS)?;
+    let cost_total = floats(batch, traces::COST_TOTAL)?;
+    let user_id = strings(batch, traces::USER_ID)?;
+    let tags = lists(batch, traces::TAGS)?;
+
+    let mut out = Vec::with_capacity(batch.num_rows());
+    for row in 0..batch.num_rows() {
+        out.push(SessionSummary {
+            session_id: req_string(&session_id, row, traces::SESSION_ID)?,
+            start_time: req_time(&start_time, row, traces::START_TIME)?,
+            end_time: req_time(&end_time, row, traces::END_TIME)?,
+            duration_ns: req_i64(&duration_ns, row, TRACE_DURATION_NS)?,
+            trace_count: req_i64(&trace_count, row, TRACE_COUNT)?,
+            error_count: req_i64(&error_count, row, traces::ERROR_COUNT)?,
+            total_tokens: opt_i64(&total_tokens, row),
+            cost_total: opt_f64(&cost_total, row),
+            user_id: opt_string(&user_id, row),
+            tags: list_strings(&tags, row, traces::TAGS)?,
+            scores: Vec::new(),
+        });
+    }
+    Ok(out)
+}
+
+/// End-user list rows (users view), in row order across batches.
+pub(crate) fn end_user_summaries(
+    batches: &[RecordBatch],
+) -> Result<Vec<EndUserSummary>, ConvertError> {
+    let mut out = Vec::new();
+    for batch in batches {
+        out.extend(end_user_batch(batch)?);
+    }
+    Ok(out)
+}
+
+fn end_user_batch(batch: &RecordBatch) -> Result<Vec<EndUserSummary>, ConvertError> {
+    let user_id = strings(batch, traces::USER_ID)?;
+    let first_seen = times(batch, FIRST_SEEN)?;
+    let last_seen = times(batch, LAST_SEEN)?;
+    let trace_count = ints(batch, TRACE_COUNT)?;
+    let session_count = ints(batch, SESSION_COUNT)?;
+    let error_count = ints(batch, traces::ERROR_COUNT)?;
+    let total_tokens = ints(batch, traces::TOTAL_TOKENS)?;
+    let cost_total = floats(batch, traces::COST_TOTAL)?;
+
+    let mut out = Vec::with_capacity(batch.num_rows());
+    for row in 0..batch.num_rows() {
+        out.push(EndUserSummary {
+            user_id: req_string(&user_id, row, traces::USER_ID)?,
+            first_seen: req_time(&first_seen, row, FIRST_SEEN)?,
+            last_seen: req_time(&last_seen, row, LAST_SEEN)?,
+            trace_count: req_i64(&trace_count, row, TRACE_COUNT)?,
+            session_count: req_i64(&session_count, row, SESSION_COUNT)?,
+            error_count: req_i64(&error_count, row, traces::ERROR_COUNT)?,
+            total_tokens: opt_i64(&total_tokens, row),
+            cost_total: opt_f64(&cost_total, row),
+        });
+    }
+    Ok(out)
+}
+
+/// The input and output of a trace's root span, as `(input, output)`.
+pub(crate) type RootPayloads = (Option<Payload>, Option<Payload>);
+
+/// The root input and output of each trace, keyed by trace id. A trace without a root has no
+/// entry. The first row of a trace id wins.
+pub(crate) fn root_payloads(
+    batches: &[RecordBatch],
+) -> Result<HashMap<TraceId, RootPayloads>, ConvertError> {
+    let mut out = HashMap::new();
+    for batch in batches {
+        let trace_id = strings(batch, spans::TRACE_ID)?;
+        let input = strings(batch, spans::INPUT)?;
+        let input_format = strings(batch, spans::INPUT_FORMAT)?;
+        let output = strings(batch, spans::OUTPUT)?;
+        let output_format = strings(batch, spans::OUTPUT_FORMAT)?;
+        for row in 0..batch.num_rows() {
+            let id = req_parsed(&trace_id, row, spans::TRACE_ID, TraceId::from_str)?;
+            if out.contains_key(&id) {
+                continue;
+            }
+            let input_format = opt_parsed(
+                &input_format,
+                row,
+                spans::INPUT_FORMAT,
+                PayloadFormat::parse,
+            )?;
+            let output_format = opt_parsed(
+                &output_format,
+                row,
+                spans::OUTPUT_FORMAT,
+                PayloadFormat::parse,
+            )?;
+            let payloads = (
+                stored_payload(input_format, opt_string(&input, row)),
+                stored_payload(output_format, opt_string(&output, row)),
+            );
+            out.insert(id, payloads);
+        }
+    }
+    Ok(out)
 }
 
 /// Latest-score rows grouped by `target_key`. Each group keeps row order.

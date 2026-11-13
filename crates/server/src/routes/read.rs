@@ -8,6 +8,7 @@ use llmobs_storage::{ListScope, QueryContext, QueryOptions, ScoreTargets, TimeWi
 
 use crate::api::common::{Limit, SortOrder, TimeParam};
 use crate::api::convert;
+use crate::api::sessions::SessionSummary;
 use crate::api::traces::TraceSummary;
 use crate::http::AppState;
 use crate::http::error::ApiError;
@@ -89,6 +90,30 @@ pub(crate) async fn attach_trace_scores(
     let mut briefs = convert::score_briefs(&batches)?;
     for (trace, id) in traces.iter_mut().zip(&ids) {
         trace.scores = briefs.remove(id).unwrap_or_default();
+    }
+    Ok(())
+}
+
+/// Fills `scores` of each session with its latest score per name.
+///
+/// Callers pass at most 1,000 sessions.
+pub(crate) async fn attach_session_scores(
+    ctx: &QueryContext,
+    sessions: &mut [SessionSummary],
+) -> Result<(), ApiError> {
+    if sessions.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<String> = sessions
+        .iter()
+        .map(|session| session.session_id.clone())
+        .collect();
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let batches =
+        llmobs_storage::latest_scores(ctx, ScoreTargets::Sessions(&refs), READ_TIMEOUT).await?;
+    let mut briefs = convert::score_briefs(&batches)?;
+    for (session, id) in sessions.iter_mut().zip(&ids) {
+        session.scores = briefs.remove(id).unwrap_or_default();
     }
     Ok(())
 }
