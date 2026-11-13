@@ -6,6 +6,7 @@
 pub mod account;
 pub mod admin;
 pub mod common;
+pub(crate) mod convert;
 pub mod invites;
 pub mod keys;
 pub mod members;
