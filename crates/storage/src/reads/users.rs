@@ -7,13 +7,15 @@
 
 use std::time::Duration;
 
-use arrow::array::{Array, AsArray};
+use std::sync::Arc;
+
 use arrow::compute::concat_batches;
 use arrow::record_batch::RecordBatch;
 use datafusion::error::DataFusionError;
+use datafusion::execution::SessionState;
 use datafusion::functions::expr_fn::coalesce;
 use datafusion::functions_aggregate::expr_fn::{count, count_distinct, max, min, sum};
-use datafusion::logical_expr::{Expr, col, lit};
+use datafusion::logical_expr::{LogicalPlan, col, in_subquery, lit};
 use datafusion::prelude::DataFrame;
 use llmobs_core::schema::traces;
 
@@ -245,13 +247,6 @@ async fn load(
         .map_err(classify)?
         .logical_plan()
         .clone();
-    let user_rows = DataFrame::new(state.clone(), user_plan.clone())
-        .collect()
-        .await
-        .map_err(|error| ctx.fail(error))?;
-    if row_count(&user_rows) == 0 {
-        return Ok(None);
-    }
     let user = aggregate_users(DataFrame::new(state.clone(), user_plan.clone()))?
         .collect()
         .await
@@ -259,29 +254,7 @@ async fn load(
     let Some(user) = single_row(&user)? else {
         return Ok(None);
     };
-    let session_ids = DataFrame::new(state.clone(), user_plan)
-        .filter(col(traces::SESSION_ID).is_not_null())
-        .map_err(classify)?
-        .select(vec![col(traces::SESSION_ID)])
-        .map_err(classify)?
-        .distinct()
-        .map_err(classify)?
-        .collect()
-        .await
-        .map_err(|error| ctx.fail(error))?;
-    let ids = string_column(&session_ids, traces::SESSION_ID);
-    if ids.is_empty() {
-        return Ok(Some(UserDetailData {
-            user,
-            sessions: Vec::new(),
-        }));
-    }
-    let list: Vec<Expr> = ids.iter().map(|id| lit(id.as_str())).collect();
-    let session_traces = DataFrame::new(state.clone(), excluded_plan)
-        .filter(col(traces::SESSION_ID).in_list(list, false))
-        .map_err(classify)?;
-    let sessions =
-        sessions_from_traces(session_traces.into_unoptimized_plan()).map_err(RunError::Internal)?;
+    let sessions = user_sessions_plan(&state, excluded_plan, user_plan)?;
     let sessions = DataFrame::new(state, sessions)
         .sort(order_by(
             traces::START_TIME,
@@ -294,29 +267,32 @@ async fn load(
         .collect()
         .await
         .map_err(|error| ctx.fail(error))?;
+    let sessions: Vec<RecordBatch> = sessions
+        .into_iter()
+        .filter(|batch| batch.num_rows() > 0)
+        .collect();
     Ok(Some(UserDetailData { user, sessions }))
 }
 
-fn string_column(batches: &[RecordBatch], name: &str) -> Vec<String> {
-    let mut values = Vec::new();
-    for batch in batches {
-        let Some(column) = batch.column_by_name(name) else {
-            continue;
-        };
-        let Some(strings) = column.as_string_opt::<i32>() else {
-            continue;
-        };
-        for index in 0..strings.len() {
-            if !strings.is_null(index) {
-                values.push(strings.value(index).to_owned());
-            }
-        }
-    }
-    values
-}
-
-fn row_count(batches: &[RecordBatch]) -> usize {
-    batches.iter().map(RecordBatch::num_rows).sum()
+/// Sessions of the user whose traces `user_plan` selects, over `excluded_plan`
+/// (all scoped traces), through an `IN (subquery)` that plans as a semi join.
+fn user_sessions_plan(
+    state: &SessionState,
+    excluded_plan: LogicalPlan,
+    user_plan: LogicalPlan,
+) -> Result<LogicalPlan, RunError> {
+    let session_ids = DataFrame::new(state.clone(), user_plan)
+        .filter(col(traces::SESSION_ID).is_not_null())
+        .map_err(classify)?
+        .select(vec![col(traces::SESSION_ID)])
+        .map_err(classify)?
+        .distinct()
+        .map_err(classify)?
+        .into_unoptimized_plan();
+    let session_traces = DataFrame::new(state.clone(), excluded_plan)
+        .filter(in_subquery(col(traces::SESSION_ID), Arc::new(session_ids)))
+        .map_err(classify)?;
+    sessions_from_traces(session_traces.into_unoptimized_plan()).map_err(RunError::Internal)
 }
 
 fn single_row(batches: &[RecordBatch]) -> Result<Option<RecordBatch>, RunError> {
@@ -344,18 +320,31 @@ mod tests {
 
     use arrow::json::{ArrayWriter, WriterBuilder};
     use arrow::record_batch::RecordBatch;
+    use datafusion::logical_expr::{col, lit};
+    use datafusion::prelude::DataFrame;
     use llmobs_core::names::environment;
+    use llmobs_core::schema::traces;
+    use llmobs_core::span::Span;
     use serde_json::Value;
 
-    use super::{UserListRequest, UserSort, user_detail, user_frame, user_list};
-    use crate::reads::{ListScope, Page, SortOrder};
-    use crate::test_support::example_query;
+    use super::{
+        UserListRequest, UserSort, user_detail, user_frame, user_list, user_sessions_plan,
+    };
+    use crate::reads::{ListScope, Page, SortOrder, scoped_traces};
+    use crate::test_support::{example_query, span_row, spans_table, traces_table};
     use crate::views::QueryContext;
 
     const TIMEOUT: Duration = Duration::from_secs(30);
 
     fn context() -> QueryContext {
         QueryContext::new(example_query(), None).expect("context")
+    }
+
+    fn context_of(spans: &[Span]) -> QueryContext {
+        let mut query = example_query();
+        query.spans = spans_table(spans);
+        query.traces = traces_table(spans);
+        QueryContext::new(query, None).expect("context")
     }
 
     fn scope(include_eval: bool) -> ListScope {
@@ -594,5 +583,53 @@ mod tests {
             logical.contains("count") && logical.to_lowercase().contains("distinct"),
             "{logical}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_user_with_only_excluded_traces_is_none() {
+        let mut root = span_row(7, 0, 1_000, 1_000);
+        root.user_id = Some("eval-user".to_owned());
+        root.environment = Some(environment::EVAL.to_owned());
+        let spans = [root];
+        let ctx = context_of(&spans);
+        let hidden = user_detail(&ctx, "eval-user", false, false, TIMEOUT)
+            .await
+            .expect("hidden");
+        assert!(hidden.is_none());
+        let shown = user_detail(&ctx, "eval-user", true, false, TIMEOUT)
+            .await
+            .expect("eval");
+        assert!(shown.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_user_without_sessions_has_an_empty_session_list() {
+        let mut root = span_row(7, 0, 1_000, 1_000);
+        root.user_id = Some("lonely".to_owned());
+        let spans = [root];
+        let detail = user_detail(&context_of(&spans), "lonely", false, false, TIMEOUT)
+            .await
+            .expect("detail")
+            .expect("user");
+        assert!(detail.sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn user_detail_plans_a_semi_join() {
+        let ctx = context();
+        let state = ctx.session().state();
+        let excluded = scoped_traces(&ctx, scope(false), false)
+            .await
+            .expect("scoped");
+        let excluded_plan = excluded.logical_plan().clone();
+        let user_plan = DataFrame::new(state.clone(), excluded_plan.clone())
+            .filter(col(traces::USER_ID).eq(lit("user-42")))
+            .expect("user filter")
+            .logical_plan()
+            .clone();
+        let plan = user_sessions_plan(&state, excluded_plan, user_plan).expect("plan");
+        let optimized = state.optimize(&plan).expect("optimize");
+        let text = format!("{}", optimized.display_indent());
+        assert!(text.contains("LeftSemi"), "{text}");
     }
 }
