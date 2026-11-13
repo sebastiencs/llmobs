@@ -118,6 +118,60 @@ describe("transcript", () => {
     });
     expect(started.size).toBeLessThanOrEqual(BULK_COUNT);
   });
+
+  it("waits for the previous call before showing a turn", async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = false;
+    server.use(
+      http.get("/api/v1/projects/:project/traces/:trace_id/spans/:span_id", async ({ params }) => {
+        if (params.span_id !== "b100000000000012") return undefined;
+        started = true;
+        await gate;
+        return undefined;
+      }),
+    );
+    await renderApp(`/acme/support-bot/traces?trace=${TRACE_1}&mode=transcript`);
+    const transcript = await screen.findByRole("region", { name: "Transcript" });
+    await waitFor(() => expect(started).toBe(true));
+    // Let the second call's detail arrive while the first is held.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(within(transcript).queryByText("My order 1234 hasn't arrived.")).not.toBeInTheDocument();
+    expect(
+      within(transcript).queryByText("Your order 1234 shipped and arrives tomorrow."),
+    ).not.toBeInTheDocument();
+    release();
+    expect(
+      await within(transcript).findByText("Your order 1234 shipped and arrives tomorrow."),
+    ).toBeInTheDocument();
+    expect(within(transcript).getAllByText("My order 1234 hasn't arrived.")).toHaveLength(1);
+  });
+
+  it("shows the full input when the previous call fails", async () => {
+    server.use(
+      http.get("/api/v1/projects/:project/traces/:trace_id/spans/:span_id", ({ params }) => {
+        if (params.span_id !== "b100000000000012") return undefined;
+        return HttpResponse.json(
+          { type: "about:blank", title: "Not Found", status: 404, code: "not_found" },
+          { status: 404 },
+        );
+      }),
+    );
+    await renderApp(`/acme/support-bot/traces?trace=${TRACE_1}&mode=transcript`);
+    const transcript = await screen.findByRole("region", { name: "Transcript" });
+    expect(
+      await within(transcript).findByText("Earlier context could not be loaded"),
+    ).toBeInTheDocument();
+    expect(within(transcript).getByText("Could not load this span")).toBeInTheDocument();
+    expect(within(transcript).getAllByText("My order 1234 hasn't arrived.")).toHaveLength(1);
+    expect(
+      within(transcript).getByText("Your order 1234 shipped and arrives tomorrow."),
+    ).toBeInTheDocument();
+  });
 });
 
 function bulkTrace(): Schema<"TraceDetail"> {
