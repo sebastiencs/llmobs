@@ -348,6 +348,15 @@ mod tests {
         assert_eq!(rows.len(), 1);
         let row = &rows[0];
         assert_eq!(row.score_id.to_string(), score_id(401));
+        assert_eq!(row.name, "accuracy");
+        assert_eq!(
+            row.target,
+            ScoreTarget::Span {
+                trace_id: TraceId::from_str("a1000000000000000000000000000001").unwrap(),
+                span_id: SpanId::from_str("b100000000000012").unwrap(),
+            }
+        );
+        assert_eq!(row.session_id, None);
         assert_eq!(row.source, ScoreSource::Sdk);
         assert_eq!(row.value, ScoreValue::Numeric(0.8));
         assert_eq!(row.reason.as_deref(), Some("Matches the reference answer."));
