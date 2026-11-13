@@ -317,6 +317,12 @@ Decisions of track G (`docs/plans/g-spine/00-design.md`), numbered `D-G-<n>` (`d
 | D-G-21 | Ports | **`/v1/traces` is served on `http_addr` and on `otlp_http_addr`** (that route only); gRPC on `grpc_addr` with `tonic`. An empty `otlp_http_addr` or `grpc_addr` disables that listener (spec 09, 12). |
 | D-G-22 | Stream validation | **`/traces/stream` validates `filter` and `search` (D-C-5) when it opens: an invalid filter is a `400 invalid_filter` problem, not a stream, so `EventSource` stops instead of retrying. A later failed re-read sends `resync` (spec 09 § SSE; C review U27). |
 
+## Track A2 — Query layer
+
+| # | Topic | Decision |
+|---|---|---|
+| D-A2-1 | SQL statement caps | **Every token or keyword that sqlparser chains left-deep counts as an operator token (D95): set operations, `AT`, `COLLATE`, subscripts, `:`, `#`, the PostgreSQL `~~` family, `#-`, `@?`, `^@`, `RLIKE`, `REGEXP`, `MATCH`, `MEMBER`, `OVERLAPS` and `OPERATOR`. Pipe syntax (`\|>`) is rejected, and a SQL console statement reads at most 32 tables** (each view, CTE reference, derived table or `UNNEST` in a `FROM` or `JOIN`, and each `INTERSECT` or `EXCEPT`). sqlparser builds these chains without using its recursion limit, and DataFusion then overflows a 2 MiB stack while planning them: about 2,600 `UNION ALL` terms, 1,000 `INTERSECT` terms, 2,600 `AT TIME ZONE` terms or 700 joined tables in a release build, and 1,000 subscripts, 4,000 pipe stages or 2,000 `~~` in a debug build. That aborts the process. `INTERSECT` and `EXCEPT` run as joins, and a chain of them overflows when it runs from about 384 terms (debug and release), well under the operator limit, so each counts as a table. 32 tables also bound planning time: join planning grows superlinearly (about 4 s at 128 tables, over 10 minutes at 512) and the request timeout cannot interrupt it (spec 05 § Sandbox). |
+
 ## Open
 
 - License (D9).

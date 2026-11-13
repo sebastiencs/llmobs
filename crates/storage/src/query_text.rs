@@ -271,7 +271,17 @@ fn is_operator(token: &Token) -> bool {
         | Token::TildeAsterisk
         | Token::ExclamationMarkTilde
         | Token::ExclamationMarkTildeAsterisk
-        | Token::DoubleColon => true,
+        | Token::DoubleColon
+        | Token::LBracket
+        | Token::Colon
+        | Token::Sharp
+        | Token::DoubleTilde
+        | Token::DoubleTildeAsterisk
+        | Token::ExclamationMarkDoubleTilde
+        | Token::ExclamationMarkDoubleTildeAsterisk
+        | Token::HashMinus
+        | Token::AtQuestion
+        | Token::CaretAt => true,
         Token::Word(word) => matches!(
             word.keyword,
             Keyword::AND
@@ -285,6 +295,18 @@ fn is_operator(token: &Token) -> bool {
                 | Keyword::SIMILAR
                 | Keyword::XOR
                 | Keyword::DIV
+                | Keyword::UNION
+                | Keyword::INTERSECT
+                | Keyword::EXCEPT
+                | Keyword::MINUS
+                | Keyword::AT
+                | Keyword::COLLATE
+                | Keyword::RLIKE
+                | Keyword::REGEXP
+                | Keyword::MATCH
+                | Keyword::MEMBER
+                | Keyword::OVERLAPS
+                | Keyword::OPERATOR
         ),
         _ => false,
     }
@@ -403,6 +425,34 @@ mod tests {
         assert!(text.starts_with(&capped));
         assert_eq!(capped.len() % "€".len(), 0);
         assert!(capped.len() > 2048 - "€".len());
+    }
+
+    #[test]
+    fn chained_forms_count_as_operators() {
+        let cases = [
+            ("SELECT 1 UNION SELECT 1", 1),
+            ("SELECT 1 UNION ALL SELECT 1", 1),
+            ("SELECT 1 INTERSECT SELECT 1", 1),
+            ("SELECT 1 EXCEPT SELECT 1", 1),
+            ("SELECT 1 MINUS SELECT 1", 1),
+            ("SELECT now() AT TIME ZONE 'UTC'", 1),
+            ("SELECT 'a' COLLATE x", 1),
+            ("SELECT metadata['k'] FROM spans", 1),
+            ("SELECT 'a' ~~ 'a'", 1),
+            ("SELECT 'a' RLIKE 'a'", 1),
+            ("SELECT {n:Int}", 1),
+            ("SELECT \"union\" FROM spans", 0),
+        ];
+        for (text, expected) in cases {
+            let tokens = Tokenizer::new(&DIALECT, text)
+                .tokenize_with_location()
+                .expect("tokens");
+            let counted = tokens
+                .iter()
+                .filter(|token| is_operator(&token.token))
+                .count();
+            assert_eq!(counted, expected, "{text}");
+        }
     }
 
     fn parse(text: &str) -> InvalidQuery {

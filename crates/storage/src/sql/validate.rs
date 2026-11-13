@@ -6,13 +6,18 @@ use std::collections::HashSet;
 use std::ops::ControlFlow;
 
 use datafusion::sql::sqlparser::ast::{
-    DescribeAlias, Expr, Ident, ObjectName, ObjectNamePart, Query, Select, Spanned, Statement,
-    TableFactor, Visit, Visitor,
+    DescribeAlias, Expr, Ident, ObjectName, ObjectNamePart, Query, Select, SetExpr, SetOperator,
+    Spanned, Statement, TableFactor, Visit, Visitor,
 };
 use datafusion::sql::sqlparser::tokenizer::Span;
 
 use crate::query_error::{InvalidQuery, Position};
 use crate::query_text::cap_message;
+
+/// Tables one statement may read (D-A2-1). Each `INTERSECT`, `EXCEPT` or
+/// `MINUS` counts as one more: DataFusion runs it as a join, and a long chain
+/// of joins overflows the stack when it runs.
+pub(crate) const MAX_TABLES: usize = 32;
 
 /// Reject anything that is not one read-only query over the registered views.
 pub(crate) fn validate_statement(
@@ -64,6 +69,7 @@ pub(crate) fn validate_statement(
         registered,
         ctes,
         text,
+        tables: 0,
     };
     match query.visit(&mut walk) {
         ControlFlow::Break(error) => Err(error),
@@ -118,6 +124,23 @@ struct Walk<'a> {
     registered: &'a HashSet<String>,
     ctes: CteNames,
     text: &'a str,
+    tables: usize,
+}
+
+impl Walk<'_> {
+    /// Count one table (or set-operation join) toward [`MAX_TABLES`].
+    fn count_table(&mut self, span: Span) -> ControlFlow<InvalidQuery> {
+        self.tables += 1;
+        if self.tables > MAX_TABLES {
+            return ControlFlow::Break(invalid(
+                format!(
+                    "the query reads more than {MAX_TABLES} tables (each INTERSECT or EXCEPT counts as one)"
+                ),
+                at(span),
+            ));
+        }
+        ControlFlow::Continue(())
+    }
 }
 
 impl Visitor for Walk<'_> {
@@ -130,6 +153,30 @@ impl Visitor for Walk<'_> {
                 at(query.span()),
             ));
         }
+        // Set operations nest left-deep; walk them with a stack, not recursion,
+        // and count in text order so the error points at the first operand past
+        // the cap. A nested `SetExpr::Query` is a query of its own, visited
+        // separately.
+        let mut pending = vec![query.body.as_ref()];
+        while let Some(mut body) = pending.pop() {
+            let mut chain = Vec::new();
+            while let SetExpr::SetOperation {
+                op, left, right, ..
+            } = body
+            {
+                chain.push((op, right.as_ref()));
+                body = left;
+            }
+            for (op, right) in chain.into_iter().rev() {
+                if matches!(
+                    op,
+                    SetOperator::Intersect | SetOperator::Except | SetOperator::Minus
+                ) {
+                    self.count_table(right.span())?;
+                }
+                pending.push(right);
+            }
+        }
         ControlFlow::Continue(())
     }
 
@@ -141,6 +188,9 @@ impl Visitor for Walk<'_> {
     }
 
     fn pre_visit_table_factor(&mut self, factor: &TableFactor) -> ControlFlow<Self::Break> {
+        if !matches!(factor, TableFactor::NestedJoin { .. }) {
+            self.count_table(factor.span())?;
+        }
         match factor {
             TableFactor::Derived { .. }
             | TableFactor::NestedJoin { .. }

@@ -88,8 +88,8 @@ Later (post-MVP): Tantivy index per partition built at compaction.
 
 ### Sandbox
 
-1. Limits: 64 KiB and 512 operator tokens (the same operator tokens as the filter DSL); parser recursion limit 50 (D95).
-2. Exactly one statement: a query (`SELECT`, `WITH`, `UNION`/`INTERSECT`/`EXCEPT`, `VALUES`), or `EXPLAIN` of a query without `ANALYZE` or `VERBOSE`.
+1. Limits: 64 KiB and 512 operator tokens (the same operator tokens as the filter DSL; set operations `UNION`, `INTERSECT`, `EXCEPT`, `MINUS`, the keywords `AT`, `COLLATE`, `RLIKE`, `REGEXP`, `MATCH`, `MEMBER`, `OVERLAPS`, `OPERATOR`, subscripts `[`, `:`, `#` and the PostgreSQL operators `~~`, `~~*`, `!~~`, `!~~*`, `#-`, `@?`, `^@` count too); parser recursion limit 50 (D95, D-A2-1). At most 32 tables per statement: every view, CTE reference, derived table and `UNNEST` in a `FROM` or `JOIN` counts, wherever it appears, and so does every `INTERSECT` or `EXCEPT`, which runs as a join (D-A2-1).
+2. Exactly one statement: a query (`SELECT`, `WITH`, `UNION`/`INTERSECT`/`EXCEPT`, `VALUES`), or `EXPLAIN` of a query without `ANALYZE` or `VERBOSE`. Pipe syntax (`|>`) is rejected (D-A2-1).
 3. Table references are unqualified names of the registered views (`spans`, `traces`, `sessions`, `scores`, `experiment_items`, `dataset_items`) or of CTEs in scope. No table functions, no `information_schema`, no URL tables, no recursive CTEs.
 4. Functions: DataFusion's built-in scalar, nested, aggregate and window functions. No table or higher-order functions. Score functions are DSL-only (D97).
 5. The planned statement is checked again with DataFusion's `SQLOptions` (no DDL, DML or statements).
