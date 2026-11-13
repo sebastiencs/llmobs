@@ -9,6 +9,7 @@ import { CreateTokenDialog } from "@/components/account/create-token-dialog";
 import { accessLabel } from "@/components/account/token-format";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { EmptyState } from "@/components/empty-state";
+import { FormError } from "@/components/form/form-error";
 import { SecretDialog } from "@/components/secret-dialog";
 import { TimeText } from "@/components/time-text";
 import { Button } from "@/components/ui/button";
@@ -40,7 +41,9 @@ export function PersonalTokens() {
   const [created, setCreated] = useState<Schema<"CreatedPersonalToken"> | undefined>();
   const [revoking, setRevoking] = useState<Schema<"PersonalToken"> | undefined>();
 
-  if (tokens.error) {
+  // A failed first page has no data to show: the route's ErrorState renders it. A failed
+  // "Load more" keeps the rows already loaded, so only an inline error is added.
+  if (tokens.error && tokens.data === undefined) {
     throw tokens.error;
   }
 
@@ -137,6 +140,9 @@ export function PersonalTokens() {
           </TableBody>
         </Table>
       )}
+      {tokens.error && tokens.data !== undefined ? (
+        <FormError message="Could not load more tokens." />
+      ) : null}
       {tokens.hasNextPage ? (
         <Button
           type="button"

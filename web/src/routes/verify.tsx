@@ -42,7 +42,9 @@ function VerifyWithoutToken() {
 }
 
 function VerifyToken({ token }: { token: string }) {
-  const verify = $api.useMutation("post", "/api/auth/email/verify");
+  // gcTime 0: the request carries the verification token, so its variables must
+  // leave the mutation cache as soon as the page unmounts (README § Pitfalls).
+  const verify = $api.useMutation("post", "/api/auth/email/verify", { gcTime: 0 });
   const sent = useRef(false);
   // The ref guard keeps React's StrictMode double effect, and the changing `verify`
   // object, from sending twice.

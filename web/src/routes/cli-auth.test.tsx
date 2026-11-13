@@ -96,6 +96,27 @@ it("names the token CLI without a host", async () => {
   await waitFor(() => expect(body).toMatchObject({ name: "CLI" }));
 });
 
+it("reads the host from the raw query string", async () => {
+  let body: unknown;
+  server.use(
+    http.post("/api/v1/me/tokens", async ({ request }) => {
+      body = await request.json();
+      return tokenCreated("CLI on 1e3");
+    }),
+  );
+
+  // `host=1e3` would arrive as `1000` through the router's JSON parsing of search
+  // values; only the raw query string keeps it byte for byte.
+  const { user } = await renderApp("/cli-auth?port=54321&state=s1&host=1e3");
+  expect(
+    await screen.findByRole("heading", { name: "Authorize the llmobs CLI", level: 1 }),
+  ).toBeInTheDocument();
+  expect(screen.getByText("CLI on 1e3")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Authorize" }));
+  await waitFor(() => expect(body).toEqual({ name: "CLI on 1e3", scopes: ["read", "write"] }));
+});
+
 it("cancels without creating a token", async () => {
   const calls: unknown[] = [];
   server.use(

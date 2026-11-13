@@ -86,6 +86,10 @@ it("joins as the invited user", async () => {
   expect(await screen.findByRole("heading", { name: "Join Acme" })).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Join Acme" }));
   await waitFor(() => expect(router.state.location.pathname).toBe("/acme"));
+  // The org page really rendered: the refetched `me` lists the org, so the switcher
+  // shows it and the route is neither not-found nor in its error state.
+  expect(await screen.findByRole("button", { name: "Acme" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
 });
 
 it("maps the accept errors", async () => {
@@ -196,17 +200,31 @@ it("creates an account from the invitation and joins", async () => {
       );
     }),
   );
-  const { router, user } = await renderApp(URL_PATH);
+  const { queryClient, router, user } = await renderApp(URL_PATH);
   const email = await screen.findByLabelText("Email");
   expect(email).toHaveValue("guest@example.com");
   expect(email).toHaveAttribute("readonly");
   await fillSignup(user);
+  await waitFor(() => expect(router.state.location.pathname).toBe("/acme"));
   expect(body).toEqual({
     email: "guest@example.com",
     password: "a long enough password",
     invite_token: INVITE_TOKEN,
   });
-  await waitFor(() => expect(router.state.location.pathname).toBe("/acme"));
+  // The org page really rendered, not just the URL change (see "joins as the invited user").
+  expect(await screen.findByRole("button", { name: "Acme" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  // The password leaves the mutation cache with the form (gcTime: 0, D-L-5).
+  await waitFor(() =>
+    expect(
+      JSON.stringify(
+        queryClient
+          .getMutationCache()
+          .getAll()
+          .map((mutation) => [mutation.state.variables, mutation.state.data]),
+      ),
+    ).not.toContain("a long enough password"),
+  );
 });
 
 it("maps the sign-up errors", async () => {

@@ -28,7 +28,18 @@ it("refuses an invalid port", () => {
 });
 
 it("refuses an invalid state", () => {
-  for (const state of [undefined, "", "has space", "a".repeat(257), "12345678901234567890", "7"]) {
+  for (const state of [
+    undefined,
+    "",
+    "has space",
+    "a".repeat(257),
+    "12345678901234567890",
+    "7",
+    "1e5",
+    "1E5",
+    "-123",
+    "123e10",
+  ]) {
     expect(parseCliRequest({ port: "54321", state })).toBeUndefined();
   }
 });

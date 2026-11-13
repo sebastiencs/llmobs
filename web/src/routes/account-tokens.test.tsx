@@ -98,8 +98,8 @@ it("creates a read-only token and shows the secret once", async () => {
   expect(screen.getByRole("combobox", { name: "Expires" })).toHaveTextContent("Never");
   await user.click(screen.getByRole("button", { name: "Create token" }));
 
-  expect(body).toEqual({ name: "Laptop", scopes: ["read"] });
   const dialog = await screen.findByRole("dialog", { name: "Personal access token created" });
+  expect(body).toEqual({ name: "Laptop", scopes: ["read"] });
   expect(within(dialog).getByLabelText("Secret")).toHaveValue(
     "pat-llmobs-NEWTOKEN0NEWTOKEN0NEWTOKEN0NEWT",
   );
@@ -239,8 +239,8 @@ it("revokes a token after confirming", async () => {
 
   await user.click(within(dialog).getByRole("button", { name: "Revoke" }));
 
-  expect(ids).toEqual([TOKEN_ID]);
   expect(await screen.findByText("No personal access tokens")).toBeInTheDocument();
+  expect(ids).toEqual([TOKEN_ID]);
 });
 
 it("keeps the dialog open with the error when revoking fails", async () => {
@@ -315,4 +315,60 @@ it("shows the error page when the list fails", async () => {
   await renderApp("/account");
 
   expect(await screen.findByRole("button", { name: "Try again" })).toBeInTheDocument();
+});
+
+it("keeps the secret reachable when the dialog is closed while creating", async () => {
+  let answer: ((response: Response) => void) | undefined;
+  server.use(
+    http.post(
+      "/api/v1/me/tokens",
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    ),
+  );
+
+  const { user } = await renderApp("/account");
+  await screen.findByRole("table", { name: "Personal access tokens" });
+
+  await user.click(screen.getByRole("button", { name: "New token" }));
+  await user.type(screen.getByLabelText("Name"), "Laptop");
+  const form = await screen.findByRole("dialog", { name: "New personal access token" });
+  await user.click(within(form).getByRole("button", { name: "Create token" }));
+  expect(within(form).getByRole("button", { name: "Create token" })).toBeDisabled();
+
+  // Cancel is disabled and Esc does nothing while the POST is pending.
+  await user.click(within(form).getByRole("button", { name: "Cancel" }));
+  await user.keyboard("{Escape}");
+  expect(
+    await screen.findByRole("dialog", { name: "New personal access token" }),
+  ).toBeInTheDocument();
+
+  answer?.(createdBody("Laptop"));
+  const dialog = await screen.findByRole("dialog", { name: "Personal access token created" });
+  expect(within(dialog).getByLabelText("Secret")).toHaveValue(
+    "pat-llmobs-NEWTOKEN0NEWTOKEN0NEWTOKEN0NEWT",
+  );
+});
+
+it("shows an inline error when loading more fails", async () => {
+  server.use(
+    http.get("/api/v1/me/tokens", ({ request }) => {
+      const cursor = new URL(request.url).searchParams.get("cursor");
+      if (cursor === "c2") {
+        return problemResponse(500, "internal");
+      }
+      return HttpResponse.json({ ...personalTokensFixture, next_cursor: "c2" });
+    }),
+  );
+
+  const { user } = await renderApp("/account");
+  await screen.findByRole("table", { name: "Personal access tokens" });
+
+  await user.click(screen.getByRole("button", { name: "Load more" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not load more tokens.");
+  expect(screen.getByRole("table", { name: "Personal access tokens" })).toBeInTheDocument();
+  expect(screen.getByRole("row", { name: /CLI/ })).toBeInTheDocument();
 });

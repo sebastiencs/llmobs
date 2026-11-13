@@ -42,9 +42,7 @@ export function CreateTokenDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        {open ? <CreateTokenForm onOpenChange={onOpenChange} onCreated={onCreated} /> : null}
-      </DialogContent>
+      {open ? <CreateTokenForm onOpenChange={onOpenChange} onCreated={onCreated} /> : null}
     </Dialog>
   );
 }
@@ -56,8 +54,18 @@ function CreateTokenForm({
   onOpenChange: (open: boolean) => void;
   onCreated: (data: Schema<"CreatedPersonalToken">) => void;
 }) {
-  // gcTime 0: the response holds the secret, shown once (D-L-5).
-  const create = $api.useMutation("post", "/api/v1/me/tokens", { gcTime: 0 });
+  // gcTime 0: the response holds the secret, shown once (D-L-5). onSuccess sits on the
+  // hook, not on `mutate`, so closing the dialog mid-request cannot lose the secret
+  // (README § Pitfalls, Row actions and `mutate` callbacks).
+  const create = $api.useMutation("post", "/api/v1/me/tokens", {
+    gcTime: 0,
+    onSuccess: (data) => {
+      onCreated(data);
+      // Closing unmounts this form and its mutation, so the secret leaves the
+      // mutation cache at once (D-L-5).
+      onOpenChange(false);
+    },
+  });
   const [name, setName] = useState("");
   const [access, setAccess] = useState<TokenAccess>("read");
   const [expiry, setExpiry] = useState<TokenExpiry>("90");
@@ -73,27 +81,30 @@ function CreateTokenForm({
     }
     setNameError(undefined);
     const expires = expiresAt(expiry, Date.now());
-    create.mutate(
-      {
-        body: {
-          name: trimmed,
-          scopes: scopesFor(access),
-          ...(expires ? { expires_at: expires } : {}),
-        },
+    create.mutate({
+      body: {
+        name: trimmed,
+        scopes: scopesFor(access),
+        ...(expires ? { expires_at: expires } : {}),
       },
-      {
-        onSuccess: (data) => {
-          onCreated(data);
-          // Closing unmounts this form and its mutation, so the secret leaves the
-          // mutation cache at once (D-L-5).
-          onOpenChange(false);
-        },
-      },
-    );
+    });
   }
 
   return (
-    <>
+    <DialogContent
+      // A close while the request runs would unmount the form; the buttons stay
+      // unusable until the secret is in hand.
+      onEscapeKeyDown={(event) => {
+        if (create.isPending) {
+          event.preventDefault();
+        }
+      }}
+      onInteractOutside={(event) => {
+        if (create.isPending) {
+          event.preventDefault();
+        }
+      }}
+    >
       <DialogHeader>
         <DialogTitle>New personal access token</DialogTitle>
         <DialogDescription>The token acts as you in the CLI and MCP clients.</DialogDescription>
@@ -170,7 +181,12 @@ function CreateTokenForm({
         {/* The footer sits inside the form: userEvent and jsdom only find a submit
             button for Enter that is a DOM descendant of the form. */}
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={create.isPending}
+            onClick={() => onOpenChange(false)}
+          >
             Cancel
           </Button>
           <SubmitButton pending={create.isPending} form="create-token-form">
@@ -178,6 +194,6 @@ function CreateTokenForm({
           </SubmitButton>
         </DialogFooter>
       </form>
-    </>
+    </DialogContent>
   );
 }

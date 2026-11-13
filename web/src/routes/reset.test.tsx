@@ -59,10 +59,10 @@ it("sends a reset link", async () => {
   );
   const { user } = await renderApp("/reset");
   await sendEmail(user);
-  expect(body).toEqual({ email: "ada@example.com" });
   expect(await screen.findByRole("status")).toHaveTextContent(
     /^If an account exists for ada@example.com/,
   );
+  expect(body).toEqual({ email: "ada@example.com" });
 });
 
 it("starts over with another address", async () => {
@@ -120,10 +120,20 @@ it("sets a new password from the link", async () => {
   queryClient.setQueryData(meQuery.queryKey, ME);
   expect(await screen.findByRole("heading", { name: "Set a new password" })).toBeInTheDocument();
   await fillNewPassword(user);
-  expect(body).toEqual({ token: "tok123", password: "a long enough password" });
   expect(await screen.findByRole("heading", { name: "Password updated" })).toBeInTheDocument();
+  expect(body).toEqual({ token: "tok123", password: "a long enough password" });
   expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/login");
   expect(queryClient.getQueryData(meQuery.queryKey)).toBeUndefined();
+  // The done view keeps the page mounted, so the password only leaves the mutation's
+  // `variables` because `onSuccess` resets it (README § Pitfalls).
+  expect(
+    JSON.stringify(
+      queryClient
+        .getMutationCache()
+        .getAll()
+        .map((mutation) => [mutation.state.variables, mutation.state.data]),
+    ),
+  ).not.toContain("a long enough password");
 });
 
 it("shows the form without SMTP", async () => {

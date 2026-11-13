@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
 import { server } from "@/mocks/node";
@@ -65,8 +65,8 @@ it("saves a new display name and refreshes the user", async () => {
   await user.type(screen.getByLabelText("Display name (optional)"), "  Ada Lovelace  ");
   await user.click(screen.getByRole("button", { name: "Save name" }));
 
-  expect(body).toEqual({ name: "Ada Lovelace" });
   expect(await screen.findByText("Name saved.")).toBeInTheDocument();
+  expect(body).toEqual({ name: "Ada Lovelace" });
   await waitFor(() => expect(meCalls).toBeGreaterThanOrEqual(1));
   expect(await screen.findByRole("button", { name: "Ada Lovelace" })).toBeInTheDocument();
 });
@@ -112,7 +112,7 @@ it("shows the server's error under the name field", async () => {
 });
 
 it("changes the password with the current one", async () => {
-  const { user } = await renderApp("/account");
+  const { queryClient, user } = await renderApp("/account");
   await screen.findByLabelText("Current password (optional)");
 
   let body: unknown;
@@ -140,6 +140,16 @@ it("changes the password with the current one", async () => {
     ),
   ).toBeInTheDocument();
   expect(screen.getByLabelText("Current password (optional)")).toHaveValue("");
+  // The form stays mounted, so the passwords only leave the mutation's `variables`
+  // because `onSuccess` resets it (README § Pitfalls).
+  expect(
+    JSON.stringify(
+      queryClient
+        .getMutationCache()
+        .getAll()
+        .map((mutation) => [mutation.state.variables, mutation.state.data]),
+    ),
+  ).not.toContain("correct-horse-battery");
 });
 
 it("omits the current password when it is empty", async () => {
@@ -178,6 +188,11 @@ it("does not send mismatched passwords", async () => {
   await user.click(screen.getByRole("button", { name: "Change password" }));
 
   expect(screen.getByLabelText("Confirm password")).toHaveAttribute("aria-invalid", "true");
+  // The submit handler runs synchronously, but the request would only show up after a
+  // tick of the event loop, so nothing may be sent by then either.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
   expect(calls).toEqual([]);
 });
 

@@ -54,6 +54,9 @@ export function PasswordForm() {
       },
       {
         onSuccess: () => {
+          // The form stays mounted, so the passwords must leave the mutation's
+          // `variables` here; `gcTime: 0` alone would keep them while it is observed.
+          change.reset();
           setCurrent("");
           setNext("");
           setConfirm("");

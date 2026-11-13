@@ -41,10 +41,10 @@ it("offers a new link when the token is invalid", async () => {
   ).toBeInTheDocument();
   await user.type(screen.getByLabelText("Email"), "ada@example.com");
   await user.click(screen.getByRole("button", { name: "Send a new link" }));
-  expect(body).toEqual({ email: "ada@example.com" });
   expect(await screen.findByRole("status")).toHaveTextContent(
     "If the address still needs verification, we sent a new link.",
   );
+  expect(body).toEqual({ email: "ada@example.com" });
 });
 
 it("retries after a server error", async () => {

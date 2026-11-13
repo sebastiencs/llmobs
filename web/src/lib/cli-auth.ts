@@ -6,6 +6,8 @@ const PORT = /^[1-9]\d{3,4}$/;
 const STATE = /^[A-Za-z0-9_-]{1,256}$/;
 /** D-L-9: at least one non-digit, so the router's JSON parsing (README § Conventions, Search params) never turns it into a number. */
 const HAS_NON_DIGIT = /[^0-9]/;
+/** D-L-9: a state that JSON-parses to a number (`1e5`) would come back as `100000`, so it is refused too. */
+const JSON_NUMBER = /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i;
 const HOST = /^[A-Za-z0-9.-]{1,64}$/;
 
 /**
@@ -36,7 +38,12 @@ export function parseCliRequest(search: CliAuthSearch): CliRequest | undefined {
   if (portNumber < 1024 || portNumber > 65535) {
     return undefined;
   }
-  if (state === undefined || !STATE.test(state) || !HAS_NON_DIGIT.test(state)) {
+  if (
+    state === undefined ||
+    !STATE.test(state) ||
+    !HAS_NON_DIGIT.test(state) ||
+    JSON_NUMBER.test(state)
+  ) {
     return undefined;
   }
   if (host !== undefined && !HOST.test(host)) {

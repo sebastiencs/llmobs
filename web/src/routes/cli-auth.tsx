@@ -26,13 +26,11 @@ function CliAuthPage() {
 
   if (request === undefined) {
     return (
-      // The empty fragment satisfies AuthLayout's required children; these states
-      // have no body of their own.
       <AuthLayout
         title="This sign-in link is invalid"
         description="Run the login command in your terminal again to get a new link."
       >
-        <></>
+        {null}
       </AuthLayout>
     );
   }
@@ -43,7 +41,7 @@ function CliAuthPage() {
         title="You're signed in"
         description="Return to your terminal. You can close this tab. If the terminal is still waiting, run the login command again and revoke the extra token on your account page."
       >
-        <></>
+        {null}
       </AuthLayout>
     );
   }
@@ -54,7 +52,7 @@ function CliAuthPage() {
         title="Sign-in cancelled"
         description="Nothing was created. You can close this tab."
       >
-        <></>
+        {null}
       </AuthLayout>
     );
   }

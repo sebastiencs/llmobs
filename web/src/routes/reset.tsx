@@ -210,6 +210,9 @@ function NewPassword({ token }: { token: string }) {
         onSuccess: () => {
           // Every session of the user was deleted, so a cached `me` is stale.
           queryClient.removeQueries({ queryKey: meQuery.queryKey });
+          // The done view keeps this component mounted, so the password must leave
+          // the mutation's `variables` here, not only to the garbage collector.
+          reset.reset();
           setDone(true);
         },
       },

@@ -79,7 +79,7 @@ it("creates an account and opens the app", async () => {
       return HttpResponse.json({ me: NEW_ME, verification_required: false }, { status: 201 });
     }),
   );
-  const { router, user } = await renderApp("/signup");
+  const { queryClient, router, user } = await renderApp("/signup");
   await fillForm(user, { name: "Bea" });
   await submit(user);
   await waitFor(() => expect(router.state.location.pathname).toBe("/acme"));
@@ -88,6 +88,17 @@ it("creates an account and opens the app", async () => {
     password: "a long enough password",
     name: "Bea",
   });
+  // The password leaves the mutation cache with the form (gcTime: 0, D-L-5).
+  await waitFor(() =>
+    expect(
+      JSON.stringify(
+        queryClient
+          .getMutationCache()
+          .getAll()
+          .map((mutation) => [mutation.state.variables, mutation.state.data]),
+      ),
+    ).not.toContain("a long enough password"),
+  );
 });
 
 it("leaves out a blank name", async () => {
@@ -99,9 +110,10 @@ it("leaves out a blank name", async () => {
       return HttpResponse.json({ me: NEW_ME, verification_required: false }, { status: 201 });
     }),
   );
-  const { user } = await renderApp("/signup");
+  const { router, user } = await renderApp("/signup");
   await fillForm(user);
   await submit(user);
+  await waitFor(() => expect(router.state.location.pathname).toBe("/acme"));
   expect(body).toEqual({ email: "bea@example.com", password: "a long enough password" });
 });
 
@@ -127,10 +139,10 @@ it("shows the check-your-email screen and resends the link", async () => {
   expect(screen.queryByRole("heading", { name: "Create an account" })).toBeNull();
   expect(screen.getAllByRole("main")).toHaveLength(1);
   await user.click(screen.getByRole("button", { name: "Send the link again" }));
-  expect(resendBody).toEqual({ email: "bea@example.com" });
   expect(await screen.findByRole("status")).toHaveTextContent(
     "If the address still needs verification, we sent a new link.",
   );
+  expect(resendBody).toEqual({ email: "bea@example.com" });
 });
 
 it("explains verification without email", async () => {

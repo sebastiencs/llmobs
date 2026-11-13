@@ -167,7 +167,9 @@ function acceptError(error: unknown): string | undefined {
 function JoinAsInvited({ token, orgName, back }: { token: string; orgName: string; back: string }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const accept = $api.useMutation("post", "/api/auth/invites/{token}/accept");
+  // gcTime 0: the request's path carries the invite token, so its variables must
+  // leave the mutation cache as soon as the page unmounts (README § Pitfalls).
+  const accept = $api.useMutation("post", "/api/auth/invites/{token}/accept", { gcTime: 0 });
   const problem = problemOf(accept.error);
 
   function onSubmit(event: FormEvent) {
