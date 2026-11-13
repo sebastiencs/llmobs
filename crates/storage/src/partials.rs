@@ -376,7 +376,8 @@ enum Acc {
     Bytes(Vec<u8>),
     I64(i64),
     I32(i32),
-    F64(f64),
+    /// USD in units of 1e-18, summed exactly so the merge order does not matter (D-A2-4).
+    Usd(i128),
     Bool(bool),
     Str(String),
     RankedStr(Ranked<String>),
@@ -466,7 +467,7 @@ impl TraceAcc {
             | Column::CacheWriteTokens
             | Column::ReasoningTokens
             | Column::TotalTokens => sum_i64(self.slot(column), &val),
-            Column::CostTotal => sum_f64(self.slot(column), &val),
+            Column::CostTotal => sum_usd(self.slot(column), &val),
             Column::PartialCount => sum_i32(self.slot(column), &val),
         }
     }
@@ -555,11 +556,27 @@ fn sum_i32(slot: &mut Option<Acc>, val: &Val) -> usize {
     0
 }
 
-fn sum_f64(slot: &mut Option<Acc>, val: &Val) -> usize {
+/// 1e-18 USD per unit (D-A2-4).
+const USD_UNITS: f64 = 1e18;
+
+// Saturating by design: costs are far inside the range (D-A2-4).
+#[allow(clippy::cast_possible_truncation)]
+/// `value` in 1e-18 USD units. `as` saturates out-of-range values and maps NaN to 0.
+fn usd_units(value: f64) -> i128 {
+    (value * USD_UNITS).round() as i128
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn usd_from_units(units: i128) -> f64 {
+    units as f64 / USD_UNITS
+}
+
+fn sum_usd(slot: &mut Option<Acc>, val: &Val) -> usize {
     if let Val::F64(value) = val {
+        let units = usd_units(*value);
         match slot {
-            Some(Acc::F64(kept)) => *kept += *value,
-            _ => *slot = Some(Acc::F64(*value)),
+            Some(Acc::Usd(kept)) => *kept = kept.saturating_add(units),
+            _ => *slot = Some(Acc::Usd(units)),
         }
     }
     0
@@ -1058,7 +1075,7 @@ impl Builder {
                 _ => builder.append_null(),
             },
             Self::F64(builder) => match acc {
-                Some(Acc::F64(value)) => builder.append_value(*value),
+                Some(Acc::Usd(units)) => builder.append_value(usd_from_units(*units)),
                 _ => builder.append_null(),
             },
             Self::StrList(builder) => {
@@ -1639,6 +1656,57 @@ mod tests {
             .unwrap()
             .as_primitive::<Float64Type>();
         assert!(column.is_null(0));
+    }
+
+    /// D-A2-4: the merged `cost_total` is the same bit for bit whatever order
+    /// the partials arrive in.
+    #[test]
+    fn cost_merge_does_not_depend_on_order() {
+        let mut one = base_span(trace_id(1), span_id(1), 10);
+        one.cost_total = Some(0.1);
+        let mut two = base_span(trace_id(1), span_id(2), 20);
+        two.parent_span_id = Some(span_id(9));
+        two.cost_total = Some(0.2);
+        let mut three = base_span(trace_id(1), span_id(3), 30);
+        three.parent_span_id = Some(span_id(9));
+        three.cost_total = Some(0.3);
+        let partials = partial_batches(&[vec![one], vec![two], vec![three]]);
+        let orders = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+        let mut values = Vec::new();
+        for order in orders {
+            let ordered: Vec<RecordBatch> =
+                order.iter().map(|index| partials[*index].clone()).collect();
+            let merged = merge_all(&ordered);
+            let column = merged
+                .column_by_name(traces::COST_TOTAL)
+                .unwrap()
+                .as_primitive::<Float64Type>();
+            let value = column.value(0);
+            assert!((value - 0.6).abs() < 1e-15, "cost {value} for {order:?}");
+            values.push(value);
+        }
+        let bits: Vec<u64> = values.iter().map(|value| value.to_bits()).collect();
+        assert!(
+            bits.iter().all(|value| *value == bits[0]),
+            "cost depends on order: {values:?}"
+        );
+    }
+
+    #[test]
+    fn usd_units_round_trip() {
+        use super::{usd_from_units, usd_units};
+        assert_eq!(usd_from_units(usd_units(0.1)), 0.1);
+        assert_eq!(usd_units(0.0), 0);
+        assert_eq!(usd_units(-0.25), -250_000_000_000_000_000);
+        assert_eq!(usd_units(f64::NAN), 0);
+        assert_eq!(usd_units(f64::INFINITY), i128::MAX);
     }
 
     #[test]

@@ -195,13 +195,6 @@ async fn load(
         .map_err(classify)?;
     let plan = scoped.logical_plan().clone();
     let state = ctx.session().state();
-    let existing = DataFrame::new(state.clone(), plan.clone())
-        .collect()
-        .await
-        .map_err(|error| ctx.fail(error))?;
-    if row_count(&existing) == 0 {
-        return Ok(None);
-    }
     let session_plan = sessions_from_traces(plan.clone()).map_err(RunError::Internal)?;
     let session = DataFrame::new(state.clone(), session_plan)
         .collect()
@@ -338,15 +331,25 @@ mod tests {
     use llmobs_core::time_serde::parse_rfc3339;
     use serde_json::Value;
 
+    use llmobs_core::names::environment;
+    use llmobs_core::span::Span;
+
     use super::{SessionListRequest, SessionSort, session_detail, session_list};
     use crate::reads::{ListScope, Page, SortOrder};
-    use crate::test_support::example_query;
+    use crate::test_support::{example_query, span_row, spans_table, traces_table};
     use crate::views::{QueryContext, TimeWindow};
 
     const TIMEOUT: Duration = Duration::from_secs(30);
 
     fn context() -> QueryContext {
         QueryContext::new(example_query(), None).expect("context")
+    }
+
+    fn context_of(spans: &[Span]) -> QueryContext {
+        let mut query = example_query();
+        query.spans = spans_table(spans);
+        query.traces = traces_table(spans);
+        QueryContext::new(query, None).expect("context")
     }
 
     fn scope(window: Option<TimeWindow>, include_eval: bool) -> ListScope {
@@ -617,5 +620,22 @@ mod tests {
         let rows = rows(&page);
         assert_eq!(ids(&rows), ["sess-001"]);
         assert_eq!(rows[0]["trace_count"], 1);
+    }
+
+    #[tokio::test]
+    async fn a_session_with_only_excluded_traces_is_none() {
+        let mut root = span_row(7, 0, 1_000, 1_000);
+        root.session_id = Some("eval-only".to_owned());
+        root.environment = Some(environment::EVAL.to_owned());
+        let spans = [root];
+        let ctx = context_of(&spans);
+        let hidden = session_detail(&ctx, "eval-only", false, false, TIMEOUT)
+            .await
+            .expect("hidden");
+        assert!(hidden.is_none());
+        let shown = session_detail(&ctx, "eval-only", true, false, TIMEOUT)
+            .await
+            .expect("eval");
+        assert!(shown.is_some());
     }
 }

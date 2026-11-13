@@ -6,13 +6,19 @@ use std::collections::HashSet;
 use std::ops::ControlFlow;
 
 use datafusion::sql::sqlparser::ast::{
-    DescribeAlias, Expr, Ident, ObjectName, ObjectNamePart, Query, Select, Spanned, Statement,
-    TableFactor, Visit, Visitor,
+    DescribeAlias, Expr, Ident, ObjectName, ObjectNamePart, Query, Select, SetExpr, SetOperator,
+    Spanned, Statement, TableFactor, Visit, Visitor,
 };
 use datafusion::sql::sqlparser::tokenizer::Span;
 
 use crate::query_error::{InvalidQuery, Position};
 use crate::query_text::cap_message;
+use crate::views::guard::DENIED_FUNCTIONS;
+
+/// Tables one statement may read (D-A2-1). Each `INTERSECT`, `EXCEPT` or
+/// `MINUS` counts as one more: DataFusion runs it as a join, and a long chain
+/// of joins overflows the stack when it runs.
+pub(crate) const MAX_TABLES: usize = 32;
 
 /// Reject anything that is not one read-only query over the registered views.
 pub(crate) fn validate_statement(
@@ -64,6 +70,7 @@ pub(crate) fn validate_statement(
         registered,
         ctes,
         text,
+        tables: 0,
     };
     match query.visit(&mut walk) {
         ControlFlow::Break(error) => Err(error),
@@ -118,6 +125,23 @@ struct Walk<'a> {
     registered: &'a HashSet<String>,
     ctes: CteNames,
     text: &'a str,
+    tables: usize,
+}
+
+impl Walk<'_> {
+    /// Count one table (or set-operation join) toward [`MAX_TABLES`].
+    fn count_table(&mut self, span: Span) -> ControlFlow<InvalidQuery> {
+        self.tables += 1;
+        if self.tables > MAX_TABLES {
+            return ControlFlow::Break(invalid(
+                format!(
+                    "the query reads more than {MAX_TABLES} tables (each INTERSECT or EXCEPT counts as one)"
+                ),
+                at(span),
+            ));
+        }
+        ControlFlow::Continue(())
+    }
 }
 
 impl Visitor for Walk<'_> {
@@ -130,6 +154,30 @@ impl Visitor for Walk<'_> {
                 at(query.span()),
             ));
         }
+        // Set operations nest left-deep; walk them with a stack, not recursion,
+        // and count in text order so the error points at the first operand past
+        // the cap. A nested `SetExpr::Query` is a query of its own, visited
+        // separately.
+        let mut pending = vec![query.body.as_ref()];
+        while let Some(mut body) = pending.pop() {
+            let mut chain = Vec::new();
+            while let SetExpr::SetOperation {
+                op, left, right, ..
+            } = body
+            {
+                chain.push((op, right.as_ref()));
+                body = left;
+            }
+            for (op, right) in chain.into_iter().rev() {
+                if matches!(
+                    op,
+                    SetOperator::Intersect | SetOperator::Except | SetOperator::Minus
+                ) {
+                    self.count_table(right.span())?;
+                }
+                pending.push(right);
+            }
+        }
         ControlFlow::Continue(())
     }
 
@@ -141,6 +189,9 @@ impl Visitor for Walk<'_> {
     }
 
     fn pre_visit_table_factor(&mut self, factor: &TableFactor) -> ControlFlow<Self::Break> {
+        if !matches!(factor, TableFactor::NestedJoin { .. }) {
+            self.count_table(factor.span())?;
+        }
         match factor {
             TableFactor::Derived { .. }
             | TableFactor::NestedJoin { .. }
@@ -198,6 +249,12 @@ impl Visitor for Walk<'_> {
         let Some(name) = bare_name(&function.name) else {
             return ControlFlow::Continue(());
         };
+        if DENIED_FUNCTIONS.contains(&name.as_str()) {
+            return ControlFlow::Break(invalid(
+                format!("function `{name}` is not available in the SQL console"),
+                at(expr.span()),
+            ));
+        }
         if matches!(name.as_str(), "score" | "score_label" | "has_score") {
             return ControlFlow::Break(invalid(
                 "score functions are only available in filters; join the scores view instead",
@@ -402,5 +459,42 @@ mod tests {
             }
         }
         assert!(mismatches.is_empty(), "{mismatches}");
+    }
+
+    #[tokio::test]
+    async fn denied_functions_are_rejected_with_a_position() {
+        let cases = [
+            (
+                "SELECT repeat('x', 3) AS a",
+                "function `repeat` is not available in the SQL console",
+                at(1, 8),
+            ),
+            (
+                "SELECT list_repeat(1, 3) AS a",
+                "function `list_repeat` is not available in the SQL console",
+                at(1, 8),
+            ),
+            (
+                "SELECT RANGE(3) AS a",
+                "function `range` is not available in the SQL console",
+                at(1, 8),
+            ),
+            (
+                "SELECT 1 AS a WHERE levenshtein('a', 'b') > 0",
+                "function `levenshtein` is not available in the SQL console",
+                at(1, 21),
+            ),
+            (
+                "SELECT replace(name, 'a', 'b') AS a FROM spans",
+                "function `replace` is not available in the SQL console",
+                at(1, 8),
+            ),
+        ];
+        let ctx = context();
+        for (text, message, position) in cases {
+            let error = plan_sql(&ctx, text).await.expect_err(text);
+            assert_eq!(error.message, message, "{text}");
+            assert_eq!(error.position, position, "{text}");
+        }
     }
 }

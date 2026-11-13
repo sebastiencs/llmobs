@@ -39,7 +39,7 @@ impl OptimizerRule for HexIdRule {
     }
 }
 
-fn expression_schema(plan: &LogicalPlan) -> Result<DFSchema, DataFusionError> {
+pub(super) fn expression_schema(plan: &LogicalPlan) -> Result<DFSchema, DataFusionError> {
     if let LogicalPlan::TableScan(scan) = plan {
         return DFSchema::try_from_qualified_schema(scan.table_name.clone(), &scan.source.schema());
     }

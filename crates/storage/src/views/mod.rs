@@ -1,12 +1,13 @@
 //! User-facing views over the stored providers (D91, D101).
 
 mod catalog;
+pub(crate) mod guard;
 mod hex;
 mod scores;
 mod session;
 mod sessions;
 
-pub(crate) use sessions::sessions_from_traces;
+pub(crate) use sessions::{exact_cost_sum, sessions_from_traces};
 mod spans;
 mod traces;
 

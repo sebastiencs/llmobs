@@ -62,6 +62,15 @@ async fn plan_tokens(
     text: &str,
     tokens: Vec<TokenWithSpan>,
 ) -> Result<LogicalPlan, InvalidQuery> {
+    if let Some(pipe) = tokens
+        .iter()
+        .find(|token| token.token == Token::VerticalBarRightAngleBracket)
+    {
+        return Err(invalid(
+            "pipe syntax (`|>`) is not allowed",
+            Some(position(pipe.span.start.line, pipe.span.start.column)),
+        ));
+    }
     let mut parsed = parser(tokens);
     let start = parsed.peek_token();
     let statement = parsed
@@ -144,6 +153,9 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::datasource::memory::MemTable;
+
+    const TABLES: &str =
+        "the query reads more than 32 tables (each INTERSECT or EXCEPT counts as one)";
 
     fn context() -> QueryContext {
         QueryContext::new(example_query(), None).expect("example project")
@@ -229,14 +241,19 @@ mod tests {
         assert_eq!(error.position, at(1, column));
     }
 
-    #[tokio::test]
-    async fn a_full_size_query_runs_on_a_two_megabyte_stack() {
-        let mut expr = String::from("true");
-        for _ in 0..512 {
-            expr.push_str(" OR true");
-        }
-        let expr = format!("{}{expr}{}", "(".repeat(45), ")".repeat(45));
-        let sql = format!("SELECT name FROM spans WHERE {expr}");
+    #[derive(Clone, Copy)]
+    enum OnStack {
+        /// Plan, build the physical plan and run it.
+        Run,
+        /// Plan and build the physical plan only.
+        Plan,
+        /// `plan_sql` only.
+        Logical,
+        /// `plan_sql` must return an error (and not abort).
+        Reject,
+    }
+
+    fn on_two_megabytes(sql: String, mode: OnStack) {
         let joined = std::thread::Builder::new()
             .stack_size(2 * 1024 * 1024)
             .spawn(move || {
@@ -246,13 +263,24 @@ mod tests {
                     .expect("runtime");
                 runtime.block_on(async move {
                     let ctx = context();
-                    let plan = plan_sql(&ctx, &sql).await.expect("plan");
+                    let planned = plan_sql(&ctx, &sql).await;
+                    if matches!(mode, OnStack::Reject) {
+                        planned.expect_err("rejected");
+                        return;
+                    }
+                    let plan = planned.expect("plan");
+                    if matches!(mode, OnStack::Logical) {
+                        return;
+                    }
                     let frame = ctx
                         .session()
                         .execute_logical_plan(plan)
                         .await
                         .expect("execute");
-                    frame.collect().await.expect("run");
+                    frame.create_physical_plan().await.expect("physical");
+                    if matches!(mode, OnStack::Run) {
+                        frame.collect().await.expect("run");
+                    }
                 });
             })
             .expect("thread")
@@ -260,6 +288,182 @@ mod tests {
         if let Err(payload) = joined {
             std::panic::resume_unwind(payload);
         }
+    }
+
+    #[test]
+    fn a_full_size_query_runs_on_a_two_megabyte_stack() {
+        let mut expr = String::from("true");
+        for _ in 0..512 {
+            expr.push_str(" OR true");
+        }
+        let expr = format!("{}{expr}{}", "(".repeat(45), ")".repeat(45));
+        let sql = format!("SELECT name FROM spans WHERE {expr}");
+        on_two_megabytes(sql, OnStack::Run);
+    }
+
+    #[test]
+    fn full_size_set_operations_run_on_a_two_megabyte_stack() {
+        let mut sql = String::from("SELECT 1 AS a");
+        for _ in 0..512 {
+            sql.push_str(" UNION ALL SELECT 1");
+        }
+        on_two_megabytes(sql, OnStack::Run);
+    }
+
+    #[test]
+    fn full_size_intersections_run_on_a_two_megabyte_stack() {
+        // Each INTERSECT runs as a join; 384 of them overflow 2 MiB when run.
+        let mut sql = String::from("SELECT 1 AS a");
+        for _ in 0..32 {
+            sql.push_str(" INTERSECT SELECT 1");
+        }
+        on_two_megabytes(sql.clone(), OnStack::Run);
+        for _ in 32..512 {
+            sql.push_str(" INTERSECT SELECT 1");
+        }
+        on_two_megabytes(sql, OnStack::Reject);
+    }
+
+    #[test]
+    fn full_size_time_zone_chains_run_on_a_two_megabyte_stack() {
+        let mut sql = String::from("SELECT now()");
+        for _ in 0..512 {
+            sql.push_str(" AT TIME ZONE 'UTC'");
+        }
+        sql.push_str(" AS t");
+        on_two_megabytes(sql, OnStack::Run);
+    }
+
+    #[test]
+    fn full_size_like_chains_plan_on_a_two_megabyte_stack() {
+        let mut sql = String::from("SELECT 'a' AS a WHERE 'a'");
+        for _ in 0..512 {
+            sql.push_str(" ~~ 'a'");
+        }
+        // From the second `~~` on the chain is `Boolean ~~ Utf8`, which only
+        // the physical planner rejects; the stack risk is in `plan_sql`.
+        on_two_megabytes(sql, OnStack::Logical);
+    }
+
+    #[test]
+    fn full_size_subscripts_are_rejected_on_a_two_megabyte_stack() {
+        let mut sql = String::from("SELECT metadata");
+        for _ in 0..512 {
+            sql.push_str("['k']");
+        }
+        sql.push_str(" AS x FROM spans");
+        on_two_megabytes(sql, OnStack::Reject);
+    }
+
+    #[test]
+    fn full_size_joins_plan_on_a_two_megabyte_stack() {
+        let mut sql = String::from("SELECT 1 AS a FROM scores s0");
+        for i in 1..32 {
+            sql.push_str(&format!(" CROSS JOIN scores s{i}"));
+        }
+        sql.push_str(" WHERE true");
+        for _ in 0..479 {
+            sql.push_str(" OR true");
+        }
+        on_two_megabytes(sql, OnStack::Plan);
+    }
+
+    #[tokio::test]
+    async fn set_operations_count_toward_the_operator_limit() {
+        let mut text = String::from("SELECT 1 AS a");
+        for _ in 0..512 {
+            text.push_str(" UNION ALL SELECT 1");
+        }
+        plan_sql(&context(), &text).await.expect("512 operators");
+        let column = text.len() as u32 + 2;
+        text.push_str(" UNION ALL SELECT 1");
+        let error = plan_sql(&context(), &text).await.expect_err("513");
+        assert_eq!(error.message, "the query has more than 512 operators");
+        assert_eq!(error.position, at(1, column));
+    }
+
+    #[tokio::test]
+    async fn the_table_cap_counts_every_table_factor() {
+        let mut text = String::from("SELECT 1 AS a FROM scores s0");
+        for i in 1..32 {
+            text.push_str(&format!(" CROSS JOIN scores s{i}"));
+        }
+        plan_sql(&context(), &text).await.expect("32 tables");
+        let column = text.len() as u32 + 13;
+        text.push_str(" CROSS JOIN scores s32");
+        let error = plan_sql(&context(), &text).await.expect_err("33 tables");
+        assert_eq!(error.message, TABLES);
+        assert_eq!(error.position, at(1, column));
+
+        let mut text = String::from("SELECT 1 AS a FROM scores s0");
+        for i in 1..32 {
+            text.push_str(&format!(", scores s{i}"));
+        }
+        plan_sql(&context(), &text)
+            .await
+            .expect("32 comma-joined tables");
+        let column = text.len() as u32 + 3;
+        text.push_str(", scores s32");
+        let error = plan_sql(&context(), &text).await.expect_err("33 tables");
+        assert_eq!(error.message, TABLES);
+        assert_eq!(error.position, at(1, column));
+
+        let mut text = String::from("WITH c AS (SELECT 1 AS a) SELECT 1 AS a FROM c c0");
+        for i in 1..32 {
+            text.push_str(&format!(", c c{i}"));
+        }
+        plan_sql(&context(), &text)
+            .await
+            .expect("32 CTE references");
+        let column = text.len() as u32 + 3;
+        text.push_str(", c c32");
+        let error = plan_sql(&context(), &text)
+            .await
+            .expect_err("33 references");
+        assert_eq!(error.message, TABLES);
+        assert_eq!(error.position, at(1, column));
+    }
+
+    #[tokio::test]
+    async fn intersections_and_exceptions_count_as_tables() {
+        for operator in ["INTERSECT", "EXCEPT"] {
+            let mut text = String::from("SELECT 1 AS a");
+            for _ in 0..32 {
+                text.push_str(&format!(" {operator} SELECT 1"));
+            }
+            plan_sql(&context(), &text)
+                .await
+                .expect("32 set operations");
+            let column = (text.len() + operator.len()) as u32 + 3;
+            text.push_str(&format!(" {operator} SELECT 1"));
+            let error = plan_sql(&context(), &text).await.expect_err("33");
+            assert_eq!(error.message, TABLES, "{operator}");
+            assert_eq!(error.position, at(1, column), "{operator}");
+        }
+
+        let mut text = String::from("SELECT 1 AS a FROM scores s0");
+        for i in 1..32 {
+            text.push_str(&format!(" INTERSECT SELECT 1 AS a FROM scores s{i}"));
+        }
+        let error = plan_sql(&context(), &text).await.expect_err("63 tables");
+        assert_eq!(error.message, TABLES);
+
+        let mut text = String::from("SELECT 1 AS a");
+        for _ in 0..100 {
+            text.push_str(" UNION SELECT 1");
+        }
+        plan_sql(&context(), &text)
+            .await
+            .expect("UNION runs as a union, not a join");
+    }
+
+    #[tokio::test]
+    async fn pipe_syntax_is_rejected() {
+        let error = plan_sql(&context(), "SELECT 1 AS a |> WHERE true")
+            .await
+            .expect_err("pipe");
+        assert_eq!(error.message, "pipe syntax (`|>`) is not allowed");
+        assert_eq!(error.position, at(1, 15));
     }
 
     #[tokio::test]
