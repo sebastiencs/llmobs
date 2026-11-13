@@ -20,4 +20,6 @@ pub(crate) mod routes;
 pub mod serve;
 
 #[cfg(test)]
+mod api_examples;
+#[cfg(test)]
 pub(crate) mod test_support;

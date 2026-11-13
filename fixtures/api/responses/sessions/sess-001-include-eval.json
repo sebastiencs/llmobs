@@ -54,7 +54,7 @@
         "output_tokens": 100,
         "cache_read_tokens": 2200,
         "total_tokens": 2600,
-        "cost_total": 0.0030600000000000002,
+        "cost_total": 0.00306,
         "models": [
           "claude-sonnet-4-5"
         ],

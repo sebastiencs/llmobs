@@ -318,6 +318,53 @@ impl TestApp {
     }
 }
 
+/// The example project's fixed id (`fixtures/api/README.md` § Fixed identifiers).
+pub(crate) const EXAMPLE_PROJECT: &str = "01900000-0000-7000-8000-000000000001";
+
+impl TestApp {
+    /// The example user, org and project of `fixtures/api/README.md` § Fixed identifiers, with
+    /// the project's fixed id `01900000-0000-7000-8000-000000000001`. Returns a session cookie
+    /// for `ada@example.com`. Used by `just api-examples` (D-G-25).
+    pub(crate) async fn seed_examples(&self) -> String {
+        let now = self.state.clock.now_ns();
+        let user_id = self
+            .state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    let user = insert_user(
+                        conn,
+                        NewUser {
+                            email: "ada@example.com".to_owned(),
+                            name: Some("Ada Example".to_owned()),
+                            password_hash: None,
+                            email_verified_at: None,
+                            is_instance_admin: true,
+                        },
+                        now,
+                    )
+                    .await?;
+                    let org = insert_org(conn, "Acme", "acme", now).await?;
+                    add_org_member(conn, org.id, user.id, OrgRole::Owner, now).await?;
+                    let project =
+                        insert_project(conn, org.id, "Support bot", "support-bot", Some(30), now)
+                            .await?;
+                    // Nothing references the project yet, so renaming its id is safe.
+                    sqlx::query("UPDATE projects SET id = ? WHERE id = ?")
+                        .bind(EXAMPLE_PROJECT)
+                        .bind(project.id.to_string())
+                        .execute(&mut *conn)
+                        .await
+                        .map_err(MetaError::Db)?;
+                    Ok(user.id)
+                })
+            })
+            .await
+            .unwrap();
+        session_cookie(self, user_id).await
+    }
+}
+
 impl TestApp {
     /// Appends `fixtures/api/dataset` (spans and scores) to `project` and stores the PNGs of
     /// `fixtures/api/media`. Every row's `project_id` is set to `project`.

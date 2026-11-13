@@ -19,7 +19,7 @@
       "trace_count": 2,
       "error_count": 0,
       "total_tokens": 4180,
-      "cost_total": 0.005520000000000001,
+      "cost_total": 0.00552,
       "user_id": "user-42",
       "tags": [
         "beta",
