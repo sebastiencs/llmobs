@@ -11,4 +11,5 @@ pub(crate) mod oauth;
 pub(crate) mod orgs;
 pub(crate) mod otlp;
 pub(crate) mod projects;
+pub(crate) mod read;
 pub(crate) mod tokens;

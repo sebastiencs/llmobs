@@ -16,12 +16,15 @@ use axum::body::{Body, Bytes};
 use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
 use bytesize::ByteSize;
+use llmobs_core::batch::{scores_to_record_batch, spans_to_record_batch};
 use llmobs_core::ids::{OrgId, ProjectId};
 use llmobs_core::names::PRODUCT;
-use llmobs_storage::Storage;
+use llmobs_core::score::Score;
+use llmobs_core::span::Span;
 use llmobs_storage::config::{
     AnchorConfig, FlushConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig, WalConfig,
 };
+use llmobs_storage::{MediaBlob, Storage};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sqlx::SqliteConnection;
@@ -311,6 +314,54 @@ impl TestApp {
             .await
             .unwrap();
         (project, plaintext)
+    }
+}
+
+impl TestApp {
+    /// Appends `fixtures/api/dataset` (spans and scores) to `project` and stores the PNGs of
+    /// `fixtures/api/media`. Every row's `project_id` is set to `project`.
+    pub(crate) async fn load_example_dataset(&self, project: ProjectId) {
+        let dataset = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/api/dataset");
+        let spans_text = std::fs::read_to_string(format!("{dataset}/spans.json")).unwrap();
+        let mut spans: Vec<Span> = serde_json::from_str(&spans_text).unwrap();
+        for span in &mut spans {
+            span.project_id = project;
+        }
+        let batch = spans_to_record_batch(&spans).unwrap();
+        self.state
+            .storage
+            .append_spans(project, batch)
+            .await
+            .unwrap();
+
+        let scores_text = std::fs::read_to_string(format!("{dataset}/scores.json")).unwrap();
+        let mut scores: Vec<Score> = serde_json::from_str(&scores_text).unwrap();
+        for score in &mut scores {
+            score.project_id = project;
+        }
+        let batch = scores_to_record_batch(&scores).unwrap();
+        self.state
+            .storage
+            .append_scores(project, batch)
+            .await
+            .unwrap();
+
+        let media_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/api/media");
+        for entry in std::fs::read_dir(media_dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("png") {
+                continue;
+            }
+            let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap();
+            let sha256: [u8; 32] = hex::decode(stem).unwrap().try_into().unwrap();
+            let bytes = std::fs::read(&path).unwrap();
+            let blob = MediaBlob {
+                sha256,
+                mime_type: "image/png".to_owned(),
+                bytes: Bytes::from(bytes),
+            };
+            self.state.storage.put_media(project, blob).await.unwrap();
+        }
     }
 }
 
