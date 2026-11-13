@@ -179,6 +179,14 @@ pub(crate) async fn write(
         .collect();
 
     append(state, project.id, &rows).await?;
+    state.usage.add(
+        project.org_id,
+        project.id,
+        now,
+        0,
+        0,
+        u64::try_from(rows.len()).unwrap_or(u64::MAX),
+    );
     Ok(ids)
 }
 

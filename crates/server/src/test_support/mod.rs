@@ -176,6 +176,7 @@ impl TestApp {
             oauth_key: crate::auth::oidc::random_key().expect("oauth key"),
             ingest,
             metrics_cache: crate::routes::metrics::MetricsCache::default(),
+            usage: crate::usage::Usage::default(),
         });
         let router = if let Some(table) = table {
             serve_router(state.clone(), table)

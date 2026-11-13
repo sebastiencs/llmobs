@@ -13,7 +13,7 @@ use bytes::Bytes;
 use futures::{StreamExt, stream};
 use llmobs_core::batch::spans_to_record_batch;
 use llmobs_core::error::CoreError;
-use llmobs_core::ids::ProjectId;
+use llmobs_core::ids::{OrgId, ProjectId};
 use llmobs_core::media::MediaBlob as CoreBlob;
 use llmobs_otel::{
     DecodeError, ExportTraceServiceRequest, IngestContext, IngestLimits, Normalized, PriceTable,
@@ -26,6 +26,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use crate::config::{IngestConfig, MediaConfig};
 use crate::http::error::ApiError;
 use crate::meta::projects::ProjectRow;
+use crate::usage::Usage;
 use body::{BodyEncoding, BodyError, BodyFormat, DecompressError, decompress};
 use environment::rewrite_reserved_environment;
 
@@ -55,6 +56,17 @@ pub(crate) struct Accepted {
     /// Spans whose environment was rewritten (D-G-7).
     pub(crate) rewritten: usize,
     pub(crate) reservation: Reservation,
+}
+
+/// Where a commit goes and what it counts (D-G-8, D-G-30).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CommitTarget {
+    pub(crate) org_id: OrgId,
+    pub(crate) project_id: ProjectId,
+    /// Bytes counted in `usage_daily.bytes`. In-process commits pass 0.
+    pub(crate) request_bytes: u64,
+    /// The request's `now`; its UTC day is the usage day.
+    pub(crate) now_ns: i64,
 }
 
 /// What `commit` stored.
@@ -263,12 +275,14 @@ impl Ingest {
         })
     }
 
-    /// Stores the media, then appends the spans (D-G-8, D-G-9). Nothing is appended when a
-    /// blob fails. The caller's reservation covers the spans until this returns.
+    /// Stores the media, then appends the spans (D-G-8, D-G-9), then counts them and the
+    /// request bytes (D-G-30). Nothing is appended when a blob fails, and nothing is counted
+    /// then. The caller's reservation covers the spans until this returns.
     pub(crate) async fn commit(
         &self,
         storage: &Storage,
-        project_id: ProjectId,
+        usage: &Usage,
+        target: CommitTarget,
         normalized: Normalized,
     ) -> Result<CommitReceipt, IngestError> {
         let Normalized { spans, media, .. } = normalized;
@@ -278,27 +292,31 @@ impl Ingest {
             .collect::<Result<Vec<_>, _>>()?;
         let mut stored = 0_usize;
         let mut puts = stream::iter(blobs)
-            .map(|blob| storage.put_media(project_id, blob))
+            .map(|blob| storage.put_media(target.project_id, blob))
             .buffer_unordered(MEDIA_CONCURRENCY);
         while let Some(result) = puts.next().await {
             result.map_err(IngestError::Media)?;
             stored += 1;
         }
-        if spans.is_empty() {
-            return Ok(CommitReceipt {
-                accepted: 0,
-                media: stored,
-            });
-        }
         let accepted = spans.len();
-        let batch = tokio::task::spawn_blocking(move || spans_to_record_batch(&spans))
-            .await
-            .map_err(IngestError::Join)?
-            .map_err(IngestError::Batch)?;
-        storage
-            .append_spans(project_id, batch)
-            .await
-            .map_err(IngestError::Append)?;
+        if !spans.is_empty() {
+            let batch = tokio::task::spawn_blocking(move || spans_to_record_batch(&spans))
+                .await
+                .map_err(IngestError::Join)?
+                .map_err(IngestError::Batch)?;
+            storage
+                .append_spans(target.project_id, batch)
+                .await
+                .map_err(IngestError::Append)?;
+        }
+        usage.add(
+            target.org_id,
+            target.project_id,
+            target.now_ns,
+            u64::try_from(accepted).unwrap_or(u64::MAX),
+            target.request_bytes,
+            0,
+        );
         Ok(CommitReceipt {
             accepted,
             media: stored,
@@ -454,6 +472,16 @@ mod tests {
             limits: app.state.config.ingest.limits(&app.state.config.media),
         };
         normalize(request, &ctx, prices)
+    }
+
+    /// The commit target of `project` at the app's clock, with no request bytes.
+    fn target(app: &TestApp, project: &ProjectRow) -> CommitTarget {
+        CommitTarget {
+            org_id: project.org_id,
+            project_id: project.id,
+            request_bytes: 0,
+            now_ns: app.state.clock.now_ns(),
+        }
     }
 
     /// Reserves for `body` and runs `accept` on it.
@@ -747,7 +775,12 @@ mod tests {
         let receipt = app
             .state
             .ingest
-            .commit(&app.state.storage, seeded.project.id, normalized)
+            .commit(
+                &app.state.storage,
+                &app.state.usage,
+                target(&app, &seeded.project),
+                normalized,
+            )
             .await
             .expect("committed");
         assert_eq!(
@@ -805,7 +838,12 @@ mod tests {
         let error = app
             .state
             .ingest
-            .commit(&app.state.storage, seeded.project.id, normalized)
+            .commit(
+                &app.state.storage,
+                &app.state.usage,
+                target(&app, &seeded.project),
+                normalized,
+            )
             .await
             .expect_err("the hash does not match");
         assert!(
@@ -830,7 +868,12 @@ mod tests {
         let error = app
             .state
             .ingest
-            .commit(&app.state.storage, seeded.project.id, normalized)
+            .commit(
+                &app.state.storage,
+                &app.state.usage,
+                target(&app, &seeded.project),
+                normalized,
+            )
             .await
             .expect_err("the MIME type is too long");
         assert!(
@@ -849,7 +892,8 @@ mod tests {
             .ingest
             .commit(
                 &app.state.storage,
-                seeded.project.id,
+                &app.state.usage,
+                target(&app, &seeded.project),
                 Normalized {
                     spans: Vec::new(),
                     media: Vec::new(),
@@ -886,7 +930,12 @@ mod tests {
         let error = app
             .state
             .ingest
-            .commit(&app.state.storage, seeded.project.id, normalized)
+            .commit(
+                &app.state.storage,
+                &app.state.usage,
+                target(&app, &seeded.project),
+                normalized,
+            )
             .await
             .expect_err("a dropped project takes no spans");
         assert!(

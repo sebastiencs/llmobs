@@ -2,8 +2,9 @@
 //!
 //! `POST /api/public/feedback` takes a `pk` key with the `feedback` scope, from any origin.
 //! Every answer of the handler carries `Access-Control-Allow-Origin: *`. Refusals of the
-//! access layer (401, 403) and the 4 KiB body limit (413) carry no CORS header, so the browser
-//! sees a network failure and `feedback()` resolves `{ ok: false }`, which is its contract (D-F-16).
+//! access layer (401, 403), the 4 KiB body limit (413) and body parse failures (400, 415)
+//! carry no CORS header, so the browser sees a network failure and `feedback()` resolves
+//! `{ ok: false }`, which is its contract (D-F-16).
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;

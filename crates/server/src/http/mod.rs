@@ -63,6 +63,8 @@ pub(crate) struct AppInner {
     pub(crate) ingest: crate::ingest::Ingest,
     /// `GET /metrics` answers cached 10 s (spec 05).
     pub(crate) metrics_cache: crate::routes::metrics::MetricsCache,
+    /// Usage counters, flushed every 10 s (D-G-11).
+    pub(crate) usage: crate::usage::Usage,
 }
 
 impl AppState {

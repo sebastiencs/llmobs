@@ -479,6 +479,50 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn writes_count_their_rows_and_deletes_count_nothing() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let batch = ScoreBatch {
+            scores: vec![span_score("tone", 1.0), span_score("accuracy", 0.5)],
+        };
+        let written = app
+            .request(Method::POST, &scores_path(&seeded))
+            .header("cookie", &seeded.cookie)
+            .json(&batch)
+            .send()
+            .await;
+        assert_eq!(written.status, StatusCode::OK);
+        let answer: ScoreWriteResult = written.json();
+        assert_eq!(answer.score_ids.len(), 2);
+        assert_eq!(usage_scores(&app, &seeded).await, 2);
+
+        let deleted = app
+            .request(
+                Method::DELETE,
+                &format!("{}/{}", scores_path(&seeded), answer.score_ids[0]),
+            )
+            .header("cookie", &seeded.cookie)
+            .send()
+            .await;
+        assert_eq!(deleted.status, StatusCode::NO_CONTENT);
+        assert_eq!(usage_scores(&app, &seeded).await, 2);
+    }
+
+    /// The `scores` total of `usage_daily` for the project, after a flush.
+    async fn usage_scores(app: &TestApp, seeded: &Seeded) -> i64 {
+        app.state
+            .usage
+            .flush(&app.state.meta)
+            .await
+            .expect("usage flushes");
+        sqlx::query_scalar("SELECT COALESCE(SUM(scores), 0) FROM usage_daily WHERE project_id = ?")
+            .bind(seeded.project.id.to_string())
+            .fetch_one(app.state.meta.reader())
+            .await
+            .expect("usage reads")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn score_batches_have_their_own_body_limit() {
         let app = TestApp::new().await;
         let seeded = app.seed().await;

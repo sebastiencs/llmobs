@@ -41,6 +41,9 @@ const PRUNE_EVERY: Duration = Duration::from_secs(60);
 /// How often coalesced `last_used_at` values are written (D140).
 const LAST_USED_EVERY: Duration = Duration::from_secs(60);
 
+/// How often usage counters are written (D-G-11).
+const USAGE_EVERY: Duration = Duration::from_secs(10);
+
 /// How often expired web sessions are deleted.
 const PURGE_EVERY: Duration = Duration::from_secs(60 * 60);
 
@@ -257,6 +260,7 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         oauth_key,
         ingest,
         metrics_cache: crate::routes::metrics::MetricsCache::default(),
+        usage: crate::usage::Usage::default(),
     });
     if let Err(error) = crate::bootstrap::prepare(&state).await {
         release_state(state).await;
@@ -319,7 +323,8 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         tasks: vec![
             spawn_prune(state.clone()),
             spawn_purge(state.clone()),
-            spawn_last_used(state),
+            spawn_last_used(state.clone()),
+            spawn_usage(state),
         ],
     })
 }
@@ -378,6 +383,20 @@ fn spawn_last_used(state: AppState) -> JoinHandle<()> {
     })
 }
 
+fn spawn_usage(state: AppState) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(USAGE_EVERY);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            if let Err(error) = state.usage.flush(&state.meta).await {
+                tracing::error!(error = %error, "usage flush failed");
+            }
+        }
+    })
+}
+
 fn spawn_prune(state: AppState) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(PRUNE_EVERY);
@@ -422,6 +441,9 @@ impl Running {
             }
             if let Err(error) = state.token_last_used.flush(&state.meta).await {
                 tracing::error!(error = %error, "last_used flush failed");
+            }
+            if let Err(error) = state.usage.flush(&state.meta).await {
+                tracing::error!(error = %error, "usage flush failed");
             }
             match tokio::time::timeout(STORAGE_SHUTDOWN, state.storage.shutdown()).await {
                 Ok(Ok(())) => {}
@@ -631,6 +653,29 @@ mod tests {
             Some(length) => body.len() >= length,
             None => !body.is_empty(),
         }
+    }
+
+    #[tokio::test]
+    async fn shutdown_flushes_usage() {
+        use crate::meta::MetaDb;
+        use llmobs_core::ids::{OrgId, ProjectId};
+
+        let dir = tempfile::tempdir().unwrap();
+        let running = bind(config(dir.path())).await.unwrap();
+        let state = running.state.as_ref().unwrap().clone();
+        let project = ProjectId::new_v7();
+        // Counted less than 10 s before shutdown, so only the shutdown flush can write it.
+        state
+            .usage
+            .add(OrgId::new_v7(), project, state.clock.now_ns(), 3, 0, 0);
+        running.shutdown().await.unwrap();
+        let meta = MetaDb::open(dir.path()).await.unwrap();
+        let spans: i64 = sqlx::query_scalar("SELECT spans FROM usage_daily WHERE project_id = ?")
+            .bind(project.to_string())
+            .fetch_one(meta.reader())
+            .await
+            .unwrap();
+        assert_eq!(spans, 3);
     }
 
     #[tokio::test]

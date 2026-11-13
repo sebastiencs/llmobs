@@ -18,7 +18,7 @@ use crate::http::access::{Access, ProjectAccess, RouteDef};
 use crate::http::error::ApiError;
 use crate::ingest::body::{body_encoding, body_format, read_capped};
 use crate::ingest::otlp::export_response;
-use crate::ingest::{Accepted, IngestError};
+use crate::ingest::{Accepted, CommitTarget, IngestError};
 use crate::meta::projects::ProjectRow;
 
 /// The OTLP/HTTP route. Undocumented, so it stays out of `openapi.json` (D-G-6).
@@ -64,6 +64,7 @@ async fn export_body(
     let raw = read_capped(body, headers, state.ingest.max_request_bytes())
         .await
         .map_err(IngestError::Body)?;
+    let now_ns = state.clock.now_ns();
     let Accepted {
         normalized,
         request_bytes,
@@ -72,19 +73,18 @@ async fn export_body(
         reservation,
     } = state
         .ingest
-        .accept(
-            raw,
-            reservation,
-            format,
-            encoding,
-            project,
-            state.clock.now_ns(),
-        )
+        .accept(raw, reservation, format, encoding, project, now_ns)
         .await?;
     let rejections = normalized.rejections.clone();
+    let target = CommitTarget {
+        org_id: project.org_id,
+        project_id: project.id,
+        request_bytes: decompressed_bytes,
+        now_ns,
+    };
     let receipt = state
         .ingest
-        .commit(&state.storage, project.id, normalized)
+        .commit(&state.storage, &state.usage, target, normalized)
         .await?;
     // The budget covers the spans until they are appended (D-G-5).
     drop(reservation);
@@ -750,6 +750,31 @@ mod tests {
         assert!(logs.contains("too_many_spans"), "{logs}");
         assert!(!logs.contains(MARKER), "{logs}");
         assert!(!logs.contains(&seeded.ingest_key), "{logs}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn accepted_spans_and_request_bytes_are_counted_for_the_day() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let body = export_json("", &[span_json(0, ""), span_json(1, "")]);
+        let len = i64::try_from(body.len()).unwrap();
+        let response = post_traces(&app, &seeded.ingest_key, "application/json", body)
+            .send()
+            .await;
+        assert_eq!(response.status, StatusCode::OK);
+        app.state
+            .usage
+            .flush(&app.state.meta)
+            .await
+            .expect("usage flushes");
+        let counted: (i64, i64, i64) = sqlx::query_as(
+            "SELECT spans, bytes, scores FROM usage_daily WHERE project_id = ? AND day = '2026-01-01'",
+        )
+        .bind(seeded.project.id.to_string())
+        .fetch_one(app.state.meta.reader())
+        .await
+        .expect("one usage row for the day");
+        assert_eq!(counted, (2, len, 0));
     }
 
     fn fixture_bytes(relative: &str) -> Vec<u8> {

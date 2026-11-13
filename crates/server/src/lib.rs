@@ -19,6 +19,7 @@ pub(crate) mod meta;
 pub(crate) mod routes;
 pub(crate) mod scores;
 pub mod serve;
+pub(crate) mod usage;
 
 #[cfg(test)]
 mod api_examples;
