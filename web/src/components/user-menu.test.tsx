@@ -3,6 +3,7 @@ import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
 import { TIME_ZONE_STORAGE_KEY } from "@/lib/settings";
 import { server } from "@/mocks/node";
+import { ADA_ID, ORG_ID } from "@/test/fixtures";
 import { problemResponse } from "@/test/problem";
 import { renderApp } from "@/test/render";
 import meFixture from "../../../fixtures/api/static/me.json";
@@ -70,4 +71,30 @@ it("opens the account page from the user menu", async () => {
   await user.click(screen.getByRole("menuitem", { name: "Account" }));
   await waitFor(() => expect(router.state.location.pathname).toBe("/account"));
   expect(await screen.findByRole("heading", { name: "Account", level: 1 })).toBeInTheDocument();
+});
+
+it("links instance admins to the admin pages", async () => {
+  const { user } = await renderApp("/");
+  await user.click(screen.getByRole("button", { name: "Ada Example" }));
+  expect(screen.getByRole("menuitem", { name: "Admin" })).toHaveAttribute("href", "/admin/users");
+});
+
+it("hides the admin link from other users", async () => {
+  server.use(
+    http.get("/api/auth/me", () =>
+      HttpResponse.json({
+        user: {
+          id: ADA_ID,
+          email: "ada@example.com",
+          name: "Ada Example",
+          is_instance_admin: false,
+        },
+        orgs: [{ id: ORG_ID, slug: "acme", name: "Acme", role: "owner" }],
+      }),
+    ),
+  );
+  const { user } = await renderApp("/");
+  await user.click(screen.getByRole("button", { name: "Ada Example" }));
+  expect(screen.getByRole("menuitem", { name: "Account" })).toBeInTheDocument();
+  expect(screen.queryByRole("menuitem", { name: "Admin" })).toBeNull();
 });

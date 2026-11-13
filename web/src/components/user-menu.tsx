@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { LogOut, UserRound } from "lucide-react";
+import { LogOut, ShieldCheck, UserRound } from "lucide-react";
 import { $api } from "@/api/client";
 import { useSignOut } from "@/components/auth/use-sign-out";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -70,6 +70,14 @@ export function UserMenu() {
             Account
           </Link>
         </DropdownMenuItem>
+        {me.user.is_instance_admin ? (
+          <DropdownMenuItem asChild>
+            <Link to="/admin/users">
+              <ShieldCheck />
+              Admin
+            </Link>
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem disabled={pending} onSelect={signOut}>
           <LogOut aria-hidden="true" />
