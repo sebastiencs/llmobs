@@ -1,7 +1,7 @@
 import { AudioLines, File, FileText, Image as ImageIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { useOptionalProject } from "@/components/shell/project-context";
-import { mediaUrl } from "@/lib/media";
+import { classifyMedia } from "@/lib/media";
 
 export function MediaChip({
   uri,
@@ -14,7 +14,8 @@ export function MediaChip({
 }) {
   const project = useOptionalProject();
   const ref = projectRef ?? project?.ref;
-  const href = ref ? mediaUrl(ref, uri) : undefined;
+  const source = classifyMedia(ref, uri);
+  const href = source.kind === "stored" || source.kind === "external" ? source.url : undefined;
   const mime = mimeType || "file";
   const body = (
     <span className="inline-flex items-center gap-1 rounded bg-muted px-1 text-muted-foreground">
