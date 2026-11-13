@@ -2,6 +2,8 @@ export const PLACEHOLDER_KEY = "sk-llmobs-…";
 
 export const API_KEY_NOTE = "Create a secret key in Settings → API keys";
 
+export const API_KEY_ASK_NOTE = "Ask a project admin for a secret key";
+
 export const WAITING_LINE = "Waiting for the first trace…";
 
 /** Raw OTLP/HTTP exporter settings. The endpoint is `<origin>/v1/traces`. */

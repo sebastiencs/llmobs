@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  API_KEY_ASK_NOTE,
   API_KEY_NOTE,
   otelSnippet,
   PLACEHOLDER_KEY,
@@ -31,6 +32,7 @@ it("uses the spec init names and env vars", () => {
   expect(typescriptSnippet(ORIGIN)).toContain(`baseUrl: "${ORIGIN}"`);
   expect(vercelSnippet(ORIGIN)).toContain("experimental_telemetry: llmobs.aiTelemetry()");
   expect(API_KEY_NOTE).toBe("Create a secret key in Settings → API keys");
+  expect(API_KEY_ASK_NOTE).toBe("Ask a project admin for a secret key");
 });
 
 it("fills a real key into every snippet", () => {

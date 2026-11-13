@@ -1,4 +1,5 @@
 import { $api } from "./client";
+import { projectRef } from "./project-ref";
 
 export function orgInit(org: string) {
   return { params: { path: { org } } };
@@ -22,4 +23,13 @@ export function orgInvitesInit(org: string) {
 
 export function orgInvitesKey(org: string) {
   return $api.queryOptions("get", "/api/v1/orgs/{org}/invites", orgInvitesInit(org)).queryKey;
+}
+
+export function apiKeysInit(org: string, project: string) {
+  return { params: { path: { project: projectRef(org, project) }, query: { limit: 50 } } };
+}
+
+export function apiKeysKey(org: string, project: string) {
+  return $api.queryOptions("get", "/api/v1/projects/{project}/api-keys", apiKeysInit(org, project))
+    .queryKey;
 }

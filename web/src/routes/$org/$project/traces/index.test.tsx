@@ -15,6 +15,7 @@ import { server } from "@/mocks/node";
 import { savedViewHandlers } from "@/mocks/saved-views";
 import { type StreamEmit, spanStreamHandler, traceStreamHandler } from "@/mocks/sse";
 import { renderApp } from "@/test/render";
+import projectFixture from "../../../../../../fixtures/api/static/project.json";
 
 const FIRST = "a1000000000000000000000000000006";
 
@@ -516,6 +517,34 @@ it("shows onboarding snippets when the project has no traces", async () => {
   await waitFor(() => {
     expect(writeText).toHaveBeenCalledWith(otelSnippet(window.location.origin));
   });
+});
+
+it("links admins to the API keys page from onboarding", async () => {
+  savedViewHandlers([]);
+  server.use(
+    http.get("/api/v1/projects/:project/traces", () =>
+      HttpResponse.json({ data: [], next_cursor: null }),
+    ),
+  );
+  await renderApp("/acme/support-bot/traces");
+  expect(
+    await screen.findByRole("link", { name: "Create a secret key in Settings → API keys" }),
+  ).toHaveAttribute("href", "/acme/support-bot/settings/api-keys");
+});
+
+it("asks members to get a key from an admin", async () => {
+  savedViewHandlers([]);
+  server.use(
+    http.get("/api/v1/projects/:project/traces", () =>
+      HttpResponse.json({ data: [], next_cursor: null }),
+    ),
+    http.get("/api/v1/projects/:project", () =>
+      HttpResponse.json({ ...projectFixture, role: "member" }),
+    ),
+  );
+  await renderApp("/acme/support-bot/traces");
+  expect(await screen.findByText("Ask a project admin for a secret key")).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: /API keys/ })).toBeNull();
 });
 
 it("clears a filter and shows onboarding when nothing is left", async () => {

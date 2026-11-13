@@ -1,5 +1,8 @@
+import { Link } from "@tanstack/react-router";
 import { SnippetTabs } from "@/components/onboarding/snippet-tabs";
-import { API_KEY_NOTE, WAITING_LINE } from "@/components/onboarding/snippets";
+import { API_KEY_ASK_NOTE, API_KEY_NOTE, WAITING_LINE } from "@/components/onboarding/snippets";
+import { useOptionalProject } from "@/components/shell/project-context";
+import { atLeast } from "@/lib/roles";
 
 export function OnboardingPanel({ origin }: { origin: string }) {
   return (
@@ -9,7 +12,28 @@ export function OnboardingPanel({ origin }: { origin: string }) {
         <p className="text-sm text-muted-foreground">{WAITING_LINE}</p>
       </div>
       <SnippetTabs origin={origin} />
-      <p className="text-sm text-muted-foreground">{API_KEY_NOTE}</p>
+      <ApiKeyNote />
     </div>
+  );
+}
+
+function ApiKeyNote() {
+  const project = useOptionalProject();
+  if (!project) {
+    return <p className="text-sm text-muted-foreground">{API_KEY_NOTE}</p>;
+  }
+  if (!atLeast(project.data.role, "admin")) {
+    return <p className="text-sm text-muted-foreground">{API_KEY_ASK_NOTE}</p>;
+  }
+  return (
+    <p className="text-sm text-muted-foreground">
+      <Link
+        to="/$org/$project/settings/api-keys"
+        params={{ org: project.org, project: project.project }}
+        className="underline underline-offset-4"
+      >
+        {API_KEY_NOTE}
+      </Link>
+    </p>
   );
 }
