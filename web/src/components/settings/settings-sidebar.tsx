@@ -1,7 +1,7 @@
 import { Link, useMatchRoute } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
 import type { ReactNode } from "react";
-import { orgSettingsNav } from "@/components/settings/settings-nav";
+import { orgSettingsNav, projectSettingsNav } from "@/components/settings/settings-nav";
 import {
   Sidebar,
   SidebarContent,
@@ -15,8 +15,17 @@ import {
   SidebarMenuItem,
   SidebarProvider,
 } from "@/components/ui/sidebar";
+import { atLeast, type OrgRole } from "@/lib/roles";
 
-export function SettingsSidebar({ org, children }: { org: string; children: ReactNode }) {
+export function SettingsSidebar({
+  org,
+  project,
+  children,
+}: {
+  org: string;
+  project?: { slug: string; role: OrgRole | undefined };
+  children: ReactNode;
+}) {
   const matchRoute = useMatchRoute();
 
   return (
@@ -26,15 +35,50 @@ export function SettingsSidebar({ org, children }: { org: string; children: Reac
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton asChild>
-                <Link to="/$org" params={{ org }}>
-                  <ArrowLeft />
-                  <span>Back to projects</span>
-                </Link>
+                {project ? (
+                  <Link to="/$org/$project/traces" params={{ org, project: project.slug }}>
+                    <ArrowLeft />
+                    <span>Back to project</span>
+                  </Link>
+                ) : (
+                  <Link to="/$org" params={{ org }}>
+                    <ArrowLeft />
+                    <span>Back to projects</span>
+                  </Link>
+                )}
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarHeader>
         <SidebarContent>
+          {project ? (
+            <SidebarGroup>
+              <SidebarGroupLabel>Project</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu aria-label="Project settings">
+                  {projectSettingsNav
+                    .filter((item) => !item.adminOnly || atLeast(project.role, "admin"))
+                    .map((item) => (
+                      <SidebarMenuItem key={item.to}>
+                        <SidebarMenuButton
+                          asChild
+                          isActive={Boolean(
+                            matchRoute({
+                              to: item.to,
+                              params: { org, project: project.slug },
+                            }),
+                          )}
+                        >
+                          <Link to={item.to} params={{ org, project: project.slug }}>
+                            {item.label}
+                          </Link>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          ) : null}
           <SidebarGroup>
             <SidebarGroupLabel>Organization</SidebarGroupLabel>
             <SidebarGroupContent>

@@ -1,10 +1,12 @@
 import { Link, useMatchRoute } from "@tanstack/react-router";
+import { Settings } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { projectNav } from "@/components/shell/nav";
 import { useProject } from "@/components/shell/project-context";
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarHeader,
@@ -83,6 +85,18 @@ export function ProjectSidebar({ children }: { children: ReactNode }) {
               </SidebarGroupContent>
             </SidebarGroup>
           </SidebarContent>
+          <SidebarFooter>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild tooltip="Settings">
+                  <Link to="/$org/$project/settings/general" params={{ org, project }}>
+                    <Settings />
+                    <span>Settings</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarFooter>
         </Sidebar>
         <SidebarInset className="min-h-0 overflow-hidden">{children}</SidebarInset>
       </SidebarProvider>

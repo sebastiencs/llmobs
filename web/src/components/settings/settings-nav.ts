@@ -2,3 +2,13 @@ export const orgSettingsNav = [
   { to: "/$org/settings/general", label: "General" },
   { to: "/$org/settings/members", label: "Members" },
 ] as const;
+
+export const projectSettingsNav = [
+  { to: "/$org/$project/settings/general", label: "General", adminOnly: false },
+] as const;
+
+/** True on `/<org>/<project>/settings` and every path below it. Slugs are `[a-z0-9-]`. */
+export function isProjectSettingsPath(pathname: string, org: string, project: string): boolean {
+  const base = `/${org}/${project}/settings`;
+  return pathname === base || pathname.startsWith(`${base}/`);
+}

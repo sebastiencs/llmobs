@@ -1,9 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { FolderOpen, Loader2, Settings } from "lucide-react";
+import { FolderOpen, Loader2, Plus, Settings } from "lucide-react";
+import { useState } from "react";
 import { $api } from "@/api/client";
 import { projectListInit, projectListOptions } from "@/api/queries";
 import type { Schema } from "@/api/types";
+import { DisabledReason } from "@/components/disabled-reason";
 import { EmptyState } from "@/components/empty-state";
+import { NewProjectDialog } from "@/components/settings/new-project-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,7 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { roleLabel } from "@/lib/roles";
+import { atLeast, roleLabel } from "@/lib/roles";
 
 export const Route = createFileRoute("/$org/")({
   loader: ({ context, params }) =>
@@ -27,6 +30,7 @@ export const Route = createFileRoute("/$org/")({
 
 function OrgHome() {
   const { org } = Route.useParams();
+  const [creating, setCreating] = useState(false);
   const { data: me } = $api.useSuspenseQuery("get", "/api/auth/me");
   const membership = me.orgs.find((item) => item.slug === org);
   const projects = $api.useInfiniteQuery(
@@ -57,6 +61,23 @@ function OrgHome() {
           <h2 className="text-sm text-muted-foreground">Projects</h2>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <DisabledReason
+            reason={
+              atLeast(membership?.role, "admin")
+                ? undefined
+                : "Only admins and owners can create projects"
+            }
+          >
+            <Button
+              type="button"
+              size="sm"
+              disabled={!atLeast(membership?.role, "admin")}
+              onClick={() => setCreating(true)}
+            >
+              <Plus />
+              New project
+            </Button>
+          </DisabledReason>
           <Button asChild variant="outline" size="sm">
             <Link to="/$org/settings/general" params={{ org }}>
               <Settings />
@@ -66,7 +87,11 @@ function OrgHome() {
         </div>
       </div>
       {rows.length === 0 ? (
-        <EmptyState icon={FolderOpen} title="No projects yet" />
+        <EmptyState
+          icon={FolderOpen}
+          title="No projects yet"
+          description="Create a project to start sending traces."
+        />
       ) : (
         <ProjectTable org={org} rows={rows} />
       )}
@@ -84,6 +109,7 @@ function OrgHome() {
           Load more
         </Button>
       ) : null}
+      <NewProjectDialog org={org} open={creating} onOpenChange={setCreating} />
     </main>
   );
 }

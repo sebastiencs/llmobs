@@ -1,12 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
 import { ThemeProvider } from "@/components/theme-provider";
 import { server } from "@/mocks/node";
 import { createAppRouter } from "@/router";
+import { problemResponse } from "@/test/problem";
 import { renderApp } from "@/test/render";
+import projectsFixture from "../../../fixtures/api/static/projects.json";
 
 const USER = {
   id: "01900000-0000-7000-8000-000000000100",
@@ -253,3 +255,112 @@ function project(name: string, slug: string, retention?: number) {
     ...(retention === undefined ? {} : { retention_days: retention }),
   };
 }
+
+it("creates a project and opens its traces", async () => {
+  let body: unknown;
+  const created = { ...projectsFixture.data[0], slug: "new-bot", name: "New bot" };
+  server.use(
+    http.post("/api/v1/orgs/:org/projects", async ({ request }) => {
+      body = await request.json();
+      return HttpResponse.json(created, { status: 201 });
+    }),
+    http.get("/api/v1/projects/:project", () => HttpResponse.json(created)),
+    http.get("/api/v1/projects/:project/traces", () =>
+      HttpResponse.json({ data: [], next_cursor: null }),
+    ),
+  );
+
+  const { router, user } = await renderApp("/acme");
+  await user.click(screen.getByRole("button", { name: "New project" }));
+  const dialog = await screen.findByRole("dialog", { name: "New project" });
+  await user.type(within(dialog).getByLabelText("Name"), "New bot");
+  await user.click(within(dialog).getByRole("button", { name: "Create project" }));
+
+  expect(body).toEqual({ name: "New bot" });
+  await waitFor(() => expect(router.state.location.pathname).toBe("/acme/new-bot/traces"));
+});
+
+it("sends the slug and retention", async () => {
+  let body: unknown;
+  const created = { ...projectsFixture.data[0], slug: "new-bot", name: "New bot" };
+  server.use(
+    http.post("/api/v1/orgs/:org/projects", async ({ request }) => {
+      body = await request.json();
+      return HttpResponse.json(created, { status: 201 });
+    }),
+    http.get("/api/v1/projects/:project", () => HttpResponse.json(created)),
+    http.get("/api/v1/projects/:project/traces", () =>
+      HttpResponse.json({ data: [], next_cursor: null }),
+    ),
+  );
+
+  const { user } = await renderApp("/acme");
+  await user.click(screen.getByRole("button", { name: "New project" }));
+  const dialog = await screen.findByRole("dialog", { name: "New project" });
+  await user.type(within(dialog).getByLabelText("Name"), "New bot");
+  await user.type(within(dialog).getByLabelText("Slug (optional)"), "bot-2");
+  await user.type(within(dialog).getByLabelText("Retention in days (optional)"), "14");
+  await user.click(within(dialog).getByRole("button", { name: "Create project" }));
+
+  await waitFor(() => expect(body).toEqual({ name: "New bot", slug: "bot-2", retention_days: 14 }));
+});
+
+it("shows a taken slug and a refusal", async () => {
+  server.use(
+    http.post("/api/v1/orgs/:org/projects", () =>
+      problemResponse(409, "conflict", { detail: "slug taken" }),
+    ),
+  );
+
+  const { user } = await renderApp("/acme");
+  await user.click(screen.getByRole("button", { name: "New project" }));
+  const dialog = await screen.findByRole("dialog", { name: "New project" });
+  await user.type(within(dialog).getByLabelText("Name"), "New bot");
+  await user.click(within(dialog).getByRole("button", { name: "Create project" }));
+  expect(await screen.findByText("This slug is taken.")).toBeInTheDocument();
+
+  server.use(http.post("/api/v1/orgs/:org/projects", () => problemResponse(403, "forbidden")));
+  await user.click(within(dialog).getByRole("button", { name: "Create project" }));
+  expect(
+    await screen.findByText("Only admins and owners can create projects."),
+  ).toBeInTheDocument();
+});
+
+it("rejects a bad retention without calling the server", async () => {
+  const { user } = await renderApp("/acme");
+  await user.click(screen.getByRole("button", { name: "New project" }));
+  const dialog = await screen.findByRole("dialog", { name: "New project" });
+  await user.type(within(dialog).getByLabelText("Name"), "New bot");
+  await user.type(within(dialog).getByLabelText("Retention in days (optional)"), "0");
+  await user.click(within(dialog).getByRole("button", { name: "Create project" }));
+
+  expect(
+    await screen.findByText("Enter a whole number of days from 1 to 36500."),
+  ).toBeInTheDocument();
+});
+
+it("asks for a project name without calling the server", async () => {
+  const { user } = await renderApp("/acme");
+  await user.click(screen.getByRole("button", { name: "New project" }));
+  const dialog = await screen.findByRole("dialog", { name: "New project" });
+  await user.click(within(dialog).getByRole("button", { name: "Create project" }));
+
+  expect(await screen.findByText("Enter a name.")).toBeInTheDocument();
+  expect(within(dialog).getByLabelText("Name")).toHaveAttribute("aria-invalid", "true");
+});
+
+it("disables New project for a member", async () => {
+  server.use(
+    http.get("/api/auth/me", () =>
+      HttpResponse.json({ user: USER, orgs: [{ ...ACME, role: "member" }] }),
+    ),
+  );
+
+  await renderApp("/acme");
+
+  const button = screen.getByRole("button", { name: "New project" });
+  expect(button).toBeDisabled();
+  expect(button.parentElement).toHaveAccessibleDescription(
+    "Only admins and owners can create projects",
+  );
+});
