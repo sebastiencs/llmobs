@@ -8,7 +8,9 @@ use datafusion::functions_aggregate::expr_fn::{array_agg, count, max, min, sum};
 use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::functions_nested::expr_fn::{array_distinct, array_sort, flatten};
 use datafusion::logical_expr::expr::NullTreatment;
-use datafusion::logical_expr::{Expr, ExprFunctionExt, LogicalPlan, LogicalPlanBuilder, col, lit};
+use datafusion::logical_expr::{
+    Expr, ExprFunctionExt, LogicalPlan, LogicalPlanBuilder, cast, col, lit,
+};
 use llmobs_core::schema::traces;
 
 use super::{DURATION_MS, DURATION_NS, duration_ms, duration_ns_from_bounds};
@@ -33,7 +35,7 @@ pub(crate) fn sessions_from_traces(
                 count(lit(1_i64)).alias(TRACE_COUNT),
                 sum(col(traces::ERROR_COUNT)).alias(traces::ERROR_COUNT),
                 sum(col(traces::TOTAL_TOKENS)).alias(traces::TOTAL_TOKENS),
-                sum(col(traces::COST_TOTAL)).alias(traces::COST_TOTAL),
+                exact_cost_sum().alias(traces::COST_TOTAL),
                 user_id()?.alias(traces::USER_ID),
                 array_agg(col(traces::TAGS)).alias(traces::TAGS),
             ],
@@ -70,6 +72,15 @@ pub(crate) fn sessions_from_traces(
             col(traces::TAGS),
         ])?
         .build()
+}
+
+/// `sum(cost_total)` in `Decimal128(38, 18)`, back to `Float64`: an exact sum
+/// whose result does not depend on the partitioning (D-A2-4).
+pub(crate) fn exact_cost_sum() -> Expr {
+    cast(
+        sum(cast(col(traces::COST_TOTAL), DataType::Decimal128(38, 18))),
+        DataType::Float64,
+    )
 }
 
 /// First non-null `user_id` by `(start_time, trace_id)`.
@@ -114,14 +125,16 @@ mod tests {
     use arrow::array::{Array, AsArray, RecordBatch};
     use arrow::datatypes::{DataType, Field, TimeUnit};
     use chrono::{DateTime, SecondsFormat, Utc};
+    use datafusion::datasource::MemTable;
     use datafusion::execution::runtime_env::RuntimeEnv;
     use llmobs_core::ids::{SpanId, TraceId};
+    use llmobs_core::schema::traces_schema;
     use llmobs_core::span::Span;
     use serde_json::Value;
 
     use crate::test_support::{
-        dataset_scores, dataset_spans, example_query, live_scores_table, rows, spans_table,
-        traces_table,
+        dataset_scores, dataset_spans, example_query, live_scores_table, rows, span_row,
+        spans_table, trace_batch, traces_table,
     };
     use crate::views::{ProjectQuery, QueryContext};
 
@@ -299,6 +312,44 @@ mod tests {
             assert_eq!(column.data_type(), &data_type, "{name}");
             assert_eq!(column.is_nullable(), nullable, "{name}");
         }
+    }
+
+    /// D-A2-4: the session cost is the same bit for bit however the traces are
+    /// split into partitions.
+    #[tokio::test]
+    async fn session_cost_does_not_depend_on_partitioning() {
+        let trace_of = |trace: u16, cost: f64| {
+            let mut span = span_row(trace, 0, 1_000 * i64::from(trace), 2_000);
+            span.session_id = Some("s".to_owned());
+            span.cost_total = Some(cost);
+            trace_batch(&[span])
+        };
+        let (t1, t2, t3) = (trace_of(1, 0.1), trace_of(2, 0.2), trace_of(3, 0.3));
+        let layouts = vec![
+            vec![vec![t1.clone(), t2.clone(), t3.clone()]],
+            vec![vec![t3.clone()], vec![t2.clone()], vec![t1.clone()]],
+            vec![vec![t2.clone()], vec![t3.clone(), t1.clone()]],
+        ];
+        let mut bits = Vec::new();
+        for partitions in layouts {
+            let mut query = example_query();
+            query.traces =
+                Arc::new(MemTable::try_new(traces_schema(), partitions).expect("traces table"));
+            query.target_partitions = std::num::NonZeroUsize::new(3).expect("three partitions");
+            let ctx = QueryContext::new(query, None).expect("context");
+            let found = rows(&ctx, "SELECT cost_total FROM sessions").await;
+            let value = found
+                .iter()
+                .find(|batch| batch.num_rows() > 0)
+                .and_then(|batch| f64_cell(batch, 0, "cost_total"))
+                .expect("one session cost");
+            assert!((value - 0.6).abs() < 1e-15, "cost {value}");
+            bits.push(value.to_bits());
+        }
+        assert!(
+            bits.iter().all(|value| *value == bits[0]),
+            "cost depends on partitioning: {bits:?}"
+        );
     }
 
     fn query_for(spans: &[Span]) -> ProjectQuery {

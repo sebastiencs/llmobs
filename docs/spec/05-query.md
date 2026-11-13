@@ -13,6 +13,8 @@ Everything compiles to DataFusion plans over the project-scoped providers of 03 
 | `experiment_items` | experiment results | SQLite rows for the project, exposed via a `MemTable` built per query (bounded to 1M rows). The server owns the schema, the rows and the column catalog, and registers the table through `QueryContext::register_sqlite_view` (D93) |
 | `dataset_items` | current version items | same approach |
 
+Cost totals of `sessions` and of the user list are summed as `Decimal128(38, 18)`, so they do not depend on the partitioning (D-A2-4).
+
 Each view exposes the stored columns of its table in spec 01 order, without `project_id`. `traces` also drops `last_ingest_time` and `partial_count`. Binary IDs (`trace_id`, `span_id`, `parent_span_id`, `root_span_id`) are lowercase hex `Utf8`. `duration_ms` follows `duration_ns`: on `spans`, `duration_ns` is stored; on `traces` and `sessions`, `duration_ns = end_time − start_time` in nanoseconds, placed after `end_time`, and `duration_ms = duration_ns / 1e6`. `events` and `links` keep their native list-of-struct types. They are listed as `json` in the schema endpoint because clients receive them as JSON.
 
 `sessions` columns, in order: `session_id, start_time, end_time, duration_ns, duration_ms, trace_count, error_count, total_tokens, cost_total, user_id, tags`. `user_id` is the first non-null `user_id` of the session's traces ordered by `(start_time, trace_id)`. `tags` is the sorted distinct union of the traces' tags.

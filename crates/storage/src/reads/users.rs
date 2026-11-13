@@ -23,7 +23,7 @@ use super::cursor::{after, assemble, decode, order_by};
 use super::{ListScope, Page, SortOrder, present, scoped_traces};
 use crate::filter::FilterView;
 use crate::query_error::{RunError, classify};
-use crate::views::{QueryContext, sessions_from_traces};
+use crate::views::{QueryContext, exact_cost_sum, sessions_from_traces};
 
 const LIST: &str = "users";
 const FIRST_SEEN: &str = "first_seen";
@@ -210,7 +210,7 @@ fn aggregate_users(frame: DataFrame) -> Result<DataFrame, RunError> {
                 count_distinct(col(traces::SESSION_ID)).alias(SESSION_COUNT),
                 sum(col(traces::ERROR_COUNT)).alias(traces::ERROR_COUNT),
                 sum(col(traces::TOTAL_TOKENS)).alias(traces::TOTAL_TOKENS),
-                sum(col(traces::COST_TOTAL)).alias(traces::COST_TOTAL),
+                exact_cost_sum().alias(traces::COST_TOTAL),
             ],
         )
         .map_err(classify)?;
@@ -316,14 +316,19 @@ fn single_row(batches: &[RecordBatch]) -> Result<Option<RecordBatch>, RunError> 
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+    use std::sync::Arc;
     use std::time::Duration;
 
+    use arrow::array::AsArray;
+    use arrow::datatypes::Float64Type;
     use arrow::json::{ArrayWriter, WriterBuilder};
     use arrow::record_batch::RecordBatch;
+    use datafusion::datasource::MemTable;
     use datafusion::logical_expr::{col, lit};
     use datafusion::prelude::DataFrame;
     use llmobs_core::names::environment;
-    use llmobs_core::schema::traces;
+    use llmobs_core::schema::{traces, traces_schema};
     use llmobs_core::span::Span;
     use serde_json::Value;
 
@@ -331,7 +336,7 @@ mod tests {
         UserListRequest, UserSort, user_detail, user_frame, user_list, user_sessions_plan,
     };
     use crate::reads::{ListScope, Page, SortOrder, scoped_traces};
-    use crate::test_support::{example_query, span_row, spans_table, traces_table};
+    use crate::test_support::{example_query, span_row, spans_table, trace_batch, traces_table};
     use crate::views::QueryContext;
 
     const TIMEOUT: Duration = Duration::from_secs(30);
@@ -515,6 +520,52 @@ mod tests {
             .await
             .expect("missing");
         assert!(missing.is_none());
+    }
+
+    /// D-A2-4: the user cost is the same bit for bit however the traces are
+    /// split into partitions.
+    #[tokio::test]
+    async fn user_cost_does_not_depend_on_partitioning() {
+        let trace_of = |trace: u16, cost: f64| {
+            let mut span = span_row(trace, 0, 1_000 * i64::from(trace), 2_000);
+            span.user_id = Some("u".to_owned());
+            span.cost_total = Some(cost);
+            trace_batch(&[span])
+        };
+        let (t1, t2, t3) = (trace_of(1, 0.1), trace_of(2, 0.2), trace_of(3, 0.3));
+        let layouts = vec![
+            vec![vec![t1.clone(), t2.clone(), t3.clone()]],
+            vec![vec![t3.clone()], vec![t2.clone()], vec![t1.clone()]],
+            vec![vec![t2.clone()], vec![t3.clone(), t1.clone()]],
+        ];
+        let mut bits = Vec::new();
+        for partitions in layouts {
+            let mut query = example_query();
+            query.traces =
+                Arc::new(MemTable::try_new(traces_schema(), partitions).expect("traces table"));
+            query.target_partitions = NonZeroUsize::new(3).expect("three partitions");
+            let ctx = QueryContext::new(query, None).expect("context");
+            let page = user_list(&ctx, request(false, UserSort::CostTotal, SortOrder::Desc))
+                .await
+                .expect("list");
+            assert_eq!(ids(&rows(&page), "user_id"), ["u"]);
+            let batch = page
+                .batches
+                .iter()
+                .find(|batch| batch.num_rows() > 0)
+                .expect("one user");
+            let value = batch
+                .column_by_name(traces::COST_TOTAL)
+                .expect("cost_total")
+                .as_primitive::<Float64Type>()
+                .value(0);
+            assert!((value - 0.6).abs() < 1e-15, "cost {value}");
+            bits.push(value.to_bits());
+        }
+        assert!(
+            bits.iter().all(|value| *value == bits[0]),
+            "cost depends on partitioning: {bits:?}"
+        );
     }
 
     #[tokio::test]
