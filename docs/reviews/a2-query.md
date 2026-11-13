@@ -21,7 +21,7 @@ The weak point is **resource safety of the SQL console**, the one surface where 
 
 Since llmobs is a single binary, both let one authenticated user take the server down. Fix them before G exposes `/sql`.
 
-Counts: **2 blocker, 4 major, 22 minor** confirmed; 5 discarded.
+Counts: **2 blocker, 4 major, 22 minor** confirmed; 5 discarded. The blockers, the majors and m-9 are fixed by [`plans/a2-fixes/`](../plans/a2-fixes/) (#48).
 
 **Known item (per-partition ordering):** no query code relies on per-partition order, so results are not wrong for that reason. A1 already added `with_preserve_order(true)` to both query scans (`b0b8305`). The order-sensitive thing found instead is the float `cost_total` sum, which affects cursor paging (M-4). Details are in § Known item.
 
@@ -55,6 +55,7 @@ Counts: **2 blocker, 4 major, 22 minor** confirmed; 5 discarded.
 ### Blockers
 
 **B-1. Uncounted operator chains overflow the stack and abort the process (D95).** Probed.
+- **Fixed** by P1, `a46e1a3` ([`plans/a2-fixes/`](../plans/a2-fixes/), #48).
 - Sub-phase: Q6/Q10. Location: `crates/storage/src/query_text.rs:239` (`is_operator`) and `sql/validate.rs`.
 - Evidence. Both of these abort with `fatal runtime error: stack overflow` (SIGABRT) on a 2 MiB thread, in debug **and release** builds:
   - `SELECT 1 AS a` followed by 3,300 × ` UNION ALL SELECT 1` (62 KiB, 0 counted operators);
@@ -70,6 +71,7 @@ Counts: **2 blocker, 4 major, 22 minor** confirmed; 5 discarded.
   - Add the two probes above as 2 MiB-stack tests, next to the existing 512-operator test.
 
 **B-2. Scalar functions allocate without limit, outside the memory pool (D91, D96).** Probed.
+- **Fixed** by P2 and P3, `47cd6d7` and `9cf5772` ([`plans/a2-fixes/`](../plans/a2-fixes/), #48).
 - Sub-phase: Q2/Q10. Location: `crates/storage/src/views/session.rs:43-44` (`SessionStateDefaults::default_scalar_functions()`).
 - Evidence. Under a 64 MiB `RuntimeEnv` pool, every query below succeeded:
   - `SELECT array_length(range(0, 100000000))`: peak RSS 48 → 825 MiB;
@@ -87,6 +89,7 @@ Counts: **2 blocker, 4 major, 22 minor** confirmed; 5 discarded.
 ### Major
 
 **M-1. Parquet export holds the whole file in memory.** Probed.
+- **Fixed** by P4, `665282f` ([`plans/a2-fixes/`](../plans/a2-fixes/), #48).
 - Sub-phase: Q13. Location: `crates/storage/src/sql/encode.rs:218-224` (`ParquetEncoder::push`).
 - Evidence:
   - `push` takes bytes only when `in_progress_size() > 32 MiB`. `in_progress_size` covers only the open row group.
@@ -97,6 +100,7 @@ Counts: **2 blocker, 4 major, 22 minor** confirmed; 5 discarded.
 - Suggested fix: after each `write`, drain `inner_mut()` whenever `flushed_row_groups().len()` grew, or when the buffer passes a threshold. Add a test that asserts several chunks and a round trip of the concatenation.
 
 **M-2. `bucket=auto` has no bucket cap.**
+- **Fixed** by P5, `8cf62cf` ([`plans/a2-fixes/`](../plans/a2-fixes/), #48).
 - Sub-phase: Q18. Location: `crates/storage/src/reads/metrics.rs:365-381` (`resolve`) and `398` (`bucket_grid`).
 - Evidence:
   - `Auto` falls back to `D1` without checking the count; only `Fixed` is checked against `FIXED_LIMIT = 2000`.
@@ -106,6 +110,7 @@ Counts: **2 blocker, 4 major, 22 minor** confirmed; 5 discarded.
 - Suggested fix: apply the 2,000 limit to the resolved width too, or cap the window length. Record it in spec 05 § Dashboard metrics.
 
 **M-3. `session_detail` and `user_detail` collect every trace row only to test that one exists.**
+- **Fixed** by P6, `09b0bba` ([`plans/a2-fixes/`](../plans/a2-fixes/), #48).
 - Sub-phase: Q16. Location: `crates/storage/src/reads/sessions.rs:196-203` and `reads/users.rs:248-254`.
 - Evidence:
   - The scoped traces plan, with all view columns including `metadata`, tags and previews and no limit, is `.collect()`ed only to test `row_count == 0`.
@@ -114,6 +119,7 @@ Counts: **2 blocker, 4 major, 22 minor** confirmed; 5 discarded.
 - Suggested fix: drop the pre-collect and return `Ok(None)` when the aggregate yields no row.
 
 **M-4. Cursors on float sort keys are not stable across pages.** This is where the known item leads.
+- **Fixed** by P7, `e211e9e` ([`plans/a2-fixes/`](../plans/a2-fixes/), #48).
 - Sub-phase: Q14/Q16. Location: `reads/cursor.rs` (float value), `reads/traces.rs` `TraceSort::CostTotal`, `reads/sessions.rs` and `reads/users.rs` `CostTotal` sorts. Root cause in A1's `partials.rs:469` (`sum_f64`).
 - Evidence:
   - A trace's `cost_total` is an f64 sum over its partials, in the order they reach `TraceMerger`. That order is not deterministic: `UnionExec` → hash `RepartitionExec`, file grouping, and work stealing when it is enabled.
@@ -135,7 +141,7 @@ Counts: **2 blocker, 4 major, 22 minor** confirmed; 5 discarded.
 | m-6 | Q11 | `sql/params.rs` (`reject_raw_placeholder`) | Only `$n` and `?` tokens are rejected. Probed: `SELECT :a` → `Failed("Placeholder ':a' was not provided…")` (400 `query_failed`, no position); `SELECT @a` → `Invalid` with no position. | Walk the AST for `Value::Placeholder` and reject with a position. |
 | m-7 | Q2 | `query_error.rs` (`RunError::Internal(#[source] DataFusionError)`) | An error-chain logger (`{:#}`, anyhow) prints the DataFusion source, which can quote literal values (D94: logs carry the kind only). Nothing pins the safe path. | Log only `kind()` at call sites, or drop `#[source]`; note it for the G server work. |
 | m-8 | Q2/Q6/Q7/Q9–Q11 | `query_text.rs:6`, `filter/{mod,scope,validate}.rs`, `sql/{mod,params,validate}.rs`, `views/mod.rs:28-33,155-160,285` | Module-wide `#![allow(dead_code)]` and "callers arrive later" comments remain, though every caller has landed. They hide real dead code (e.g. the unused `expect_end(_, _text)` parameter, the unread `Placeholder.position`). | Remove the allows and comments; fix what clippy reports. |
-| m-9 | Q16 | `reads/users.rs:270-276`, `303-318` | `user_detail` turns every distinct session id of the user into an `IN (…)` literal list with no cap, although only 100 sessions are returned. `string_column` silently skips a non-`Utf8` column, which would make `sessions: []`. | Use a semi-join on the subquery; error on an unexpected type. |
+| m-9 | Q16 | `reads/users.rs:270-276`, `303-318` | `user_detail` turns every distinct session id of the user into an `IN (…)` literal list with no cap, although only 100 sessions are returned. `string_column` silently skips a non-`Utf8` column, which would make `sessions: []`. | Use a semi-join on the subquery; error on an unexpected type. **Fixed** by P6, `09b0bba` (#48). |
 | m-10 | Q9 | `filter/scope.rs:33` | `exclusions(ctx, view, …) -> Result<Option<Expr>, RunError>` differs from the plan's `exclusions(include_eval, include_experiments, filter_references_environment) -> Option<Expr>`, and the change is not recorded. | Update the plan or README signature. |
 | m-11 | Q9 | `filter/scope.rs:33-59` | `exclusions` does not reject the `sessions`/`scores` views as `search` does. A misuse surfaces as an opaque planning error or `Internal`. | Match the view and return an error. |
 | m-12 | Q2 | `views/session.rs` test `sandbox_rejects_tables_outside_the_views` | Assertions accept any non-empty error (`SHOW TABLES`, URL table) or any message containing the name. Missing cases: `datafusion.public.spans`, `COPY`, `SET`, `CREATE VIEW`, and a positive control. | Assert the error class per case; add the cases. |
