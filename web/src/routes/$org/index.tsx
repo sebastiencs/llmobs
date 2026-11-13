@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { FolderOpen, Loader2 } from "lucide-react";
+import { FolderOpen, Loader2, Settings } from "lucide-react";
 import { $api } from "@/api/client";
 import { projectListInit, projectListOptions } from "@/api/queries";
 import type { Schema } from "@/api/types";
@@ -51,9 +51,19 @@ function OrgHome() {
 
   return (
     <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 overflow-auto px-4 py-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-medium">{membership?.name ?? org}</h1>
-        <h2 className="text-sm text-muted-foreground">Projects</h2>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-medium">{membership?.name ?? org}</h1>
+          <h2 className="text-sm text-muted-foreground">Projects</h2>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link to="/$org/settings/general" params={{ org }}>
+              <Settings />
+              Settings
+            </Link>
+          </Button>
+        </div>
       </div>
       {rows.length === 0 ? (
         <EmptyState icon={FolderOpen} title="No projects yet" />
