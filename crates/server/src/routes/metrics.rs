@@ -1,5 +1,4 @@
 //! Dashboard metrics (spec 05 § Dashboard metrics, spec 09 § Observability data).
-#![cfg_attr(not(test), allow(dead_code))]
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};

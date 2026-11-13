@@ -1,5 +1,4 @@
 //! Filter and SQL schema (spec 05 § Logical views, spec 09 § Observability data).
-#![cfg_attr(not(test), allow(dead_code))]
 
 use axum::http::Method;
 use axum::routing::get;

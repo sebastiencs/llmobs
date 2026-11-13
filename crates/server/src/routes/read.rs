@@ -1,5 +1,4 @@
 //! Shared plumbing of the read handlers (D-G-14).
-#![cfg_attr(not(test), allow(dead_code))]
 
 use std::time::Duration;
 

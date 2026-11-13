@@ -1,5 +1,4 @@
 //! Trace and span reads (spec 09 § Observability data).
-#![cfg_attr(not(test), allow(dead_code))]
 
 use axum::extract::{Extension, State};
 use axum::http::Method;
@@ -440,6 +439,82 @@ mod tests {
         assert_eq!(body["data"][0]["span_id"], "b100000000000061");
         let (_, body) = get_json(&app, &seeded, "/spans?include_eval=true").await;
         assert_eq!(body["data"].as_array().unwrap().len(), 14);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn span_detail_carries_events_links_and_maps() {
+        let (app, seeded) = loaded().await;
+        let mut span: llmobs_core::span::Span = serde_json::from_value(serde_json::json!({
+            "project_id": seeded.project.id.to_string(),
+            "trace_id": "a1000000000000000000000000000008",
+            "span_id": "b100000000000081",
+            "name": "with-events",
+            "span_kind": "span",
+            "start_time": "2026-01-01T10:50:00.000000000Z",
+            "end_time": "2026-01-01T10:50:01.000000000Z",
+            "status": "ok",
+            "ingest_time": "2026-01-01T10:50:01.000000000Z",
+            "schema_version": 1
+        }))
+        .unwrap();
+        span.events = vec![
+            llmobs_core::span::SpanEvent {
+                time: span.start_time,
+                name: "gen_ai.choice".to_owned(),
+                attributes: Some(r#"{"index":0}"#.to_owned()),
+            },
+            llmobs_core::span::SpanEvent {
+                time: span.end_time,
+                name: "retry".to_owned(),
+                attributes: None,
+            },
+        ];
+        span.links = vec![llmobs_core::span::SpanLink {
+            trace_id: TRACE_1.parse().unwrap(),
+            span_id: "b100000000000011".parse().unwrap(),
+            attributes: Some(r#"{"kind":"follows"}"#.to_owned()),
+        }];
+        span.attributes
+            .insert("http.method".to_owned(), "GET".to_owned());
+        span.resource_attributes
+            .insert("host.name".to_owned(), "box".to_owned());
+        span.conventions = vec![llmobs_core::enums::Convention::Genai];
+        let batch = llmobs_core::batch::spans_to_record_batch(&[span]).unwrap();
+        app.state
+            .storage
+            .append_spans(seeded.project.id, batch)
+            .await
+            .unwrap();
+
+        let (status, body) = get_json(
+            &app,
+            &seeded,
+            "/traces/a1000000000000000000000000000008/spans/b100000000000081",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["events"],
+            serde_json::json!([
+                {"time": "2026-01-01T10:50:00.000000000Z", "name": "gen_ai.choice", "attributes": {"index": 0}},
+                {"time": "2026-01-01T10:50:01.000000000Z", "name": "retry", "attributes": {}}
+            ])
+        );
+        assert_eq!(
+            body["links"],
+            serde_json::json!([
+                {"trace_id": TRACE_1, "span_id": "b100000000000011", "attributes": {"kind": "follows"}}
+            ])
+        );
+        assert_eq!(
+            body["attributes"],
+            serde_json::json!({"http.method": "GET"})
+        );
+        assert_eq!(
+            body["resource_attributes"],
+            serde_json::json!({"host.name": "box"})
+        );
+        assert_eq!(body["conventions"], serde_json::json!(["genai"]));
     }
 
     #[tokio::test(flavor = "multi_thread")]

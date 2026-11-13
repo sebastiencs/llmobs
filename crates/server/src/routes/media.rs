@@ -1,5 +1,4 @@
 //! Extracted media blobs (spec 09 § Observability data, D-G-24).
-#![cfg_attr(not(test), allow(dead_code))]
 
 use axum::extract::{Extension, State};
 use axum::http::header::{

@@ -1,5 +1,4 @@
 //! Session reads (spec 09 § Observability data).
-#![cfg_attr(not(test), allow(dead_code))]
 
 use axum::extract::{Extension, State};
 use axum::http::Method;

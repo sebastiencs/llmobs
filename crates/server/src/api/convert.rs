@@ -243,9 +243,11 @@ fn map_strings(
     if map.is_null(row) {
         return Ok(out);
     }
+    // Entries are `(key, value)` structs. Read them by position: Parquet writers name the
+    // fields `key`/`value` or `keys`/`values`.
     let entries = map.value(row);
-    let keys = child(&entries, "keys", &DataType::Utf8)?;
-    let values = child(&entries, "values", &DataType::Utf8)?;
+    let keys = typed(Some(entries.column(0)), name, &DataType::Utf8)?;
+    let values = typed(Some(entries.column(1)), name, &DataType::Utf8)?;
     let keys = keys
         .as_any()
         .downcast_ref::<StringArray>()

@@ -1,5 +1,4 @@
 //! Score reads (spec 09 § Scores & annotations).
-#![cfg_attr(not(test), allow(dead_code))]
 
 use axum::extract::{Extension, State};
 use axum::http::Method;
