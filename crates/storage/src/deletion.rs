@@ -10,6 +10,7 @@ use std::sync::Arc;
 use arrow::array::{Array, AsArray, RecordBatch};
 use arrow::compute::{filter_record_batch, not, prep_null_mask_filter};
 use arrow::datatypes::{DataType, SchemaRef};
+use chrono::NaiveDate;
 use datafusion::common::ScalarValue;
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::Operator;
@@ -300,12 +301,15 @@ pub(crate) fn drop_covered(
 }
 
 /// A filtered copy of `snapshot` for `project`: every batch without its covered
-/// rows, other projects' partitions left out. Batches no deletion can cover are
-/// kept as they are, sharing their `Arc`s and partials cache.
-pub(crate) fn filter_snapshot(
+/// rows, other projects' partitions left out, and the partitions of days before
+/// the project's retention watermark dropped entirely (spec 03 §8). Batches no
+/// deletion can cover are kept as they are, sharing their `Arc`s and partials
+/// cache.
+pub(crate) fn project_snapshot(
     table: Table,
     snapshot: &MemSnapshot,
     project: ProjectId,
+    keep_from: Option<NaiveDate>,
     deletions: &[Arc<PendingDeletion>],
 ) -> Result<Arc<MemSnapshot>, QueryError> {
     let schema = table.schema();
@@ -313,6 +317,9 @@ pub(crate) fn filter_snapshot(
     let mut partitions: BTreeMap<PartitionKey, Vec<MemBatch>> = BTreeMap::new();
     for (key, batches) in &snapshot.partitions {
         if key.project != project {
+            continue;
+        }
+        if keep_from.is_some_and(|keep| key.day < keep) {
             continue;
         }
         let mut kept = Vec::with_capacity(batches.len());

@@ -3,7 +3,7 @@
 //! A query loads one [`ReadState`] and keeps that `Arc` for the whole scan.
 //! Each table snapshot holds the active and frozen batches together, so a
 //! reader cannot tell a flush in progress from live rows. The writer replaces
-//! the `Arc` after each group. M5 adds tombstones.
+//! the `Arc` after each group. M5 adds tombstones and project states.
 //!
 //! `load` is what a query calls. Open publishes the first state. Both land
 //! with `Storage`, so this module is only half-used until then.
@@ -14,6 +14,7 @@ use std::sync::{Arc, PoisonError, RwLock};
 use crate::catalog::Catalog;
 use crate::deletion::Tombstones;
 use crate::memtable::{MemSnapshot, Memtable};
+use crate::projects::ProjectStates;
 use crate::wal::Table;
 
 /// Snapshots of both tables at one moment.
@@ -27,6 +28,8 @@ pub(crate) struct ReadState {
     pub catalog: Arc<Catalog>,
     /// Pending deletions as of this publish (spec 03 §7).
     pub tombstones: Arc<Tombstones>,
+    /// Project states as of this publish: retention watermarks (spec 03 §8).
+    pub projects: Arc<ProjectStates>,
 }
 
 impl ReadState {
@@ -37,6 +40,7 @@ impl ReadState {
             scores: Memtable::new(Table::Scores).snapshot(),
             catalog: Arc::new(Catalog::empty()),
             tombstones: Arc::new(Tombstones::default()),
+            projects: Arc::new(ProjectStates::default()),
         }
     }
 }
@@ -80,6 +84,7 @@ pub(crate) fn publish_catalog(published: &Published, catalog: &Arc<Catalog>) {
         scores: Arc::clone(&state.scores),
         catalog: Arc::clone(catalog),
         tombstones: Arc::clone(&state.tombstones),
+        projects: Arc::clone(&state.projects),
     });
 }
 
@@ -91,5 +96,6 @@ pub(crate) fn publish_tombstones(published: &Published, tombstones: &Arc<Tombsto
         scores: Arc::clone(&state.scores),
         catalog: Arc::clone(&state.catalog),
         tombstones: Arc::clone(tombstones),
+        projects: Arc::clone(&state.projects),
     });
 }

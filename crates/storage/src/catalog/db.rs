@@ -16,6 +16,7 @@ use uuid::Uuid;
 use super::{Catalog, FileId, FileMeta, FileTable, insert_sorted};
 use crate::deletion::{PendingDeletion, Tombstones};
 use crate::error::CatalogError;
+use crate::projects::ProjectStates;
 
 /// `flushed_seq` for the two tables. A missing `table_state` row is `0`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,6 +166,28 @@ pub(crate) async fn load_tombstones(
         });
     }
     Ok(Tombstones::loaded(known_seq, pending))
+}
+
+/// Read every retention watermark (spec 03 §8). `keep_from` is `YYYY-MM-DD`,
+/// like `data_files.day`.
+pub(super) async fn load_project_states(
+    connection: &mut SqliteConnection,
+) -> Result<ProjectStates, CatalogError> {
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT project_id, keep_from FROM retention_watermarks")
+            .fetch_all(&mut *connection)
+            .await
+            .map_err(CatalogError::db)?;
+    let mut keep_from = HashMap::with_capacity(rows.len());
+    for (project, day) in rows {
+        let project = project
+            .parse()
+            .map_err(|_| CatalogError::corrupt("retention watermark"))?;
+        let day = NaiveDate::parse_from_str(&day, "%Y-%m-%d")
+            .map_err(|_| CatalogError::corrupt("retention watermark"))?;
+        keep_from.insert(project, day);
+    }
+    Ok(ProjectStates::loaded(keep_from))
 }
 
 /// Enforce spec 03 §3 over `file_sources` (D88), reading `catalog.db` directly.
@@ -457,7 +480,7 @@ mod tests {
             .fetch_one(&mut connection)
             .await
             .unwrap();
-        assert_eq!(versions, 3);
+        assert_eq!(versions, 4);
     }
 
     #[tokio::test]
@@ -469,6 +492,7 @@ mod tests {
         // migration from 0003 on, newest first, then let open_catalog_db
         // re-apply them.
         for statement in [
+            "DROP TABLE retention_watermarks",
             "DROP INDEX deletions_pending",
             "DROP TABLE deletion_sessions",
             "DROP TABLE deletion_users",
@@ -503,6 +527,7 @@ mod tests {
             "deletion_traces",
             "deletion_users",
             "deletion_sessions",
+            "retention_watermarks",
         ] {
             let count: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",

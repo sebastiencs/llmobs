@@ -106,7 +106,7 @@ pub enum AppendError {
 
 /// Shutdown failed, or a later maintenance call failed.
 ///
-/// M1 only returns this from [`crate::Storage::shutdown`].
+/// Returned by `shutdown`, `apply_retention` and (M5.7) `drop_project`.
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
     /// The table's writer stopped after a WAL error.
@@ -121,6 +121,12 @@ pub enum StorageError {
         /// `spans` or `scores`.
         table: &'static str,
     },
+    /// The catalog commit failed.
+    #[error(transparent)]
+    Commit(#[from] CommitError),
+    /// `catalog.db` failed.
+    #[error(transparent)]
+    Catalog(#[from] CatalogError),
 }
 
 /// `Storage::query` failed.

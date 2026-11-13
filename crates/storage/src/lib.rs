@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow::array::{Array, RecordBatch, StringArray};
+use chrono::NaiveDate;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use llmobs_core::ids::ProjectId;
 use uuid::Uuid;
@@ -32,7 +33,7 @@ use crate::error::{
 };
 use crate::flush::FlushHandle;
 use crate::hooks::Hooks;
-use crate::memtable::Memtable;
+use crate::memtable::{MemSnapshot, Memtable};
 use crate::objects::Objects;
 use crate::read_state::{Published, ReadState};
 use crate::wal::Table;
@@ -53,6 +54,7 @@ pub(crate) mod gc;
 pub(crate) mod objects;
 pub(crate) mod parquet;
 pub(crate) mod partials;
+pub(crate) mod projects;
 pub mod query;
 mod query_error;
 mod query_text;
@@ -92,6 +94,8 @@ mod crash_tests;
 #[cfg(test)]
 mod deletion_tests;
 #[cfg(test)]
+mod retention;
+#[cfg(test)]
 mod test_support;
 
 /// One acknowledged append.
@@ -116,6 +120,17 @@ pub struct StorageHealth {
     pub memtable_bytes: u64,
     /// `storage.memtable.hard_limit`. Each table is checked against this on its own.
     pub memtable_hard_limit: u64,
+}
+
+/// What [`Storage::apply_retention`] removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetentionReport {
+    /// Files obsoleted, all tables.
+    pub files: u64,
+    /// Their total size.
+    pub bytes: u64,
+    /// The watermark now stored: the later of the old one and the request.
+    pub keep_from: NaiveDate,
 }
 
 /// Open data directory: the lock, both writers, and the published memtables.
@@ -265,6 +280,7 @@ impl Storage {
         })??;
         let catalog = committer.catalog().await;
         let tombstones = committer.tombstones().await;
+        let projects = Arc::new(committer.project_states().await?);
         let mut anchors = anchor::Anchors::new(window_ns);
         anchors.rebuild(&catalog, &objects).await?;
         let anchors = Arc::new(Mutex::new(anchors));
@@ -273,6 +289,7 @@ impl Storage {
             scores: recovered.scores.memtable.snapshot(),
             catalog,
             tombstones,
+            projects,
         }));
         // Compaction gets a runtime of its own, so its memory pool is
         // independent of the query runtime's.
@@ -425,7 +442,10 @@ impl Storage {
     ///
     /// The snapshot's pending deletions hide their rows from every provider
     /// (spec 03 §7): the memtable snapshots are filtered copies, and the
-    /// providers carry the tombstones for the file side.
+    /// providers carry the tombstones for the file side. A memtable partition
+    /// of a day before the project's retention watermark is left out of the
+    /// copies the same way (spec 03 §8); the files were removed from the
+    /// catalog by the retention commit itself.
     pub fn query(
         &self,
         project: ProjectId,
@@ -434,14 +454,36 @@ impl Storage {
         let state = self.published.load();
         let partitions = self.target_partitions.get();
         let deletions = state.tombstones.for_project(project);
-        let (spans_snapshot, scores_snapshot) = if deletions.is_empty() {
-            (Arc::clone(&state.spans), Arc::clone(&state.scores))
-        } else {
-            (
-                deletion::filter_snapshot(Table::Spans, &state.spans, project, &deletions)?,
-                deletion::filter_snapshot(Table::Scores, &state.scores, project, &deletions)?,
-            )
+        let keep_from = state.projects.keep_from(project);
+        let has_late = |snapshot: &MemSnapshot| {
+            keep_from.is_some_and(|keep| {
+                snapshot
+                    .partitions
+                    .keys()
+                    .any(|key| key.project == project && key.day < keep)
+            })
         };
+        let (spans_snapshot, scores_snapshot) =
+            if deletions.is_empty() && !has_late(&state.spans) && !has_late(&state.scores) {
+                (Arc::clone(&state.spans), Arc::clone(&state.scores))
+            } else {
+                (
+                    deletion::project_snapshot(
+                        Table::Spans,
+                        &state.spans,
+                        project,
+                        keep_from,
+                        &deletions,
+                    )?,
+                    deletion::project_snapshot(
+                        Table::Scores,
+                        &state.scores,
+                        project,
+                        keep_from,
+                        &deletions,
+                    )?,
+                )
+            };
         let spans = Arc::new(query::SpansProvider::new(
             project,
             Arc::clone(&spans_snapshot),
@@ -506,6 +548,37 @@ impl Storage {
             .deletion_status(id)
             .await?
             .ok_or(DeletionError::NotFound)
+    }
+
+    /// Drops every partition of `project` before `keep_from` (a UTC day), and
+    /// drops late rows for those days from then on (spec 03 §8). A `keep_from`
+    /// earlier than the stored watermark changes nothing.
+    pub async fn apply_retention(
+        &self,
+        project: ProjectId,
+        keep_from: NaiveDate,
+    ) -> Result<RetentionReport, StorageError> {
+        let published = Arc::clone(&self.published);
+        let report = self
+            .committer
+            .apply_retention(project, keep_from, move |next, watermark| {
+                published.replace(|state| ReadState {
+                    catalog: Arc::clone(next),
+                    projects: Arc::new(state.projects.with_keep_from(project, watermark)),
+                    ..state.clone()
+                });
+            })
+            .await?;
+        if report.files > 0 {
+            tracing::info!(
+                project = %project,
+                keep_from = %report.keep_from,
+                files = report.files,
+                bytes = report.bytes,
+                "retention applied"
+            );
+        }
+        Ok(report)
     }
 
     /// Writer flags and memtable accounting. Does not touch the disk.

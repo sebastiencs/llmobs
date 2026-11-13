@@ -31,6 +31,7 @@ use crate::memtable::{FrozenView, Memtable, PartitionKey};
 use crate::objects::Objects;
 use crate::parquet::{WrittenFile, write_file};
 use crate::partials::partials_from_spans;
+use crate::projects::ProjectStates;
 use crate::read_state::{Published, ReadState};
 use crate::wal::writer::WriterShared;
 use crate::wal::{Table, truncate_segments};
@@ -296,7 +297,9 @@ async fn flush_once(params: &FlushParams) -> Result<Option<u64>, FlushError> {
     let Some(view) = view else {
         return Ok(None);
     };
-    let tombstones = Arc::clone(&params.published.load().tombstones);
+    let state = params.published.load();
+    let tombstones = Arc::clone(&state.tombstones);
+    let projects = Arc::clone(&state.projects);
     let partitions = view.partitions.len();
     let max_seq = view.max_seq;
     if fresh {
@@ -308,7 +311,7 @@ async fn flush_once(params: &FlushParams) -> Result<Option<u64>, FlushError> {
     let table = params.table;
     let anchors = params.anchors.clone();
     let prepared = match tokio::task::spawn_blocking(move || {
-        prepare(table, &view, anchors.as_deref(), &tombstones)
+        prepare(table, &view, anchors.as_deref(), &tombstones, &projects)
     })
     .await
     {
@@ -414,12 +417,14 @@ fn publish_flush(
             scores: Arc::clone(&state.scores),
             catalog: Arc::clone(catalog),
             tombstones: Arc::clone(&state.tombstones),
+            projects: Arc::clone(&state.projects),
         },
         Table::Scores => ReadState {
             spans: Arc::clone(&state.spans),
             scores: Arc::clone(&snapshot),
             catalog: Arc::clone(catalog),
             tombstones: Arc::clone(&state.tombstones),
+            projects: Arc::clone(&state.projects),
         },
     });
     shared.set_memtable_bytes(bytes);
@@ -430,6 +435,7 @@ fn prepare(
     view: &FrozenView,
     anchors: Option<&Mutex<Anchors>>,
     tombstones: &Tombstones,
+    projects: &ProjectStates,
 ) -> Result<Prepared, FlushError> {
     let file_table = FileTable::from(table);
     let known_seq = tombstones.known_seq();
@@ -445,6 +451,11 @@ fn prepare(
                 .partition(view)?;
             anchor_plan = Some(plan);
             for partition in partitions {
+                // A partition of a day the project's retention watermark has
+                // dropped never reaches a file (spec 03 §8).
+                if projects.drops(partition.key.project, partition.key.day) {
+                    continue;
+                }
                 // Rows covered when the flush starts never reach a file
                 // (spec 03 §7). The partition's rows go through the filter
                 // before the duplicate collapsing.
@@ -467,6 +478,9 @@ fn prepare(
         }
         Table::Scores => {
             for (key, batches) in view.partitions.iter() {
+                if projects.drops(key.project, key.day) {
+                    continue;
+                }
                 if batches.is_empty() {
                     continue;
                 }

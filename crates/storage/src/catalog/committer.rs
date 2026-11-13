@@ -12,18 +12,22 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use chrono::NaiveDate;
 use llmobs_core::ids::ProjectId;
 use sqlx::{Connection, SqliteConnection};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::db::{
-    TableState, check_file_sources, load, load_tombstones, open_catalog_db, parse_file_id,
+    TableState, check_file_sources, load, load_project_states, load_tombstones, open_catalog_db,
+    parse_file_id,
 };
 use super::{Catalog, FileId, FileMeta, FileState, FileTable, table_index};
+use crate::RetentionReport;
 use crate::deletion::{Deletion, DeletionScope, DeletionStatus, PendingDeletion, Tombstones};
 use crate::error::{CatalogError, CommitError, DeletionError, GcError};
 use crate::hooks::{HookPoint, Hooks};
+use crate::projects::ProjectStates;
 use crate::wal::Table;
 
 /// One catalog change. Paths in `add` must already be staged.
@@ -44,6 +48,20 @@ pub(crate) struct CatalogEdit {
     /// checked them and found no covered row. Each must be active and its stored
     /// value lower than the new one.
     pub raise: Vec<(FileId, u64)>,
+}
+
+/// What a commit writes besides the file edit, inside the same transaction.
+enum Extra {
+    /// Nothing beyond the edit.
+    None,
+    /// `INSERT OR REPLACE` the retention watermark (spec 03 §8). `keep_from`
+    /// is already the max of the stored one and the request.
+    Retention {
+        /// The project whose watermark rises.
+        project: ProjectId,
+        /// The watermark to store.
+        keep_from: NaiveDate,
+    },
 }
 
 struct CommitterInner {
@@ -104,6 +122,13 @@ impl Committer {
     /// The pending deletions as last committed.
     pub(crate) async fn tombstones(&self) -> Arc<Tombstones> {
         Arc::clone(&self.inner.lock().await.tombstones)
+    }
+
+    /// The project states stored in `catalog.db`: retention watermarks
+    /// (spec 03 §8).
+    pub(crate) async fn project_states(&self) -> Result<ProjectStates, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        load_project_states(&mut inner.connection).await
     }
 
     /// Stores `deletion` with the next `deletion_seq`, then calls `publish` with
@@ -436,40 +461,75 @@ impl Committer {
     {
         // Lock order: committer mutex, then (inside `publish`) memtable, then Published.
         let mut inner = self.inner.lock().await;
-        // The transaction borrows the connection, so copy these out first.
-        let current = Arc::clone(&inner.catalog);
-        // Production hooks are `Copy`. Tests share one value and have to clone it.
-        #[allow(clippy::clone_on_copy)]
-        let hooks = inner.hooks.clone();
-        let mut transaction = inner.connection.begin().await.map_err(CommitError::db)?;
-        if let Err(error) = write_edit(transaction.as_mut(), edit).await {
-            let _ = transaction.rollback().await;
-            return Err(error);
-        }
-        let (next, removed) = match current.apply(edit) {
-            Ok((catalog, removed)) => (Arc::new(catalog), removed),
-            Err(error) => {
-                let _ = transaction.rollback().await;
-                return Err(error);
-            }
-        };
-        hooks.pause(HookPoint::CatalogCommit);
-        if let Some(source) = hooks.fail(HookPoint::CatalogCommit) {
-            let _ = transaction.rollback().await;
-            return Err(CommitError::Db {
-                source: sqlx::Error::Io(source),
-            });
-        }
-        transaction.commit().await.map_err(CommitError::db)?;
-        for file in removed {
-            inner.retired.insert(file.id, file);
-        }
-        if let Some((table, sequence)) = edit.flushed_seq {
-            inner.flushed[table_index(table)] = sequence;
-        }
-        inner.catalog = Arc::clone(&next);
+        let next = commit_inner(&mut inner, edit, &Extra::None).await?;
         publish(&next);
         Ok(next)
+    }
+
+    /// Obsoletes every active file of `project` in the days before the
+    /// watermark, stores the watermark in the same transaction, then calls
+    /// `publish` with the new catalog and the watermark before releasing the
+    /// mutex (spec 03 §8). The watermark is the later of the stored one and
+    /// `keep_from`: it never moves back.
+    pub(crate) async fn apply_retention<F>(
+        &self,
+        project: ProjectId,
+        keep_from: NaiveDate,
+        publish: F,
+    ) -> Result<RetentionReport, CommitError>
+    where
+        F: FnOnce(&Arc<Catalog>, NaiveDate),
+    {
+        let mut inner = self.inner.lock().await;
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT keep_from FROM retention_watermarks WHERE project_id = ?")
+                .bind(project.to_string())
+                .fetch_optional(&mut inner.connection)
+                .await
+                .map_err(CommitError::db)?;
+        let stored = stored
+            .map(|day| NaiveDate::parse_from_str(&day, "%Y-%m-%d"))
+            .transpose()
+            .map_err(|_| CommitError::conflict("invalid retention watermark"))?;
+        let watermark = stored.map_or(keep_from, |stored| stored.max(keep_from));
+        // Every active file of the project before the watermark, all three
+        // tables. A `spans` file and its `traces` file share their day, so
+        // both sides of every pair go in one edit.
+        let mut remove = Vec::new();
+        let mut bytes = 0_u64;
+        if let Some(last_day) = watermark.pred_opt() {
+            for table in [FileTable::Spans, FileTable::Traces, FileTable::Scores] {
+                for file in inner
+                    .catalog
+                    .files(table, project, NaiveDate::MIN..=last_day)
+                {
+                    remove.push((file.id, FileState::Active));
+                    bytes = bytes.saturating_add(file.size);
+                }
+            }
+        }
+        let edit = CatalogEdit {
+            add: Vec::new(),
+            remove,
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: Vec::new(),
+        };
+        let next = commit_inner(
+            &mut inner,
+            &edit,
+            &Extra::Retention {
+                project,
+                keep_from: watermark,
+            },
+        )
+        .await?;
+        publish(&next, watermark);
+        Ok(RetentionReport {
+            files: u64::try_from(edit.remove.len()).unwrap_or(u64::MAX),
+            bytes,
+            keep_from: watermark,
+        })
     }
 
     /// Staged paths whose `created_at` is strictly before `cutoff_ns`.
@@ -691,6 +751,73 @@ pub(crate) fn now_ns() -> i64 {
         .unwrap_or(0)
 }
 
+/// The body of [`Committer::commit`] up to and including the SQLite commit
+/// and the in-memory updates, with `extra`'s SQL run after `write_edit` and
+/// before the `CatalogCommit` hook. Does not publish; the caller holds the
+/// mutex and publishes once everything worked.
+async fn commit_inner(
+    inner: &mut CommitterInner,
+    edit: &CatalogEdit,
+    extra: &Extra,
+) -> Result<Arc<Catalog>, CommitError> {
+    // The transaction borrows the connection, so copy these out first.
+    let current = Arc::clone(&inner.catalog);
+    // Production hooks are `Copy`. Tests share one value and have to clone it.
+    #[allow(clippy::clone_on_copy)]
+    let hooks = inner.hooks.clone();
+    let mut transaction = inner.connection.begin().await.map_err(CommitError::db)?;
+    if let Err(error) = write_edit(transaction.as_mut(), edit).await {
+        let _ = transaction.rollback().await;
+        return Err(error);
+    }
+    if let Err(error) = write_extra(transaction.as_mut(), extra).await {
+        let _ = transaction.rollback().await;
+        return Err(error);
+    }
+    let (next, removed) = match current.apply(edit) {
+        Ok((catalog, removed)) => (Arc::new(catalog), removed),
+        Err(error) => {
+            let _ = transaction.rollback().await;
+            return Err(error);
+        }
+    };
+    hooks.pause(HookPoint::CatalogCommit);
+    if let Some(source) = hooks.fail(HookPoint::CatalogCommit) {
+        let _ = transaction.rollback().await;
+        return Err(CommitError::Db {
+            source: sqlx::Error::Io(source),
+        });
+    }
+    transaction.commit().await.map_err(CommitError::db)?;
+    for file in removed {
+        inner.retired.insert(file.id, file);
+    }
+    if let Some((table, sequence)) = edit.flushed_seq {
+        inner.flushed[table_index(table)] = sequence;
+    }
+    inner.catalog = Arc::clone(&next);
+    Ok(next)
+}
+
+/// The SQL of [`Extra`], inside the edit's transaction.
+async fn write_extra(connection: &mut SqliteConnection, extra: &Extra) -> Result<(), CommitError> {
+    match extra {
+        Extra::None => Ok(()),
+        Extra::Retention { project, keep_from } => {
+            sqlx::query(
+                "INSERT OR REPLACE INTO retention_watermarks (project_id, keep_from)
+                 VALUES (?, ?)",
+            )
+            .bind(project.to_string())
+            .bind(keep_from.format("%Y-%m-%d").to_string())
+            .execute(&mut *connection)
+            .await
+            .map_err(CommitError::db)?;
+            Ok(())
+        }
+    }
+}
+
 async fn write_edit(
     connection: &mut SqliteConnection,
     edit: &CatalogEdit,
@@ -703,6 +830,25 @@ async fn write_edit(
             .map_err(CommitError::db)?;
         if staged.is_none() {
             return Err(CommitError::conflict("path is not staged"));
+        }
+    }
+    // An added file may not be of a day the project's retention watermark has
+    // dropped (spec 03 §8): a flush or compaction prepared before the
+    // retention fails here and retries. Both columns are `YYYY-MM-DD`, which
+    // compares the same as text as it does as a date.
+    for file in &edit.add {
+        let keep_from: Option<String> =
+            sqlx::query_scalar("SELECT keep_from FROM retention_watermarks WHERE project_id = ?")
+                .bind(file.project.to_string())
+                .fetch_optional(&mut *connection)
+                .await
+                .map_err(CommitError::db)?;
+        if let Some(keep_from) = keep_from
+            && file.day.format("%Y-%m-%d").to_string() < keep_from
+        {
+            return Err(CommitError::conflict(
+                "file day is before the retention watermark",
+            ));
         }
     }
     for (id, state) in &edit.remove {
@@ -1053,7 +1199,7 @@ mod tests {
             .fetch_one(&mut again)
             .await
             .unwrap();
-        assert_eq!(migrations, 3);
+        assert_eq!(migrations, 4);
         let indexes: Vec<String> = sqlx::query_scalar(
             "SELECT name FROM sqlite_master
              WHERE type = 'index' AND name LIKE 'data_files_%'
