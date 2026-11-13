@@ -2,9 +2,9 @@
 
 Track G connects the Wave 1 areas into a running product: OTLP ingest into storage, the read API over A2's queries, score writes, live updates, and the embedded UI on the real API. It runs first and alone in Wave 2 because it settles the wiring every later track extends: the server's state and route table, `openapi.json`, the `fixtures/api` manifest and the web router (`docs/roadmap.md` § Wave 2).
 
-This document holds the decisions, the architecture, the interfaces later tracks build on, and the milestones. Each milestone gets its own plan of small sub-phases (`01-m1-…md` onwards). The first is [`01-m1-otlp-http-ingest.md`](01-m1-otlp-http-ingest.md).
+This document holds the decisions, the architecture, the interfaces later tracks build on, and the milestones. Each milestone gets its own plan of small sub-phases: [`01-m1-otlp-http-ingest.md`](01-m1-otlp-http-ingest.md) and [`02-m2-read-api.md`](02-m2-read-api.md) so far.
 
-**Status.** Design and M1 plan written. The A2 and C review findings that touch G are in § Review findings, with the milestone each fix must precede; M1 depends on none of them.
+**Status.** Design, M1 and M2 plans written. M1 implemented (PR #43). The A2 fixes M2 needs are merged (PR #48). The C review findings that touch G are in § Review findings, with the milestone each fix must precede.
 
 **Read first:** `AGENTS.md`; `docs/mvp-decisions.md` (D39–D51, D60, D64, D69–D76, D83–D101, D103, D105, D108, D111, D135–D151, D152–D154, D161, D-F-1, D-F-2, D-F-16, D-A1-6, D-A1-7 and the Track G section); specs 01, 02, 03 §1–2 and §9–10, 05, 08, 09, 11, 12; the research note [`docs/research/spine/competitors-ingest-ui.md`](../../research/spine/competitors-ingest-ui.md).
 
@@ -36,6 +36,9 @@ All are in `docs/mvp-decisions.md` § Track G. The user chose the option marked 
 | D-G-20 | **End-to-end test.** In `just check`: a Rust test starts the real server on ephemeral ports, sends the SDK conformance fixtures over OTLP/HTTP (protobuf and JSON) and gRPC, signs in and reads them back through the UI API. `just e2e` runs the real Python and TypeScript SDKs against `llmobs serve`, as its own CI job. |
 | D-G-21 | **Ports.** `/v1/traces` is served on `http_addr` (8080) and on `otlp_http_addr` (4318, only that route; empty disables it). gRPC `TraceService/Export` is served by `tonic` on `grpc_addr` (4317; empty disables it). |
 | D-G-22 | **Stream requests are validated before streaming.** `/traces/stream` applies `filter` and `search` (already in its parameters, D-C-5) on each re-read; a trace that matched `search` once keeps being sent on every update while the stream is open (D-C-5). The filter and search are checked when the stream opens: an invalid filter answers `400 invalid_filter` as a problem, not a stream, so `EventSource` closes without retrying. A re-read that fails later (timeout, memory cap) sends `resync` and logs the error kind. (From the C review, U27.) |
+| D-G-23 | **Read error contract.** The read operations declare `422` and `503`; `get_media` declares `503`; a new problem code `range_not_satisfiable` (416). (User's choice.) |
+| D-G-24 | **Media ranges from a whole read.** `GET /media` reads the whole blob (≤ `media.max_bytes`) and slices one `bytes=` range; anything else gets `200`. (User's choice; A1 is asked for a size-only lookup.) |
+| D-G-25 | **Example generator.** `just api-examples` is a unit test in `llmobs-server` over `fixtures/api/dataset`; `GET /schema` is checked against `static/schema.json`; `GET /metrics` uses a fixed window and an empty manifest query. |
 
 ## Scope
 
@@ -210,7 +213,7 @@ Handlers for every declared read operation: `list_traces`, `get_trace`, `list_sp
 5. maps Arrow batches to the API types in `api::convert` (one function per type, columns by name as A2 documents them);
 6. answers JSON.
 
-Metrics results are cached 10 s per `(project, params)` (spec 05) in a small `Mutex<HashMap>` with expiry, held in `AppInner`. `RunError` → problem: `InvalidFilter` → 400 `invalid_filter` with `position`, `InvalidRequest` → 400 `bad_request`, `Failed` → 400 `query_failed`, `Timeout` → 422 `query_timeout`, `ResourcesExhausted` → 422 `query_too_large`, `Busy` (when A1 M6 adds it) → 503 `busy`. The exact variant names are taken from `crates/storage/src/query_error.rs` when M2 is planned.
+Metrics results are cached 10 s per `(project, params)` (spec 05) in a small `Mutex<HashMap>` with expiry (at most 256 entries), held in `AppInner.metrics_cache`. `RunError` → problem: `Invalid` → 400 `invalid_filter` with `errors[0] = {field: "filter", message, position}`, `InvalidRequest` → 400 `bad_request`, `Failed` → 400 `query_failed`, `Timeout` → 422 `query_timeout`, `TooLarge` → 422 `query_too_large`, `Internal` → 500. `Storage::query`'s `QueryError::Busy` (admission) → 503 `busy`. A `from` or `to` alone leaves the other side of the window open. The CLI runtime gives workers 8 MiB stacks, as A2 asks. Media follows D-G-24. The plan is [`02-m2-read-api.md`](02-m2-read-api.md).
 
 ### Score writes and feedback (M3)
 
@@ -245,7 +248,7 @@ The A2 and C reviews (`docs/reviews/a2-query.md`, `docs/reviews/c-web-ui.md` on 
 | C U18 (the external-media gate can be bypassed: upper-case schemes, `//host`) | G serves media only same-origin, at `GET /api/v1/projects/{p}/media/{sha256}` with `Content-Security-Policy: sandbox` and `nosniff`, and the UI's CSP allows media from `self` only (§ Embedded UI), which blocks external loads even if the gate is bypassed. The gate fix is still needed. | M5 |
 | C: `j`/`k` after a deep link, the table header not scrolling horizontally, the default saved view re-applied on every empty search | UI-only. | M5 |
 
-M2's plan starts by checking that the A2 fixes it needs are merged; M5's plan starts by checking the C fixes. If one is not merged, that milestone waits or the coordinator decides to ship without it.
+M2's plan checked that the A2 fixes it needs are merged (PR #48); M5's plan starts by checking the C fixes. If one is not merged, that milestone waits or the coordinator decides to ship without it.
 
 ## Testing
 
@@ -263,7 +266,7 @@ M2's plan starts by checking that the A2 fixes it needs are merged; M5's plan st
 | # | Milestone | Done when |
 |---|---|---|
 | **M1** | **OTLP/HTTP ingest end to end.** Config (`[ingest]`, `[media]`, `otlp_http_addr`); `Access::Key`; body handling; OTLP responses; `Ingest` with built-in prices, budget, `accept` and `commit` (media, append); `POST /v1/traces` on 8080 and 4318; golden and limit tests. | An OTel exporter pointed at `llmobs serve` with an `sk` key gets `200` and its spans are queryable through storage. |
-| **M2** | **Read API.** `api::convert`; the 12 read handlers; the metrics cache; `fixtures/api` regenerated by the real handlers (D-G-17). | Every declared read operation has a handler; the committed examples equal the real responses; `openapi.json` unchanged. |
+| **M2** | **Read API.** `api::convert`; the 12 read handlers; the metrics cache; `fixtures/api` regenerated by the real handlers (D-G-17, D-G-25); the read error contract (D-G-23). | Every declared read operation has a handler; the committed examples equal the real responses; `openapi.json` declares the read errors. |
 | **M3** | **Writes, gRPC, usage.** Score create/delete, the key score route, public feedback (contract added to `openapi.json`); `tonic` gRPC on 4317; `usage_daily` counters. | The SDKs' score route and the browser feedback helper work against the server; gRPC exporters work; usage rows grow. |
 | **M4** | **Live updates.** `LiveBus`, `commit` publishes, both SSE routes, `search` on the trace stream (D-C-5, D-G-22). | The UI's live mode works against the real server. |
 | **M5** | **UI on the real API and the end-to-end test.** `llmobs-ui`, SPA fallback and headers, minimal login, 401 handling, the e2e test, `just e2e` and its CI job, `just build-release` builds the web. | `llmobs serve` serves the UI; a user signs in, sees ingested traces live; `just check` runs the e2e test. |
@@ -281,7 +284,8 @@ M2 and M3 are independent of each other after M1; they stay in order because G r
 
 - **B1 (`llmobs-otel`):** cap the MIME type of an extracted blob at 255 bytes (storage's `put_media` limit; `is_mime` checks characters only), falling back to `application/octet-stream`. Until then G answers such a request `400`.
 - **A1:** the doc comment of `AppendError` (`crates/storage/src/error.rs`) still says `Backpressure` is answered `429`; D-G-3 makes it `503`.
-- **A2 / A1:** the review fixes listed in § Review findings (M-2, M-3, M-4 before M2; B-1, B-2, M-1 before H).
+- **A1:** a size-only media lookup (`media_info(project, sha256) -> Option<(mime_type, size)>`) so `GET /media` can read only the requested range (D-G-24).
+- **A2 / A1:** the review fixes listed in § Review findings: M-2, M-3, M-4 before M2 (merged, PR #48); B-1, B-2, M-1 before H (merged, PR #48).
 - **C:** the review fixes listed in § Review findings, before M5. C's R2 (batch span payloads) and R3 (autocomplete values) are not in G; they need A2 reads first.
 - **Coordinator:** assign `model_prices` and `/models` (D-G-10) to a track.
 - **L:** restyle G's `/login` and add setup, signup, reset and settings pages (D-G-19).
@@ -294,3 +298,5 @@ M2 and M3 are independent of each other after M1; they stay in order because G r
 
 - Feedback rate limit state lives in memory, like D's login limits; multi-node is out of scope (D15).
 - `memory-serve`'s exact API (version 2.4.0 at the time of writing) is checked when M5 is planned.
+- `GET /media` reads the whole blob for a range request (D-G-24) until A1 offers a size-only lookup.
+- The examples of D's endpoints (`static/`) stay hand-written; they can move to the generator when their owners next touch them.
