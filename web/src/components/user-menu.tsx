@@ -1,4 +1,5 @@
-import { LogOut } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { LogOut, UserRound } from "lucide-react";
 import { $api } from "@/api/client";
 import { useSignOut } from "@/components/auth/use-sign-out";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -62,6 +63,13 @@ export function UserMenu() {
         >
           Show times in UTC
         </DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link to="/account">
+            <UserRound aria-hidden="true" />
+            Account
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem disabled={pending} onSelect={signOut}>
           <LogOut aria-hidden="true" />

@@ -63,3 +63,11 @@ it("leaves even when signing out fails", async () => {
 
   await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
 });
+
+it("opens the account page from the user menu", async () => {
+  const { user, router } = await renderApp("/acme");
+  await user.click(screen.getByRole("button", { name: "Ada Example" }));
+  await user.click(screen.getByRole("menuitem", { name: "Account" }));
+  await waitFor(() => expect(router.state.location.pathname).toBe("/account"));
+  expect(await screen.findByRole("heading", { name: "Account", level: 1 })).toBeInTheDocument();
+});
