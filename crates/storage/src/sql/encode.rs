@@ -26,6 +26,9 @@ use crate::query_error::RunError;
 /// Flush a parquet row group once its encoded size passes this.
 const PARQUET_CHUNK_BYTES: usize = 32 * 1024 * 1024;
 
+/// Rows per Parquet row group in exports (parquet's default).
+const PARQUET_ROW_GROUP_ROWS: usize = 1024 * 1024;
+
 /// Encode `batches` as JSON objects, one per row, in column order.
 ///
 /// # Errors
@@ -194,6 +197,8 @@ pub(crate) fn ndjson_rows(batch: &RecordBatch, schema: &Schema) -> Result<Option
 /// Parquet writer that yields a chunk after each flushed row group.
 pub(crate) struct ParquetEncoder {
     writer: ArrowWriter<Vec<u8>>,
+    /// Row groups whose bytes were already returned.
+    taken_row_groups: usize,
 }
 
 impl ParquetEncoder {
@@ -201,17 +206,31 @@ impl ParquetEncoder {
     ///
     /// Returns [`RunError::Internal`] when the Parquet writer cannot be created.
     pub(crate) fn new(schema: &Schema) -> Result<Self, RunError> {
+        Self::with_row_group_rows(schema, PARQUET_ROW_GROUP_ROWS)
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RunError::Internal`] when the Parquet writer cannot be created.
+    fn with_row_group_rows(schema: &Schema, rows: usize) -> Result<Self, RunError> {
+        // Callers pass `PARQUET_ROW_GROUP_ROWS` or a test value; `set_max_row_group_row_count` panics on 0.
+        debug_assert!(rows > 0);
         // `ZstdLevel::default` is level 1.
         let properties = WriterProperties::builder()
             .set_compression(Compression::ZSTD(ZstdLevel::default()))
+            .set_max_row_group_row_count(Some(rows))
             .build();
         let writer = ArrowWriter::try_new(Vec::new(), Arc::new(schema.clone()), Some(properties))
             .map_err(parquet_failure)?;
-        Ok(Self { writer })
+        Ok(Self {
+            writer,
+            taken_row_groups: 0,
+        })
     }
 
-    /// Write `batch`. Returns the bytes of completed row groups once the in-progress
-    /// group passes 32 MiB.
+    /// Write `batch`. Returns the bytes of every row group completed since the
+    /// last chunk: one closed by the writer at the row limit, or the open one
+    /// once it passes 32 MiB.
     ///
     /// # Errors
     ///
@@ -219,10 +238,13 @@ impl ParquetEncoder {
     pub(crate) fn push(&mut self, batch: &RecordBatch) -> Result<Option<Bytes>, RunError> {
         self.writer.write(batch).map_err(parquet_failure)?;
         if self.writer.in_progress_size() > PARQUET_CHUNK_BYTES {
-            self.take_bytes()
-        } else {
-            Ok(None)
+            self.writer.flush().map_err(parquet_failure)?;
         }
+        if self.writer.flushed_row_groups().len() == self.taken_row_groups {
+            return Ok(None);
+        }
+        self.taken_row_groups = self.writer.flushed_row_groups().len();
+        self.take_bytes()
     }
 
     /// Write the footer and return every byte still buffered.
@@ -241,7 +263,6 @@ impl ParquetEncoder {
     }
 
     fn take_bytes(&mut self) -> Result<Option<Bytes>, RunError> {
-        self.writer.flush().map_err(parquet_failure)?;
         self.writer.sync().map_err(io_failure)?;
         let bytes = std::mem::take(self.writer.inner_mut());
         Ok((!bytes.is_empty()).then(|| Bytes::from(bytes)))
@@ -254,4 +275,84 @@ fn parquet_failure(error: parquet::errors::ParquetError) -> RunError {
 
 fn io_failure(error: std::io::Error) -> RunError {
     RunError::Internal(DataFusionError::IoError(error))
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::Int64Array;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+    use super::*;
+
+    fn int_schema() -> Schema {
+        Schema::new(vec![Field::new("n", DataType::Int64, false)])
+    }
+
+    fn int_batch(schema: &Schema, values: std::ops::Range<i64>) -> RecordBatch {
+        let array = Int64Array::from(values.collect::<Vec<_>>());
+        RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)]).expect("batch")
+    }
+
+    fn read_back(file: Bytes) -> (usize, Vec<i64>) {
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).expect("parquet");
+        let groups = builder.metadata().num_row_groups();
+        let values = builder
+            .build()
+            .expect("reader")
+            .map(|batch| batch.expect("batch"))
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .expect("int64")
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        (groups, values)
+    }
+
+    #[test]
+    fn parquet_chunks_follow_row_groups() {
+        let schema = int_schema();
+        let mut encoder = ParquetEncoder::with_row_group_rows(&schema, 1_000).expect("encoder");
+        let mut file = Vec::new();
+        for index in 0..10 {
+            let batch = int_batch(&schema, index * 1_000..index * 1_000 + 1_000);
+            let chunk = encoder
+                .push(&batch)
+                .expect("push")
+                .expect("each batch completes one row group");
+            assert!(!chunk.is_empty());
+            file.extend_from_slice(&chunk);
+        }
+        file.extend_from_slice(&encoder.finish().expect("finish"));
+
+        let (groups, values) = read_back(Bytes::from(file));
+        assert_eq!(groups, 10);
+        assert_eq!(values, (0..10_000).collect::<Vec<i64>>());
+    }
+
+    #[test]
+    fn a_partial_row_group_waits_for_finish() {
+        let schema = int_schema();
+        let mut encoder = ParquetEncoder::with_row_group_rows(&schema, 1_000).expect("encoder");
+        assert!(
+            encoder
+                .push(&int_batch(&schema, 0..999))
+                .expect("push")
+                .is_none()
+        );
+        let chunk = encoder
+            .push(&int_batch(&schema, 999..1_001))
+            .expect("push")
+            .expect("the group closes at 1,000 rows");
+        let mut file = chunk.to_vec();
+        file.extend_from_slice(&encoder.finish().expect("finish"));
+
+        let (groups, values) = read_back(Bytes::from(file));
+        assert_eq!(groups, 2);
+        assert_eq!(values, (0..1_001).collect::<Vec<i64>>());
+    }
 }
