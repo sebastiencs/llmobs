@@ -1,4 +1,4 @@
-Status: L1–L19 done on 2026-11-13; L20 not started
+Status: L1–L20 done on 2026-11-13
 
 # L · Admin UI
 
@@ -351,7 +351,7 @@ export PATH=$HOME/.local/share/nvm/v26.13.0/bin:$PATH
 just web-dev
 ```
 
-Then open `http://localhost:5173/acme/support-bot/settings/general` (port from Vite's output). The mocks sign you in as Ada. Until L20, writes in the dev server fail with a network error; tests do not depend on that.
+Then open `http://localhost:5173/acme/support-bot/settings/general` (port from Vite's output). The mocks sign you in as Ada. Writes answer from `web/src/mocks/writes.ts` and keep no state, so a list does not change after a create or a delete.
 
 ## Notes for other tracks
 

@@ -3,12 +3,14 @@ import { STORAGE_PREFIX } from "@/product";
 import { handlers } from "./handlers";
 import { savedViewHandlers, seedSavedViews } from "./saved-views";
 import { fixtureStreamHandlers } from "./sse";
+import { writeHandlers } from "./writes";
 
 export const MOCK_STORAGE_KEY = `${STORAGE_PREFIX}mock`;
 
 export const worker = setupWorker(
   ...fixtureStreamHandlers(),
   ...savedViewHandlers(seedSavedViews()),
+  ...writeHandlers,
   ...handlers,
 );
 
