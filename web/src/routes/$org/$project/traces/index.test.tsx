@@ -1,17 +1,17 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
-import { expect, it, vi } from "vitest";
+import { beforeAll, expect, it, vi } from "vitest";
 import type { Schema } from "@/api/types";
 import { columnChoiceKey } from "@/components/data-table/column-layout";
 import { ROW_HEIGHT } from "@/components/data-table/data-table";
 import { ONBOARDING_POLL_MS, setOnboardingPollMs } from "@/components/onboarding/poll";
 import { otelSnippet } from "@/components/onboarding/snippets";
 import { defaultCollapsed } from "@/lib/tree";
-import { createDataset } from "@/mocks/generated/dataset";
+import { createDataset, type Dataset } from "@/mocks/generated/dataset";
 import { largeHandlers } from "@/mocks/generated/handlers";
 import { server } from "@/mocks/node";
 import { savedViewHandlers } from "@/mocks/saved-views";
-import { type StreamEmit, traceStreamHandler } from "@/mocks/sse";
+import { type StreamEmit, spanStreamHandler, traceStreamHandler } from "@/mocks/sse";
 import { renderApp } from "@/test/render";
 
 const FIRST = "a1000000000000000000000000000006";
@@ -96,9 +96,14 @@ it("sorts from the URL without reordering the server page", async () => {
   }
 });
 
+let traces5k: Dataset;
+
+beforeAll(() => {
+  traces5k = createDataset({ seed: 1, now: Date.now(), traces: 5000 });
+});
+
 it("virtualizes a large list and loads the next page on scroll", async () => {
-  const now = Date.now();
-  server.use(...largeHandlers(createDataset({ seed: 1, now, traces: 5000 })));
+  server.use(...largeHandlers(traces5k));
   const urls: URL[] = [];
   const onStart = ({ request }: { request: Request }) => {
     const url = new URL(request.url);
@@ -598,6 +603,7 @@ it("refetches the list when the stream resyncs", async () => {
 });
 
 it("keeps the selected row in place when a trace is prepended", async () => {
+  server.use(spanStreamHandler(() => undefined));
   const { emit } = await openLive(`/acme/support-bot/traces?live=1&trace=${FIRST}`);
   const scroller = tracesScroller();
   expect(scroller.scrollTop).toBe(0);

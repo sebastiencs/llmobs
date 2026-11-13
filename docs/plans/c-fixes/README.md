@@ -1,4 +1,4 @@
-Status: planned on 2026-11-13, not started
+Status: CF1–CF1 done on 2026-11-13
 
 # C · Fixes for the review's major findings
 
