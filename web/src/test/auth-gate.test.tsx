@@ -1,7 +1,8 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { api } from "@/api/client";
+import { setSigningOut } from "@/api/session";
 import { server } from "@/mocks/node";
 import { problemResponse } from "@/test/problem";
 import { renderApp } from "@/test/render";
@@ -53,12 +54,12 @@ it("sends the user to login when the session ends during use", async () => {
     }),
   );
 
-  const { router, queryClient } = await renderApp("/acme");
+  const { router, queryClient } = await renderApp("/acme?x=1");
 
   await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
   expect(await screen.findByRole("link", { name: "Continue with GitHub" })).toHaveAttribute(
     "href",
-    "/api/auth/authorize/github?redirect=%2Facme",
+    "/api/auth/authorize/github?redirect=%2Facme%3Fx%3D1",
   );
   await waitFor(() =>
     expect(
@@ -72,7 +73,7 @@ it("does not redirect when the login form gets a 401", async () => {
   signedOut();
   server.use(http.post("/api/auth/login", () => problemResponse(401, "unauthorized")));
 
-  const { router, user } = await renderApp("/login?redirect=%2Facme");
+  const { router, user } = await renderApp("/login?redirect=%2Facme%2Fsupport-bot%2Ftraces");
   await user.type(screen.getByLabelText("Email"), "ada@example.com");
   await user.type(screen.getByLabelText("Password"), "wrong password");
   await user.click(screen.getByRole("button", { name: "Sign in" }));
@@ -81,7 +82,7 @@ it("does not redirect when the login form gets a 401", async () => {
   expect(router.state.location.pathname).toBe("/login");
   expect(screen.getByRole("link", { name: "Continue with GitHub" })).toHaveAttribute(
     "href",
-    "/api/auth/authorize/github?redirect=%2Facme",
+    "/api/auth/authorize/github?redirect=%2Facme%2Fsupport-bot%2Ftraces",
   );
 });
 
@@ -89,14 +90,57 @@ it("ignores a session 401 on a public page", async () => {
   signedOut();
   server.use(http.get("/api/v1/orgs", () => problemResponse(401, "unauthorized")));
 
-  const { router } = await renderApp("/login?redirect=%2Facme");
+  const { router } = await renderApp("/login?redirect=%2Facme%2Fsupport-bot%2Ftraces");
+  const navigate = vi.spyOn(router, "navigate");
   await api.GET("/api/v1/orgs");
 
+  expect(navigate).not.toHaveBeenCalled();
   expect(router.state.location.pathname).toBe("/login");
   expect(screen.getByRole("link", { name: "Continue with GitHub" })).toHaveAttribute(
     "href",
-    "/api/auth/authorize/github?redirect=%2Facme",
+    "/api/auth/authorize/github?redirect=%2Facme%2Fsupport-bot%2Ftraces",
   );
+});
+
+it("ignores a poll's 401 while signing out", async () => {
+  let started = false;
+  let signedOut = false;
+  let answerLogout: (response: Response) => void = () => {};
+  const answer = new Promise<Response>((resolve) => {
+    answerLogout = resolve;
+  });
+  server.use(
+    http.post("/api/auth/logout", () => {
+      started = true;
+      signedOut = true;
+      return answer;
+    }),
+    http.get("/api/auth/me", () =>
+      signedOut ? problemResponse(401, "unauthorized") : HttpResponse.json(meFixture),
+    ),
+  );
+
+  const { router, user } = await renderApp("/acme");
+  try {
+    await screen.findByRole("heading", { name: "Acme" });
+    // A poll of a session path now fails with a 401, mid-sign-out.
+    server.use(http.get("/api/v1/orgs", () => problemResponse(401, "unauthorized")));
+    await user.click(screen.getByRole("button", { name: "Ada Example" }));
+    await user.click(screen.getByRole("menuitem", { name: "Sign out" }));
+    await waitFor(() => expect(started).toBe(true));
+
+    await api.GET("/api/v1/orgs");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(router.state.location.pathname).toBe("/acme");
+
+    answerLogout(new HttpResponse(null, { status: 204 }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
+    expect(router.state.location.search).toEqual({});
+  } finally {
+    setSigningOut(false);
+  }
 });
 
 it("sends a session that ends on a new server to setup", async () => {

@@ -43,10 +43,28 @@ async function fillAndSubmit(user: UserEvent, email: string, password: string) {
 it("signs in and returns to the redirect target", async () => {
   signedOut();
   const bodies = loginSucceeds();
-  const { router, user } = await renderApp("/login?redirect=%2Facme");
+  const { router, user, queryClient } = await renderApp(
+    "/login?redirect=%2Facme%2Fsupport-bot%2Ftraces",
+  );
   await fillAndSubmit(user, "ada@example.com", "correct horse battery");
-  await waitFor(() => expect(router.state.location.pathname).toBe("/acme"));
+  await waitFor(() => expect(router.state.location.pathname).toBe("/acme/support-bot/traces"));
   expect(bodies).toEqual([{ email: "ada@example.com", password: "correct horse battery" }]);
+  // gcTime 0: once the page has unmounted, TanStack drops the mutation, whose variables
+  // hold the password and whose data holds the signed-in user.
+  const cached = () =>
+    JSON.stringify(
+      queryClient
+        .getMutationCache()
+        .getAll()
+        .map((mutation) => ({
+          data: mutation.state.data ?? null,
+          variables: mutation.state.variables ?? null,
+        })),
+    );
+  await waitFor(() => {
+    expect(cached()).not.toContain("correct horse battery");
+    expect(cached()).not.toContain("ada@example.com");
+  });
 });
 
 it("goes home after signing in without a redirect", async () => {
@@ -74,12 +92,13 @@ it("ignores an unsafe redirect", async () => {
     "/api/auth/authorize/github",
   );
   await fillAndSubmit(user, "ada@example.com", "correct horse battery");
-  await waitFor(() => expect(router.state.location.pathname).toBe("/acme"));
+  // The app stays on its origin and lands on the default page, not on the given redirect.
+  await waitFor(() => expect(router.state.location.href).toBe("/acme"));
 });
 
 it("sends a user who is already signed in to the redirect target", async () => {
-  const { router } = await renderApp("/login?redirect=%2Facme");
-  expect(router.state.location.pathname).toBe("/acme");
+  const { router } = await renderApp("/login?redirect=%2Facme%2Fsupport-bot%2Ftraces");
+  expect(router.state.location.pathname).toBe("/acme/support-bot/traces");
   expect(screen.queryByRole("heading", { name: "Sign in" })).toBeNull();
 });
 

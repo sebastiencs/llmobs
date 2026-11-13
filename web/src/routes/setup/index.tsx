@@ -1,5 +1,5 @@
 import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { createFileRoute, Link, redirect } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 import { authConfigQuery } from "@/api/auth";
 import { $api } from "@/api/client";
@@ -28,9 +28,23 @@ export const Route = createFileRoute("/setup/")({
   component: SetupPage,
 });
 
+/** What a successful setup created. Held in `SetupPage`, so it survives the token leaving the URL. */
+type Created = { org: string; project: string; projectName: string; secret: string };
+
 function SetupPage() {
   const { data: config } = useSuspenseQuery(authConfigQuery);
   const { token } = Route.useSearch();
+  const [created, setCreated] = useState<Created>();
+  if (created) {
+    return (
+      <FirstTraceScreen
+        org={created.org}
+        project={created.project}
+        projectName={created.projectName}
+        secret={created.secret}
+      />
+    );
+  }
   if (token === undefined) {
     return (
       <AuthLayout title={`Set up ${PRODUCT_NAME}`}>
@@ -41,7 +55,7 @@ function SetupPage() {
       </AuthLayout>
     );
   }
-  return <SetupForm token={token} config={config} />;
+  return <SetupForm token={token} config={config} onCreated={setCreated} />;
 }
 
 /** The message above the submit button for a failed `POST /api/auth/setup`. */
@@ -65,8 +79,17 @@ function setupFormError(error: unknown): string | undefined {
   return problemMessage(error, "Setup failed. Try again.");
 }
 
-function SetupForm({ token, config }: { token: string; config: Schema<"AuthConfig"> }) {
+function SetupForm({
+  token,
+  config,
+  onCreated,
+}: {
+  token: string;
+  config: Schema<"AuthConfig">;
+  onCreated: (created: Created) => void;
+}) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -74,11 +97,25 @@ function SetupForm({ token, config }: { token: string; config: Schema<"AuthConfi
   const [orgName, setOrgName] = useState("");
   const [projectName, setProjectName] = useState("");
   const [clientErrors, setClientErrors] = useState<Record<string, string>>({});
-  const [created, setCreated] = useState<
-    { org: string; project: string; projectName: string; secret: string } | undefined
-  >();
-  // gcTime 0: the response holds the secret key, shown once (D-L-5).
-  const setup = $api.useMutation("post", "/api/auth/setup", { gcTime: 0 });
+  // gcTime 0: the request holds the password and the setup token, the response the
+  // secret key, shown once (D-L-5, README § Pitfalls). onSuccess in the hook options:
+  // it navigates, which unmounts this form and would drop a `mutate` callback.
+  const setup = $api.useMutation("post", "/api/auth/setup", {
+    gcTime: 0,
+    onSuccess: (response) => {
+      void queryClient.invalidateQueries({ queryKey: authConfigQuery.queryKey });
+      queryClient.removeQueries({ queryKey: meQuery.queryKey });
+      onCreated({
+        org: response.org.slug,
+        project: response.project.slug,
+        projectName: response.project.name,
+        secret: response.secret_key,
+      });
+      setup.reset();
+      // The one-time token leaves the URL; the created state above keeps the screen.
+      void navigate({ to: "/setup", search: { token: undefined }, replace: true });
+    },
+  });
   const server = fieldErrors(setup.error);
   const formError = setupFormError(setup.error);
 
@@ -100,42 +137,16 @@ function SetupForm({ token, config }: { token: string; config: Schema<"AuthConfi
       return;
     }
     const trimmedName = name.trim();
-    setup.mutate(
-      {
-        body: {
-          setup_token: token,
-          email: email.trim(),
-          password,
-          org_name: orgName.trim(),
-          project_name: projectName.trim(),
-          ...(trimmedName.length > 0 ? { name: trimmedName } : {}),
-        },
+    setup.mutate({
+      body: {
+        setup_token: token,
+        email: email.trim(),
+        password,
+        org_name: orgName.trim(),
+        project_name: projectName.trim(),
+        ...(trimmedName.length > 0 ? { name: trimmedName } : {}),
       },
-      {
-        onSuccess: (response) => {
-          void queryClient.invalidateQueries({ queryKey: authConfigQuery.queryKey });
-          queryClient.removeQueries({ queryKey: meQuery.queryKey });
-          setCreated({
-            org: response.org.slug,
-            project: response.project.slug,
-            projectName: response.project.name,
-            secret: response.secret_key,
-          });
-          setup.reset();
-        },
-      },
-    );
-  }
-
-  if (created) {
-    return (
-      <FirstTraceScreen
-        org={created.org}
-        project={created.project}
-        projectName={created.projectName}
-        secret={created.secret}
-      />
-    );
+    });
   }
 
   return (

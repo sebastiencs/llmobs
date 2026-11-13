@@ -1,7 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { createRouter, type RouterHistory } from "@tanstack/react-router";
 import { clearUserData } from "@/api/auth";
-import { setUnauthorizedHandler } from "@/api/session";
+import { isSigningOut, setUnauthorizedHandler } from "@/api/session";
 import { ErrorState } from "@/components/error-state";
 import { NotFound } from "@/components/not-found";
 import { isPublicPath, safeRedirect } from "@/lib/redirect";
@@ -27,6 +27,10 @@ export function createAppRouter(options: { queryClient: QueryClient; history?: R
     if (apiPath === "/api/auth/me" && router.state.status === "pending") {
       return;
     }
+    // A poll's 401 during sign-out must not race the sign-out's own navigation to /login.
+    if (isSigningOut()) {
+      return;
+    }
     const location = router.state.location;
     if (isPublicPath(location.pathname)) {
       return;
@@ -34,7 +38,7 @@ export function createAppRouter(options: { queryClient: QueryClient; history?: R
     const target = safeRedirect(location.href);
     void router
       .navigate({ to: "/login", search: target === undefined ? {} : { redirect: target } })
-      .then(() => {
+      .finally(() => {
         clearUserData(options.queryClient);
       });
   });

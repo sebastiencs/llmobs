@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import type { UserEvent } from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
@@ -88,7 +88,7 @@ it("checks the form before sending it", async () => {
 it("creates the admin, the org and the project, then shows the key", async () => {
   needsSetup();
   const bodies = setupAnswers(() => HttpResponse.json(setupResponse, { status: 201 }));
-  const { user, queryClient } = await renderApp("/setup?token=tok123");
+  const { router, user, queryClient } = await renderApp("/setup?token=tok123");
   await fillForm(user, { name: "Ada Example" });
   await submit(user);
   expect(bodies).toEqual([
@@ -110,16 +110,27 @@ it("creates the admin, the org and the project, then shows the key", async () =>
     "/acme/support-bot/traces",
   );
   expect(await screen.findByText("First trace received")).toBeInTheDocument();
-  await waitFor(() =>
-    expect(
-      JSON.stringify(
-        queryClient
-          .getMutationCache()
-          .getAll()
-          .map((mutation) => mutation.state.data ?? null),
-      ),
-    ).not.toContain("sk-llmobs-EXAMPLE0"),
-  );
+  // The one-time token leaves the URL, and the created state keeps the screen showing.
+  await waitFor(() => expect(router.state.location.href).toBe("/setup"));
+  expect(screen.getByRole("heading", { name: "Send your first trace" })).toBeInTheDocument();
+  // gcTime 0 plus reset() drops the mutation: its data holds the secret key and its
+  // variables the password and the setup token. `reset()` alone would leave all of it
+  // in the cache for the default five minutes.
+  const cached = () =>
+    JSON.stringify(
+      queryClient
+        .getMutationCache()
+        .getAll()
+        .map((mutation) => ({
+          data: mutation.state.data ?? null,
+          variables: mutation.state.variables ?? null,
+        })),
+    );
+  await waitFor(() => {
+    expect(cached()).not.toContain("sk-llmobs-EXAMPLE0");
+    expect(cached()).not.toContain("correct horse battery");
+    expect(cached()).not.toContain("tok123");
+  });
 });
 
 it("leaves the name out when it is empty", async () => {
@@ -193,6 +204,34 @@ it("waits for the first trace", async () => {
       expect(url.searchParams.get("from")).not.toBeNull();
       expect(url.searchParams.get("to")).not.toBeNull();
     }
+  } finally {
+    setOnboardingPollMs(ONBOARDING_POLL_MS);
+  }
+});
+
+it("stops polling when the traces list errors", async () => {
+  needsSetup();
+  setupAnswers(() => HttpResponse.json(setupResponse, { status: 201 }));
+  setOnboardingPollMs(20);
+  let calls = 0;
+  server.use(
+    http.get("/api/v1/projects/:project/traces", () => {
+      calls += 1;
+      return problemResponse(500, "internal");
+    }),
+  );
+  try {
+    const { user } = await renderApp("/setup?token=tok123");
+    await fillForm(user);
+    await submit(user);
+    expect(await screen.findByText(WAITING_LINE)).toBeInTheDocument();
+    // The first poll fails and the polling stops; the waiting line stays.
+    await waitFor(() => expect(calls).toBe(1));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    });
+    expect(calls).toBe(1);
+    expect(screen.getByText(WAITING_LINE)).toBeInTheDocument();
   } finally {
     setOnboardingPollMs(ONBOARDING_POLL_MS);
   }

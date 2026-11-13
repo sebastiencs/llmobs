@@ -47,7 +47,9 @@ function LoginPage() {
   const [password, setPassword] = useState("");
   const [clientErrors, setClientErrors] = useState<{ email?: string; password?: string }>({});
   const [resendDone, setResendDone] = useState(false);
-  const login = $api.useMutation("post", "/api/auth/login");
+  // gcTime 0: the request carries the password, so its variables must leave the
+  // mutation cache as soon as the page unmounts (README § Pitfalls).
+  const login = $api.useMutation("post", "/api/auth/login", { gcTime: 0 });
   const resend = $api.useMutation("post", "/api/auth/email/verify/resend");
   const serverFieldErrors = fieldErrors(login.error);
   const needsVerification = problemOf(login.error)?.code === "email_not_verified";

@@ -58,16 +58,23 @@ it("creates the org, the project and a secret key, then shows the key", async ()
   expect(screen.getByLabelText("Secret key")).toHaveValue(
     "sk-llmobs-EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0",
   );
-  await waitFor(() =>
-    expect(
-      JSON.stringify(
-        queryClient
-          .getMutationCache()
-          .getAll()
-          .map((mutation) => mutation.state.data ?? null),
-      ),
-    ).not.toContain("sk-llmobs-EXAMPLE0"),
-  );
+  // gcTime 0 plus reset() drops the key mutation: its data holds the secret and its
+  // variables the request that made it (`name: "Default"`). `reset()` alone would leave
+  // both in the cache for the default five minutes.
+  const cached = () =>
+    JSON.stringify(
+      queryClient
+        .getMutationCache()
+        .getAll()
+        .map((mutation) => ({
+          data: mutation.state.data ?? null,
+          variables: mutation.state.variables ?? null,
+        })),
+    );
+  await waitFor(() => {
+    expect(cached()).not.toContain("sk-llmobs-EXAMPLE0");
+    expect(cached()).not.toContain('"name":"Default"');
+  });
 });
 
 it("does not create the org again when the project fails", async () => {

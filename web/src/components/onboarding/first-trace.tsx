@@ -41,7 +41,10 @@ export function FirstTraceScreen({
         }
         return (data?.data.length ?? 0) > 0;
       },
-      refetchInterval: (query) => (query.state.data === true ? false : onboardingPollMs()),
+      // Stop polling once the trace is seen or the query errored; a 401 redirects via
+      // the middleware, and any other failure keeps the waiting line without polling.
+      refetchInterval: (query) =>
+        query.state.status === "error" || query.state.data === true ? false : onboardingPollMs(),
     }).data === true;
 
   return (

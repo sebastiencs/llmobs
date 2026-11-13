@@ -9,6 +9,21 @@ export function setUnauthorizedHandler(next: UnauthorizedHandler | undefined): v
   handler = next;
 }
 
+let signingOut = false;
+
+export function setSigningOut(value: boolean): void {
+  signingOut = value;
+}
+
+/**
+ * True from the moment a sign-out starts until its navigation is done. The handler
+ * ignores 401s meanwhile, so a poll that fails mid-sign-out cannot race the sign-out's
+ * own navigation to `/login` with a `/login?redirect=…`.
+ */
+export function isSigningOut(): boolean {
+  return signingOut;
+}
+
 /**
  * API paths whose 401 means "your session ended": every `/api/v1/*` path, and exactly
  * `/api/auth/me`. Other `/api/auth/*` paths answer 401 for a wrong password.

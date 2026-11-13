@@ -7,6 +7,8 @@ import { SecretDialog } from "@/components/secret-dialog";
 const PAT_SECRET = "pat-llmobs-EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0";
 const SK_SECRET = "sk-llmobs-EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0";
 
+// The dialog stays mounted; only its `open` prop toggles, so a reopen shows the same
+// component instance and the tests really exercise `finish()` resetting the state.
 function Harness({
   secret,
   showSnippets,
@@ -19,27 +21,28 @@ function Harness({
   onDone: () => void;
 }) {
   const [open, setOpen] = useState(true);
-  return open ? (
-    <SecretDialog
-      open
-      title="Token created"
-      secret={secret}
-      showSnippets={showSnippets}
-      description={description}
-      onDone={() => {
-        onDone();
-        setOpen(false);
-      }}
-    />
-  ) : (
-    <button
-      type="button"
-      onClick={() => {
-        setOpen(true);
-      }}
-    >
-      Reopen
-    </button>
+  return (
+    <>
+      <SecretDialog
+        open={open}
+        title="Token created"
+        secret={secret}
+        showSnippets={showSnippets}
+        description={description}
+        onDone={() => {
+          onDone();
+          setOpen(false);
+        }}
+      />
+      <button
+        type="button"
+        onClick={() => {
+          setOpen(true);
+        }}
+      >
+        Reopen
+      </button>
+    </>
   );
 }
 
