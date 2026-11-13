@@ -1,0 +1,2 @@
+# Vitest's JSON reporter output (used by the rtk wrapper) lands here.
+.vitest/

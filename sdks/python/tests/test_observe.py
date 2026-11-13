@@ -277,6 +277,55 @@ def test_exception_recorded_and_reraised(memory: Memory, spans: Spans) -> None:
     assert isinstance(event_attributes["exception.stacktrace"], str)
 
 
+def test_base_exception_ends_span_unset_and_reraises(memory: Memory, spans: Spans) -> None:
+    """A ``BaseException`` that is not an ``Exception`` ends the span with the
+    status unset (like ``span()``), records no error and no output, and is
+    re-raised unchanged (sync, async and the generator wrappers)."""
+    exporter, start = memory
+    start()
+
+    @llmobs.observe(name="interrupted")
+    def interrupted() -> None:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        interrupted()
+
+    @llmobs.observe(name="cancelled")
+    async def cancelled() -> None:
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(cancelled())
+
+    @llmobs.observe(name="cut")
+    def cut() -> Iterator[int]:
+        yield 1
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        list(cut())
+
+    @llmobs.observe(name="acut")
+    async def acut() -> AsyncIterator[int]:
+        yield 1
+        raise KeyboardInterrupt
+
+    async def run_acut() -> None:
+        async for _ in acut():
+            pass
+
+    with pytest.raises(KeyboardInterrupt):
+        asyncio.run(run_acut())
+
+    by_name = {span.name: span for span in spans(exporter)}
+    for name in ("interrupted", "cancelled", "cut", "acut"):
+        span = by_name[name]
+        assert span.status.status_code is StatusCode.UNSET, name
+        assert not span.events, name
+        assert "llmobs.output" not in attrs(span), name
+
+
 def test_span_inside_observe(memory: Memory, spans: Spans) -> None:
     exporter, start = memory
     start()

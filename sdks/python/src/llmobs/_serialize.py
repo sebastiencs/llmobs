@@ -41,6 +41,19 @@ def _guard(value: object, depth: int, path: set[int]) -> str | None:
     return None
 
 
+def _child(value: object, depth: int, path: set[int]) -> object:
+    """One contained value: converted, or the in-place marker when it fails.
+
+    A failure that escapes a child's own conversion (a raising ``str`` on one
+    of its keys, a raising accessor, …) names the child, keeping the rest of
+    the payload; only the top-level value itself falls to rule 7.
+    """
+    try:
+        return _convert(value, depth, path)
+    except Exception:  # noqa: BLE001  # never raise into the app (spec 10 rule 4)
+        return _UNSERIALIZABLE.format(type(value).__name__)
+
+
 def _convert(value: object, depth: int, path: set[int]) -> object:
     """Rules 2-4 conversion; ``depth`` is the slot the value sits in (top level = 1)."""
     if value is None:
@@ -73,7 +86,7 @@ def _convert(value: object, depth: int, path: set[int]) -> object:
         path.add(id(value))
         try:
             fields = dataclasses.fields(value)
-            return {f.name: _convert(getattr(value, f.name), depth + 1, path) for f in fields}
+            return {f.name: _child(getattr(value, f.name), depth + 1, path) for f in fields}
         finally:
             path.discard(id(value))
     model_dump = getattr(value, "model_dump", None)
@@ -120,7 +133,7 @@ def _convert(value: object, depth: int, path: set[int]) -> object:
             return marker
         path.add(id(value))
         try:
-            return {_text(str(key)): _convert(val, depth + 1, path) for key, val in value.items()}
+            return {_text(str(key)): _child(val, depth + 1, path) for key, val in value.items()}
         finally:
             path.discard(id(value))
     if isinstance(value, (list, tuple, set, frozenset)):
@@ -129,13 +142,17 @@ def _convert(value: object, depth: int, path: set[int]) -> object:
             return marker
         path.add(id(value))
         try:
-            return [_convert(item, depth + 1, path) for item in value]
+            return [_child(item, depth + 1, path) for item in value]
         finally:
             path.discard(id(value))
     try:
         return _text(repr(value))
-    except Exception:  # noqa: BLE001
-        # never raise into the app (spec 10 rule 4)
+    except Exception:
+        # never raise into the app (spec 10 rule 4); at the top level the
+        # failure belongs to the whole value, so it escapes to serialize's
+        # rule-7 tuple instead of the in-place marker.
+        if depth == 1:
+            raise
         return _UNSERIALIZABLE.format(type(value).__name__)
 
 

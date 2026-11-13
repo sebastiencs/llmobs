@@ -64,7 +64,7 @@ export interface ScoreBody {
   name: string;
   value: ScoreValue;
   source: "sdk";
-  reason?: unknown;
+  reason?: string;
   user_id?: string;
   metadata?: Record<string, string>;
 }
@@ -162,7 +162,10 @@ function buildBody(options: ScoreOptions, scoreId: string): ScoreBody {
     source: "sdk",
   };
   if (options.reason !== undefined) {
-    body.reason = applyMask(options.reason);
+    // A mask that returns a non-string is serialized (Python's score does the
+    // same for its reason).
+    const masked = applyMask(options.reason);
+    body.reason = typeof masked === "string" ? masked : serialize(masked)[0];
   }
   if (userId !== undefined) {
     body.user_id = userId;

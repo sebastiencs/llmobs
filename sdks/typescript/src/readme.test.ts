@@ -17,6 +17,7 @@ import {
 } from "./readme-examples.test-helpers.js";
 import { init, resetForTests } from "./runtime.js";
 import { finished, type MemoryRuntime, startMemory } from "./testing.test-helpers.js";
+import type { FetchLike } from "./web.js";
 
 const README = new URL("../README.md", import.meta.url);
 const EXAMPLES = new URL("./readme-examples.test-helpers.ts", import.meta.url);
@@ -89,9 +90,12 @@ describe("README examples", () => {
   beforeEach(async () => {
     await resetForTests();
     // The examples call init() themselves; init is once per process (D-F-15),
-    // so the harness claims the first call and keeps the memory runtime.
+    // so the harness claims the first call and keeps the memory runtime. The
+    // score example queues one score whose cleanup flush would otherwise POST
+    // for real (to the refused 127.0.0.1:9) and retry the refusals: the stub
+    // answers 200 without touching the network.
     init({ enabled: false });
-    memory = startMemory();
+    memory = startMemory(undefined, undefined, { fetch: okFetch });
   });
 
   afterEach(async () => {
@@ -115,6 +119,10 @@ describe("README examples", () => {
     }
   });
 });
+
+/** A `fetch` that answers 200 to everything; no request leaves the process. */
+const okFetch: FetchLike = () =>
+  Promise.resolve({ status: 200, ok: true, headers: { get: () => null } });
 
 /** The `ts` fenced blocks preceded by a `<!-- readme:<name> -->` line. */
 function markedBlocks(markdown: string): Map<string, string> {

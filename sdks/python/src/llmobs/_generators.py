@@ -12,7 +12,10 @@ Exhaustion ends the span with the status unset and the output of § P6
 (joined text when every item is a ``str``, else a JSON list,
 ``reduce_output``'s result when given); closing early ends it with status
 ``ok`` and the items so far; an exception records the § Errors event and
-re-raises. ``inspect.isasyncgenfunction`` (and ``isgeneratorfunction``) is
+re-raises, and a ``BaseException`` that is not an ``Exception``
+(``KeyboardInterrupt``, a thrown ``GeneratorExit``, …) ends the span with
+the status unset and no output before re-raising.
+``inspect.isasyncgenfunction`` (and ``isgeneratorfunction``) is
 false on a wrapped generator function: the wrapper is a plain function
 returning the traced generator.
 
@@ -34,12 +37,15 @@ from opentelemetry.trace import Status, StatusCode
 from llmobs._log import logger
 from llmobs._runtime import Runtime, current
 from llmobs._spans import (
+    _UNSET,
     SpanKind,
     _bound_input,
     _detach,
+    _end_span,
     _record_error,
     _record_payload,
     _serialize_payload,
+    _start_span,
 )
 
 P = ParamSpec("P")
@@ -105,9 +111,16 @@ class _TracedSteps:
             self._span = None
             self._ctx = None
 
-    def _finish(self, error: Exception | None = None, *, closed: bool = False) -> None:
+    def _finish(
+        self,
+        error: Exception | None = None,
+        *,
+        closed: bool = False,
+        interrupted: bool = False,
+    ) -> None:
         """End the span: the § Errors event on ``error``, status ok when ``closed``,
-        the output from the items otherwise; never raises.
+        status unset and no output when ``interrupted`` (a ``BaseException`` that
+        is not an ``Exception``), the output from the items otherwise; never raises.
         """
         otel_span, self._span = self._span, None
         self._ctx = None
@@ -120,7 +133,8 @@ class _TracedSteps:
             else:
                 if closed:
                     otel_span.set_status(Status(StatusCode.OK))
-                self._record_output(otel_span)
+                if not interrupted:
+                    self._record_output(otel_span)
             otel_span.end()
         except Exception as failure:  # noqa: BLE001  # never raise into the app (spec 10 rule 4)
             logger.debug("llmobs: could not end the span (%s)", type(failure).__name__)
@@ -181,6 +195,11 @@ class TracedGenerator(_TracedSteps, Generator[Y, S, R]):
                 raise
             except Exception as error:
                 self._finish(error)
+                raise
+            except BaseException:
+                # KeyboardInterrupt, a thrown GeneratorExit, …: end with the
+                # status unset (§ Errors) and re-raise unchanged.
+                self._finish(interrupted=True)
                 raise
             if self._keep_items:
                 self._items.append(item)
@@ -260,6 +279,11 @@ class TracedAsyncGenerator(_TracedSteps, AsyncGenerator[Y, S]):
             except Exception as error:
                 self._finish(error)
                 raise
+            except BaseException:
+                # KeyboardInterrupt, asyncio.CancelledError, …: end with the
+                # status unset (§ Errors) and re-raise unchanged.
+                self._finish(interrupted=True)
+                raise
             if self._keep_items:
                 self._items.append(item)
             return item
@@ -327,15 +351,30 @@ def _wrap_generator(
     The wrapper is a plain function — ``inspect.isgeneratorfunction`` is
     false on it — that binds the input at call time (D-F-11) and returns a
     ``TracedGenerator``; without a running runtime the inner generator is
-    returned unchanged.
+    returned unchanged. A call with arguments the function cannot bind raises
+    before a generator exists (Python checks arguments at call time); like the
+    sync wrapper, one span records the input fallback and the error.
     """
 
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-        inner = func(*args, **kwargs)
         runtime = current()
         if runtime is None:
-            return inner
+            return func(*args, **kwargs)
+        try:
+            inner = func(*args, **kwargs)
+        except BaseException as error:
+            _record_failed_call(
+                runtime,
+                error,
+                signature,
+                args,
+                kwargs,
+                span_name=span_name,
+                kind=kind,
+                capture_input=capture_input,
+            )
+            raise
         return cast(
             "R",
             TracedGenerator(
@@ -367,15 +406,29 @@ def _wrap_async_generator(
     The wrapper is a plain function, so ``inspect.isasyncgenfunction`` on it
     is false; calling it returns a ``TracedAsyncGenerator`` around the inner
     async generator. Without a running runtime the inner async generator is
-    returned unchanged.
+    returned unchanged; a call that cannot bind gets the sync wrapper's
+    one-span treatment.
     """
 
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-        inner = func(*args, **kwargs)
         runtime = current()
         if runtime is None:
-            return inner
+            return func(*args, **kwargs)
+        try:
+            inner = func(*args, **kwargs)
+        except BaseException as error:
+            _record_failed_call(
+                runtime,
+                error,
+                signature,
+                args,
+                kwargs,
+                span_name=span_name,
+                kind=kind,
+                capture_input=capture_input,
+            )
+            raise
         return cast(
             "R",
             TracedAsyncGenerator(
@@ -390,3 +443,25 @@ def _wrap_async_generator(
         )
 
     return wrapper
+
+
+def _record_failed_call(
+    runtime: Runtime,
+    error: BaseException,
+    signature: inspect.Signature | None,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    *,
+    span_name: str,
+    kind: SpanKind,
+    capture_input: bool,
+) -> None:
+    """Record a call that raised before a generator existed (P5's sync-path
+    treatment): one span with the input fallback and the error, or just the
+    status unset for a ``BaseException`` that is not an ``Exception``.
+    """
+    input_value = _UNSET if not capture_input else _bound_input(signature, args, kwargs)
+    otel_span, token = _start_span(runtime, span_name, kind, input_value)
+    if isinstance(error, Exception):
+        _record_error(otel_span, error)
+    _end_span(otel_span, token)

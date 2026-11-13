@@ -450,9 +450,11 @@ scores still sitting in the batch queue are lost.
   headers; headers meant for another OTLP backend reach the llmobs server as
   well. Unset them if that matters.
 - **`KeyboardInterrupt` and `asyncio.CancelledError` are not errors.** Only
-  `Exception` gets the error status. Inside a `span()` / `llm_span()` block
-  such an exception still ends the span (status unset); through `@observe` the
-  span is left unended, so it is never exported.
+  `Exception` gets the error status. A `BaseException` that is not an
+  `Exception` — inside a `span()` / `llm_span()` block or raised through
+  `@observe` (functions, coroutine functions and both generator wrappers)
+  alike — ends the span with the status unset, records no output, and is
+  re-raised unchanged.
 - **Threads and serverless**: see [Threads](#threads) and
   [Serverless](#serverless).
 

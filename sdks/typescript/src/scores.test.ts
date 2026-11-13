@@ -212,6 +212,15 @@ describe("score()", () => {
     expect(body?.reason).toBe("[redacted]");
     expect(body?.metadata).toEqual({ email: "[redacted]", n: "1" });
   });
+
+  it("serializes a mask result for reason that is not a string", async () => {
+    // Python's test_mask_non_string_reason_is_serialized pins the same rule.
+    const { fetch, calls } = scriptedFetch([]);
+    startScores(fetch, { mask: () => 42 });
+    score({ name: "m", value: 1, sessionId: "s", reason: "why" });
+    await flush();
+    expect(bodies(calls[0])[0]?.reason).toBe("42");
+  });
 });
 
 describe("score() validation", () => {

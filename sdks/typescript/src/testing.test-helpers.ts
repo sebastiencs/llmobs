@@ -14,6 +14,7 @@ import {
 import { type LlmobsOptions, resolveConfig } from "./config.js";
 import { enableInstrumentations } from "./instrument.js";
 import { flush, installRuntime, Runtime } from "./runtime.js";
+import type { FetchLike } from "./web.js";
 
 /**
  * Trace and span ids from two counters starting at 1, zero-padded to the OTel
@@ -39,10 +40,12 @@ export interface MemoryRuntime {
   runtime: Runtime;
 }
 
-/** A runtime exporting in memory, with sequential ids, installed as current. */
+/** A runtime exporting in memory, with sequential ids, installed as current.
+ * `seams.fetch` feeds the score queue (the span exporter is always in memory). */
 export function startMemory(
   options?: Partial<LlmobsOptions>,
   env?: Record<string, string>,
+  seams?: { fetch?: FetchLike },
 ): MemoryRuntime {
   const exporter = new InMemorySpanExporter();
   const config = resolveConfig(
@@ -52,6 +55,7 @@ export function startMemory(
   const runtime = Runtime.create(config, {
     exporter,
     idGenerator: new SequentialIdGenerator(),
+    fetch: seams?.fetch,
   });
   installRuntime(runtime);
   // The production wiring path, so tests exercise what init() runs (T11).

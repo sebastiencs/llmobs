@@ -278,6 +278,62 @@ def test_reduce_output_raising_falls_back(
     assert any("reduce_output" in record.getMessage() for record in caplog.records)
 
 
+def test_empty_generator_records_no_output_and_skips_reduce(memory: Memory, spans: Spans) -> None:
+    """No yielded items → no output attribute at all, and ``reduce_output``
+    is not even called (TypeScript does the same in ``recordOutput``)."""
+    exporter, start = memory
+    start()
+    calls: list[int] = []
+
+    def counter(items: list[object]) -> object:
+        calls.append(len(items))
+        return {"count": len(items)}
+
+    @llmobs.observe(name="empty", reduce_output=counter)
+    def empty() -> Iterator[int]:
+        return
+        yield 1  # makes this a generator function that yields nothing
+
+    assert list(empty()) == []
+    [span] = spans(exporter)
+    assert "llmobs.output" not in attrs(span)
+    assert calls == []
+
+
+def test_unbindable_call_records_one_span_with_the_error(memory: Memory, spans: Spans) -> None:
+    """Python checks arguments at call time even for generator functions, so a
+    call that cannot bind raises before any generator exists: like the sync
+    wrapper, one span with the D-F-11 input fallback and the error."""
+    exporter, start = memory
+    start()
+
+    @llmobs.observe(name="bad")
+    def bad(a: int, b: int = 1) -> Iterator[int]:
+        yield a
+
+    with pytest.raises(TypeError):
+        bad(*[1, 2, 3])  # one argument too many: the call cannot bind
+
+    @llmobs.observe(name="abad")
+    async def abad(a: int) -> AsyncIterator[int]:
+        yield a
+
+    with pytest.raises(TypeError):
+        abad(*[1, 2])
+
+    by_name_spans = by_name(spans(exporter))
+    inputs = {"bad": '{"args":[1,2,3],"kwargs":{}}', "abad": '{"args":[1,2],"kwargs":{}}'}
+    for name, expected_input in inputs.items():
+        span = by_name_spans[name]
+        attributes = attrs(span)
+        assert attributes["llmobs.input"] == expected_input
+        assert attributes["llmobs.span.kind"] == "chain"
+        assert span.status.status_code is StatusCode.ERROR
+        assert span.status.description is not None
+        [event] = span.events
+        assert event.name == "exception"
+
+
 def test_capture_content_false_keeps_no_items(memory: Memory, spans: Spans) -> None:
     exporter, start = memory
     start(capture_content=False)

@@ -279,10 +279,14 @@ def test_depth_33_gets_marker() -> None:
 
 def test_never_raises() -> None:
     # rule 2 fallback: the marker names the object whose repr failed
-    assert as_json(BadRepr()) == '"<unserializable BadRepr>"'
     assert as_json({"k": BadRepr()}) == '{"k":"<unserializable BadRepr>"}'
-    # a dict key whose str() raises escapes the rules: rule 7 fallback
+    # a top-level value that fails to convert is the rule 7 tuple, not an
+    # in-place JSON string
+    assert serialize(BadRepr()) == ("<unserializable BadRepr>", "text")
+    # a dict key whose str() raises escapes the rules: rule 7 fallback at the
+    # top level, the in-place marker when the dict is itself nested
     assert serialize({EvilKey(): 1}) == ("<unserializable dict>", "text")
+    assert as_json({"outer": {EvilKey(): 1}}) == '{"outer":"<unserializable dict>"}'
 
 
 def marker(n: int) -> str:
@@ -353,7 +357,8 @@ def test_attribute_value_other_becomes_json_string() -> None:
     assert attribute_value({"a": True}) == '{"a":true}'
     assert attribute_value(float("nan")) == '"NaN"'
     assert attribute_value(float("inf")) == '"Infinity"'
-    assert attribute_value(BadRepr()) == '"<unserializable BadRepr>"'
+    assert attribute_value([BadRepr()]) == '["<unserializable BadRepr>"]'
+    assert attribute_value(BadRepr()) == "<unserializable BadRepr>"
 
 
 def test_attribute_value_truncates_strings() -> None:

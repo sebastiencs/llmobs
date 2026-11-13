@@ -374,6 +374,11 @@ def _wrap_function(
             _record_error(otel_span, error)
             _end_span(otel_span, token)
             raise
+        except BaseException:
+            # KeyboardInterrupt, asyncio.CancelledError, …: the span ends with
+            # the status unset (like span()/llm_span) and the raise goes through.
+            _end_span(otel_span, token)
+            raise
         if capture_output and runtime.config.capture_content and _recordable(result):
             _record_payload(otel_span, "output", result)
         _end_span(otel_span, token)
@@ -417,6 +422,11 @@ def _wrap_coroutine(
             result = await func(*args, **kwargs)
         except Exception as error:
             _record_error(otel_span, error)
+            _end_span(otel_span, token)
+            raise
+        except BaseException:
+            # KeyboardInterrupt, asyncio.CancelledError, …: the span ends with
+            # the status unset (like span()/llm_span) and the raise goes through.
             _end_span(otel_span, token)
             raise
         if capture_output and runtime.config.capture_content and _recordable(result):

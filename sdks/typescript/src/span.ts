@@ -111,20 +111,35 @@ interface TracedPlan extends SpanStart {
 }
 
 /**
- * The shared runner. The body's return value is never recorded as the output
- * here; `observe` records it through `plan.captureResultAsOutput` and
- * `withSpan` only through `SpanHandle.setOutput`.
+ * How the shared runner hands the body its handle. Internal, shared with the
+ * LLM span (T8). `create` runs once, right after the span started — the LLM
+ * span stamps its GenAI start attributes there; `noop` is the handle the body
+ * gets without a runtime or when the start failed.
  */
-function traced<T>(plan: TracedPlan, body: (span: SpanHandle) => T): T {
+export interface HandleSource<H extends SpanHandle> {
+  create(span: Span, runtime: Runtime): H;
+  readonly noop: H;
+}
+
+/**
+ * The shared runner (T6, T8). The body's return value is never recorded as
+ * the output here; `observe` records it through `plan.captureResultAsOutput`,
+ * `withSpan` and `withLlmSpan` only through the handle's `setOutput`.
+ */
+export function tracedSpan<T, H extends SpanHandle>(
+  plan: TracedPlan,
+  handles: HandleSource<H>,
+  body: (span: H) => T,
+): T {
   const runtime = currentRuntime();
   if (runtime === undefined) {
-    return body(NOOP_HANDLE);
+    return body(handles.noop);
   }
   const span = startTracedSpan(runtime, plan);
   if (span === undefined) {
-    return body(NOOP_HANDLE);
+    return body(handles.noop);
   }
-  const handle = new LiveSpanHandle(span, runtime);
+  const handle = handles.create(span, runtime);
   try {
     const result = context.with(trace.setSpan(context.active(), span), () => body(handle));
     if (isThenable(result)) {
@@ -215,8 +230,9 @@ export function setPayload(
   }
 }
 
-/** Each metadata value as its `llmobs.metadata.<key>` attribute, masked per value (D-F-6). Never throws. */
-function stampMetadata(span: Span, values: Readonly<Record<string, unknown>>): void {
+/** Each metadata value as its `llmobs.metadata.<key>` attribute, masked per value (D-F-6).
+ * Never throws. Shared with the LLM span (T8). */
+export function stampMetadata(span: Span, values: Readonly<Record<string, unknown>>): void {
   try {
     for (const [key, value] of Object.entries(values)) {
       const name = metadataAttributeName(key);
@@ -276,6 +292,11 @@ const NOOP_HANDLE: SpanHandle = {
   setMetadata: () => {},
 };
 
+const SPAN_HANDLES: HandleSource<SpanHandle> = {
+  create: (span, runtime) => new LiveSpanHandle(span, runtime),
+  noop: NOOP_HANDLE,
+};
+
 /** A body result with a `then` method ends the span when it settles. */
 function isThenable(value: unknown): value is PromiseLike<unknown> {
   return (
@@ -309,7 +330,7 @@ export function withSpan<T>(
   // The overloads guarantee fn: first in the two-argument form, last in the
   // three-argument form.
   const fn = (typeof fnOrOptions === "function" ? fnOrOptions : maybeFn) as (span: SpanHandle) => T;
-  return traced(
+  return tracedSpan(
     {
       name,
       kind,
@@ -318,6 +339,7 @@ export function withSpan<T>(
       metadata: raw.metadata,
       captureResultAsOutput: false,
     },
+    SPAN_HANDLES,
     fn,
   );
 }
@@ -349,7 +371,7 @@ export function observe<A extends unknown[], R>(
     tag === "[object GeneratorFunction]" || tag === "[object AsyncGeneratorFunction]";
   return function (this: unknown, ...args: A): R {
     if (!generatorTag) {
-      return traced(
+      return tracedSpan(
         {
           name,
           kind,
@@ -358,6 +380,7 @@ export function observe<A extends unknown[], R>(
           metadata: undefined,
           captureResultAsOutput: captureOutput,
         },
+        SPAN_HANDLES,
         () => fn.apply(this, args),
       );
     }

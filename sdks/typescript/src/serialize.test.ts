@@ -208,8 +208,11 @@ describe("serialize", () => {
   });
 
   it("never throws on a throwing getter", () => {
+    // A top-level value that fails to convert is the rule 7 tuple; the same
+    // value nested is the in-place marker, keeping the rest of the payload.
     expect(serialize(new Boom())).toEqual(["<unserializable Boom>", "text"]);
-    expect(serialize({ deep: new Boom() })).toEqual(["<unserializable Object>", "text"]);
+    expect(serialize({ deep: new Boom() })).toEqual(['{"deep":"<unserializable Boom>"}', "json"]);
+    expect(serialize([new Boom(), 1])).toEqual(['["<unserializable Boom>",1]', "json"]);
   });
 
   it("never throws on a throwing toJSON", () => {
@@ -220,6 +223,15 @@ describe("serialize", () => {
         },
       }),
     ).toEqual(["<unserializable Object>", "text"]);
+    expect(
+      serialize({
+        nested: {
+          toJSON: () => {
+            throw new Error("nope");
+          },
+        },
+      }),
+    ).toEqual(['{"nested":"<unserializable Object>"}', "json"]);
   });
 });
 

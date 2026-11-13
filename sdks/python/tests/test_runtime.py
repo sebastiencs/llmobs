@@ -183,6 +183,31 @@ def test_shutdown_is_idempotent_and_drops_after(memory: Memory, spans: Spans) ->
     assert [span.name for span in spans(exporter)] == ["one"]
 
 
+def test_every_public_call_noops_after_shutdown(memory: Memory, spans: Spans) -> None:
+    """After ``shutdown()`` the whole public surface returns quickly and
+    creates nothing (the no-runtime path): no span, no score, no raise."""
+    exporter, start = memory
+    start()
+    llmobs.shutdown()
+
+    @llmobs.observe(name="after")
+    def after(x: int) -> int:
+        return x
+
+    assert after(1) == 1
+    with llmobs.span("manual") as handle:
+        handle.set_output("late")
+    with llmobs.llm_span("call", provider="p", model="m") as llm_handle:
+        llm_handle.set_output_messages([{"role": "user", "content": "late"}])
+    with llmobs.context(session_id="late"):
+        pass
+    assert llmobs.score(name="late", value=1, session_id="s") is None
+    llmobs.flush()
+    assert llmobs.current_trace_id() is None
+    assert llmobs.span_processor() is None
+    assert spans(exporter) == []
+
+
 def test_otlp_exporter_request(http_recorder: Recorder) -> None:
     llmobs.init(api_key="sk-llmobs-test", base_url=http_recorder.url)
     runtime = current()

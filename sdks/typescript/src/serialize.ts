@@ -120,7 +120,7 @@ function convert(value: unknown, depth: number, path: Set<object>): unknown {
         if (withoutJsonForm(item)) {
           continue;
         }
-        record[String(key)] = convert(item, depth + 1, path);
+        record[String(key)] = convertChild(item, depth + 1, path);
       }
       return record;
     });
@@ -129,7 +129,7 @@ function convert(value: unknown, depth: number, path: Set<object>): unknown {
     return convertContainer(object, depth, path, () => {
       const items: unknown[] = [];
       for (const item of object) {
-        items.push(withoutJsonForm(item) ? null : convert(item, depth + 1, path));
+        items.push(withoutJsonForm(item) ? null : convertChild(item, depth + 1, path));
       }
       return items;
     });
@@ -138,7 +138,7 @@ function convert(value: unknown, depth: number, path: Set<object>): unknown {
     return convertContainer(object, depth, path, () => {
       const items: unknown[] = [];
       for (const item of object) {
-        items.push(withoutJsonForm(item) ? null : convert(item, depth + 1, path));
+        items.push(withoutJsonForm(item) ? null : convertChild(item, depth + 1, path));
       }
       return items;
     });
@@ -157,10 +157,24 @@ function convert(value: unknown, depth: number, path: Set<object>): unknown {
       if (withoutJsonForm(item)) {
         continue;
       }
-      record[key] = convert(item, depth + 1, path);
+      record[key] = convertChild(item, depth + 1, path);
     }
     return record;
   });
+}
+
+/**
+ * One contained value: converted, or the in-place `<unserializable …>` marker
+ * when its conversion fails (§ Serialization rule 2, last row). A failure of
+ * the top-level value itself is not caught here: it escapes to `serialize`,
+ * whose rule-7 tuple replaces the whole payload.
+ */
+function convertChild(value: unknown, depth: number, path: Set<object>): unknown {
+  try {
+    return convert(value, depth, path);
+  } catch {
+    return `<unserializable ${typeName(value)}>`;
+  }
 }
 
 /**

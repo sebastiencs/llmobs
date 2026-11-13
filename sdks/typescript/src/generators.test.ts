@@ -310,6 +310,53 @@ describe("generators", () => {
     expect(span?.status.code).toBe(SpanStatusCode.UNSET);
   });
 
+  it("records no output and never calls reduceOutput when nothing is yielded", async () => {
+    // Python's _record_output returns before reduce_output for an empty item
+    // list; this pins the same no-items rule here.
+    const { exporter } = startMemory();
+    const calls: number[] = [];
+    const traced = observe(
+      function* gen() {
+        // A generator function that yields nothing.
+      },
+      {
+        name: "gen",
+        reduceOutput: (items) => {
+          calls.push(items.length);
+          return items.length;
+        },
+      },
+    );
+    expect([...traced()]).toEqual([]);
+    const [span] = await finished(exporter);
+    expect(span?.attributes["llmobs.output"]).toBeUndefined();
+    expect(calls).toEqual([]);
+  });
+
+  it("records the body's binding error on the span when the call cannot bind", async () => {
+    // JavaScript never checks arity at call time, so a generator function
+    // called with unusable arguments raises in the body at the first step;
+    // Python (which checks at call time) records the same one-span error
+    // through _record_failed_call.
+    const { exporter } = startMemory();
+    const traced = observe(
+      function* gen(options: { prompt: string }) {
+        yield options.prompt;
+      },
+      { name: "gen" },
+    );
+    // `undefined` where the body expects an options object: the call itself
+    // succeeds (JS checks no arity), the body raises at the first step.
+    const generator = traced(undefined as unknown as { prompt: string });
+    // A sync generator's body throws synchronously out of next().
+    expect(() => generator.next()).toThrow(TypeError);
+    const [span] = await finished(exporter);
+    expect(span?.attributes["llmobs.span.kind"]).toBe("chain");
+    expect(span?.status.code).toBe(SpanStatusCode.ERROR);
+    expect(span?.status.message).toMatch(/^TypeError: /);
+    expect(span?.events[0]?.name).toBe("exception");
+  });
+
   it("ignores reduceOutput for a non-generator function", async () => {
     const { exporter } = startMemory();
     observe(() => "plain", { name: "plain", reduceOutput: () => "reduced" })();

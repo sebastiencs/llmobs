@@ -11,16 +11,15 @@
  * recorded; `setInput`/`setOutput` remain available for non-chat payloads.
  */
 
-import { context, isSpanContextValid, type Span, trace } from "@opentelemetry/api";
+import { isSpanContextValid, type Span } from "@opentelemetry/api";
 import { hrTime, hrTimeDuration, hrTimeToNanoseconds } from "@opentelemetry/core";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace";
 
-import { metadataAttributeName } from "./context.js";
 import { debug } from "./log.js";
 import { applyMask } from "./mask.js";
-import { currentRuntime, type Runtime } from "./runtime.js";
-import { attributeValue, serialize } from "./serialize.js";
-import { recordError, type SpanHandle, setPayload, startTracedSpan } from "./span.js";
+import type { Runtime } from "./runtime.js";
+import { serialize } from "./serialize.js";
+import { type SpanHandle, setPayload, stampMetadata, tracedSpan } from "./span.js";
 
 export interface LlmSpanOptions {
   /** Required, non-empty; written as `gen_ai.provider.name`. */
@@ -172,20 +171,6 @@ function stampLlmStart(
   }
 }
 
-/** Each metadata value as its `llmobs.metadata.<key>` attribute (D-F-6). Never throws. */
-function stampMetadata(span: Span, values: Readonly<Record<string, unknown>>): void {
-  try {
-    for (const [key, value] of Object.entries(values)) {
-      const name = metadataAttributeName(key);
-      if (name !== undefined) {
-        span.setAttribute(name, attributeValue(applyMask(value)));
-      }
-    }
-  } catch (error) {
-    debug(`llmobs: setting a metadata attribute failed: ${errorName(error)}`);
-  }
-}
-
 /** The live handle; every method is a no-op after the span ended and never raises. */
 class LiveLlmSpanHandle implements LlmSpanHandle {
   private readonly span: Span;
@@ -321,9 +306,10 @@ const NOOP_LLM_HANDLE: LlmSpanHandle = {
 };
 
 /**
- * Run `fn` inside one manual LLM span. `provider` and `model` are checked
- * before the body runs (a `TypeError` otherwise); the body's return value is
- * never recorded — only the handle's setters write attributes.
+ * Run `fn` inside one manual LLM span, through the T6 runner (`tracedSpan`)
+ * so `withSpan` and `withLlmSpan` behave the same. `provider` and `model` are
+ * checked before the body runs (a `TypeError` otherwise); the body's return
+ * value is never recorded — only the handle's setters write attributes.
  */
 export function withLlmSpan<T>(
   name: string,
@@ -332,52 +318,25 @@ export function withLlmSpan<T>(
 ): T {
   const provider = requireNonEmptyString("provider", options.provider);
   const model = requireNonEmptyString("model", options.model);
-  const runtime = currentRuntime();
-  if (runtime === undefined) {
-    return fn(NOOP_LLM_HANDLE);
-  }
-  const span = startTracedSpan(runtime, {
-    name,
-    kind: "llm",
-    hasInput: false,
-    inputValue: undefined,
-    metadata: options.metadata,
-  });
-  if (span === undefined) {
-    return fn(NOOP_LLM_HANDLE);
-  }
-  stampLlmStart(span, provider, model, options, runtime);
-  const handle = new LiveLlmSpanHandle(span, runtime);
-  try {
-    const result = context.with(trace.setSpan(context.active(), span), () => fn(handle));
-    if (isThenable(result)) {
-      // The body settles later: end the span from an observer chain and hand
-      // the thenable itself back (same settlement, same value, never recorded).
-      void result.then(
-        () => span.end(),
-        (error) => {
-          recordError(span, error);
-          span.end();
-        },
-      );
-      return result;
-    }
-    span.end();
-    return result;
-  } catch (error) {
-    recordError(span, error);
-    span.end();
-    throw error;
-  }
-}
-
-/** A body result with a `then` method ends the span when it settles. */
-function isThenable(value: unknown): value is PromiseLike<unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "then" in value &&
-    typeof value.then === "function"
+  return tracedSpan(
+    {
+      name,
+      kind: "llm",
+      hasInput: false,
+      inputValue: undefined,
+      metadata: options.metadata,
+      captureResultAsOutput: false,
+    },
+    {
+      // Right after the start (T6's HandleSource): stamp the GenAI start
+      // attributes, then hand out the live handle.
+      create: (span, runtime) => {
+        stampLlmStart(span, provider, model, options, runtime);
+        return new LiveLlmSpanHandle(span, runtime);
+      },
+      noop: NOOP_LLM_HANDLE,
+    },
+    fn,
   );
 }
 
