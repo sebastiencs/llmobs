@@ -197,6 +197,7 @@ function TracesPage() {
     url: liveOn
       ? traceStreamUrl(projectRef(org, project), {
           filter: search.filter,
+          search: search.search,
           includeEval: search.eval === 1,
           includeExperiments: search.exp === 1,
         })

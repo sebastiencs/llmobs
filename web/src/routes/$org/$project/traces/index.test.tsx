@@ -562,7 +562,7 @@ it("replaces onboarding with the table when a trace arrives", async () => {
   }
 });
 
-it("opens the trace stream with the list filter", async () => {
+it("opens the trace stream with the list filter and search", async () => {
   const streams: URL[] = [];
   const onStart = ({ request }: { request: Request }) => {
     const url = new URL(request.url);
@@ -574,10 +574,11 @@ it("opens the trace stream with the list filter", async () => {
   server.use(traceStreamHandler(() => undefined));
   try {
     await renderApp(
-      `/acme/support-bot/traces?live=1&filter=${encodeURIComponent("status = 'error'")}&eval=1&exp=1`,
+      `/acme/support-bot/traces?live=1&filter=${encodeURIComponent("status = 'error'")}&search=refund&eval=1&exp=1`,
     );
     await waitFor(() => expect(streams.length).toBeGreaterThan(0));
     expect(streams[0]?.searchParams.get("filter")).toBe("status = 'error'");
+    expect(streams[0]?.searchParams.get("search")).toBe("refund");
     expect(streams[0]?.searchParams.get("include_eval")).toBe("true");
     expect(streams[0]?.searchParams.get("include_experiments")).toBe("true");
     expect(screen.getByRole("switch", { name: "Live" })).toBeEnabled();

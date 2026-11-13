@@ -132,6 +132,20 @@ it("builds the list stream url from the list query", () => {
   );
 });
 
+it("adds search to the trace stream url", () => {
+  expect(
+    traceStreamUrl("acme/support-bot", { filter: "status = 'error'", search: "refund policy" }),
+  ).toBe(
+    "/api/v1/projects/acme%2Fsupport-bot/traces/stream?filter=status+%3D+%27error%27&search=refund+policy",
+  );
+  expect(traceStreamUrl("acme/support-bot", { search: "" })).toBe(
+    "/api/v1/projects/acme%2Fsupport-bot/traces/stream",
+  );
+  expect(traceStreamUrl("acme/support-bot", { search: undefined })).toBe(
+    "/api/v1/projects/acme%2Fsupport-bot/traces/stream",
+  );
+});
+
 it("dispatches trace, span, and resync, and ignores ping", async () => {
   const bag = manualStream();
   listen(bag);
