@@ -43,7 +43,10 @@ use datafusion::logical_expr::{
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_expr::expressions::{Column, NotExpr};
 use datafusion::physical_expr::utils::conjunction_opt;
-use datafusion::physical_expr::{LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr};
+use datafusion::physical_expr::{
+    LexOrdering, LexRequirement, OrderingRequirements, Partitioning, PhysicalExpr,
+    PhysicalSortExpr, PhysicalSortRequirement,
+};
 use datafusion::physical_plan::execution_plan::{
     Boundedness, EmissionType, collect as collect_plan,
 };
@@ -362,6 +365,15 @@ fn build_range_plan(ctx: &ScanContext, spec: RangeSpec) -> DfResult<Arc<dyn Exec
         union,
         Partitioning::Hash(vec![Arc::clone(&key)], partitions),
     )?);
+    // Partials of one trace end up next to each other, so the merge holds one
+    // chunk of traces at a time; the sort spills when its share is refused (D-A1-13).
+    let ordering = LexOrdering::new([PhysicalSortExpr::new(
+        Arc::clone(&key),
+        SortOptions::default(),
+    )])
+    .ok_or_else(|| DataFusionError::Internal("empty trace_id ordering".into()))?;
+    let sorted: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(ordering, repartition).with_preserve_partitioning(true));
 
     // Merged-level filters, converted once against the merged output schema.
     let mut physical_filters = Vec::with_capacity(ctx.filters.len());
@@ -382,8 +394,12 @@ fn build_range_plan(ctx: &ScanContext, spec: RangeSpec) -> DfResult<Arc<dyn Exec
     );
 
     let exec: Arc<dyn ExecutionPlan> = Arc::new(TracesExec {
-        input: repartition,
-        properties: Arc::new(properties_for(&spec.output_schema, partitions)),
+        input: sorted,
+        properties: Arc::new(properties_for(
+            &spec.output_schema,
+            partitions,
+            EmissionType::Incremental,
+        )),
         scan_ctx: ctx.clone(),
         mode: spec.mode,
         merge_columns: spec.merge_columns,
@@ -422,11 +438,11 @@ fn build_range_plan(ctx: &ScanContext, spec: RangeSpec) -> DfResult<Arc<dyn Exec
     Ok(Arc::new(sort))
 }
 
-fn properties_for(schema: &SchemaRef, partitions: usize) -> PlanProperties {
+fn properties_for(schema: &SchemaRef, partitions: usize, emission: EmissionType) -> PlanProperties {
     PlanProperties::new(
         EquivalenceProperties::new(Arc::clone(schema)),
         Partitioning::UnknownPartitioning(partitions),
-        EmissionType::Final,
+        emission,
         Boundedness::Bounded,
     )
 }
@@ -748,7 +764,7 @@ pub(crate) fn rewrite_list(
         .display
         .replacen("mode=range", &format!("mode=list, fetch={fetch}"), 1);
     // List mode emits one stream; the ancestors are rebuilt by `transform_up`.
-    new.properties = Arc::new(properties_for(&new.output_schema, 1));
+    new.properties = Arc::new(properties_for(&new.output_schema, 1, EmissionType::Final));
     Some(Arc::new(new))
 }
 
@@ -792,16 +808,32 @@ impl ExecutionPlan for TracesExec {
         // input partition it is unnecessary). Keep our output partitioning in
         // step with the child so the number of execute() partitions matches;
         // list mode always stays a single stream.
-        let partitions = if matches!(this.mode, Mode::List { .. }) {
-            1
+        let (partitions, emission) = if matches!(this.mode, Mode::List { .. }) {
+            (1, EmissionType::Final)
         } else {
-            this.input
+            let partitions = this
+                .input
                 .properties()
                 .output_partitioning()
-                .partition_count()
+                .partition_count();
+            (partitions, EmissionType::Incremental)
         };
-        this.properties = Arc::new(properties_for(&this.output_schema, partitions));
+        this.properties = Arc::new(properties_for(&this.output_schema, partitions, emission));
         Ok(Arc::new(this))
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        if !matches!(self.mode, Mode::Range | Mode::Lookup) {
+            // List mode never executes its input.
+            return vec![None];
+        }
+        // The key is non-empty: `build_range_plan` sorts by it. `new` returns
+        // `None` only for an empty requirement, so one element always gives `Some`.
+        let requirement = LexRequirement::new([PhysicalSortRequirement::new(
+            Arc::clone(&self.key[0]),
+            Some(SortOptions::default()),
+        )]);
+        vec![requirement.map(OrderingRequirements::new)]
     }
 
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
@@ -853,18 +885,16 @@ impl ExecutionPlan for TracesExec {
         let input = self.input.execute(partition, Arc::clone(&context))?;
         let reservation =
             MemoryConsumer::new(format!("TracesExec[{partition}]")).register(context.memory_pool());
-        let batch_size = context.session_config().batch_size();
         let stream = MergeStream {
             input,
-            merger: Some(TraceMerger::new(self.merge_columns.clone())),
+            merger: TraceMerger::new(self.merge_columns.clone()),
             reservation,
-            accounted: 0,
+            merge_columns: self.merge_columns.clone(),
             predicate: self.predicate.clone(),
             bounds: self.bounds,
             projection: self.projection.clone(),
             output_schema: Arc::clone(&self.output_schema),
-            batch_size,
-            limit: self.limit,
+            remaining: self.limit,
             outstanding: VecDeque::new(),
             done: false,
         };
@@ -894,58 +924,90 @@ impl Clone for TracesExec {
     }
 }
 
+/// Most input rows merged before the complete traces are emitted (D-A1-13).
+/// It bounds the merge's own reservation, which can't spill: about 2 KB per
+/// trace, so ~2 MB per partition.
+const MERGE_CHUNK_ROWS: usize = 1024;
+
+/// Merges one partition's partials, which arrive sorted by `trace_id`. Every
+/// trace whose id is below the last id of the current chunk is complete, so it
+/// is emitted, and the merge holds at most one chunk of traces.
 struct MergeStream {
     input: SendableRecordBatchStream,
-    merger: Option<TraceMerger>,
+    /// Partials of traces not yet known to be complete.
+    merger: TraceMerger,
+    /// Holds `merger.size()`.
     reservation: MemoryReservation,
-    accounted: usize,
+    merge_columns: MergeColumns,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     bounds: TimeBounds,
     projection: Projection,
     output_schema: SchemaRef,
-    batch_size: usize,
-    limit: Option<usize>,
+    /// Rows `limit` still allows; `None` without a limit.
+    remaining: Option<usize>,
     outstanding: VecDeque<RecordBatch>,
     done: bool,
 }
 
 impl MergeStream {
-    fn push_batch(&mut self, batch: &RecordBatch) -> datafusion::error::Result<()> {
-        let merger = self
-            .merger
-            .as_mut()
-            .ok_or_else(|| DataFusionError::Internal("merge already finished".into()))?;
-        merger.push(batch).map_err(partial_err)?;
-        let size = merger.size();
-        let grown = size.saturating_sub(self.accounted);
-        if grown > 0 {
-            // A failed grow is DataFusion's ResourcesExhausted, which A2 maps
-            // to query_too_large. The reservation frees itself on drop.
-            self.reservation.try_grow(grown)?;
-            self.accounted = size;
+    fn push_batch(&mut self, batch: &RecordBatch) -> DfResult<()> {
+        let mut offset = 0;
+        while offset < batch.num_rows() && !self.done {
+            let length = MERGE_CHUNK_ROWS.min(batch.num_rows() - offset);
+            self.push_chunk(&batch.slice(offset, length))?;
+            offset += length;
         }
         Ok(())
     }
 
-    fn finish(&mut self) -> datafusion::error::Result<()> {
-        let merger = self
-            .merger
-            .take()
-            .ok_or_else(|| DataFusionError::Internal("merge already finished".into()))?;
+    fn push_chunk(&mut self, chunk: &RecordBatch) -> DfResult<()> {
+        if chunk.num_rows() == 0 {
+            return Ok(());
+        }
+        // The last trace may continue in the next chunk, so its rows wait.
+        let cut = last_run_start(chunk)?;
+        if cut > 0 {
+            self.merge(&chunk.slice(0, cut))?;
+            self.emit()?;
+            if self.done {
+                return Ok(());
+            }
+        }
+        self.merge(&chunk.slice(cut, chunk.num_rows() - cut))
+    }
+
+    fn merge(&mut self, partials: &RecordBatch) -> DfResult<()> {
+        self.merger.push(partials).map_err(partial_err)?;
+        // A refused resize is DataFusion's ResourcesExhausted, which A2 maps to
+        // query_too_large. The reservation frees itself on drop.
+        self.reservation.try_resize(self.merger.size())
+    }
+
+    /// Finishes the traces the merger holds and queues their rows, up to
+    /// `remaining` when there is a limit.
+    fn emit(&mut self) -> DfResult<()> {
+        let merger = std::mem::replace(
+            &mut self.merger,
+            TraceMerger::new(self.merge_columns.clone()),
+        );
         let merged = merger.finish().map_err(partial_err)?;
+        self.reservation.free();
         let mask = self.keep_mask(&merged)?;
         let filtered = filter_record_batch(&merged, &mask)?;
-        let rows = match self.limit {
-            Some(limit) => filtered.num_rows().min(limit),
+        let rows = match self.remaining {
+            Some(remaining) => {
+                let rows = filtered.num_rows().min(remaining);
+                self.remaining = Some(remaining - rows);
+                rows
+            }
             None => filtered.num_rows(),
         };
-        let projected = self.project(&filtered.slice(0, rows))?;
-        let total = projected.num_rows();
-        let mut offset = 0;
-        while offset < total {
-            let length = self.batch_size.min(total - offset);
-            self.outstanding.push_back(projected.slice(offset, length));
-            offset += length;
+        if self.remaining == Some(0) {
+            self.done = true;
+        }
+        if rows > 0 {
+            let projected = self.project(&filtered.slice(0, rows))?;
+            self.outstanding.push_back(projected);
         }
         Ok(())
     }
@@ -1015,6 +1077,24 @@ impl MergeStream {
     }
 }
 
+/// The first row of the trailing run of equal `trace_id`s in `chunk`, which
+/// must be non-empty and sorted by `trace_id`.
+fn last_run_start(chunk: &RecordBatch) -> DfResult<usize> {
+    let ids = chunk
+        .column_by_name(traces::TRACE_ID)
+        .ok_or_else(|| DataFusionError::Internal("merge input has no trace_id".into()))?
+        .as_any()
+        .downcast_ref::<FixedSizeBinaryArray>()
+        .ok_or_else(|| DataFusionError::Internal("merge input trace_id type".into()))?;
+    let last_row = chunk.num_rows() - 1;
+    let last = ids.value(last_row);
+    let mut start = last_row;
+    while start > 0 && ids.value(start - 1) == last {
+        start -= 1;
+    }
+    Ok(start)
+}
+
 impl Stream for MergeStream {
     type Item = datafusion::error::Result<RecordBatch>;
 
@@ -1041,7 +1121,7 @@ impl Stream for MergeStream {
                 }
                 Poll::Ready(None) => {
                     this.done = true;
-                    if let Err(error) = this.finish() {
+                    if let Err(error) = this.emit() {
                         return Poll::Ready(Some(Err(error)));
                     }
                 }
@@ -1738,6 +1818,18 @@ mod tests {
     /// shutdown-driven flushes, the last part left in the memtable as one batch.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn oracle_full_scan_matches_the_fixture() {
+        oracle_full_scan(None).await;
+    }
+
+    /// The Oracle with two-row batches: the sort's output batches end in the
+    /// middle of most runs of partials.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn oracle_full_scan_with_tiny_batches_matches_the_fixture() {
+        oracle_full_scan(Some(2)).await;
+    }
+
+    /// The Oracle scan; `batch_size` overrides the session's batch size.
+    async fn oracle_full_scan(batch_size: Option<usize>) {
         let spans = dataset_spans();
         let mut rng: u64 = 0x2545_F491_4F6C_DD1D;
         let n = spans.len();
@@ -1801,7 +1893,15 @@ mod tests {
             .query(dataset_project(), Default::default())
             .await
             .unwrap();
-        let ctx = session(&query);
+        let ctx = match batch_size {
+            Some(size) => SessionContext::new_with_config_rt(
+                SessionConfig::new()
+                    .with_target_partitions(query.target_partitions.get())
+                    .with_batch_size(size),
+                Arc::clone(&query.runtime),
+            ),
+            None => session(&query),
+        };
         ctx.register_table("traces", Arc::clone(&query.traces))
             .unwrap();
         let batches = collect(&ctx, "SELECT * FROM traces").await;
@@ -2292,61 +2392,245 @@ mod tests {
         storage.shutdown().await.unwrap();
     }
 
-    /// Group 10 (Memory): a 1 MiB pool fails a 50,000-trace full scan with
-    /// DataFusion's ResourcesExhausted, not an allocation abort.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn a_small_memory_pool_fails_with_resources_exhausted() {
-        use datafusion::execution::memory_pool::GreedyMemoryPool;
-        use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+    /// A trace id whose last four bytes are `value`, so ids sort by `value`.
+    fn numbered_trace(value: u32) -> TraceId {
+        let mut bytes = [0_u8; 16];
+        bytes[12..].copy_from_slice(&value.to_be_bytes());
+        TraceId::from_bytes(bytes).unwrap()
+    }
 
+    /// One single-span trace per `numbered_trace(1..=count)`, all in one day.
+    fn numbered_spans(count: u32) -> Vec<Span> {
+        (1..=count)
+            .map(|value| {
+                base_span(
+                    numbered_trace(value),
+                    span_id(1),
+                    20_000 * DAY + i64::from(value),
+                )
+            })
+            .collect()
+    }
+
+    /// The `trace_id` and `span_count` columns of a query result, by trace id.
+    fn span_counts_by_trace(batches: &[RecordBatch]) -> BTreeMap<Vec<u8>, i64> {
+        let mut counts = BTreeMap::new();
+        for batch in batches {
+            let ids = batch
+                .column_by_name(traces::TRACE_ID)
+                .unwrap()
+                .as_fixed_size_binary();
+            let spans = int64_column(batch, traces::SPAN_COUNT);
+            for (row, count) in spans.into_iter().enumerate() {
+                counts.insert(ids.value(row).to_vec(), count);
+            }
+        }
+        counts
+    }
+
+    /// Sum of the spill counts of every operator in `plan`.
+    fn spill_count_of(plan: &Arc<dyn datafusion::physical_plan::ExecutionPlan>) -> usize {
+        let own = plan
+            .metrics()
+            .and_then(|metrics| metrics.spill_count())
+            .unwrap_or(0);
+        own + plan
+            .children()
+            .into_iter()
+            .map(spill_count_of)
+            .sum::<usize>()
+    }
+
+    /// M6.8 (D-A1-13): a pool too small for the merge's sorts spills them, and
+    /// the merge still returns every trace, as the default-memory query does.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_small_pool_spills_the_merge_and_returns_every_trace() {
         let dir = tempfile::tempdir().unwrap();
         let storage = crate::Storage::open(config_in(dir.path())).await.unwrap();
-        let mut spans = Vec::with_capacity(50_000);
-        for index in 0..50_000_u32 {
-            let mut bytes = [0_u8; 16];
-            bytes[12..].copy_from_slice(&(index + 1).to_be_bytes());
-            let trace = TraceId::from_bytes(bytes).unwrap();
-            spans.push(base_span(
-                trace,
-                span_id(1),
-                20_000 * DAY + i64::from(index),
-            ));
+        storage
+            .append_spans(project(), spans_batch(&numbered_spans(50_000)))
+            .await
+            .unwrap();
+        storage.shutdown().await.unwrap();
+
+        let expected = {
+            let storage = crate::Storage::open(config_in(dir.path())).await.unwrap();
+            let query = storage.query(project(), Default::default()).await.unwrap();
+            let ctx = session(&query);
+            ctx.register_table("traces", Arc::clone(&query.traces))
+                .unwrap();
+            let counts = span_counts_by_trace(
+                &collect(&ctx, "SELECT trace_id, span_count FROM traces").await,
+            );
+            storage.shutdown().await.unwrap();
+            counts
+        };
+        assert_eq!(expected.len(), 50_000);
+
+        let mut config = config_in(dir.path());
+        config.query.max_memory = ByteSize::mib(8);
+        config.query.initial_memory = ByteSize::mib(1);
+        config.query.max_memory_total = Some(ByteSize::mib(8));
+        let storage = crate::Storage::open(config).await.unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
+        // Each sort reserves 1 MiB to merge its spill files, not the default 10 MiB.
+        let ctx = SessionContext::new_with_config_rt(
+            SessionConfig::new()
+                .with_target_partitions(2)
+                .with_batch_size(1024)
+                .with_sort_spill_reservation_bytes(1024 * 1024),
+            Arc::clone(&query.runtime),
+        );
+        ctx.register_table("traces", Arc::clone(&query.traces))
+            .unwrap();
+        let plan = ctx
+            .sql("SELECT trace_id, span_count FROM traces")
+            .await
+            .unwrap()
+            .create_physical_plan()
+            .await
+            .unwrap();
+        let batches = collect_plan(Arc::clone(&plan), ctx.task_ctx())
+            .await
+            .unwrap();
+        assert!(spill_count_of(&plan) > 0, "the merge did not spill");
+        assert_eq!(span_counts_by_trace(&batches), expected);
+        storage.shutdown().await.unwrap();
+    }
+
+    /// M6.8: a pool below the sort's merge reservation fails as too large
+    /// (A2 maps ResourcesExhausted to query_too_large), whatever the traces.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_pool_below_the_sort_floor_fails_as_too_large() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::Storage::open(config_in(dir.path())).await.unwrap();
+        storage
+            .append_spans(project(), spans_batch(&numbered_spans(50_000)))
+            .await
+            .unwrap();
+        storage.shutdown().await.unwrap();
+
+        let mut config = config_in(dir.path());
+        config.query.max_memory = ByteSize::mib(1);
+        config.query.initial_memory = ByteSize::mib(1);
+        config.query.max_memory_total = Some(ByteSize::mib(1));
+        let storage = crate::Storage::open(config).await.unwrap();
+        let ctx = QueryContext::new(
+            storage.query(project(), Default::default()).await.unwrap(),
+            None,
+        )
+        .unwrap();
+        let params = serde_json::Map::new();
+        let result = ctx
+            .sql_json(crate::SqlRequest {
+                query: "SELECT * FROM traces",
+                params: &params,
+                limit: 50,
+                timeout: TIMEOUT,
+            })
+            .await;
+        match result {
+            Err(crate::RunError::TooLarge) => {}
+            Err(other) => panic!("expected too large, got {other:?}"),
+            Ok(_) => panic!("the sorts fit in one megabyte"),
         }
+        drop(ctx);
+        storage.shutdown().await.unwrap();
+    }
+
+    /// M6.8: runs longer than one merge chunk merge into one row each. One
+    /// partition, 3,000 single-span traces, and one trace in the middle of the
+    /// id order with a span in each of three flushes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn runs_longer_than_a_chunk_merge_into_one_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_in(dir.path());
+        config.query.target_partitions = 1;
+        let day = 20_000 * DAY;
+        // Even ids for the 3,000 traces, so the split trace (id 3001) sorts
+        // between 3,000 and 3,002.
+        let mut spans: Vec<Span> = (1..=3_000_u32)
+            .map(|value| {
+                base_span(
+                    numbered_trace(2 * value),
+                    span_id(1),
+                    day + i64::from(value),
+                )
+            })
+            .collect();
+        spans.push(base_span(numbered_trace(3_001), span_id(1), day + 5_000));
+        let storage = crate::Storage::open(config.clone()).await.unwrap();
         storage
             .append_spans(project(), spans_batch(&spans))
             .await
             .unwrap();
-        let storage = reopen(dir.path(), storage).await;
+        storage.shutdown().await.unwrap();
+        for index in 2..=3_u8 {
+            let storage = crate::Storage::open(config.clone()).await.unwrap();
+            let span = base_span(
+                numbered_trace(3_001),
+                span_id(index),
+                day + 5_000 + i64::from(index),
+            );
+            storage
+                .append_spans(project(), spans_batch(&[span]))
+                .await
+                .unwrap();
+            storage.shutdown().await.unwrap();
+        }
 
-        let pool = Arc::new(GreedyMemoryPool::new(1024 * 1024));
-        let runtime = RuntimeEnvBuilder::new()
-            .with_memory_pool(pool)
-            .build()
-            .unwrap();
-        crate::objects::Objects::new(&config_in(dir.path()), Hooks::default())
-            .await
-            .unwrap()
-            .register(&runtime);
-        let mut query = storage.query(project(), Default::default()).await.unwrap();
-        query.runtime = Arc::new(runtime);
+        let storage = crate::Storage::open(config).await.unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let ctx = session(&query);
         ctx.register_table("traces", Arc::clone(&query.traces))
             .unwrap();
+        let batches = collect(&ctx, "SELECT trace_id, span_count FROM traces").await;
+        assert_eq!(rows(&batches), 3_001);
+        let counts = span_counts_by_trace(&batches);
+        assert_eq!(counts.len(), 3_001);
+        assert_eq!(counts[&numbered_trace(3_001).as_bytes().to_vec()], 3);
+        assert_eq!(counts.values().filter(|count| **count != 1).count(), 1);
+        storage.shutdown().await.unwrap();
+    }
 
-        let error = ctx
-            .sql("SELECT * FROM traces")
+    /// M6.8: the merge input is sorted by `trace_id`, straight under `TracesExec`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_merge_input_is_sorted_by_trace_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::Storage::open(config_in(dir.path())).await.unwrap();
+        storage
+            .append_spans(project(), spans_batch(&numbered_spans(100)))
             .await
+            .unwrap();
+        let storage = reopen(dir.path(), storage).await;
+        let query = storage.query(project(), Default::default()).await.unwrap();
+        let ctx = session(&query);
+        ctx.register_table("traces", Arc::clone(&query.traces))
+            .unwrap();
+        let frame = ctx
+            .table("traces")
+            .await
+            .unwrap()
+            .filter(start_ge(0))
+            .unwrap();
+        let explained = frame
+            .explain(false, false)
             .unwrap()
             .collect()
             .await
-            .unwrap_err();
-        let text = error.to_string();
+            .unwrap();
+        let text = plan_text(&explained);
+        let lines: Vec<&str> = text.lines().collect();
+        let at = lines
+            .iter()
+            .position(|line| line.contains("TracesExec:"))
+            .unwrap();
+        let below = lines[at + 1..].iter().find(|line| !line.trim().is_empty());
+        let below = below.unwrap_or(&"");
         assert!(
-            matches!(
-                &error,
-                datafusion::common::DataFusionError::ResourcesExhausted(_)
-            ) || text.to_lowercase().contains("exhaust"),
-            "expected ResourcesExhausted, got: {text}"
+            below.contains("SortExec: expr=[trace_id@")
+                || below.contains("SortPreservingMergeExec: [trace_id@"),
+            "{text}"
         );
         storage.shutdown().await.unwrap();
     }
@@ -2449,12 +2733,16 @@ mod tests {
         assert!(line.contains("mode=range"), "{line}");
         // One output partition: EnforceDistribution must not repartition the
         // single-partition limit scan back to target_partitions, which would
-        // repeat the whole merge once per partition.
-        assert!(
-            !plan.contains("RepartitionExec"),
-            "limit scan was repartitioned: {plan}"
-        );
-        assert!(plan.contains("CoalescePartitionsExec"), "{plan}");
+        // repeat the whole merge once per partition. Any repartition left is
+        // the single-partition one.
+        for line in plan.lines().filter(|line| line.contains("RepartitionExec")) {
+            assert!(
+                line.contains("partitioning=Hash([trace_id@") && line.contains("], 1)"),
+                "limit scan was repartitioned: {line}"
+            );
+        }
+        // The sorted partitions merge with SortPreservingMergeExec (D-A1-13).
+        assert!(plan.contains("SortPreservingMergeExec"), "{plan}");
         storage.shutdown().await.unwrap();
     }
 
