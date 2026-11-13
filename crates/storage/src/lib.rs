@@ -38,6 +38,7 @@ use crate::media::MediaGc;
 use crate::memtable::{MemSnapshot, Memtable};
 use crate::objects::Objects;
 use crate::read_state::{Published, ReadState};
+use crate::verify::{Suspects, VerifyQueue};
 use crate::wal::Table;
 use crate::wal::sync_dir;
 use crate::wal::writer::{WalWriterHandle, WriterExit, WriterParams, spawn};
@@ -179,7 +180,7 @@ pub struct Storage {
     compaction: compaction::task::CompactionHandle,
     /// Suspect files (spec 03 §10), shared with the compactor and the anchor rebuild.
     #[cfg_attr(not(test), allow(dead_code))]
-    verify: Arc<verify::VerifyQueue>,
+    verify: Arc<VerifyQueue>,
     /// Shared with the flush tasks and staged-object collection.
     #[cfg_attr(not(test), allow(dead_code))]
     objects: Arc<Objects>,
@@ -341,7 +342,7 @@ impl Storage {
         let catalog = committer.catalog().await;
         let tombstones = committer.tombstones().await;
         let projects = Arc::new(committer.project_states().await?);
-        let verify = Arc::new(verify::VerifyQueue::default());
+        let verify = Arc::new(VerifyQueue::default());
         let mut anchors = anchor::Anchors::new(window_ns);
         anchors.rebuild(&catalog, &objects, &verify).await?;
         let anchors = Arc::new(Mutex::new(anchors));
@@ -455,6 +456,7 @@ impl Storage {
             target_partitions,
             lookback,
             hooks: share_hooks(&hooks),
+            verify: Arc::clone(&verify),
         };
         // Finish drops interrupted by a crash or a failed media step, after
         // the first obsolete-file collection (spec 03 §7).
@@ -560,6 +562,7 @@ impl Storage {
             &runtime,
             self.target_partitions,
             self.lookback,
+            &self.verify,
         )
     }
 
@@ -830,7 +833,7 @@ impl Storage {
 
     /// The suspect files waiting for the verify pass.
     #[cfg(test)]
-    pub(crate) fn verify_queue(&self) -> &verify::VerifyQueue {
+    pub(crate) fn verify_queue(&self) -> &VerifyQueue {
         &self.verify
     }
 
@@ -1060,8 +1063,10 @@ pub(crate) fn project_query(
     runtime: &Arc<RuntimeEnv>,
     target_partitions: NonZeroUsize,
     lookback: i64,
+    verify: &Arc<VerifyQueue>,
 ) -> Result<ProjectQuery, QueryError> {
     let partitions = target_partitions.get();
+    let suspects = Suspects::new(Arc::clone(verify));
     // A dropped project gets empty tables (spec 03 §7): the drop commit
     // removed its files from the catalog, its memtable partitions are dropped
     // at flush, and no file of it can be committed again, so nothing of it is
@@ -1079,6 +1084,7 @@ pub(crate) fn project_query(
                 partitions,
                 options.around,
                 Arc::clone(&no_deletions),
+                suspects.clone(),
             )),
             traces: Arc::new(query::TracesProvider::new(
                 project,
@@ -1088,6 +1094,7 @@ pub(crate) fn project_query(
                 lookback,
                 partitions,
                 Arc::clone(&no_deletions),
+                suspects.clone(),
             )),
             scores: Arc::new(query::ScoresProvider::new(
                 project,
@@ -1095,10 +1102,12 @@ pub(crate) fn project_query(
                 catalog,
                 partitions,
                 no_deletions,
+                suspects.clone(),
             )),
             runtime: Arc::clone(runtime),
             target_partitions,
             optimizer_rules: vec![Arc::new(query::TraceListRule)],
+            suspects,
         });
     }
     let deletions = state.tombstones.for_project(project);
@@ -1135,6 +1144,7 @@ pub(crate) fn project_query(
         partitions,
         options.around,
         Arc::clone(&deletions),
+        suspects.clone(),
     ));
     let scores = Arc::new(query::ScoresProvider::new(
         project,
@@ -1142,6 +1152,7 @@ pub(crate) fn project_query(
         Arc::clone(&state.catalog),
         partitions,
         Arc::clone(&deletions),
+        suspects.clone(),
     ));
     // The traces provider reads the filtered spans snapshot too, so its
     // memtable partials are computed from the rows that remain.
@@ -1153,6 +1164,7 @@ pub(crate) fn project_query(
         lookback,
         partitions,
         deletions,
+        suspects.clone(),
     ));
     Ok(ProjectQuery {
         spans,
@@ -1161,6 +1173,7 @@ pub(crate) fn project_query(
         runtime: Arc::clone(runtime),
         target_partitions,
         optimizer_rules: vec![Arc::new(query::TraceListRule)],
+        suspects,
     })
 }
 

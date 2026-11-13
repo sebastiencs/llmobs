@@ -834,6 +834,7 @@ fn no_rule(query: &ProjectQuery) -> QueryContext {
         runtime: Arc::clone(&query.runtime),
         target_partitions: query.target_partitions,
         optimizer_rules: Vec::<Arc<dyn PhysicalOptimizerRule + Send + Sync>>::new(),
+        suspects: query.suspects.clone(),
     };
     QueryContext::new(source, None).unwrap()
 }

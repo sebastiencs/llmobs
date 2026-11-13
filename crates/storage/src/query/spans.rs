@@ -17,6 +17,7 @@ use crate::catalog::Catalog;
 use crate::catalog::FileMeta;
 use crate::deletion::PendingDeletion;
 use crate::memtable::MemSnapshot;
+use crate::verify::Suspects;
 use crate::wal::Table;
 
 /// Spans of one project at one read snapshot.
@@ -29,6 +30,7 @@ pub(crate) struct SpansProvider {
     around: Option<i64>,
     /// The project's pending deletions (spec 03 §7).
     deletions: Arc<[Arc<PendingDeletion>]>,
+    suspects: Suspects,
 }
 
 impl SpansProvider {
@@ -39,6 +41,7 @@ impl SpansProvider {
         target_partitions: usize,
         around: Option<i64>,
         deletions: Arc<[Arc<PendingDeletion>]>,
+        suspects: Suspects,
     ) -> Self {
         Self {
             project,
@@ -47,6 +50,7 @@ impl SpansProvider {
             target_partitions,
             around,
             deletions,
+            suspects,
         }
     }
 
@@ -108,6 +112,7 @@ impl TableProvider for SpansProvider {
             target_partitions: self.target_partitions,
             session: state,
             deletions: &self.deletions,
+            suspects: &self.suspects,
         })
     }
 }

@@ -17,7 +17,7 @@ use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::PageIndexPolicy;
 
-use crate::catalog::{FileId, FileMeta};
+use crate::catalog::{self, FileId, FileMeta};
 use crate::query_error::root;
 
 /// Whether `error` may come from a corrupt Parquet file rather than the object
@@ -139,6 +139,69 @@ impl VerifyQueue {
     }
 }
 
+/// The files one query's scans read, and the queue to report them to (spec 03 §10).
+#[derive(Debug, Clone)]
+pub struct Suspects {
+    inner: Arc<SuspectsInner>,
+}
+
+#[derive(Debug)]
+struct SuspectsInner {
+    /// Files the query's scans read so far.
+    files: Mutex<HashSet<FileId>>,
+    queue: Arc<VerifyQueue>,
+}
+
+impl Suspects {
+    pub(crate) fn new(queue: Arc<VerifyQueue>) -> Self {
+        Self {
+            inner: Arc::new(SuspectsInner {
+                files: Mutex::new(HashSet::new()),
+                queue,
+            }),
+        }
+    }
+
+    /// Not connected to any storage: reports go nowhere. For `ProjectQuery`
+    /// values built by tests.
+    #[cfg(test)]
+    pub(crate) fn detached() -> Self {
+        Self::new(Arc::new(VerifyQueue::default()))
+    }
+
+    /// Records the files a scan reads.
+    pub(crate) fn record(&self, files: &[Arc<FileMeta>]) {
+        let mut recorded = self
+            .inner
+            .files
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        recorded.extend(files.iter().map(|file| file.id));
+    }
+
+    /// Queues the recorded files when `error` may come from a corrupt file.
+    pub(crate) fn report(&self, error: &DataFusionError) {
+        if !may_be_corrupt(error) {
+            return;
+        }
+        let ids: Vec<FileId> = self
+            .inner
+            .files
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .copied()
+            .collect();
+        let queued = self.inner.queue.suspect(ids, catalog::now_ns());
+        if queued > 0 {
+            tracing::warn!(
+                files = queued,
+                "a query failed to decode; its files are queued for verification"
+            );
+        }
+    }
+}
+
 /// What a whole-file read found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Verdict {
@@ -218,6 +281,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::catalog::FileTable;
 
     fn store_error() -> object_store::Error {
         object_store::Error::Generic {
@@ -338,6 +402,39 @@ mod tests {
         queue.requeue(first[0]);
         queue.requeue(first[0]);
         assert_eq!(queue.take(10), vec![file_id(2), file_id(1)]);
+    }
+
+    fn recorded_file(id: FileId) -> Arc<FileMeta> {
+        Arc::new(FileMeta {
+            id,
+            table: FileTable::Spans,
+            project: crate::compaction::job::tests::project(),
+            day: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            level: 0,
+            path: format!("tables/spans/day=2026-01-01/{id:?}.parquet"),
+            size: 1,
+            footer_size: 1,
+            rows: 1,
+            min_time: 0,
+            max_time: 0,
+            min_ingest_time: 0,
+            max_ingest_time: 0,
+            fully_merged: false,
+            deletions_applied_seq: 0,
+        })
+    }
+
+    #[test]
+    fn a_report_queues_the_recorded_files_only_for_a_decode_error() {
+        let queue = Arc::new(VerifyQueue::default());
+        let suspects = Suspects::new(Arc::clone(&queue));
+        suspects.record(&[recorded_file(file_id(7)), recorded_file(file_id(8))]);
+
+        suspects.report(&DataFusionError::ResourcesExhausted("full".to_owned()));
+        assert!(queue.take(10).is_empty());
+
+        suspects.report(&DataFusionError::ParquetError(Box::new(parquet_error())));
+        assert_eq!(queue.take(10), vec![file_id(7), file_id(8)]);
     }
 
     #[test]

@@ -460,3 +460,57 @@ async fn a_failed_quarantine_commit_requeues() {
     assert_eq!(state_of(dir.path(), victim.id).await, "active");
     storage.shutdown().await.unwrap();
 }
+
+/// One SQL statement through a fresh query context over the project's views.
+async fn sql_all(storage: &Storage, query: &str) -> Result<crate::SqlJson, crate::RunError> {
+    let source = storage
+        .query(project(), QueryOptions::default())
+        .await
+        .unwrap();
+    let ctx = QueryContext::new(source, None).unwrap();
+    ctx.sql_json(crate::SqlRequest {
+        query,
+        params: &serde_json::Map::new(),
+        limit: 100,
+        timeout: Duration::from_secs(30),
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_query_on_a_corrupt_file_queues_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (storage, _) = two_files(dir.path()).await;
+    let victim = spans_file_at(&storage, at(10, 0, 0));
+    let healthy = spans_file_at(&storage, at(10, 1, 0));
+    corrupt(dir.path(), &victim, Corruption::Page);
+
+    // The query fails, and both files it planned to read are queued.
+    assert!(sql_all(&storage, "SELECT * FROM spans").await.is_err());
+    let report = storage.verify_pass().await;
+    assert_eq!(report.healthy, 1, "the healthy file was queued");
+    assert_eq!(report.quarantined, 1, "the corrupt file was queued");
+    assert_eq!(state_of(dir.path(), victim.id).await, "quarantined");
+    assert_eq!(state_of(dir.path(), healthy.id).await, "active");
+
+    // The same query now runs over the other file's rows.
+    let ok = sql_all(&storage, "SELECT * FROM spans").await.unwrap();
+    assert_eq!(ok.rows.len(), 1);
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_user_error_queues_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (storage, _) = two_files(dir.path()).await;
+    let error = sql_all(&storage, "SELECT 1 / 0 FROM spans")
+        .await
+        .expect_err("division by zero");
+    assert!(matches!(error, crate::RunError::Failed(_)), "{error:?}");
+    let report = storage.verify_pass().await;
+    assert_eq!(
+        report.healthy + report.quarantined + report.repaired + report.unavailable + report.failed,
+        0
+    );
+    storage.shutdown().await.unwrap();
+}

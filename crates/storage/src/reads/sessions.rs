@@ -167,7 +167,7 @@ async fn list(ctx: &QueryContext, request: &SessionListRequest<'_>) -> Result<Pa
         .map_err(classify)?
         .limit(0, Some(request.limit + 1))
         .map_err(classify)?;
-    let batches = frame.collect().await.map_err(classify)?;
+    let batches = frame.collect().await.map_err(|error| ctx.fail(error))?;
     assemble(
         batches,
         request.limit,
@@ -198,7 +198,7 @@ async fn load(
     let existing = DataFrame::new(state.clone(), plan.clone())
         .collect()
         .await
-        .map_err(classify)?;
+        .map_err(|error| ctx.fail(error))?;
     if row_count(&existing) == 0 {
         return Ok(None);
     }
@@ -206,7 +206,7 @@ async fn load(
     let session = DataFrame::new(state.clone(), session_plan)
         .collect()
         .await
-        .map_err(classify)?;
+        .map_err(|error| ctx.fail(error))?;
     let Some(session) = single_row(&session)? else {
         return Ok(None);
     };
@@ -221,7 +221,7 @@ async fn load(
         .map_err(classify)?
         .collect()
         .await
-        .map_err(classify)?;
+        .map_err(|error| ctx.fail(error))?;
     let (turns, truncated) = cap_rows(turns, MAX_SESSION_TURNS);
     let roots = root_payloads(ctx, &turns).await?;
     Ok(Some(SessionDetailData {
@@ -278,7 +278,7 @@ async fn root_payloads(
             col(spans::OUTPUT_FORMAT),
         ])
         .map_err(classify)?;
-    joined.collect().await.map_err(classify)
+    joined.collect().await.map_err(|error| ctx.fail(error))
 }
 
 fn row_count(batches: &[RecordBatch]) -> usize {

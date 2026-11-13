@@ -22,6 +22,7 @@ use crate::error::{MediaError, QueryError};
 use crate::hooks::{HookPoint, Hooks};
 use crate::objects::Objects;
 use crate::read_state::Published;
+use crate::verify::VerifyQueue;
 use crate::{QueryOptions, project_query};
 
 /// One extracted media blob (spec 02 § Media).
@@ -73,6 +74,8 @@ pub(crate) struct MediaGc {
     /// `query.trace_lookback` in ns, for [`project_query`].
     pub(crate) lookback: i64,
     pub(crate) hooks: Hooks,
+    /// The suspects of the live-set query go here (spec 03 §10).
+    pub(crate) verify: Arc<VerifyQueue>,
 }
 
 impl std::fmt::Debug for MediaGc {
@@ -214,6 +217,7 @@ impl MediaGc {
             &self.runtime,
             self.target_partitions,
             self.lookback,
+            &self.verify,
         )
         .map_err(|error| match error {
             QueryError::DataFusion(error) => MediaError::Query(error),
@@ -234,7 +238,10 @@ impl MediaGc {
             .map_err(MediaError::from)?
             .collect()
             .await
-            .map_err(MediaError::from)?;
+            .map_err(|error| {
+                query.suspects.report(&error);
+                MediaError::from(error)
+            })?;
         let mut live = HashSet::new();
         for batch in &batches {
             insert_media_refs(batch, &mut live)?;

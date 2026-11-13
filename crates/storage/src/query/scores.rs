@@ -26,6 +26,7 @@ use crate::catalog::Catalog;
 use crate::catalog::FileMeta;
 use crate::deletion::PendingDeletion;
 use crate::memtable::MemSnapshot;
+use crate::verify::Suspects;
 use crate::wal::Table;
 
 /// Scores of one project at one read snapshot.
@@ -40,6 +41,7 @@ pub(crate) struct ScoresProvider {
     target_partitions: usize,
     /// The project's pending deletions (spec 03 §7).
     deletions: Arc<[Arc<PendingDeletion>]>,
+    suspects: Suspects,
 }
 
 impl ScoresProvider {
@@ -49,6 +51,7 @@ impl ScoresProvider {
         catalog: Arc<Catalog>,
         target_partitions: usize,
         deletions: Arc<[Arc<PendingDeletion>]>,
+        suspects: Suspects,
     ) -> Self {
         Self {
             project,
@@ -56,6 +59,7 @@ impl ScoresProvider {
             catalog,
             target_partitions,
             deletions,
+            suspects,
         }
     }
 
@@ -88,6 +92,7 @@ struct RawScores {
     target_partitions: usize,
     /// The project's pending deletions (spec 03 §7).
     deletions: Arc<[Arc<PendingDeletion>]>,
+    suspects: Suspects,
 }
 
 #[async_trait]
@@ -120,6 +125,7 @@ impl TableProvider for ScoresProvider {
             catalog: Arc::clone(&self.catalog),
             target_partitions: self.target_partitions,
             deletions: Arc::clone(&self.deletions),
+            suspects: self.suspects.clone(),
         });
         let window = row_number()
             .partition_by(vec![col(scores::SCORE_ID)])
@@ -222,6 +228,7 @@ impl TableProvider for RawScores {
             target_partitions: self.target_partitions,
             session: state,
             deletions: &self.deletions,
+            suspects: &self.suspects,
         })
     }
 }

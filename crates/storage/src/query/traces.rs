@@ -73,6 +73,7 @@ use crate::deletion::{PendingDeletion, applicable, covered_predicate};
 use crate::memtable::{MemBatch, MemSnapshot};
 use crate::objects::OBJECT_STORE_URL;
 use crate::partials::{MergeColumns, TraceMerger};
+use crate::verify::Suspects;
 
 /// Traces of one project at one read snapshot (D152/D154, D153 in list mode).
 #[derive(Debug)]
@@ -88,9 +89,11 @@ pub(crate) struct TracesProvider {
     /// The project's pending deletions (spec 03 §7). The `traces` view hides a
     /// covered trace's partials by trace id alone.
     deletions: Arc<[Arc<PendingDeletion>]>,
+    suspects: Suspects,
 }
 
 impl TracesProvider {
+    #[allow(clippy::too_many_arguments)] // one input per field, the query's suspects last
     pub(crate) fn new(
         project: ProjectId,
         catalog: Arc<Catalog>,
@@ -99,6 +102,7 @@ impl TracesProvider {
         lookback: i64,
         partitions: usize,
         deletions: Arc<[Arc<PendingDeletion>]>,
+        suspects: Suspects,
     ) -> Self {
         Self {
             project,
@@ -108,6 +112,7 @@ impl TracesProvider {
             lookback,
             partitions,
             deletions,
+            suspects,
         }
     }
 }
@@ -147,6 +152,8 @@ struct ScanContext {
     around: Option<i64>,
     /// The project's pending deletions (spec 03 §7).
     deletions: Arc<[Arc<PendingDeletion>]>,
+    /// The query's suspects, for the file plans of this scan.
+    suspects: Suspects,
 }
 
 impl ScanContext {
@@ -167,6 +174,7 @@ impl ScanContext {
             filters: filters.to_vec(),
             around: provider.options.around,
             deletions: Arc::clone(&provider.deletions),
+            suspects: provider.suspects.clone(),
         })
     }
 
@@ -305,6 +313,7 @@ fn build_range_plan(ctx: &ScanContext, spec: RangeSpec) -> DfResult<Arc<dyn Exec
             &input_df,
             file_pred.as_ref(),
             ctx.partitions,
+            &ctx.suspects,
         )?);
     }
     if !gated.is_empty() {
@@ -318,6 +327,7 @@ fn build_range_plan(ctx: &ScanContext, spec: RangeSpec) -> DfResult<Arc<dyn Exec
             &input_df,
             file_pred.as_ref(),
             ctx.partitions,
+            &ctx.suspects,
         )?;
         let gated_plan = match covered_predicate(FileTable::Traces, &input_schema, &ctx.deletions)?
         {
@@ -637,7 +647,9 @@ fn file_plan(
     _input_df: &DFSchema,
     predicate: Option<&Arc<dyn PhysicalExpr>>,
     partitions: usize,
+    suspects: &Suspects,
 ) -> DfResult<Arc<dyn ExecutionPlan>> {
+    suspects.record(files);
     let mut source = ParquetSource::new(Arc::clone(schema))
         .with_pushdown_filters(true)
         .with_enable_page_index(true);
@@ -2464,6 +2476,8 @@ mod tests {
             runtime: Arc::clone(&query.runtime),
             target_partitions: query.target_partitions,
             optimizer_rules: Vec::new(),
+
+            suspects: crate::verify::Suspects::detached(),
         };
         (
             QueryContext::new(query, None).unwrap(),

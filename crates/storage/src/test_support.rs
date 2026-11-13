@@ -260,6 +260,7 @@ pub(crate) fn example_query() -> ProjectQuery {
         runtime: Arc::new(RuntimeEnv::default()),
         target_partitions: NonZeroUsize::new(2).expect("two partitions"),
         optimizer_rules: Vec::new(),
+        suspects: crate::verify::Suspects::detached(),
     }
 }
 

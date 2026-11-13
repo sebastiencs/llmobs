@@ -164,7 +164,7 @@ async fn list(ctx: &QueryContext, request: &UserListRequest<'_>) -> Result<Page,
         .map_err(classify)?
         .limit(0, Some(request.limit + 1))
         .map_err(classify)?;
-    let batches = frame.collect().await.map_err(classify)?;
+    let batches = frame.collect().await.map_err(|error| ctx.fail(error))?;
     assemble(
         batches,
         request.limit,
@@ -248,14 +248,14 @@ async fn load(
     let user_rows = DataFrame::new(state.clone(), user_plan.clone())
         .collect()
         .await
-        .map_err(classify)?;
+        .map_err(|error| ctx.fail(error))?;
     if row_count(&user_rows) == 0 {
         return Ok(None);
     }
     let user = aggregate_users(DataFrame::new(state.clone(), user_plan.clone()))?
         .collect()
         .await
-        .map_err(classify)?;
+        .map_err(|error| ctx.fail(error))?;
     let Some(user) = single_row(&user)? else {
         return Ok(None);
     };
@@ -268,7 +268,7 @@ async fn load(
         .map_err(classify)?
         .collect()
         .await
-        .map_err(classify)?;
+        .map_err(|error| ctx.fail(error))?;
     let ids = string_column(&session_ids, traces::SESSION_ID);
     if ids.is_empty() {
         return Ok(Some(UserDetailData {
@@ -293,7 +293,7 @@ async fn load(
         .map_err(classify)?
         .collect()
         .await
-        .map_err(classify)?;
+        .map_err(|error| ctx.fail(error))?;
     Ok(Some(UserDetailData { user, sessions }))
 }
 

@@ -47,6 +47,7 @@ use crate::catalog::{Catalog, FileMeta, FileTable};
 use crate::deletion::{PendingDeletion, applicable, covered_predicate, key_columns};
 use crate::memtable::{MemBatch, MemSnapshot};
 use crate::objects::OBJECT_STORE_URL;
+use crate::verify::Suspects;
 use crate::wal::Table;
 
 pub(crate) use scores::ScoresProvider;
@@ -391,6 +392,8 @@ pub(crate) struct ScanUnion<'a> {
     /// The project's pending deletions; files they may cover go through the
     /// tombstone filter (spec 03 §7).
     pub deletions: &'a [Arc<PendingDeletion>],
+    /// The query's suspects: every file a file plan below reads is recorded here.
+    pub suspects: &'a Suspects,
 }
 
 /// The `trace_id`s named by a scan's top-level id conjuncts, or `None` when
@@ -664,6 +667,7 @@ fn file_plan(
     files: &[Arc<FileMeta>],
     limit: Option<usize>,
 ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+    scan.suspects.record(files);
     let df_schema = DFSchema::try_from(Arc::clone(&scan.schema))?;
     let mut physical = Vec::with_capacity(scan.filters.len());
     for filter in scan.filters {
