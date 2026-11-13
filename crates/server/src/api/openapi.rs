@@ -56,6 +56,8 @@ const COOKIE_NAME: &str = concat!(llmobs_core::llmobs_name!(), "_session");
 
 const AUTH_ERRORS: &[u16] = &[401, 403, 404, 429];
 const QUERY_ERRORS: &[u16] = &[400, 401, 403, 404, 429];
+/// Read operations with a handler (D-G-23): they also return `422` and `503`.
+const READ_ERRORS: &[u16] = &[400, 401, 403, 404, 422, 429, 503];
 
 /// Schemas collected for the document.
 ///
@@ -1233,7 +1235,7 @@ fn trace_paths(paths: PathsBuilder) -> PathsBuilder {
         .responses(responses(
             "200",
             json_named("TracePage", "One page of traces."),
-            QUERY_ERRORS,
+            READ_ERRORS,
         ))
         .build();
     let stream = operation("stream_traces", "traces", "Stream traces")
@@ -1258,7 +1260,7 @@ fn trace_paths(paths: PathsBuilder) -> PathsBuilder {
         .responses(responses(
             "200",
             json_of::<TraceDetail>("The trace and its span tree."),
-            QUERY_ERRORS,
+            READ_ERRORS,
         ))
         .build();
     let span_stream = operation("stream_trace", "traces", "Stream a trace")
@@ -1284,7 +1286,7 @@ fn trace_paths(paths: PathsBuilder) -> PathsBuilder {
         .responses(responses(
             "200",
             json_of::<SpanDetail>("The span, including payloads."),
-            AUTH_ERRORS,
+            READ_ERRORS,
         ))
         .build();
     let spans = operation("list_spans", "spans", "List spans")
@@ -1293,7 +1295,7 @@ fn trace_paths(paths: PathsBuilder) -> PathsBuilder {
         .responses(responses(
             "200",
             json_named("SpanPage", "One page of spans."),
-            QUERY_ERRORS,
+            READ_ERRORS,
         ))
         .build();
     paths
@@ -1330,7 +1332,7 @@ fn session_paths(paths: PathsBuilder) -> PathsBuilder {
         .responses(responses(
             "200",
             json_named("SessionPage", "One page of sessions."),
-            QUERY_ERRORS,
+            READ_ERRORS,
         ))
         .build();
     let session = operation("get_session", "sessions", "Get a session")
@@ -1344,7 +1346,7 @@ fn session_paths(paths: PathsBuilder) -> PathsBuilder {
         .responses(responses(
             "200",
             json_of::<SessionDetail>("The session and its turns."),
-            QUERY_ERRORS,
+            READ_ERRORS,
         ))
         .build();
     let users = operation("list_users", "users", "List users")
@@ -1355,7 +1357,7 @@ fn session_paths(paths: PathsBuilder) -> PathsBuilder {
         .responses(responses(
             "200",
             json_named("EndUserPage", "One page of end users."),
-            QUERY_ERRORS,
+            READ_ERRORS,
         ))
         .build();
     let user = operation("get_user", "users", "Get a user")
@@ -1369,7 +1371,7 @@ fn session_paths(paths: PathsBuilder) -> PathsBuilder {
         .responses(responses(
             "200",
             json_of::<EndUserDetail>("The user and recent sessions."),
-            QUERY_ERRORS,
+            READ_ERRORS,
         ))
         .build();
     paths
@@ -1397,7 +1399,7 @@ fn score_paths(paths: PathsBuilder) -> PathsBuilder {
         .responses(responses(
             "200",
             json_named("ScorePage", "One page of scores."),
-            QUERY_ERRORS,
+            READ_ERRORS,
         ))
         .build();
     let schema = operation("get_schema", "schema", "Get the schema")
@@ -1418,7 +1420,7 @@ fn score_paths(paths: PathsBuilder) -> PathsBuilder {
         .responses(responses(
             "200",
             json_of::<MetricsResponse>("Dashboard metrics."),
-            QUERY_ERRORS,
+            READ_ERRORS,
         ))
         .build();
     paths
@@ -1513,7 +1515,7 @@ fn media_paths(paths: PathsBuilder) -> PathsBuilder {
                 ("200", binary("The whole blob.")),
                 ("206", binary("The requested byte range.")),
             ],
-            &[401, 403, 404, 416, 429],
+            &[401, 403, 404, 416, 429, 503],
         ))
         .build();
     paths.path(
@@ -1702,8 +1704,9 @@ fn problem(code: u16) -> Response {
         404 => "The resource does not exist.",
         409 => "The request conflicts with the current state.",
         416 => "The Range header does not overlap the blob.",
+        422 => "The query took longer than its time limit or needed more memory than allowed.",
         429 => "Too many requests.",
-        503 => "The SMTP server could not be reached or refused the message.",
+        503 => "The server is busy or a dependency is unavailable. Retry later.",
         _ => "Request failed.",
     };
     ResponseBuilder::new()

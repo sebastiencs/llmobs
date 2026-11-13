@@ -86,6 +86,12 @@ pub(crate) enum ApiError {
         /// Seconds until the caller may retry. At least 1 when a limiter builds it.
         retry_after_s: u64,
     },
+    /// The `Range` header does not overlap the blob. `size` is the blob's size.
+    #[error("range not satisfiable")]
+    RangeNotSatisfiable {
+        /// Size of the whole blob, sent in `Content-Range`.
+        size: u64,
+    },
     /// A2 refused or failed the query (D94). The message goes to the caller and is never logged.
     #[error("query error")]
     Query(#[source] RunError),
@@ -119,6 +125,9 @@ impl ApiError {
                 Problem::new(ProblemCode::Conflict, Some((*detail).to_owned()))
             }
             Self::RateLimited { .. } => Problem::new(ProblemCode::RateLimited, None),
+            Self::RangeNotSatisfiable { .. } => {
+                Problem::new(ProblemCode::RangeNotSatisfiable, None)
+            }
             Self::Query(error) => query_problem(error),
             Self::Internal(_) => {
                 Problem::new(ProblemCode::Internal, Some("internal error".to_owned()))
@@ -196,6 +205,12 @@ impl IntoResponse for ApiError {
             }
             Self::Unavailable { .. } => {
                 headers.insert(axum::http::header::RETRY_AFTER, header_u64(1));
+            }
+            Self::RangeNotSatisfiable { size } => {
+                // `bytes */<size>` is ASCII, so the value is always valid.
+                if let Ok(value) = HeaderValue::from_str(&format!("bytes */{size}")) {
+                    headers.insert(axum::http::header::CONTENT_RANGE, value);
+                }
             }
             _ => {}
         }

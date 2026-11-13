@@ -140,6 +140,8 @@ pub enum ProblemCode {
     PayloadTooLarge,
     /// The request content type is not accepted.
     UnsupportedMediaType,
+    /// The `Range` header does not overlap the blob.
+    RangeNotSatisfiable,
     /// The request conflicts with the current state.
     Conflict,
     /// Too many requests.
@@ -159,6 +161,7 @@ impl ProblemCode {
             Self::MethodNotAllowed => 405,
             Self::PayloadTooLarge => 413,
             Self::UnsupportedMediaType => 415,
+            Self::RangeNotSatisfiable => 416,
             Self::QueryTimeout | Self::QueryTooLarge => 422,
             Self::Conflict => 409,
             Self::RateLimited => 429,
@@ -177,6 +180,7 @@ impl ProblemCode {
             Self::MethodNotAllowed => "Method Not Allowed",
             Self::PayloadTooLarge => "Payload Too Large",
             Self::UnsupportedMediaType => "Unsupported Media Type",
+            Self::RangeNotSatisfiable => "Range Not Satisfiable",
             Self::QueryTimeout | Self::QueryTooLarge => "Unprocessable Content",
             Self::Conflict => "Conflict",
             Self::RateLimited => "Too Many Requests",

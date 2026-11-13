@@ -827,7 +827,7 @@
             }
           },
           "503": {
-            "description": "The SMTP server could not be reached or refused the message.",
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3355,6 +3355,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }
@@ -3788,8 +3798,28 @@
               }
             }
           },
+          "422": {
+            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4408,8 +4438,28 @@
               }
             }
           },
+          "422": {
+            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4573,8 +4623,28 @@
               }
             }
           },
+          "422": {
+            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4683,8 +4753,28 @@
               }
             }
           },
+          "422": {
+            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4857,8 +4947,28 @@
               }
             }
           },
+          "422": {
+            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5031,8 +5141,28 @@
               }
             }
           },
+          "422": {
+            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5251,8 +5381,28 @@
               }
             }
           },
+          "422": {
+            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5311,6 +5461,16 @@
               }
             }
           },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No credentials, or the credentials are invalid.",
             "content": {
@@ -5341,8 +5501,28 @@
               }
             }
           },
+          "422": {
+            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5588,8 +5768,28 @@
               }
             }
           },
+          "422": {
+            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5698,8 +5898,28 @@
               }
             }
           },
+          "422": {
+            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -7356,6 +7576,7 @@
           "method_not_allowed",
           "payload_too_large",
           "unsupported_media_type",
+          "range_not_satisfiable",
           "conflict",
           "rate_limited",
           "internal"
