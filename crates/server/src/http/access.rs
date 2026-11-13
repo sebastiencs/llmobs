@@ -119,6 +119,9 @@ pub(crate) fn routes() -> Vec<RouteDef> {
     routes.extend(crate::routes::traces::routes());
     routes.extend(crate::routes::sessions::routes());
     routes.extend(crate::routes::users::routes());
+    routes.extend(crate::routes::scores::routes());
+    routes.extend(crate::routes::schema::routes());
+    routes.extend(crate::routes::metrics::routes());
     routes.extend(crate::routes::otlp::routes());
     routes
 }

@@ -15,15 +15,21 @@ use arrow::array::{
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, TimeUnit};
 use llmobs_core::enums::{
-    Convention, CostSource, PayloadFormat, ScoreDataType, ScoreSource, SpanKind, SpanStatus,
+    Convention, CostSource, PayloadFormat, ScoreDataType, ScoreSource, ScoreTargetKind, SpanKind,
+    SpanStatus,
 };
 use llmobs_core::ids::{ProjectId, SpanId, TraceId};
 use llmobs_core::schema::{event_field, link_field, scores, spans, traces};
-use llmobs_core::score::ScoreValue;
+use llmobs_core::score::{Score, ScoreTarget, ScoreValue};
 use llmobs_core::span::{Span, SpanEvent, SpanLink};
 use uuid::Uuid;
 
+use super::metrics::{
+    Kpi, KpiMetric, MetricName, MetricPoint, MetricSeries, MetricsGroupBy, MetricsResponse,
+    ModelUsage,
+};
 use super::payload::Payload;
+use super::schema::{ColumnSchema, ColumnType, FunctionSchema, SchemaResponse, ViewSchema};
 use super::sessions::SessionSummary;
 use super::traces::{ScoreBrief, SpanSummary, TraceSummary, stored_payload};
 use super::users::EndUserSummary;
@@ -799,6 +805,251 @@ pub(crate) fn score_value(
         ScoreDataType::Text => Ok(ScoreValue::Text(
             value_str.ok_or(ConvertError::Null(scores::VALUE_STR))?,
         )),
+    }
+}
+
+/// Score rows of the scores view, in row order across batches. `project_id` is the caller's project.
+pub(crate) fn scores(
+    batches: &[RecordBatch],
+    project_id: ProjectId,
+) -> Result<Vec<Score>, ConvertError> {
+    let mut out = Vec::new();
+    for batch in batches {
+        out.extend(score_batch(batch, project_id)?);
+    }
+    Ok(out)
+}
+
+fn score_batch(batch: &RecordBatch, project_id: ProjectId) -> Result<Vec<Score>, ConvertError> {
+    let score_id = strings(batch, scores::SCORE_ID)?;
+    let target = strings(batch, scores::TARGET)?;
+    let trace_id = strings(batch, scores::TRACE_ID)?;
+    let span_id = strings(batch, scores::SPAN_ID)?;
+    let session_id = strings(batch, scores::SESSION_ID)?;
+    let user_id = strings(batch, scores::USER_ID)?;
+    let name = strings(batch, scores::NAME)?;
+    let data_type = strings(batch, scores::DATA_TYPE)?;
+    let value_num = floats(batch, scores::VALUE_NUM)?;
+    let value_str = strings(batch, scores::VALUE_STR)?;
+    let reason = strings(batch, scores::REASON)?;
+    let source = strings(batch, scores::SOURCE)?;
+    let evaluator_id = strings(batch, scores::EVALUATOR_ID)?;
+    let rule_id = strings(batch, scores::RULE_ID)?;
+    let experiment_id = strings(batch, scores::EXPERIMENT_ID)?;
+    let dataset_item_id = strings(batch, scores::DATASET_ITEM_ID)?;
+    let author_user_id = strings(batch, scores::AUTHOR_USER_ID)?;
+    let metadata = maps(batch, scores::METADATA)?;
+    let created_at = times(batch, scores::CREATED_AT)?;
+    let updated_at = times(batch, scores::UPDATED_AT)?;
+    let deleted = bools(batch, scores::DELETED)?;
+    let ingest_time = times(batch, scores::INGEST_TIME)?;
+
+    let mut out = Vec::with_capacity(batch.num_rows());
+    for row in 0..batch.num_rows() {
+        let kind = req_parsed(&target, row, scores::TARGET, ScoreTargetKind::parse)?;
+        let (score_target, score_session) = match kind {
+            ScoreTargetKind::Span => (
+                ScoreTarget::Span {
+                    trace_id: req_parsed(&trace_id, row, scores::TRACE_ID, TraceId::from_str)?,
+                    span_id: req_parsed(&span_id, row, scores::SPAN_ID, SpanId::from_str)?,
+                },
+                opt_string(&session_id, row),
+            ),
+            ScoreTargetKind::Trace => (
+                ScoreTarget::Trace {
+                    trace_id: req_parsed(&trace_id, row, scores::TRACE_ID, TraceId::from_str)?,
+                },
+                opt_string(&session_id, row),
+            ),
+            // The target's id is stored in `session_id`, so the score has no other session.
+            ScoreTargetKind::Session => (
+                ScoreTarget::Session {
+                    session_id: req_string(&session_id, row, scores::SESSION_ID)?,
+                },
+                None,
+            ),
+        };
+        out.push(Score {
+            project_id,
+            score_id: req_parsed(&score_id, row, scores::SCORE_ID, Uuid::parse_str)?,
+            target: score_target,
+            session_id: score_session,
+            user_id: opt_string(&user_id, row),
+            name: req_string(&name, row, scores::NAME)?,
+            value: score_value(
+                &req_string(&data_type, row, scores::DATA_TYPE)?,
+                opt_f64(&value_num, row),
+                opt_string(&value_str, row),
+            )?,
+            reason: opt_string(&reason, row),
+            source: req_parsed(&source, row, scores::SOURCE, ScoreSource::parse)?,
+            evaluator_id: opt_parsed(&evaluator_id, row, scores::EVALUATOR_ID, Uuid::parse_str)?,
+            rule_id: opt_parsed(&rule_id, row, scores::RULE_ID, Uuid::parse_str)?,
+            experiment_id: opt_parsed(&experiment_id, row, scores::EXPERIMENT_ID, Uuid::parse_str)?,
+            dataset_item_id: opt_parsed(
+                &dataset_item_id,
+                row,
+                scores::DATASET_ITEM_ID,
+                Uuid::parse_str,
+            )?,
+            author_user_id: opt_parsed(
+                &author_user_id,
+                row,
+                scores::AUTHOR_USER_ID,
+                Uuid::parse_str,
+            )?,
+            metadata: map_strings(&metadata, row, scores::METADATA)?,
+            created_at: req_time(&created_at, row, scores::CREATED_AT)?,
+            updated_at: req_time(&updated_at, row, scores::UPDATED_AT)?,
+            deleted: req_bool(&deleted, row, scores::DELETED)?,
+            ingest_time: req_time(&ingest_time, row, scores::INGEST_TIME)?,
+        });
+    }
+    Ok(out)
+}
+
+/// The API dashboard response. Storage names map variant by variant.
+pub(crate) fn metrics_response(
+    data: llmobs_storage::MetricsData,
+    from: i64,
+    to: i64,
+    group_by: Option<MetricsGroupBy>,
+) -> MetricsResponse {
+    MetricsResponse {
+        from,
+        to,
+        bucket_ns: data.bucket_ns,
+        group_by,
+        kpis: data
+            .kpis
+            .into_iter()
+            .map(|kpi| Kpi {
+                metric: kpi_metric(kpi.name),
+                value: kpi.value,
+                previous: kpi.previous,
+            })
+            .collect(),
+        series: data
+            .series
+            .into_iter()
+            .map(|series| MetricSeries {
+                metric: metric_name(series.name),
+                group: series.group,
+                points: series
+                    .points
+                    .into_iter()
+                    .map(|point| MetricPoint {
+                        time: point.time,
+                        value: point.value,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        top_models: data
+            .top_models
+            .into_iter()
+            .map(|row| ModelUsage {
+                model: row.model,
+                llm_count: row.llm_count,
+                total_tokens: row.total_tokens,
+                cost_total: row.cost_total,
+            })
+            .collect(),
+    }
+}
+
+fn kpi_metric(name: llmobs_storage::KpiName) -> KpiMetric {
+    use llmobs_storage::KpiName;
+    match name {
+        KpiName::Traces => KpiMetric::Traces,
+        KpiName::ErrorRate => KpiMetric::ErrorRate,
+        KpiName::LatencyP95 => KpiMetric::LatencyP95,
+        KpiName::CostTotal => KpiMetric::CostTotal,
+        KpiName::TotalTokens => KpiMetric::TotalTokens,
+    }
+}
+
+fn metric_name(name: llmobs_storage::SeriesName) -> MetricName {
+    use llmobs_storage::SeriesName;
+    match name {
+        SeriesName::Traces => MetricName::Traces,
+        SeriesName::Errors => MetricName::Errors,
+        SeriesName::ErrorRate => MetricName::ErrorRate,
+        SeriesName::LatencyP50 => MetricName::LatencyP50,
+        SeriesName::LatencyP95 => MetricName::LatencyP95,
+        SeriesName::LatencyP99 => MetricName::LatencyP99,
+        SeriesName::Cost => MetricName::Cost,
+        SeriesName::InputTokens => MetricName::InputTokens,
+        SeriesName::OutputTokens => MetricName::OutputTokens,
+        SeriesName::CacheReadTokens => MetricName::CacheReadTokens,
+        SeriesName::CacheWriteTokens => MetricName::CacheWriteTokens,
+        SeriesName::TtftP50 => MetricName::TtftP50,
+        SeriesName::TtftP95 => MetricName::TtftP95,
+        SeriesName::LlmLatencyP50 => MetricName::LlmLatencyP50,
+        SeriesName::LlmLatencyP95 => MetricName::LlmLatencyP95,
+        SeriesName::CostByModel => MetricName::CostByModel,
+        SeriesName::ScoreAvg => MetricName::ScoreAvg,
+        SeriesName::EvalCost => MetricName::EvalCost,
+    }
+}
+
+/// The API catalog of views and functions. Storage names map variant by variant.
+pub(crate) fn schema_response() -> SchemaResponse {
+    SchemaResponse {
+        views: llmobs_storage::view_catalog()
+            .into_iter()
+            .map(|view| ViewSchema {
+                name: view_name(view.view),
+                description: view.description.to_owned(),
+                columns: view
+                    .columns
+                    .into_iter()
+                    .map(|column| ColumnSchema {
+                        name: column.name.to_owned(),
+                        column_type: column_type(column.kind),
+                        nullable: column.nullable,
+                        description: column.description.to_owned(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+        functions: llmobs_storage::function_catalog()
+            .into_iter()
+            .map(|function| FunctionSchema {
+                name: function.name.to_owned(),
+                signature: function.signature.to_owned(),
+                description: function.description.to_owned(),
+                in_filter: function.in_filter,
+                in_sql: function.in_sql,
+            })
+            .collect(),
+    }
+}
+
+fn view_name(name: llmobs_storage::ViewName) -> super::schema::ViewName {
+    use super::schema::ViewName as Api;
+    use llmobs_storage::ViewName;
+    match name {
+        ViewName::Traces => Api::Traces,
+        ViewName::Spans => Api::Spans,
+        ViewName::Sessions => Api::Sessions,
+        ViewName::Scores => Api::Scores,
+        ViewName::ExperimentItems => Api::ExperimentItems,
+        ViewName::DatasetItems => Api::DatasetItems,
+    }
+}
+
+fn column_type(kind: llmobs_storage::ColumnKind) -> ColumnType {
+    use llmobs_storage::ColumnKind;
+    match kind {
+        ColumnKind::String => ColumnType::String,
+        ColumnKind::Integer => ColumnType::Integer,
+        ColumnKind::Float => ColumnType::Float,
+        ColumnKind::Boolean => ColumnType::Boolean,
+        ColumnKind::Timestamp => ColumnType::Timestamp,
+        ColumnKind::StringList => ColumnType::StringList,
+        ColumnKind::StringMap => ColumnType::StringMap,
+        ColumnKind::Json => ColumnType::Json,
     }
 }
 
