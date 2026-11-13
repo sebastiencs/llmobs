@@ -368,6 +368,62 @@ mod tests {
             }),
             409
         );
+        assert_eq!(
+            status_of(ApiError::PayloadTooLarge {
+                detail: "request body is too large",
+            }),
+            413
+        );
+        assert_eq!(
+            status_of(ApiError::UnsupportedMediaType {
+                detail: "unsupported Content-Encoding",
+            }),
+            415
+        );
+
+        let unavailable = ApiError::Unavailable {
+            detail: "server is busy, retry later",
+        }
+        .into_response();
+        assert_eq!(unavailable.status(), 503);
+        assert_eq!(unavailable.headers().get("retry-after").unwrap(), "1");
+        assert!(unavailable.headers().get("ratelimit-limit").is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ingest_problems_carry_their_detail() {
+        let cases = [
+            (
+                ApiError::PayloadTooLarge {
+                    detail: "too many spans in one request",
+                },
+                "payload_too_large",
+                "too many spans in one request",
+            ),
+            (
+                ApiError::UnsupportedMediaType {
+                    detail: "unsupported Content-Encoding",
+                },
+                "unsupported_media_type",
+                "unsupported Content-Encoding",
+            ),
+            (
+                ApiError::Unavailable {
+                    detail: "server is busy, retry later",
+                },
+                "busy",
+                "server is busy, retry later",
+            ),
+        ];
+        for (error, code, detail) in cases {
+            let response = error.into_response();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let problem: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(problem["code"], code);
+            assert_eq!(problem["detail"], detail);
+        }
     }
 
     fn status_of(error: ApiError) -> u16 {

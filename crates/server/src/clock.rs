@@ -43,6 +43,15 @@ impl Clock {
             Some(current.saturating_add(step))
         });
     }
+
+    /// Sets a [`Self::Manual`] clock. Tests only.
+    #[cfg(test)]
+    pub(crate) fn set(&self, now_ns: i64) {
+        let Self::Manual(nanos) = self else {
+            panic!("Clock::set is for Clock::Manual");
+        };
+        nanos.store(now_ns, Ordering::Relaxed);
+    }
 }
 
 fn system_now_ns() -> i64 {
@@ -75,5 +84,14 @@ mod tests {
         assert_eq!(clock.now_ns(), 10);
         clock.advance(Duration::from_nanos(5));
         assert_eq!(clock.now_ns(), 15);
+    }
+
+    #[test]
+    fn manual_clock_is_set() {
+        let clock = Clock::Manual(Arc::new(AtomicI64::new(10)));
+        clock.set(1_000);
+        assert_eq!(clock.now_ns(), 1_000);
+        clock.set(7);
+        assert_eq!(clock.now_ns(), 7);
     }
 }
