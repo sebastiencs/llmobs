@@ -1,11 +1,12 @@
 import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 import { authConfigQuery, clearUserData } from "@/api/auth";
 import { $api } from "@/api/client";
 import { fieldErrors, problemMessage, problemOf } from "@/api/problem";
 import { meQuery } from "@/api/queries";
 import { AuthLayout } from "@/components/auth/auth-layout";
+import { AUTH_LINK_CLASS } from "@/components/auth/link-class";
 import {
   loginErrorMessage,
   NO_SIGN_IN_METHOD,
@@ -82,7 +83,19 @@ function LoginPage() {
   }
 
   return (
-    <AuthLayout title="Sign in">
+    <AuthLayout
+      title="Sign in"
+      footer={
+        config.signup === "open" ? (
+          <p>
+            Don't have an account?{" "}
+            <Link to="/signup" className={AUTH_LINK_CLASS}>
+              Create an account
+            </Link>
+          </p>
+        ) : undefined
+      }
+    >
       <FormError message={search.error ? oauthErrorMessage(search.error) : undefined} />
       <ProviderButtons providers={config.providers} redirect={search.redirect} />
       {config.providers.length > 0 && config.password_enabled ? <OrDivider /> : null}

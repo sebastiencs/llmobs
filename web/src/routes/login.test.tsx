@@ -317,3 +317,20 @@ it("clears a stale server error when the client check fails", async () => {
   expect(screen.getByText("Enter your password.")).toBeInTheDocument();
   expect(screen.queryByText("Incorrect email or password.")).toBeNull();
 });
+
+it("links to sign-up when sign-up is open", async () => {
+  signedOut();
+  withConfig({ signup: "open" });
+  await renderApp("/login");
+  expect(await screen.findByRole("link", { name: "Create an account" })).toHaveAttribute(
+    "href",
+    "/signup",
+  );
+});
+
+it("hides the sign-up link unless sign-up is open", async () => {
+  signedOut();
+  await renderApp("/login");
+  await screen.findByRole("heading", { name: "Sign in" });
+  expect(screen.queryByRole("link", { name: "Create an account" })).toBeNull();
+});
