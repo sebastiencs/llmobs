@@ -104,7 +104,9 @@ impl Compactor {
             ids: claimed.clone(),
         };
 
-        let store = self.objects.store();
+        // Straight from the object store: a corrupt cached block must not
+        // make a healthy file look corrupt (spec 03 §10).
+        let store = self.objects.raw_store();
         match verify_file(&store, &file).await {
             Verdict::Healthy => {
                 self.verify.healthy(id, now);

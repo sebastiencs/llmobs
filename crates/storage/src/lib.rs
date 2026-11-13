@@ -64,6 +64,7 @@ pub(crate) mod projects;
 pub mod query;
 mod query_error;
 mod query_text;
+pub(crate) mod read_cache;
 mod reads;
 mod sql;
 pub(crate) mod verify;
@@ -75,6 +76,7 @@ pub use crate::deletion::{Deletion, DeletionScope, DeletionStatus};
 pub use crate::error::CompactionError;
 pub use crate::gc::ObsoleteReport;
 pub use crate::media::{MediaBlob, MediaRead, MediaReport};
+pub use crate::read_cache::ReadCacheStats;
 pub use query_error::{InvalidQuery, Position, RunError};
 pub use reads::{
     Bucket, BucketWidth, Kpi, KpiName, LATEST_SCORE_COLUMNS, ListScope, MAX_PAGE,
@@ -278,10 +280,32 @@ impl Storage {
                 )
             })??;
         let committer = Arc::new(Committer::open(&data_dir, share_hooks(&hooks)).await?);
-        let objects = open_objects(&config, &hooks, remote).await?;
+        let mut objects = open_objects(&config, &hooks, remote).await?;
         let mut disk_paths = vec![data_dir.clone()];
         disk_paths.extend(objects.local_root().map(Path::to_path_buf));
         let disk = Arc::new(disk::Disk::open(disk_paths, config.min_free_bytes.0)?);
+        // The read cache is for remote stores only: local files are on disk already.
+        if objects.local_root().is_none() {
+            let capacity = read_cache_capacity(&config.query, &data_dir)?;
+            if capacity > 0 {
+                let cache_dir = data_dir.join("cache");
+                let cache_disk = Arc::clone(&disk);
+                let min_free = config.min_free_bytes.0;
+                let cache = tokio::task::spawn_blocking(move || {
+                    read_cache::ReadCache::open(cache_dir, capacity, cache_disk, min_free)
+                })
+                .await
+                .map_err(|_| {
+                    open_io(
+                        "opening read cache",
+                        &data_dir,
+                        io::Error::other("open task panicked"),
+                    )
+                })??;
+                objects = objects.with_read_cache(Arc::new(cache));
+            }
+        }
+        let objects = Arc::new(objects);
         let objects_for_cleanup = Arc::clone(&objects);
         let removed = tokio::task::spawn_blocking(move || objects_for_cleanup.remove_temp_files())
             .await
@@ -468,7 +492,7 @@ impl Storage {
             grace: config.gc.grace,
             media: MediaGc::clone(&media),
         });
-        let disk_monitor = disk::spawn(Arc::clone(&disk));
+        let disk_monitor = disk::spawn(Arc::clone(&disk), objects.read_cache().map(Arc::clone));
         let compaction = compaction::task::spawn(
             Arc::clone(&compactor),
             MediaGc::clone(&media),
@@ -737,6 +761,13 @@ impl Storage {
             size,
             bytes,
         })
+    }
+
+    /// Read-cache counters, `None` without a read cache (spec 03 §6). Used by
+    /// the benchmarks.
+    #[doc(hidden)]
+    pub fn read_cache_stats(&self) -> Option<ReadCacheStats> {
+        self.objects.read_cache().map(|cache| cache.stats())
     }
 
     /// Writer flags and memtable accounting. Does not touch the disk.
@@ -1338,18 +1369,27 @@ async fn open_objects(
     config: &StorageConfig,
     hooks: &Hooks,
     remote: Option<Arc<dyn object_store::ObjectStore>>,
-) -> Result<Arc<Objects>, OpenError> {
+) -> Result<Objects, OpenError> {
     #[cfg(test)]
     if let Some(store) = remote {
-        return Ok(Arc::new(Objects::remote_for_test(
+        return Ok(Objects::remote_for_test(
             store,
             &config.data_dir,
             share_hooks(hooks),
-        )?));
+        )?);
     }
     #[cfg(not(test))]
     let _ = remote;
-    Ok(Arc::new(Objects::new(config, share_hooks(hooks)).await?))
+    Ok(Objects::new(config, share_hooks(hooks)).await?)
+}
+
+/// Capacity of the S3 read cache (spec 03 §6): `query.read_cache_bytes`, or
+/// the default for the file system holding `data_dir`.
+fn read_cache_capacity(query: &QueryConfig, data_dir: &Path) -> Result<u64, OpenError> {
+    match query.read_cache_bytes {
+        Some(bytes) => Ok(bytes.0),
+        None => Ok(read_cache::default_capacity(disk::total_bytes(data_dir)?)),
+    }
 }
 
 /// The base runtime: the metadata cache, the object stores (registered by the
@@ -2600,5 +2640,91 @@ mod tests {
             }
         }
         paths
+    }
+
+    /// A remote store with the read cache on, the flush cadence of the
+    /// flush tests, and a cache of 64 MiB.
+    fn cached_config(dir: &Path) -> StorageConfig {
+        let mut config = config_in(dir);
+        config.flush.max_age = Duration::from_millis(100);
+        config.query.read_cache_bytes = Some(ByteSize::mib(64));
+        config
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_flushed_file_is_cached_on_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let inner = Arc::new(object_store::memory::InMemory::new());
+        let storage = Storage::open_with_store(cached_config(dir.path()), inner)
+            .await
+            .unwrap();
+        storage
+            .append_spans(project(), spans_at(&[1]))
+            .await
+            .unwrap();
+        wait_for_catalog(&storage, Table::Spans, 1).await;
+        assert!(storage.read_cache_stats().unwrap().blocks > 0);
+
+        // The file is read through the query's runtime, which has the store.
+        let query = storage.query(project(), Default::default()).await.unwrap();
+        let ctx = datafusion::execution::context::SessionContext::new_with_config_rt(
+            datafusion::prelude::SessionConfig::new(),
+            Arc::clone(&query.runtime),
+        );
+        ctx.register_table("spans_t", query.spans).unwrap();
+        let rows: usize = ctx
+            .sql("SELECT name FROM spans_t")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap()
+            .iter()
+            .map(|batch| batch.num_rows())
+            .sum();
+        assert_eq!(rows, 1);
+        let stats = storage.read_cache_stats().unwrap();
+        assert_eq!(stats.misses, 0, "the query fetched from S3: {stats:?}");
+        assert!(stats.hits > 0);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn verification_reads_the_store_not_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let inner = Arc::new(object_store::memory::InMemory::new());
+        let storage = Storage::open_with_store(cached_config(dir.path()), inner)
+            .await
+            .unwrap();
+        storage
+            .append_spans(project(), spans_at(&[1]))
+            .await
+            .unwrap();
+        wait_for_catalog(&storage, Table::Spans, 1).await;
+        let file = storage.catalog_files(FileTable::Spans)[0].clone();
+
+        // Replace block 0 of the cached copy with altered bytes and a CRC that
+        // matches them, so the cache alone would accept it.
+        let name = Path::new(&file.path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let block = dir.path().join("cache").join(&name).join("0");
+        let mut bytes = std::fs::read(&block).unwrap();
+        bytes[0] ^= 0xFF;
+        let data_len = bytes.len() - 4;
+        let crc = crc32c::crc32c(&bytes[..data_len]);
+        bytes[data_len..].copy_from_slice(&crc.to_le_bytes());
+        std::fs::write(&block, &bytes).unwrap();
+
+        assert_eq!(
+            storage.verify_queue().suspect([file.id], catalog::now_ns()),
+            1
+        );
+        let report = storage.verify_pass().await;
+        assert_eq!(report.healthy, 1, "{report:?}");
+        assert_eq!(report.quarantined, 0);
+        storage.shutdown().await.unwrap();
     }
 }

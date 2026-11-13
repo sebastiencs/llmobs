@@ -660,7 +660,7 @@ fn sum_f64(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
 mod fault_store {
     use std::collections::VecDeque;
     use std::fmt;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, PoisonError};
     use std::time::Duration;
 
@@ -695,6 +695,8 @@ mod fault_store {
         hold: Arc<AtomicBool>,
         /// When set, every read (`get_opts`, and so `head` and range reads) fails.
         fail_reads: Arc<AtomicBool>,
+        /// Calls to `get_opts`, shared by the clones.
+        gets: Arc<AtomicU64>,
     }
 
     impl FaultStore {
@@ -704,7 +706,13 @@ mod fault_store {
                 fault: Arc::new(Mutex::new(VecDeque::new())),
                 hold: Arc::new(AtomicBool::new(false)),
                 fail_reads: Arc::new(AtomicBool::new(false)),
+                gets: Arc::new(AtomicU64::new(0)),
             }
+        }
+
+        /// How many reads (`get_opts`, and so `head`, range and whole reads) were made.
+        pub(crate) fn gets(&self) -> u64 {
+            self.gets.load(Ordering::SeqCst)
         }
 
         /// Makes every read fail while `on` is set.
@@ -839,6 +847,7 @@ mod fault_store {
         }
 
         async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+            self.gets.fetch_add(1, Ordering::SeqCst);
             if self.fail_reads.load(Ordering::SeqCst) {
                 return Err(injected());
             }

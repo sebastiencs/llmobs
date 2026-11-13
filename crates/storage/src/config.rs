@@ -421,6 +421,11 @@ pub struct QueryConfig {
     /// How long a query waits for its initial memory before failing as busy. Default 5 s.
     #[serde(default = "default_admission_wait", with = "humantime_serde")]
     pub admission_wait: Duration,
+    /// Bytes of the S3 read cache under `<data_dir>/cache`. Absent means 10% of
+    /// the file system holding `data_dir`, at most 100 GiB. Zero turns it off.
+    /// Unused with a local object store.
+    #[serde(default)]
+    pub read_cache_bytes: Option<ByteSize>,
 }
 
 impl Default for QueryConfig {
@@ -433,6 +438,7 @@ impl Default for QueryConfig {
             max_memory: default_query_max_memory(),
             initial_memory: default_initial_memory(),
             admission_wait: default_admission_wait(),
+            read_cache_bytes: None,
         }
     }
 }
@@ -1060,6 +1066,16 @@ mod tests {
         assert_eq!(defaults.query.max_memory, ByteSize::gib(2));
         assert_eq!(defaults.query.initial_memory, ByteSize::mib(64));
         assert_eq!(defaults.query.admission_wait, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn read_cache_bytes_parses_and_defaults_to_absent() {
+        let zero = parse(r#"{"data_dir":"/data","query":{"read_cache_bytes":"0B"}}"#).unwrap();
+        assert_eq!(zero.query.read_cache_bytes, Some(ByteSize::b(0)));
+        let sized = parse(r#"{"data_dir":"/data","query":{"read_cache_bytes":"20GiB"}}"#).unwrap();
+        assert_eq!(sized.query.read_cache_bytes, Some(ByteSize::gib(20)));
+        let absent = parse(r#"{"data_dir":"/data"}"#).unwrap();
+        assert_eq!(absent.query.read_cache_bytes, None);
     }
 
     #[test]

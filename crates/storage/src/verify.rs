@@ -434,7 +434,10 @@ mod tests {
         assert!(queue.take(10).is_empty());
 
         suspects.report(&DataFusionError::ParquetError(Box::new(parquet_error())));
-        assert_eq!(queue.take(10), vec![file_id(7), file_id(8)]);
+        // The recorded files come from a set, so their order is not fixed.
+        let mut queued = queue.take(10);
+        queued.sort();
+        assert_eq!(queued, vec![file_id(7), file_id(8)]);
     }
 
     #[test]

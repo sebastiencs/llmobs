@@ -17,6 +17,7 @@ use tokio::task::JoinHandle;
 
 use crate::error::OpenError;
 use crate::open_io;
+use crate::read_cache::{self, ReadCache};
 
 /// How often the monitor measures free disk.
 const INTERVAL: Duration = Duration::from_secs(1);
@@ -138,6 +139,17 @@ fn free_bytes(path: &Path) -> io::Result<u64> {
     Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
 }
 
+/// Size of the file system holding `path`: `f_blocks * f_frsize`. Sizes the
+/// default S3 read cache (spec 03 §6).
+pub(crate) fn total_bytes(path: &Path) -> Result<u64, OpenError> {
+    total_bytes_io(path).map_err(|source| open_io("measuring total disk", path, source))
+}
+
+fn total_bytes_io(path: &Path) -> io::Result<u64> {
+    let stat = rustix::fs::statvfs(path)?;
+    Ok(stat.f_blocks.saturating_mul(stat.f_frsize))
+}
+
 /// A running monitor task. Drop cancels it.
 #[derive(Debug)]
 pub(crate) struct DiskHandle {
@@ -161,7 +173,10 @@ impl DiskHandle {
 }
 
 /// Refreshes `disk` every second until stopped. The caller measured once at open.
-pub(crate) fn spawn(disk: Arc<Disk>) -> DiskHandle {
+///
+/// While free disk is under `min_free`, the monitor gives back read-cache
+/// blocks (spec 03 §6) until it is above the floor again.
+pub(crate) fn spawn(disk: Arc<Disk>, cache: Option<Arc<ReadCache>>) -> DiskHandle {
     let (stop_tx, mut stop) = watch::channel(false);
     let task = tokio::spawn(async move {
         let mut interval =
@@ -192,6 +207,13 @@ pub(crate) fn spawn(disk: Arc<Disk>) -> DiskHandle {
                         }
                     }
                     let now_low = disk.low();
+                    if let Some(cache) = &cache
+                        && now_low
+                    {
+                        let shed = disk.min_free - disk.free() + read_cache::BLOCK;
+                        let cache = Arc::clone(cache);
+                        let _ = tokio::task::spawn_blocking(move || cache.shed(shed)).await;
+                    }
                     if now_low != was_low {
                         let free = disk.free();
                         let min_free = disk.min_free;
@@ -238,5 +260,13 @@ mod tests {
     fn free_bytes_of_a_directory_is_positive() {
         let dir = tempfile::tempdir().unwrap();
         assert!(free_bytes(dir.path()).unwrap() > 0);
+    }
+
+    #[test]
+    fn total_bytes_of_a_directory_covers_its_free_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let total = total_bytes(dir.path()).unwrap();
+        assert!(total > 0);
+        assert!(free_bytes(dir.path()).unwrap() <= total);
     }
 }
