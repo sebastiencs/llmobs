@@ -1,0 +1,11 @@
+{
+  "description": "An observe-wrapped function that raises ScenarioError; error status and exception event.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "10 § Testing",
+    "10 § Recorded data",
+    "02 § Mapping tables",
+    "02 § Input / output"
+  ],
+  "notes": "fails(1) with @observe(name=\"fails\") raising ScenarioError(\"boom\")"
+}

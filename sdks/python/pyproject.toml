@@ -6,7 +6,12 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "opentelemetry-api>=1.45.2,<2",
+  "opentelemetry-sdk>=1.45.2,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.45.2,<2",
+  "requests>=2.32",
+]
 classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -17,12 +22,46 @@ classifiers = [
   "Private :: Do Not Upload",
 ]
 
+[project.optional-dependencies]
+openai = ["openinference-instrumentation-openai>=0.1.69"]
+anthropic = ["openinference-instrumentation-anthropic>=3.3.0"]
+langchain = ["openinference-instrumentation-langchain>=0.1.82"]
+llama-index = ["openinference-instrumentation-llama-index>=4.7.1"]
+litellm = ["openinference-instrumentation-litellm>=0.1.53"]
+google-genai = ["openinference-instrumentation-google-genai>=1.5.1"]
+bedrock = ["openinference-instrumentation-bedrock>=0.1.63"]
+openai-agents = ["openinference-instrumentation-openai-agents>=2.7.1"]
+crewai = ["openinference-instrumentation-crewai>=1.1.23"]
+dspy = ["openinference-instrumentation-dspy>=0.1.50"]
+all = [
+  "openinference-instrumentation-openai>=0.1.69",
+  "openinference-instrumentation-anthropic>=3.3.0",
+  "openinference-instrumentation-langchain>=0.1.82",
+  "openinference-instrumentation-llama-index>=4.7.1",
+  "openinference-instrumentation-litellm>=0.1.53",
+  "openinference-instrumentation-google-genai>=1.5.1",
+  "openinference-instrumentation-bedrock>=0.1.63",
+  "openinference-instrumentation-openai-agents>=2.7.1",
+  "openinference-instrumentation-crewai>=1.1.23",
+  "openinference-instrumentation-dspy>=0.1.50",
+]
+
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = ["ruff>=0.17.3", "mypy>=2.4.1", "pytest>=9.2.0"]
+dev = [
+    "ruff>=0.17.3",
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "types-protobuf>=7.35.1.20260906",
+    "types-requests>=2.33.0.20261030",
+    "openinference-instrumentation-openai>=0.1.69",
+    "openinference-instrumentation-anthropic>=3.3.0",
+    "openai>=2",
+    "anthropic>=0.70",
+]
 
 [tool.ruff]
 target-version = "py311"

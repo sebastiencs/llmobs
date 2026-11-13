@@ -268,7 +268,7 @@ For each committed span, matching online rules (06) with `target = span` are eva
 The fixture format is defined in `fixtures/otlp/README.md` (D66). Each case is a directory `fixtures/otlp/<group>/<case>/` with `case.json` (metadata, settings), `input.json` (OTLP/JSON `ExportTraceServiceRequest`) and `expected.json` (normalized spans in `llmobs_core::Span` JSON, extracted media, rejected count). Fixtures use the fixed test price table `fixtures/otlp/prices.json`, not the embedded LiteLLM snapshot (D67).
 
 - Hand-written cases pin this spec's rules (Phase 0 step 3).
-- Captured cases are recorded by `tools/capture` against a local mock of the provider HTTP APIs (D114, D115). The `llmobs` group is not captured; spec 10's SDK integration tests cover it (D121).
+- Captured cases are recorded by `tools/capture` against a local mock of the provider HTTP APIs (D114, D115). The `llmobs` group is not captured: the SDK conformance cases `llmobs/sdk-*` are the SDKs' expected output (spec 10 § Testing, D-F-9).
 
 | Convention or library | OpenAI | Anthropic | Gemini | Frameworks and own spans |
 |---|---|---|---|---|

@@ -1,0 +1,28 @@
+/**
+ * The LangChain helper (D-F-7): builds the OpenInference instrumentation for
+ * LangChain and patches the callbacks module by hand, so ESM works without
+ * loader flags. Pass the result to `init({ instrument: [...] })`; the patch is
+ * active immediately, but spans reach llmobs only once `init` has bound our
+ * tracer provider.
+ *
+ * `captureContent` defaults to `true` and is not re-read by `init`: pass the
+ * same value as `init`'s `captureContent` option.
+ */
+
+import { LangChainInstrumentation } from "@arizeai/openinference-instrumentation-langchain";
+import type * as CallbackManagerModule from "@langchain/core/callbacks/manager";
+
+import type { Instrumentation } from "./instrument.js";
+
+export function langchain(
+  module: typeof CallbackManagerModule,
+  options?: { captureContent?: boolean },
+): Instrumentation {
+  const capture = options?.captureContent ?? true;
+  const instrumentation = new LangChainInstrumentation({
+    instrumentationConfig: { enabled: false },
+    traceConfig: { hideInputs: !capture, hideOutputs: !capture },
+  });
+  instrumentation.manuallyInstrument(module);
+  return instrumentation;
+}

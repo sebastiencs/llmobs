@@ -1,0 +1,11 @@
+{
+  "description": "An observe-wrapped generator yielding text chunks, recorded as one text output.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "10 § Testing",
+    "10 § Recorded data",
+    "02 § Mapping tables / Span kind",
+    "02 § Input / output"
+  ],
+  "notes": "stream(\"hi\") with @observe(name=\"stream\") yielding \"Hel\", \"lo\""
+}

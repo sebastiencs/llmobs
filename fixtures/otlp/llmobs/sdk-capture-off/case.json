@@ -1,0 +1,11 @@
+{
+  "description": "capture_content=False records only the span kind, with no payload attributes.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "10 § Testing",
+    "10 § Recorded data",
+    "02 § Mapping tables / Span kind",
+    "02 § Normalization rules / 2"
+  ],
+  "notes": "init(capture_content=False); lookup(\"q\") with @observe(kind=\"tool\", name=\"lookup\")"
+}

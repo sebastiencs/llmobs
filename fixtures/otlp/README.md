@@ -14,7 +14,7 @@ fixtures/otlp/
     expected.json
 ```
 
-Group directories are `genai`, `openinference`, `openllmetry`, `vercel`, `langfuse`, `laminar`, `google_adk`, `llmobs` (spans from our own SDKs), and `edge` (cross-cutting edge cases). Create a group directory only when it contains a case. Case directory names are kebab-case and name the scenario.
+Group directories are `genai`, `openinference`, `openllmetry`, `vercel`, `langfuse`, `laminar`, `google_adk`, `llmobs` (spans from our own SDKs), and `edge` (cross-cutting edge cases). In `llmobs`, cases named `sdk-<scenario>` are the canonical output of both SDKs for one scenario (spec 10 § Testing). Their `input.json` is in the canonical form described there; the SDK test suites compare against it, so change one only together with both SDKs. Create a group directory only when it contains a case. Case directory names are kebab-case and name the scenario.
 
 A hand-written case directory contains exactly three files: `case.json`, `input.json`, and `expected.json`. A captured case may omit `expected.json` until bless mode writes it (D118). No other file is allowed in a case directory. The validation test allows only `README.md` and `prices.json` beside the group directories, and it rejects a group name outside the list above.
 

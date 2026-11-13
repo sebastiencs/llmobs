@@ -1,0 +1,14 @@
+{
+  "description": "A bytes argument serialized as a data URI that the server extracts as media.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "10 § Testing",
+    "10 § Recorded data",
+    "02 § Input / output",
+    "02 § Media extraction"
+  ],
+  "settings": {
+    "media_min_bytes": 1
+  },
+  "notes": "upload(png_bytes) with @observe(name=\"upload\")"
+}

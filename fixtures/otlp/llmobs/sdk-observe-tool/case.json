@@ -1,0 +1,11 @@
+{
+  "description": "Python observe / TypeScript observe on a tool function with a defaulted argument.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "10 § Testing",
+    "10 § Recorded data",
+    "02 § Mapping tables / Span kind",
+    "02 § Input / output"
+  ],
+  "notes": "search_docs(\"pricing\") with @observe(kind=\"tool\", name=\"search_docs\")"
+}

@@ -19,3 +19,18 @@ Review both SDKs side by side, reading code, not reports. For each item, record 
 **Checks:** `just check`.
 
 **Report:** the table of the 7 items with pass/fixed, every fix with its file, and any open question for the user.
+
+## X1 resolution notes (2026-11-13)
+
+Fixes made during the review, all inside `sdks/`:
+
+- **Serialization rule 7 (both SDKs).** A top-level value whose own conversion fails now yields the rule-7 tuple `("<unserializable TYPE>", "text")` in both SDKs (Python used to return the marker as a JSON string with format `json`), and a nested conversion failure is replaced in place by the `"<unserializable CHILD_TYPE>"` marker in both (TypeScript used to drop the whole payload to the rule-7 tuple). Spec 10 § Serialization rule 7 records the interpretation.
+- **`BaseException` through `observe` (Python).** `KeyboardInterrupt`, `asyncio.CancelledError` and friends now end the span with the status unset (no error event, no output) and are re-raised — sync, async and both generator wrappers — matching `span()`/`llm_span()`. The Python README's known limits were updated; TypeScript has no equivalent class of exceptions (every throw goes through § Errors), verified.
+- **Generator call that cannot bind (Python).** Python checks arguments at call time even for generator functions, so a call with unbindable arguments used to raise with no span at all while the sync wrapper recorded one; the generator wrappers now record the same one-span error (`{"args": …, "kwargs": …}` input, error status). TypeScript never fails at call time; its body error at the first step was already recorded, now pinned by a test.
+- **`reduce_output` with no items.** Both SDKs already recorded no output and skipped the reducer; each suite now pins it.
+- **TS score `reason`.** A mask returning a non-string for `reason` is serialized (`serialize(...)[0]`), as Python already did.
+- **TS `withLlmSpan` runner.** `llm.ts` now goes through `span.ts`'s exported runner (`tracedSpan`) and `stampMetadata` instead of a private copy with different thenable handling.
+- **TS README test.** The score example's cleanup flush posts to a stubbed `fetch` instead of retrying real refused connections to 127.0.0.1:9; the byte-identical README check is unchanged.
+- **TS `.gitignore`.** `sdks/typescript/.vitest/` (Vitest's JSON reporter output) is ignored.
+
+Accepted differences left as is: TS `setUsage` accepts only safe integers (Python writes any non-negative int; JS numbers cannot hold more), Python's `Retry-After` parsing accepts `"+5"` via `int()` (TS's digit regex does not).

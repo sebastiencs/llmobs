@@ -1,0 +1,13 @@
+{
+  "description": "A manual llm_span() chat span with messages, params, response model, and usage.",
+  "origin": "hand_written",
+  "spec_refs": [
+    "10 § Testing",
+    "10 § Recorded data",
+    "02 § Mapping tables / Span kind",
+    "02 § Input / output",
+    "02 § Model, provider, usage",
+    "02 § Cost computation"
+  ],
+  "notes": "with llm_span(\"chat\", provider=\"openai\", model=\"gpt-4o-mini\", params={\"temperature\": 0.2}) as s: s.set_input_messages(system, user); s.set_output_messages(assistant); s.set_response_model(\"gpt-4o-mini-2024-07-18\"); s.set_usage(input_tokens=12, output_tokens=3)"
+}
