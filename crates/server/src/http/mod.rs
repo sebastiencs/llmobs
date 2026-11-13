@@ -119,6 +119,11 @@ pub(crate) fn serve_router(state: AppState, routes: Vec<access::RouteDef>) -> Ro
     finish(state, routed)
 }
 
+/// The OTLP/HTTP listener's router: `/v1/traces` and nothing else (D-G-21).
+pub(crate) fn otlp_router(state: AppState) -> Router {
+    serve_router(state, crate::routes::otlp::routes())
+}
+
 fn finish(state: AppState, routed: Router<AppState>) -> Router {
     // serde_json's default recursion limit is 128, which is spec 12's JSON depth limit.
     // Logging is the outer layer. Authentication runs next, then the origin check (D141).
