@@ -102,11 +102,14 @@ pub enum AppendError {
     /// Shutdown has started.
     #[error("storage is shutting down")]
     ShuttingDown,
+    /// The project was dropped (spec 03 §7). The server maps it to 404.
+    #[error("project is dropped")]
+    ProjectDropped,
 }
 
 /// Shutdown failed, or a later maintenance call failed.
 ///
-/// M1 only returns this from [`crate::Storage::shutdown`].
+/// Returned by `shutdown`, `apply_retention` and `drop_project`.
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
     /// The table's writer stopped after a WAL error.
@@ -121,6 +124,16 @@ pub enum StorageError {
         /// `spans` or `scores`.
         table: &'static str,
     },
+    /// The catalog commit failed.
+    #[error(transparent)]
+    Commit(#[from] CommitError),
+    /// `catalog.db` failed.
+    #[error(transparent)]
+    Catalog(#[from] CatalogError),
+    /// Deleting a dropped project's media failed (spec 03 §7). The project is
+    /// already dropped; GC finishes the media.
+    #[error(transparent)]
+    Media(#[from] MediaError),
 }
 
 /// `Storage::query` failed.
@@ -304,6 +317,80 @@ impl CommitError {
 
     pub(crate) fn conflict(reason: &'static str) -> Self {
         Self::Conflict { reason }
+    }
+}
+
+/// `register_deletion` or `deletion_status` failed.
+#[derive(Debug, thiserror::Error)]
+pub enum DeletionError {
+    /// The request is malformed. `reason` is static and never holds an id from the scope.
+    #[error("invalid deletion: {reason}")]
+    Invalid {
+        /// Static reason. Never a trace id, user id or session id.
+        reason: &'static str,
+    },
+    /// No deletion with this id was registered.
+    #[error("deletion not found")]
+    NotFound,
+    /// `catalog.db` failed.
+    #[error(transparent)]
+    Catalog(#[from] CatalogError),
+}
+
+/// `put_media`, `get_media` or a media collection failed (spec 03 §9).
+///
+/// [`MediaError::Object`] names the object key, which holds the blob's hash:
+/// media code logs [`MediaError::label`] instead of the error text.
+#[derive(Debug, thiserror::Error)]
+pub enum MediaError {
+    /// The blob is malformed. `reason` is static.
+    #[error("invalid media: {reason}")]
+    Invalid {
+        /// Static reason. Never blob content.
+        reason: &'static str,
+    },
+    /// The given hash does not match the bytes.
+    #[error("media hash does not match its bytes")]
+    HashMismatch,
+    /// No `media` row for this hash.
+    #[error("media not found")]
+    NotFound,
+    /// The requested byte range is outside the blob.
+    #[error("media range is outside the blob")]
+    InvalidRange,
+    /// The object store rejected the read or the write.
+    #[error(transparent)]
+    Object(#[from] ObjectError),
+    /// `catalog.db` failed.
+    #[error(transparent)]
+    Catalog(#[from] CatalogError),
+    /// Reading the live set failed.
+    #[error("media query: {0}")]
+    Query(#[from] datafusion::error::DataFusionError),
+    /// An injected test fault.
+    #[error("injected fault")]
+    Fault,
+    /// The project is dropped (spec 03 §7).
+    #[error("project is dropped")]
+    ProjectDropped,
+}
+
+impl MediaError {
+    /// The variant name in snake case. Media logs print this instead of the
+    /// error text: [`MediaError::Object`] displays an object path, which holds
+    /// the blob's hash (spec 03 §9).
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            Self::Invalid { .. } => "invalid",
+            Self::HashMismatch => "hash_mismatch",
+            Self::NotFound => "not_found",
+            Self::InvalidRange => "invalid_range",
+            Self::Object(_) => "object",
+            Self::Catalog(_) => "catalog",
+            Self::Query(_) => "query",
+            Self::Fault => "fault",
+            Self::ProjectDropped => "project_dropped",
+        }
     }
 }
 
@@ -521,6 +608,34 @@ pub enum CompactionError {
     /// The storage is shutting down; the job gave up before committing.
     #[error("compaction stopped for shutdown")]
     Stopped,
+    /// The covered-row filter failed while merging or checking inputs.
+    #[error("deletion filter: {reason}")]
+    Deletion {
+        /// Static reason. Never a cell value.
+        reason: &'static str,
+    },
+}
+
+impl CompactionError {
+    /// The variant name in snake case. The job failure logs print this instead
+    /// of the error text: a DataFusion error raised by a plan that holds the
+    /// covered-row predicate may quote its literals (spec 03 §7).
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            Self::Read { .. } => "read",
+            Self::Write(_) => "write",
+            Self::Object(_) => "object",
+            Self::Commit(_) => "commit",
+            Self::Stage(_) => "stage",
+            Self::Dedup(_) => "dedup",
+            Self::Partials(_) => "partials",
+            Self::Input { .. } => "input",
+            Self::Task => "task",
+            Self::Fault => "fault",
+            Self::Stopped => "stopped",
+            Self::Deletion { .. } => "deletion",
+        }
+    }
 }
 
 /// A batch could not be deduplicated. `reason` is a static description, never row content.
@@ -558,6 +673,12 @@ pub(crate) enum FlushError {
     /// A span identity column was missing or null.
     #[error("flush dedup: {reason}")]
     Dedup {
+        /// Static reason. Never a cell value.
+        reason: &'static str,
+    },
+    /// The covered-row filter failed while preparing the flush.
+    #[error("deletion filter: {reason}")]
+    Deletion {
         /// Static reason. Never a cell value.
         reason: &'static str,
     },

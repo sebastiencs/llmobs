@@ -78,6 +78,7 @@ fn config(dir: &std::path::Path, bucket: &str, prefix: &str, endpoint: &str) -> 
         anchor: Default::default(),
         gc: Default::default(),
         compaction: Default::default(),
+        deletion: Default::default(),
     }
 }
 

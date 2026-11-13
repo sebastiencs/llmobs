@@ -41,7 +41,7 @@ use datafusion::logical_expr::{
     BinaryExpr, Expr, Operator, TableProviderFilterPushDown, TableType, col,
 };
 use datafusion::physical_expr::EquivalenceProperties;
-use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::expressions::{Column, NotExpr};
 use datafusion::physical_expr::utils::conjunction_opt;
 use datafusion::physical_expr::{LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr};
 use datafusion::physical_plan::execution_plan::{
@@ -69,6 +69,7 @@ use super::{
 };
 use crate::QueryOptions;
 use crate::catalog::{Catalog, FileMeta, FileTable};
+use crate::deletion::{PendingDeletion, applicable, covered_predicate};
 use crate::memtable::{MemBatch, MemSnapshot};
 use crate::objects::OBJECT_STORE_URL;
 use crate::partials::{MergeColumns, TraceMerger};
@@ -84,6 +85,9 @@ pub(crate) struct TracesProvider {
     options: QueryOptions,
     lookback: i64,
     partitions: usize,
+    /// The project's pending deletions (spec 03 §7). The `traces` view hides a
+    /// covered trace's partials by trace id alone.
+    deletions: Arc<[Arc<PendingDeletion>]>,
 }
 
 impl TracesProvider {
@@ -94,6 +98,7 @@ impl TracesProvider {
         options: QueryOptions,
         lookback: i64,
         partitions: usize,
+        deletions: Arc<[Arc<PendingDeletion>]>,
     ) -> Self {
         Self {
             project,
@@ -102,6 +107,7 @@ impl TracesProvider {
             options,
             lookback,
             partitions,
+            deletions,
         }
     }
 }
@@ -139,6 +145,8 @@ struct ScanContext {
     /// Logical filters pushed `Exact` into the scan.
     filters: Vec<Expr>,
     around: Option<i64>,
+    /// The project's pending deletions (spec 03 §7).
+    deletions: Arc<[Arc<PendingDeletion>]>,
 }
 
 impl ScanContext {
@@ -158,6 +166,7 @@ impl ScanContext {
             partitions: provider.partitions,
             filters: filters.to_vec(),
             around: provider.options.around,
+            deletions: Arc::clone(&provider.deletions),
         })
     }
 
@@ -268,6 +277,18 @@ fn build_range_plan(ctx: &ScanContext, spec: RangeSpec) -> DfResult<Arc<dyn Exec
         &spec.bounds,
         ctx.around,
     );
+    // A `traces` file is gated by `deletions_applied_seq` alone: its
+    // `min_ingest_time` is the smallest per-trace *latest* ingest time, so it
+    // cannot bound a cut-off (spec 03 §7).
+    let mut clean = Vec::with_capacity(files.len());
+    let mut gated = Vec::with_capacity(files.len());
+    for file in files {
+        if applicable(&ctx.deletions, Some(file.deletions_applied_seq), i64::MIN).is_empty() {
+            clean.push(file);
+        } else {
+            gated.push(file);
+        }
+    }
     let batches = mem_batches(&ctx.spans_mem, ctx.project, &padded);
     let mut partials = Vec::with_capacity(batches.len());
     for batch in &batches {
@@ -276,15 +297,37 @@ fn build_range_plan(ctx: &ScanContext, spec: RangeSpec) -> DfResult<Arc<dyn Exec
     }
 
     let mut plans: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
-    if !files.is_empty() {
+    if !clean.is_empty() {
         plans.push(file_plan(
             &schema,
             &input_indices,
-            &files,
+            &clean,
             &input_df,
             file_pred.as_ref(),
             ctx.partitions,
         )?);
+    }
+    if !gated.is_empty() {
+        // The merge input always holds `trace_id`, so the trace-id-only rule
+        // fits the input schema. A `None` predicate (no deletion has trace
+        // ids) means no filter.
+        let gated_plan = file_plan(
+            &schema,
+            &input_indices,
+            &gated,
+            &input_df,
+            file_pred.as_ref(),
+            ctx.partitions,
+        )?;
+        let gated_plan = match covered_predicate(FileTable::Traces, &input_schema, &ctx.deletions)?
+        {
+            Some(predicate) => Arc::new(FilterExec::try_new(
+                Arc::new(NotExpr::new(predicate)),
+                gated_plan,
+            )?) as Arc<dyn ExecutionPlan>,
+            None => gated_plan,
+        };
+        plans.push(gated_plan);
     }
     plans.push(mem_plan(
         &schema,
@@ -324,7 +367,7 @@ fn build_range_plan(ctx: &ScanContext, spec: RangeSpec) -> DfResult<Arc<dyn Exec
     let display = format!(
         "TracesExec: mode={}, files={}, mem_batches={}, columns=[{columns}]",
         spec.mode.as_str(),
-        files.len(),
+        clean.len() + gated.len(),
         batches.len(),
     );
 
@@ -1357,6 +1400,7 @@ mod tests {
             anchor: Default::default(),
             gc: Default::default(),
             compaction: Default::default(),
+            deletion: Default::default(),
         }
     }
 

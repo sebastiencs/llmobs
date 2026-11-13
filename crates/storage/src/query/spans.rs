@@ -15,6 +15,7 @@ use super::{ScanUnion, scan_union};
 use crate::catalog::Catalog;
 #[cfg(test)]
 use crate::catalog::FileMeta;
+use crate::deletion::PendingDeletion;
 use crate::memtable::MemSnapshot;
 use crate::wal::Table;
 
@@ -26,6 +27,8 @@ pub(crate) struct SpansProvider {
     catalog: Arc<Catalog>,
     target_partitions: usize,
     around: Option<i64>,
+    /// The project's pending deletions (spec 03 §7).
+    deletions: Arc<[Arc<PendingDeletion>]>,
 }
 
 impl SpansProvider {
@@ -35,6 +38,7 @@ impl SpansProvider {
         catalog: Arc<Catalog>,
         target_partitions: usize,
         around: Option<i64>,
+        deletions: Arc<[Arc<PendingDeletion>]>,
     ) -> Self {
         Self {
             project,
@@ -42,6 +46,7 @@ impl SpansProvider {
             catalog,
             target_partitions,
             around,
+            deletions,
         }
     }
 
@@ -102,6 +107,7 @@ impl TableProvider for SpansProvider {
             limit,
             target_partitions: self.target_partitions,
             session: state,
+            deletions: &self.deletions,
         })
     }
 }
@@ -154,6 +160,7 @@ mod tests {
             anchor: Default::default(),
             gc: Default::default(),
             compaction: Default::default(),
+            deletion: Default::default(),
         }
     }
 

@@ -53,6 +53,9 @@ pub struct StorageConfig {
     /// Compaction settings.
     #[serde(default)]
     pub compaction: CompactionConfig,
+    /// Deletion settings.
+    #[serde(default)]
+    pub deletion: DeletionConfig,
 }
 
 impl StorageConfig {
@@ -211,6 +214,14 @@ impl StorageConfig {
             return Err(ConfigError::invalid(
                 "storage.compaction.max_memory",
                 "must be between 16MiB and 1TiB",
+            ));
+        }
+        if self.deletion.max_delay < Duration::from_secs(3_600)
+            || self.deletion.max_delay > Duration::from_secs(30 * 24 * 3_600)
+        {
+            return Err(ConfigError::invalid(
+                "storage.deletion.max_delay",
+                "must be between 1h and 30days",
             ));
         }
         Ok(())
@@ -499,6 +510,28 @@ impl Default for CompactionConfig {
     }
 }
 
+fn default_deletion_max_delay() -> Duration {
+    Duration::from_secs(24 * 3_600)
+}
+
+/// `[storage.deletion]` (spec 03 §7).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeletionConfig {
+    /// How long a pending deletion may stay unapplied: the rewriter erases
+    /// the covered bytes from the files within this (spec 03 §7).
+    #[serde(default = "default_deletion_max_delay", with = "humantime_serde")]
+    pub max_delay: Duration,
+}
+
+impl Default for DeletionConfig {
+    fn default() -> Self {
+        Self {
+            max_delay: default_deletion_max_delay(),
+        }
+    }
+}
+
 fn valid_window(window: Duration) -> bool {
     !window.is_zero() && window <= Duration::from_secs(24 * 60 * 60)
 }
@@ -692,6 +725,7 @@ mod tests {
             r#"{"data_dir":"/data","anchor":{"extra":1}}"#,
             r#"{"data_dir":"/data","gc":{"extra":1}}"#,
             r#"{"data_dir":"/data","compaction":{"extra":1}}"#,
+            r#"{"data_dir":"/data","deletion":{"extra":1}}"#,
             r#"{"data_dir":"/data","s3":{"extra":1}}"#,
         ];
         for json in samples {
@@ -847,6 +881,14 @@ mod tests {
                 r#"{"data_dir":"/data","compaction":{"max_memory":"2TiB"}}"#,
                 "storage.compaction.max_memory: must be between 16MiB and 1TiB",
             ),
+            (
+                r#"{"data_dir":"/data","deletion":{"max_delay":"59m"}}"#,
+                "storage.deletion.max_delay: must be between 1h and 30days",
+            ),
+            (
+                r#"{"data_dir":"/data","deletion":{"max_delay":"31days"}}"#,
+                "storage.deletion.max_delay: must be between 1h and 30days",
+            ),
         ];
         for (json, message) in cases {
             let config = parse(json).unwrap();
@@ -940,6 +982,18 @@ mod tests {
 
         let parsed = parse(r#"{"data_dir":"/data","gc":{"grace":"90s"}}"#).unwrap();
         assert_eq!(parsed.gc.grace, Duration::from_secs(90));
+        parsed.validate().unwrap();
+    }
+
+    #[test]
+    fn deletion_max_delay_defaults_to_a_day_and_parses() {
+        let default = parse(r#"{"data_dir":"/data"}"#).unwrap();
+        assert_eq!(default.deletion, DeletionConfig::default());
+        assert_eq!(default.deletion.max_delay, Duration::from_secs(24 * 3_600));
+        default.validate().unwrap();
+
+        let parsed = parse(r#"{"data_dir":"/data","deletion":{"max_delay":"36h"}}"#).unwrap();
+        assert_eq!(parsed.deletion.max_delay, Duration::from_secs(36 * 3_600));
         parsed.validate().unwrap();
     }
 

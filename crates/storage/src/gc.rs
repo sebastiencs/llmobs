@@ -17,6 +17,7 @@ use tokio::task::JoinHandle;
 use crate::catalog::{Committer, FileId, ObsoleteRemoval, StagedRemoval, now_ns};
 use crate::error::GcError;
 use crate::hooks::Hooks;
+use crate::media::{MEDIA_INTERVAL, MediaGc};
 use crate::objects::Objects;
 
 /// How often the background task collects, after the pass at open.
@@ -60,6 +61,8 @@ pub(crate) struct GcStart {
     pub hooks: Hooks,
     /// `storage.gc.grace`, how long an obsolete file outlives its commit.
     pub grace: Duration,
+    /// Media collection, once a day (spec 03 §9).
+    pub media: MediaGc,
 }
 
 /// Starts the periodic task. The caller already ran one pass at open.
@@ -68,6 +71,7 @@ pub(crate) fn spawn(start: GcStart) -> GcHandle {
     let task = tokio::spawn(async move {
         let mut interval =
             tokio::time::interval_at(tokio::time::Instant::now() + INTERVAL, INTERVAL);
+        let mut next_media = tokio::time::Instant::now() + MEDIA_INTERVAL;
         loop {
             tokio::select! {
                 biased;
@@ -103,6 +107,20 @@ pub(crate) fn spawn(start: GcStart) -> GcHandle {
                         tracing::warn!("obsolete file collection failed");
                         tracing::debug!(%error, "obsolete file collection error");
                     }
+                    if tokio::time::Instant::now() >= next_media {
+                        if let Err(error) = start.media.collect_all(now_ns()).await {
+                            // The label only: the error names an object path,
+                            // which holds the blob's hash (spec 03 §9).
+                            tracing::warn!(
+                                error = error.label(),
+                                "media collection failed"
+                            );
+                        }
+                        next_media = tokio::time::Instant::now() + MEDIA_INTERVAL;
+                    }
+                    // Half-finished drops get their media step retried
+                    // (spec 03 §7).
+                    start.media.finish_drops().await;
                 }
             }
         }
@@ -128,7 +146,7 @@ pub(crate) async fn collect_once(
     let mut conflicts = 0_u64;
     for path in &paths {
         match committer
-            .collect_staged_path(path, hooks, || objects.delete_len(path))
+            .collect_staged_path(path, hooks, cutoff, || objects.delete_len(path))
             .await?
         {
             StagedRemoval::Deleted { bytes: size } => {
@@ -140,6 +158,10 @@ pub(crate) async fn collect_once(
                 conflicts += 1;
                 tracing::error!("staged object is also a catalog file; left in place");
                 tracing::debug!(path, "staged path is present in data_files");
+            }
+            StagedRemoval::MediaStored => {
+                // No fields: the path holds the blob's hash (spec 03 §9).
+                tracing::debug!("stale staged row of a stored media blob removed");
             }
             StagedRemoval::Gone => {}
         }
@@ -252,6 +274,7 @@ mod tests {
             anchor: Default::default(),
             gc: Default::default(),
             compaction: Default::default(),
+            deletion: Default::default(),
         }
     }
 
@@ -436,6 +459,7 @@ mod tests {
             min_ingest_time: 3,
             max_ingest_time: 4,
             fully_merged: false,
+            deletions_applied_seq: 0,
         }
     }
 
@@ -476,6 +500,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: None,
             sources: vec![(traces_id, spans_id)],
+            raise: Vec::new(),
         };
         f.committer
             .stage(&[spans_path.clone(), traces_path.clone()])
@@ -504,6 +529,7 @@ mod tests {
             ],
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         f.committer.commit(&remove, |_| {}).await.unwrap();
     }
@@ -523,6 +549,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         f.committer
             .stage(std::slice::from_ref(&path))
@@ -540,6 +567,7 @@ mod tests {
             remove: vec![(id, FileState::Active)],
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         f.committer.commit(&remove, |_| {}).await.unwrap();
         (id, path)

@@ -20,6 +20,7 @@ use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::Operator;
 use datafusion::physical_expr::LexOrdering;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion::physical_plan::ExecutionPlan;
@@ -36,6 +37,7 @@ use llmobs_core::schema::{scores, scores_schema, spans, spans_schema};
 use crate::catalog::{FileMeta, FileTable};
 use crate::compaction::slice::Slice;
 use crate::dedup;
+use crate::deletion::drop_covered;
 use crate::error::CompactionError;
 use crate::objects::OBJECT_STORE_URL;
 use crate::parquet::{FileWriter, sort_columns, time_column};
@@ -62,14 +64,17 @@ pub(crate) struct MergedSlice<W: Write + Send> {
 /// Merges `inputs` (one partition of `table`, `Spans` or `Scores`) restricted
 /// to `slice` into `writer`.
 ///
-/// For `spans`, the returned partials are the trace partials of the emitted
-/// rows, one batch per chunk. `drop_deleted` is ignored for spans.
+/// `covered` is the covered-row predicate of the deletions pending when the
+/// job started (spec 03 §7): covered rows are dropped before the dedup. For
+/// `spans`, the returned partials are the trace partials of the emitted rows,
+/// one batch per chunk. `drop_deleted` is ignored for spans.
 pub(crate) async fn merge_slice<W: Write + Send + 'static>(
     ctx: &MergeContext,
     table: FileTable,
     inputs: &[Arc<FileMeta>],
     slice: Slice,
     drop_deleted: bool,
+    covered: Option<&Arc<dyn PhysicalExpr>>,
     writer: FileWriter<W>,
 ) -> Result<MergedSlice<W>, CompactionError> {
     if table == FileTable::Traces {
@@ -115,7 +120,7 @@ pub(crate) async fn merge_slice<W: Write + Send + 'static>(
             let chunk = combined.slice(0, split);
             let tail = combined.slice(split, combined.num_rows() - split);
             let (next_writer, next_partials, written) =
-                emit_chunk(table, drop_deleted, writer, chunk, partials).await?;
+                emit_chunk(table, drop_deleted, covered, writer, chunk, partials).await?;
             writer = next_writer;
             partials = next_partials;
             rows = rows.saturating_add(written);
@@ -128,7 +133,7 @@ pub(crate) async fn merge_slice<W: Write + Send + 'static>(
         && tail.num_rows() > 0
     {
         let (next_writer, next_partials, written) =
-            emit_chunk(table, drop_deleted, writer, tail, partials).await?;
+            emit_chunk(table, drop_deleted, covered, writer, tail, partials).await?;
         writer = next_writer;
         partials = next_partials;
         rows = rows.saturating_add(written);
@@ -169,7 +174,7 @@ pub(crate) fn merge_plan(
         source = source.with_predicate(Arc::clone(&predicate));
         filter = Some(predicate);
     }
-    let scan = file_scan(inputs, source, &ordering)?;
+    let scan = file_scan(inputs, source, &ordering, None)?;
     let input: Arc<dyn ExecutionPlan> = match filter {
         Some(predicate) => Arc::new(
             FilterExec::try_new(predicate, scan)
@@ -187,11 +192,13 @@ pub(crate) fn merge_plan(
 /// The declared `ordering` also turns on `preserve_order`. Without it,
 /// DataFusion's file-stream work stealing lets one partition read a sibling's
 /// file after its own, which concatenates two sorted runs into one unsorted
-/// input of the merge.
-fn file_scan(
+/// input of the merge. `projection` narrows the output columns; the merge
+/// passes `None`.
+pub(super) fn file_scan(
     inputs: &[&Arc<FileMeta>],
     source: ParquetSource,
     ordering: &LexOrdering,
+    projection: Option<Vec<usize>>,
 ) -> Result<Arc<dyn ExecutionPlan>, CompactionError> {
     let groups: Vec<FileGroup> = inputs
         .iter()
@@ -206,13 +213,15 @@ fn file_scan(
     let url = ObjectStoreUrl::parse(OBJECT_STORE_URL).map_err(read_error)?;
     let builder = FileScanConfigBuilder::new(url, Arc::new(source))
         .with_file_groups(groups)
-        .with_output_ordering(vec![ordering.clone()]);
+        .with_output_ordering(vec![ordering.clone()])
+        .with_projection_indices(projection)
+        .map_err(read_error)?;
     Ok(DataSourceExec::from_data_source(builder.build()))
 }
 
 /// The table's `sort_columns` as physical sort expressions, in the order the
 /// writer declares.
-fn ordering_of(
+pub(super) fn ordering_of(
     table: FileTable,
     schema: &arrow::datatypes::SchemaRef,
 ) -> Result<LexOrdering, CompactionError> {
@@ -239,7 +248,7 @@ fn slice_predicate(
     table: FileTable,
     schema: &arrow::datatypes::SchemaRef,
     slice: Slice,
-) -> Result<Arc<dyn datafusion::physical_expr::PhysicalExpr>, CompactionError> {
+) -> Result<Arc<dyn PhysicalExpr>, CompactionError> {
     let name = time_column(table);
     let index = schema.index_of(name).map_err(|_| CompactionError::Input {
         reason: "time column is missing",
@@ -248,8 +257,7 @@ fn slice_predicate(
         DataType::Timestamp(_, tz) => tz.clone(),
         _ => None,
     };
-    let column =
-        Arc::new(Column::new(name, index)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
+    let column = Arc::new(Column::new(name, index)) as Arc<dyn PhysicalExpr>;
     let mut bounds = Vec::new();
     if let Some(lower) = slice.lower {
         bounds.push(Arc::new(BinaryExpr::new(
@@ -259,8 +267,7 @@ fn slice_predicate(
                 Some(lower),
                 tz.clone(),
             ))),
-        ))
-            as Arc<dyn datafusion::physical_expr::PhysicalExpr>);
+        )) as Arc<dyn PhysicalExpr>);
     }
     if let Some(upper) = slice.upper {
         bounds.push(Arc::new(BinaryExpr::new(
@@ -270,8 +277,7 @@ fn slice_predicate(
                 Some(upper),
                 tz,
             ))),
-        ))
-            as Arc<dyn datafusion::physical_expr::PhysicalExpr>);
+        )) as Arc<dyn PhysicalExpr>);
     }
     let [first, rest @ ..] = bounds.as_slice() else {
         return Err(CompactionError::Input {
@@ -333,14 +339,29 @@ fn same_group(
 }
 
 /// Deduplicates one chunk and writes it, computing the trace partials for
-/// spans. The blocking write runs on `spawn_blocking`.
+/// spans. Covered rows are dropped first (spec 03 §7): a chunk left with no
+/// row writes nothing and pushes no partial. The blocking write runs on
+/// `spawn_blocking`.
 async fn emit_chunk<W: Write + Send + 'static>(
     table: FileTable,
     drop_deleted: bool,
+    covered: Option<&Arc<dyn PhysicalExpr>>,
     writer: FileWriter<W>,
     chunk: RecordBatch,
     mut partials: Vec<RecordBatch>,
 ) -> Result<(FileWriter<W>, Vec<RecordBatch>, u64), CompactionError> {
+    let chunk = match covered {
+        Some(predicate) => {
+            let rows = drop_covered(&chunk, predicate).map_err(|_| CompactionError::Deletion {
+                reason: "applying the deletion filter",
+            })?;
+            if rows.num_rows() == 0 {
+                return Ok((writer, partials, 0));
+            }
+            rows
+        }
+        None => chunk,
+    };
     match table {
         FileTable::Spans => {
             let rows = dedup::latest_spans(&chunk)?;
@@ -379,7 +400,7 @@ fn join_error(_: tokio::task::JoinError) -> CompactionError {
     CompactionError::Task
 }
 
-fn read_error(source: DataFusionError) -> CompactionError {
+pub(super) fn read_error(source: DataFusionError) -> CompactionError {
     CompactionError::Read { source }
 }
 
@@ -443,6 +464,7 @@ mod tests {
             anchor: Default::default(),
             gc: Default::default(),
             compaction: Default::default(),
+            deletion: Default::default(),
         };
         Arc::new(Objects::new(&config, Hooks::default()).await.unwrap())
     }
@@ -486,6 +508,7 @@ mod tests {
             min_ingest_time: written.min_ingest_time,
             max_ingest_time: written.max_ingest_time,
             fully_merged: false,
+            deletions_applied_seq: 0,
         })
     }
 
@@ -499,7 +522,7 @@ mod tests {
     ) -> (RecordBatch, Vec<RecordBatch>) {
         let sink = tempfile::tempfile().unwrap();
         let writer = FileWriter::new(table, 1, sink, 0).unwrap();
-        let merged = merge_slice(ctx, table, inputs, slice, drop_deleted, writer)
+        let merged = merge_slice(ctx, table, inputs, slice, drop_deleted, None, writer)
             .await
             .unwrap();
         assert!(merged.rows > 0);

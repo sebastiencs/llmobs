@@ -50,6 +50,8 @@ pub(crate) struct MemBatch {
     pub min_time: i64,
     /// Maximum of the table's time column.
     pub max_time: i64,
+    /// Minimum of the table's `ingest_time` column (spec 03 §7).
+    pub min_ingest_time: i64,
     /// [`RecordBatch::get_array_memory_size`] of `batch`.
     pub bytes: usize,
     /// Trace partials of `batch`, computed once and shared by every read state
@@ -123,8 +125,9 @@ pub(crate) struct Memtable {
 /// A cheap copy of the batches a query sees.
 ///
 /// Cloning copies the `Arc`s, not the columns. A later coalesce replaces the
-/// memtable's `Arc`s and leaves this snapshot alone.
-#[derive(Debug, Clone)]
+/// memtable's `Arc`s and leaves this snapshot alone. `default` has no
+/// partitions: the providers of a dropped project read it (spec 03 §7).
+#[derive(Debug, Clone, Default)]
 pub(crate) struct MemSnapshot {
     /// Batches grouped by partition, in key order.
     pub partitions: BTreeMap<PartitionKey, Vec<MemBatch>>,
@@ -295,7 +298,11 @@ impl Memtable {
 }
 
 impl MemBatch {
-    fn from_batch(table: Table, batch: RecordBatch) -> Result<Self, MemtableError> {
+    /// Accounting of `batch`: min/max of the time column, min of `ingest_time`.
+    ///
+    /// A filtered copy of a batch goes through here too, which recomputes every
+    /// field and starts a fresh partials cache.
+    pub(crate) fn from_batch(table: Table, batch: RecordBatch) -> Result<Self, MemtableError> {
         let times = time_array(table, &batch)?;
         let mut min_time = i64::MAX;
         let mut max_time = i64::MIN;
@@ -309,11 +316,22 @@ impl MemBatch {
             min_time = min_time.min(value);
             max_time = max_time.max(value);
         }
+        let ingest = ingest_array(table, &batch)?;
+        let mut min_ingest_time = i64::MAX;
+        for row in 0..ingest.len() {
+            if ingest.is_null(row) {
+                return Err(MemtableError::BadColumn {
+                    column: table.ingest_column(),
+                });
+            }
+            min_ingest_time = min_ingest_time.min(ingest.value(row));
+        }
         let bytes = batch.get_array_memory_size();
         Ok(Self {
             batch: Arc::new(batch),
             min_time,
             max_time,
+            min_ingest_time,
             bytes,
             partials: Arc::new(OnceLock::new()),
         })
@@ -341,6 +359,21 @@ fn time_array(
     batch: &RecordBatch,
 ) -> Result<&TimestampNanosecondArray, MemtableError> {
     let column = table.time_column();
+    let array = batch
+        .column_by_name(column)
+        .ok_or(MemtableError::MissingColumn { column })?;
+    array
+        .as_any()
+        .downcast_ref::<TimestampNanosecondArray>()
+        .ok_or(MemtableError::BadColumn { column })
+}
+
+/// The `ingest_time` column, which the covered-row rule reads (spec 03 §7).
+fn ingest_array(
+    table: Table,
+    batch: &RecordBatch,
+) -> Result<&TimestampNanosecondArray, MemtableError> {
+    let column = table.ingest_column();
     let array = batch
         .column_by_name(column)
         .ok_or(MemtableError::MissingColumn { column })?;
@@ -419,10 +452,16 @@ fn concat_small(smalls: &[MemBatch]) -> Result<MemBatch, MemtableError> {
         .map(|batch| batch.max_time)
         .max()
         .unwrap_or(first.max_time);
+    let min_ingest_time = smalls
+        .iter()
+        .map(|batch| batch.min_ingest_time)
+        .min()
+        .unwrap_or(first.min_ingest_time);
     Ok(MemBatch {
         batch: Arc::new(merged),
         min_time,
         max_time,
+        min_ingest_time,
         bytes,
         partials: Arc::new(OnceLock::new()),
     })

@@ -494,6 +494,7 @@ fn config(dir: &Path, max_bytes: ByteSize) -> StorageConfig {
         anchor: AnchorConfig::default(),
         gc: Default::default(),
         compaction: Default::default(),
+        deletion: Default::default(),
     }
 }
 

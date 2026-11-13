@@ -23,6 +23,9 @@ test:
     # resolves different features and rebuilds every dependency from scratch.
     cargo test --workspace --all-features -- --ignored --exact crash_tests::every_flush_hook_aborts_safely
     cargo test --workspace --all-features -- --ignored --exact crash_tests::every_compaction_hook_aborts_safely
+    cargo test --workspace --all-features -- --ignored --exact crash_tests::every_deletion_hook_aborts_safely
+    cargo test --workspace --all-features -- --ignored --exact crash_tests::every_media_hook_aborts_safely
+    cargo test --workspace --all-features -- --ignored --exact crash_tests::every_drop_hook_aborts_safely
 
 # Opt-in live provider tests. Ignored by `just check` (D167).
 eval-live:

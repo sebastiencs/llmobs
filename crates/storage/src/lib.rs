@@ -6,7 +6,6 @@
 //!
 //! # What this crate does not do yet
 //!
-//! - deletion and retention are absent;
 //! - the query runtime uses DataFusion's default memory pool.
 //!   Parquet footers and page indexes use DataFusion's built-in metadata cache.
 
@@ -15,21 +14,30 @@
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::num::NonZeroUsize;
+use std::ops::Range;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow::array::{Array, RecordBatch, StringArray};
+use chrono::NaiveDate;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use llmobs_core::ids::ProjectId;
+use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
-use crate::catalog::Committer;
+use crate::catalog::{Catalog, Committer, Registered};
 use crate::config::StorageConfig;
 use crate::config::WalSync;
-use crate::error::{AppendError, MemtableError, OpenError, QueryError, StorageError, WalError};
+use crate::deletion::PendingDeletion;
+use crate::error::{
+    AppendError, DeletionError, MediaError, MemtableError, OpenError, QueryError, StorageError,
+    WalError,
+};
 use crate::flush::FlushHandle;
-use crate::hooks::Hooks;
-use crate::memtable::Memtable;
+use crate::hooks::{HookPoint, Hooks};
+use crate::media::MediaGc;
+use crate::memtable::{MemSnapshot, Memtable};
 use crate::objects::Objects;
 use crate::read_state::{Published, ReadState};
 use crate::wal::Table;
@@ -42,13 +50,16 @@ pub(crate) mod catalog;
 mod compaction;
 pub mod config;
 pub(crate) mod dedup;
+pub(crate) mod deletion;
 pub mod error;
 mod filter;
 pub(crate) mod flush;
 pub(crate) mod gc;
+pub(crate) mod media;
 pub(crate) mod objects;
 pub(crate) mod parquet;
 pub(crate) mod partials;
+pub(crate) mod projects;
 pub mod query;
 mod query_error;
 mod query_text;
@@ -57,8 +68,11 @@ mod sql;
 mod views;
 
 pub use crate::compaction::job::CompactionReport;
+pub use crate::compaction::rewrite::DeletionReport;
+pub use crate::deletion::{Deletion, DeletionScope, DeletionStatus};
 pub use crate::error::CompactionError;
 pub use crate::gc::ObsoleteReport;
+pub use crate::media::{MediaBlob, MediaRead, MediaReport};
 pub use query_error::{InvalidQuery, Position, RunError};
 pub use reads::{
     Bucket, BucketWidth, Kpi, KpiName, LATEST_SCORE_COLUMNS, ListScope, MAX_PAGE,
@@ -83,6 +97,12 @@ pub(crate) mod wal;
 
 #[cfg(test)]
 mod crash_tests;
+#[cfg(test)]
+mod deletion_tests;
+#[cfg(test)]
+mod drop_tests;
+#[cfg(test)]
+mod retention;
 #[cfg(test)]
 mod test_support;
 
@@ -110,6 +130,17 @@ pub struct StorageHealth {
     pub memtable_hard_limit: u64,
 }
 
+/// What [`Storage::apply_retention`] removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetentionReport {
+    /// Files obsoleted, all tables.
+    pub files: u64,
+    /// Their total size.
+    pub bytes: u64,
+    /// The watermark now stored: the later of the old one and the request.
+    pub keep_from: NaiveDate,
+}
+
 /// Open data directory: the lock, both writers, and the published memtables.
 #[derive(Debug)]
 ///
@@ -120,6 +151,11 @@ pub struct Storage {
     /// `query.trace_lookback` in ns, the padded window around a trace range.
     lookback: i64,
     shutting_down: AtomicBool,
+    /// Held for read by every [`Self::append`] until its WAL write returns and
+    /// for write by [`Self::drop_project`] across its commit: no append of any
+    /// project is between its `is_dropped` check and its WAL write while a
+    /// drop commits (spec 03 §7).
+    append_gate: tokio::sync::RwLock<()>,
     /// Released by [`Self::shutdown`] so another process can open the directory
     /// while this value is still alive.
     lock: Mutex<Option<File>>,
@@ -130,6 +166,8 @@ pub struct Storage {
     spans_flush: FlushHandle,
     scores_flush: FlushHandle,
     gc: gc::GcHandle,
+    /// Media collection, cloned into the GC and compaction tasks.
+    media: MediaGc,
     /// Shared by the background task and [`Self::compact`].
     compactor: Arc<compaction::job::Compactor>,
     compaction: compaction::task::CompactionHandle,
@@ -256,6 +294,8 @@ impl Storage {
             )
         })??;
         let catalog = committer.catalog().await;
+        let tombstones = committer.tombstones().await;
+        let projects = Arc::new(committer.project_states().await?);
         let mut anchors = anchor::Anchors::new(window_ns);
         anchors.rebuild(&catalog, &objects).await?;
         let anchors = Arc::new(Mutex::new(anchors));
@@ -263,6 +303,8 @@ impl Storage {
             spans: recovered.spans.memtable.snapshot(),
             scores: recovered.scores.memtable.snapshot(),
             catalog,
+            tombstones,
+            projects,
         }));
         // Compaction gets a runtime of its own, so its memory pool is
         // independent of the query runtime's.
@@ -287,7 +329,11 @@ impl Storage {
                     batch_size: 8192,
                 },
                 compaction::plan::Policy::from(&config.compaction),
-                config.compaction.threads,
+                compaction::job::CompactorLimits {
+                    threads: config.compaction.threads,
+                    max_delay: i64::try_from(config.deletion.max_delay.as_nanos())
+                        .unwrap_or(i64::MAX),
+                },
                 share_hooks(&hooks),
             ))
         };
@@ -353,19 +399,36 @@ impl Storage {
             tracing::warn!("obsolete file collection failed");
             tracing::debug!(%error, "obsolete file collection error");
         }
+        let media = MediaGc {
+            committer: Arc::clone(&committer),
+            objects: Arc::clone(&objects),
+            published: Arc::clone(&published),
+            runtime: Arc::clone(&runtime),
+            target_partitions,
+            lookback,
+            hooks: share_hooks(&hooks),
+        };
+        // Finish drops interrupted by a crash or a failed media step, after
+        // the first obsolete-file collection (spec 03 §7).
+        media.finish_drops().await;
         let gc = gc::spawn(gc::GcStart {
             committer: Arc::clone(&committer),
             objects: Arc::clone(&objects),
             hooks: share_hooks(&hooks),
             grace: config.gc.grace,
+            media: MediaGc::clone(&media),
         });
-        let compaction =
-            compaction::task::spawn(Arc::clone(&compactor), config.compaction.interval);
+        let compaction = compaction::task::spawn(
+            Arc::clone(&compactor),
+            MediaGc::clone(&media),
+            config.compaction.interval,
+        );
         Ok(Self {
             hard_limit,
             target_partitions,
             lookback,
             shutting_down: AtomicBool::new(false),
+            append_gate: tokio::sync::RwLock::new(()),
             lock: Mutex::new(Some(lock)),
             published,
             spans,
@@ -373,6 +436,7 @@ impl Storage {
             spans_flush,
             scores_flush,
             gc,
+            media,
             compactor,
             compaction,
             objects,
@@ -408,41 +472,195 @@ impl Storage {
     /// [`ProjectQuery::runtime`] and [`ProjectQuery::target_partitions`].
     /// The runtime is the one built at open. Its memory pool stays the default
     /// until a later milestone installs one.
+    ///
+    /// The snapshot's pending deletions hide their rows from every provider
+    /// (spec 03 §7): the memtable snapshots are filtered copies, and the
+    /// providers carry the tombstones for the file side. A memtable partition
+    /// of a day before the project's retention watermark is left out of the
+    /// copies the same way (spec 03 §8); the files were removed from the
+    /// catalog by the retention commit itself.
     pub fn query(
         &self,
         project: ProjectId,
         options: QueryOptions,
     ) -> Result<ProjectQuery, QueryError> {
-        let state = self.published.load();
-        let partitions = self.target_partitions.get();
-        let spans = Arc::new(query::SpansProvider::new(
+        project_query(
+            &self.published.load(),
             project,
-            Arc::clone(&state.spans),
-            Arc::clone(&state.catalog),
-            partitions,
-            options.around,
-        ));
-        let scores = Arc::new(query::ScoresProvider::new(
-            project,
-            Arc::clone(&state.scores),
-            Arc::clone(&state.catalog),
-            partitions,
-        ));
-        let traces = Arc::new(query::TracesProvider::new(
-            project,
-            Arc::clone(&state.catalog),
-            Arc::clone(&state.spans),
             options,
+            &self.runtime,
+            self.target_partitions,
             self.lookback,
-            partitions,
-        ));
-        Ok(ProjectQuery {
-            spans,
-            traces,
-            scores,
-            runtime: Arc::clone(&self.runtime),
-            target_partitions: self.target_partitions,
-            optimizer_rules: vec![Arc::new(query::TraceListRule)],
+        )
+    }
+
+    /// Registers a `traces` or `user` deletion. Idempotent by `deletion.id`.
+    /// Rows in scope are hidden from every query once this returns (spec 03 §7).
+    pub async fn register_deletion(&self, deletion: Deletion) -> Result<(), DeletionError> {
+        let published = Arc::clone(&self.published);
+        let registered = self
+            .committer
+            .register_deletion(&deletion, catalog::now_ns(), move |tombstones| {
+                read_state::publish_tombstones(&published, tombstones);
+            })
+            .await?;
+        if let Registered::New { seq } = registered {
+            // Never log the scope: its ids name the person the deletion is about.
+            tracing::info!(
+                deletion_id = %deletion.id,
+                project = %deletion.project,
+                seq,
+                "deletion registered"
+            );
+        }
+        Ok(())
+    }
+
+    /// `Pending` or `Applied`. An unknown id is [`DeletionError::NotFound`].
+    pub async fn deletion_status(&self, id: Uuid) -> Result<DeletionStatus, DeletionError> {
+        self.committer
+            .deletion_status(id)
+            .await?
+            .ok_or(DeletionError::NotFound)
+    }
+
+    /// Drops every partition of `project` before `keep_from` (a UTC day), and
+    /// drops late rows for those days from then on (spec 03 §8). A `keep_from`
+    /// earlier than the stored watermark changes nothing.
+    pub async fn apply_retention(
+        &self,
+        project: ProjectId,
+        keep_from: NaiveDate,
+    ) -> Result<RetentionReport, StorageError> {
+        let published = Arc::clone(&self.published);
+        let report = self
+            .committer
+            .apply_retention(project, keep_from, move |next, watermark| {
+                published.replace(|state| ReadState {
+                    catalog: Arc::clone(next),
+                    projects: Arc::new(state.projects.with_keep_from(project, watermark)),
+                    ..state.clone()
+                });
+            })
+            .await?;
+        if report.files > 0 {
+            tracing::info!(
+                project = %project,
+                keep_from = %report.keep_from,
+                files = report.files,
+                bytes = report.bytes,
+                "retention applied"
+            );
+        }
+        Ok(report)
+    }
+
+    /// Hides the project at once and refuses its appends, then deletes its
+    /// media. Its files are obsoleted in the same commit and removed by GC.
+    /// Idempotent. An error after the commit leaves the project dropped; GC
+    /// finishes the media.
+    pub async fn drop_project(&self, project: ProjectId) -> Result<(), StorageError> {
+        // No append of any project runs between its `is_dropped` check and its
+        // WAL write while the drop commits (spec 03 §7).
+        let gate = self.append_gate.write().await;
+        let published = Arc::clone(&self.published);
+        let dropped = self
+            .committer
+            .drop_project(project, catalog::now_ns(), move |catalog, tombstones| {
+                published.replace(|state| ReadState {
+                    catalog: Arc::clone(catalog),
+                    tombstones: Arc::clone(tombstones),
+                    projects: Arc::new(state.projects.with_dropped(project)),
+                    ..state.clone()
+                });
+            })
+            .await?;
+        drop(gate);
+        // A second call finishes a drop whose media step failed, whether the
+        // commit above was the first or a no-op.
+        self.media.finish_drop(project).await?;
+        if dropped {
+            tracing::info!(project = %project, "project dropped");
+        }
+        Ok(())
+    }
+
+    /// Stores `blob` under `media/<project>/<sha256>` once (spec 03 §9, D-A1-6).
+    /// Writing an existing hash refreshes its `last_seen_at` and writes nothing
+    /// else. A dropped project is refused (spec 03 §7).
+    ///
+    /// The blob's object is durable before this returns; its `media` row and
+    /// the staged row's removal share one transaction.
+    pub async fn put_media(&self, project: ProjectId, blob: MediaBlob) -> Result<(), MediaError> {
+        if self.published.load().projects.is_dropped(project) {
+            return Err(MediaError::ProjectDropped);
+        }
+        let now = catalog::now_ns();
+        if blob.mime_type.is_empty() || blob.mime_type.len() > 255 || !blob.mime_type.is_ascii() {
+            return Err(MediaError::Invalid {
+                reason: "mime type",
+            });
+        }
+        if blob.bytes.is_empty() {
+            return Err(MediaError::Invalid {
+                reason: "empty blob",
+            });
+        }
+        let digest = Sha256::digest(blob.bytes.as_ref());
+        if digest.as_slice() != blob.sha256.as_slice() {
+            return Err(MediaError::HashMismatch);
+        }
+        let sha = hex::encode(blob.sha256);
+        if self.committer.touch_media(project, &sha, now).await? {
+            return Ok(());
+        }
+        let path = Objects::media_path(project, &sha);
+        self.committer.stage_media(&path, now).await?;
+        let size = u64::try_from(blob.bytes.len()).unwrap_or(u64::MAX);
+        self.objects.put_media(&path, blob.bytes).await?;
+        self.hooks.pause(HookPoint::MediaAfterPut);
+        if self.hooks.fail(HookPoint::MediaAfterPut).is_some() {
+            return Err(MediaError::Fault);
+        }
+        // A put that passed its `is_dropped` check before a drop committed is
+        // caught here (spec 03 §7); the staged row stays for GC.
+        if !self
+            .committer
+            .insert_media(project, &sha, &blob.mime_type, size, &path, now)
+            .await?
+        {
+            return Err(MediaError::ProjectDropped);
+        }
+        Ok(())
+    }
+
+    /// The blob of `sha256`, whole or `range` of it (end exclusive), with its
+    /// MIME type and the whole blob's size (spec 03 §9). A dropped project has
+    /// nothing to read (spec 03 §7).
+    pub async fn get_media(
+        &self,
+        project: ProjectId,
+        sha256: &[u8; 32],
+        range: Option<Range<u64>>,
+    ) -> Result<MediaRead, MediaError> {
+        if self.published.load().projects.is_dropped(project) {
+            return Err(MediaError::NotFound);
+        }
+        let sha = hex::encode(sha256);
+        let Some((mime_type, size)) = self.committer.media_row(project, &sha).await? else {
+            return Err(MediaError::NotFound);
+        };
+        if let Some(range) = &range
+            && (range.start >= range.end || range.end > size)
+        {
+            return Err(MediaError::InvalidRange);
+        }
+        let path = Objects::media_path(project, &sha);
+        let bytes = self.objects.get_range(&path, range).await?;
+        Ok(MediaRead {
+            mime_type,
+            size,
+            bytes,
         })
     }
 
@@ -498,6 +716,34 @@ impl Storage {
         self.compactor.pass(now).await
     }
 
+    /// One deletion pass at `now` (ns), run to completion: rewrites, raises, and
+    /// marks applied. The background task runs one after each compaction pass.
+    /// After a deletion is applied, its project's unreferenced media is
+    /// collected at the same `now` (D-A1-6); a media error changes nothing here.
+    #[doc(hidden)]
+    pub async fn apply_deletions(&self, now: i64) -> Result<DeletionReport, CompactionError> {
+        let report = self.compactor.deletion_pass(now).await?;
+        for project in &report.applied_projects {
+            if let Err(error) = self.media.collect(*project, now).await {
+                // The label only: the error names an object path, which holds
+                // the blob's hash (spec 03 §9).
+                tracing::warn!(
+                    project = %project,
+                    error = error.label(),
+                    "media collection failed"
+                );
+            }
+        }
+        Ok(report)
+    }
+
+    /// One media collection over every project at `now` (ns). The background
+    /// task runs one daily.
+    #[doc(hidden)]
+    pub async fn collect_media(&self, now: i64) -> Result<MediaReport, MediaError> {
+        self.media.collect_all(now).await
+    }
+
     /// Replaces the compaction policy read at the start of each pass.
     #[cfg(test)]
     pub(crate) fn set_policy(&self, policy: compaction::plan::Policy) {
@@ -515,7 +761,7 @@ impl Storage {
     pub(crate) async fn commit_test_edit(
         &self,
         edit: &catalog::CatalogEdit,
-    ) -> Result<Arc<catalog::Catalog>, error::CommitError> {
+    ) -> Result<Arc<Catalog>, error::CommitError> {
         let published = Arc::clone(&self.published);
         self.committer
             .commit(edit, move |next| {
@@ -598,12 +844,19 @@ impl Storage {
         project: ProjectId,
         batch: RecordBatch,
     ) -> Result<AppendReceipt, AppendError> {
+        // Held until `writer.append` returns, so `drop_project`'s write guard
+        // waits for every in-flight append and holds new ones while it
+        // commits (spec 03 §7).
+        let _gate = self.append_gate.read().await;
         let writer = self.writer(table);
         if writer.shared().failed() {
             return Err(AppendError::WalFailed);
         }
         if self.shutting_down.load(Ordering::Acquire) {
             return Err(AppendError::ShuttingDown);
+        }
+        if self.published.load().projects.is_dropped(project) {
+            return Err(AppendError::ProjectDropped);
         }
         validate_batch(table, &project, &batch)?;
         let bytes = batch.get_array_memory_size();
@@ -699,6 +952,119 @@ impl Drop for Storage {
         self.compaction.abort();
         self.gc.abort();
     }
+}
+
+/// The body of [`Storage::query`]: providers for `project` over one published
+/// `state`. `Storage::query` and the media collection's live set both call it.
+pub(crate) fn project_query(
+    state: &ReadState,
+    project: ProjectId,
+    options: QueryOptions,
+    runtime: &Arc<RuntimeEnv>,
+    target_partitions: NonZeroUsize,
+    lookback: i64,
+) -> Result<ProjectQuery, QueryError> {
+    let partitions = target_partitions.get();
+    // A dropped project gets empty tables (spec 03 §7): the drop commit
+    // removed its files from the catalog, its memtable partitions are dropped
+    // at flush, and no file of it can be committed again, so nothing of it is
+    // read at all.
+    if state.projects.is_dropped(project) {
+        let spans_snapshot = Arc::new(MemSnapshot::default());
+        let scores_snapshot = Arc::new(MemSnapshot::default());
+        let catalog = Arc::new(Catalog::empty());
+        let no_deletions: Arc<[Arc<PendingDeletion>]> = Arc::from(Vec::new());
+        return Ok(ProjectQuery {
+            spans: Arc::new(query::SpansProvider::new(
+                project,
+                Arc::clone(&spans_snapshot),
+                Arc::clone(&catalog),
+                partitions,
+                options.around,
+                Arc::clone(&no_deletions),
+            )),
+            traces: Arc::new(query::TracesProvider::new(
+                project,
+                Arc::clone(&catalog),
+                spans_snapshot,
+                options,
+                lookback,
+                partitions,
+                Arc::clone(&no_deletions),
+            )),
+            scores: Arc::new(query::ScoresProvider::new(
+                project,
+                scores_snapshot,
+                catalog,
+                partitions,
+                no_deletions,
+            )),
+            runtime: Arc::clone(runtime),
+            target_partitions,
+            optimizer_rules: vec![Arc::new(query::TraceListRule)],
+        });
+    }
+    let deletions = state.tombstones.for_project(project);
+    let keep_from = state.projects.keep_from(project);
+    let has_late = |snapshot: &MemSnapshot| {
+        keep_from.is_some_and(|keep| {
+            snapshot
+                .partitions
+                .keys()
+                .any(|key| key.project == project && key.day < keep)
+        })
+    };
+    let (spans_snapshot, scores_snapshot) = if deletions.is_empty()
+        && !has_late(&state.spans)
+        && !has_late(&state.scores)
+    {
+        (Arc::clone(&state.spans), Arc::clone(&state.scores))
+    } else {
+        (
+            deletion::project_snapshot(Table::Spans, &state.spans, project, keep_from, &deletions)?,
+            deletion::project_snapshot(
+                Table::Scores,
+                &state.scores,
+                project,
+                keep_from,
+                &deletions,
+            )?,
+        )
+    };
+    let spans = Arc::new(query::SpansProvider::new(
+        project,
+        Arc::clone(&spans_snapshot),
+        Arc::clone(&state.catalog),
+        partitions,
+        options.around,
+        Arc::clone(&deletions),
+    ));
+    let scores = Arc::new(query::ScoresProvider::new(
+        project,
+        scores_snapshot,
+        Arc::clone(&state.catalog),
+        partitions,
+        Arc::clone(&deletions),
+    ));
+    // The traces provider reads the filtered spans snapshot too, so its
+    // memtable partials are computed from the rows that remain.
+    let traces = Arc::new(query::TracesProvider::new(
+        project,
+        Arc::clone(&state.catalog),
+        spans_snapshot,
+        options,
+        lookback,
+        partitions,
+        deletions,
+    ));
+    Ok(ProjectQuery {
+        spans,
+        traces,
+        scores,
+        runtime: Arc::clone(runtime),
+        target_partitions,
+        optimizer_rules: vec![Arc::new(query::TraceListRule)],
+    })
 }
 
 struct Recovered {
@@ -1056,6 +1422,7 @@ mod tests {
             anchor: Default::default(),
             gc: Default::default(),
             compaction: Default::default(),
+            deletion: Default::default(),
         }
     }
 

@@ -7,11 +7,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use arrow::array::{
-    ArrayRef, BooleanBuilder, FixedSizeBinaryBuilder, Float64Builder, Int32Builder, Int64Builder,
-    ListBuilder, MapBuilder, RecordBatch, StringBuilder, TimestampNanosecondBuilder,
+    Array, ArrayRef, BooleanBuilder, FixedSizeBinaryBuilder, Float64Builder, Int32Builder,
+    Int64Builder, ListBuilder, MapBuilder, RecordBatch, StringBuilder, TimestampNanosecondBuilder,
 };
 use arrow::datatypes::{DataType, Field, SchemaRef};
 use async_trait::async_trait;
+use bytes::Bytes;
 use datafusion::catalog::Session;
 use datafusion::datasource::memory::MemTable;
 use datafusion::datasource::{TableProvider, TableType};
@@ -32,9 +33,51 @@ fn dataset_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/api/dataset")
 }
 
+/// The test trace id of [`span_row`] and [`score_row`]: the 2 big-endian bytes
+/// of `trace + 1`, repeated 8 times. The `+ 1` keeps the id from being all
+/// zero, which the id type rejects.
+fn trace_id_of(trace: u16) -> TraceId {
+    assert!(trace < u16::MAX, "trace must be below u16::MAX");
+    let mut trace_bytes = [0_u8; 16];
+    let pair = (trace + 1).to_be_bytes();
+    for chunk in trace_bytes.as_chunks_mut::<2>().0 {
+        chunk.copy_from_slice(&pair);
+    }
+    TraceId::from_bytes(trace_bytes).unwrap()
+}
+
 fn read_text(name: &str) -> String {
     let path = dataset_dir().join(name);
     fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+/// The rows stored in one catalogued file's Parquet object, under `objects/`.
+pub(crate) fn object_rows(dir: &std::path::Path, file: &crate::catalog::FileMeta) -> RecordBatch {
+    let bytes = fs::read(dir.join("objects").join(&file.path)).unwrap();
+    let builder =
+        parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(Bytes::from(bytes))
+            .unwrap();
+    let schema = Arc::clone(builder.schema());
+    let batches: Vec<RecordBatch> = builder
+        .build()
+        .unwrap()
+        .map(|batch| batch.unwrap())
+        .collect();
+    arrow::compute::concat_batches(&schema, &batches).unwrap()
+}
+
+/// The `trace_id` bytes of every row of a stored batch.
+pub(crate) fn trace_ids_of(rows: &RecordBatch) -> Vec<[u8; 16]> {
+    let column = rows
+        .column_by_name(llmobs_core::schema::spans::TRACE_ID)
+        .unwrap();
+    let array = column
+        .as_any()
+        .downcast_ref::<arrow::array::FixedSizeBinaryArray>()
+        .unwrap();
+    (0..array.len())
+        .map(|row| <[u8; 16]>::try_from(array.value(row)).unwrap())
+        .collect()
 }
 
 pub(crate) fn dataset_spans() -> Vec<Span> {
@@ -98,19 +141,13 @@ pub(crate) fn traces_table(spans: &[Span]) -> Arc<MemTable> {
 /// below `u8::MAX`; the builder panics otherwise. A test that needs another
 /// field (`parent_span_id`, `input`) sets it on the returned `Span`.
 pub(crate) fn span_row(trace: u16, span: u8, start: i64, ingest: i64) -> Span {
-    assert!(trace < u16::MAX, "trace must be below u16::MAX");
     assert!(span < u8::MAX, "span must be below u8::MAX");
     let project_id: llmobs_core::ids::ProjectId =
         "018f6b4e-7c1a-7c1a-8c1a-000000000001".parse().unwrap();
-    let mut trace_bytes = [0_u8; 16];
-    let pair = (trace + 1).to_be_bytes();
-    for chunk in trace_bytes.as_chunks_mut::<2>().0 {
-        chunk.copy_from_slice(&pair);
-    }
     let span_bytes = [span + 1; 8];
     Span {
         project_id,
-        trace_id: TraceId::from_bytes(trace_bytes).unwrap(),
+        trace_id: trace_id_of(trace),
         span_id: llmobs_core::ids::SpanId::from_bytes(span_bytes).unwrap(),
         parent_span_id: None,
         name: "root".to_owned(),
@@ -167,6 +204,50 @@ pub(crate) fn span_row(trace: u16, span: u8, start: i64, ingest: i64) -> Span {
 /// `spans_to_record_batch(spans)`, unwrapped.
 pub(crate) fn span_rows(spans: &[Span]) -> RecordBatch {
     spans_to_record_batch(spans).unwrap_or_else(|error| panic!("spans batch: {error}"))
+}
+
+/// One score of the fixed test project on the given trace, the score twin of
+/// [`span_row`]: `trace_id` is the 2 big-endian bytes of `trace + 1`, repeated.
+/// A test that needs `session_id`, `user_id` or another target sets it on the
+/// returned `Score`; a session score has `target: ScoreTarget::Session { .. }`
+/// and no trace id.
+pub(crate) fn score_row(
+    id: u128,
+    trace: u16,
+    created_at: i64,
+    updated_at: i64,
+    ingest: i64,
+    deleted: bool,
+    name: &str,
+) -> Score {
+    Score {
+        project_id: "018f6b4e-7c1a-7c1a-8c1a-000000000001".parse().unwrap(),
+        score_id: uuid::Uuid::from_u128(id),
+        target: llmobs_core::score::ScoreTarget::Trace {
+            trace_id: trace_id_of(trace),
+        },
+        session_id: None,
+        user_id: None,
+        name: name.to_owned(),
+        value: llmobs_core::score::ScoreValue::Numeric(0.5),
+        reason: None,
+        source: llmobs_core::enums::ScoreSource::Api,
+        evaluator_id: None,
+        rule_id: None,
+        experiment_id: None,
+        dataset_item_id: None,
+        author_user_id: None,
+        metadata: BTreeMap::new(),
+        created_at,
+        updated_at,
+        deleted,
+        ingest_time: ingest,
+    }
+}
+
+/// `scores_to_record_batch(scores)`, unwrapped.
+pub(crate) fn score_rows(scores: &[Score]) -> RecordBatch {
+    scores_to_record_batch(scores).unwrap_or_else(|error| panic!("scores batch: {error}"))
 }
 
 pub(crate) fn example_query() -> ProjectQuery {

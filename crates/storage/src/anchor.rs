@@ -522,31 +522,13 @@ mod tests {
         let mut partitions = BTreeMap::new();
         for (day, indices) in by_day {
             let sliced = take_record_batch(&batch, &UInt32Array::from(indices)).unwrap();
-            let times = sliced
-                .column_by_name(spans::START_TIME)
-                .unwrap()
-                .as_primitive::<TimestampNanosecondType>();
-            let min_time = (0..sliced.num_rows())
-                .map(|row| times.value(row))
-                .min()
-                .unwrap_or(0);
-            let max_time = (0..sliced.num_rows())
-                .map(|row| times.value(row))
-                .max()
-                .unwrap_or(0);
-            let bytes = sliced.get_array_memory_size();
+            let stored = MemBatch::from_batch(crate::wal::Table::Spans, sliced).unwrap();
             partitions.insert(
                 PartitionKey {
                     project: project(),
                     day,
                 },
-                vec![MemBatch {
-                    batch: Arc::new(sliced),
-                    min_time,
-                    max_time,
-                    bytes,
-                    partials: Arc::new(std::sync::OnceLock::new()),
-                }],
+                vec![stored],
             );
         }
         FrozenView {

@@ -12,13 +12,23 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use chrono::NaiveDate;
+use llmobs_core::ids::ProjectId;
 use sqlx::{Connection, SqliteConnection};
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
-use super::db::{TableState, check_file_sources, load, open_catalog_db, parse_file_id};
+use super::db::{
+    TableState, check_file_sources, load, load_project_states, load_tombstones, open_catalog_db,
+    parse_file_id,
+};
 use super::{Catalog, FileId, FileMeta, FileState, FileTable, table_index};
-use crate::error::{CatalogError, CommitError, GcError};
+use crate::RetentionReport;
+use crate::deletion::{Deletion, DeletionScope, DeletionStatus, PendingDeletion, Tombstones};
+use crate::error::{CatalogError, CommitError, DeletionError, GcError, MediaError, ObjectError};
 use crate::hooks::{HookPoint, Hooks};
+use crate::objects::Objects;
+use crate::projects::ProjectStates;
 use crate::wal::Table;
 
 /// One catalog change. Paths in `add` must already be staged.
@@ -35,12 +45,40 @@ pub(crate) struct CatalogEdit {
     /// The traces file must be in `add` with table `Traces`; the spans file
     /// must be in `add` with table `Spans` or already be an active `spans` row.
     pub sources: Vec<(FileId, FileId)>,
+    /// Files whose `deletions_applied_seq` rises to the given value: the rewriter
+    /// checked them and found no covered row. Each must be active and its stored
+    /// value lower than the new one.
+    pub raise: Vec<(FileId, u64)>,
+}
+
+/// What a commit writes besides the file edit, inside the same transaction.
+enum Extra {
+    /// Nothing beyond the edit.
+    None,
+    /// `INSERT OR REPLACE` the retention watermark (spec 03 §8). `keep_from`
+    /// is already the max of the stored one and the request.
+    Retention {
+        /// The project whose watermark rises.
+        project: ProjectId,
+        /// The watermark to store.
+        keep_from: NaiveDate,
+    },
+    /// Records the project `dropping`, removes its retention watermark and
+    /// marks its pending deletions applied (spec 03 §7).
+    Drop {
+        /// The project being dropped.
+        project: ProjectId,
+        /// The drop's time, ns: the `dropped_at` and `applied_at` to store.
+        now: i64,
+    },
 }
 
 struct CommitterInner {
     connection: SqliteConnection,
     catalog: Arc<Catalog>,
     flushed: [u64; 2],
+    /// The pending deletions as last committed (spec 03 §7).
+    tombstones: Arc<Tombstones>,
     hooks: Hooks,
     /// Files a commit removed, held until GC collects them.
     ///
@@ -62,16 +100,18 @@ impl std::fmt::Debug for Committer {
 }
 
 impl Committer {
-    /// Open `catalog.db`, migrate, and load the active files.
+    /// Open `catalog.db`, migrate, and load the active files and tombstones.
     pub(crate) async fn open(data_dir: &Path, hooks: Hooks) -> Result<Self, CatalogError> {
         let mut connection = open_catalog_db(data_dir).await?;
         let (catalog, state) = load(&mut connection).await?;
         check_file_sources(&mut connection).await?;
+        let tombstones = load_tombstones(&mut connection).await?;
         Ok(Self {
             inner: Mutex::new(CommitterInner {
                 connection,
                 catalog: Arc::new(catalog),
                 flushed: flushed_of(state),
+                tombstones: Arc::new(tombstones),
                 hooks,
                 retired: HashMap::new(),
             }),
@@ -88,6 +128,520 @@ impl Committer {
         self.inner.lock().await.flushed[table_index(table)]
     }
 
+    /// The pending deletions as last committed.
+    pub(crate) async fn tombstones(&self) -> Arc<Tombstones> {
+        Arc::clone(&self.inner.lock().await.tombstones)
+    }
+
+    /// The project states stored in `catalog.db`: retention watermarks
+    /// (spec 03 §8) and dropped projects (spec 03 §7).
+    pub(crate) async fn project_states(&self) -> Result<ProjectStates, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        load_project_states(&mut inner.connection).await
+    }
+
+    /// Stores `deletion` with the next `deletion_seq`, then calls `publish` with
+    /// the new tombstones before releasing the mutex. A known id changes nothing
+    /// and does not call `publish`.
+    ///
+    /// Validation runs before SQLite is touched, so an invalid request writes
+    /// nothing.
+    pub(crate) async fn register_deletion<F>(
+        &self,
+        deletion: &Deletion,
+        now: i64,
+        publish: F,
+    ) -> Result<Registered, DeletionError>
+    where
+        F: FnOnce(&Arc<Tombstones>),
+    {
+        let mut inner = self.inner.lock().await;
+        if deletion.cutoff <= 0 {
+            return Err(DeletionError::Invalid {
+                reason: "cutoff must be positive",
+            });
+        }
+        let (kind, trace_ids, users, sessions) = match &deletion.scope {
+            DeletionScope::Traces { trace_ids } => {
+                if trace_ids.is_empty() {
+                    return Err(DeletionError::Invalid {
+                        reason: "empty scope",
+                    });
+                }
+                (
+                    "traces",
+                    trace_ids.iter().map(|trace| *trace.as_bytes()).collect(),
+                    HashSet::new(),
+                    HashSet::new(),
+                )
+            }
+            DeletionScope::User {
+                user_id,
+                trace_ids,
+                session_ids,
+            } => {
+                if user_id.is_empty() {
+                    return Err(DeletionError::Invalid {
+                        reason: "empty user id",
+                    });
+                }
+                (
+                    "user",
+                    trace_ids.iter().map(|trace| *trace.as_bytes()).collect(),
+                    HashSet::from([user_id.clone()]),
+                    session_ids.iter().cloned().collect(),
+                )
+            }
+        };
+        let known: Option<i64> = sqlx::query_scalar("SELECT 1 FROM deletions WHERE id = ?")
+            .bind(deletion.id.to_string())
+            .fetch_optional(&mut inner.connection)
+            .await
+            .map_err(CatalogError::db)?;
+        if known.is_some() {
+            return Ok(Registered::Known);
+        }
+        // A dropped project keeps the audit row only: stored already applied,
+        // with no scope rows (an applied request keeps none, M5.1). Nothing is
+        // published: no pending deletion changed, and a `known_seq` that lags
+        // an already-applied deletion is safe for new files (spec 03 §7).
+        let dropped: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM projects WHERE project_id = ?")
+                .bind(deletion.project.to_string())
+                .fetch_optional(&mut inner.connection)
+                .await
+                .map_err(CatalogError::db)?;
+        if dropped.is_some() {
+            let seq = inner.tombstones.known_seq() + 1;
+            let stored_seq = i64::try_from(seq).map_err(|_| DeletionError::Invalid {
+                reason: "integer does not fit the catalog",
+            })?;
+            let mut transaction = inner.connection.begin().await.map_err(CatalogError::db)?;
+            if let Err(error) = sqlx::query(
+                "INSERT INTO deletions (
+                    id, deletion_seq, project_id, kind, cutoff, status, registered_at, applied_at
+                 ) VALUES (?, ?, ?, ?, ?, 'applied', ?, ?)",
+            )
+            .bind(deletion.id.to_string())
+            .bind(stored_seq)
+            .bind(deletion.project.to_string())
+            .bind(kind)
+            .bind(deletion.cutoff)
+            .bind(now)
+            .bind(now)
+            .execute(transaction.as_mut())
+            .await
+            .map_err(CatalogError::db)
+            {
+                let _ = transaction.rollback().await;
+                return Err(error.into());
+            }
+            transaction
+                .commit()
+                .await
+                .map_err(|source| DeletionError::Catalog(CatalogError::db(source)))?;
+            inner.tombstones = Arc::new(inner.tombstones.with_known_seq(seq));
+            return Ok(Registered::New { seq });
+        }
+        let seq = inner.tombstones.known_seq() + 1;
+        // `known_seq` was read from an SQLite INTEGER, so only the `+ 1` above
+        // can overflow, and one deletion short of nine quintillion is out of
+        // reach. The error keeps the write from ever storing a wrapped value.
+        let stored_seq = i64::try_from(seq).map_err(|_| DeletionError::Invalid {
+            reason: "integer does not fit the catalog",
+        })?;
+        let pending = PendingDeletion {
+            id: deletion.id,
+            seq,
+            project: deletion.project,
+            cutoff: deletion.cutoff,
+            registered_at: now,
+            trace_ids,
+            users,
+            sessions,
+        };
+        // Production hooks are `Copy`. Tests share one value and have to clone it.
+        #[allow(clippy::clone_on_copy)]
+        let hooks = inner.hooks.clone();
+        let mut transaction = inner.connection.begin().await.map_err(CatalogError::db)?;
+        if let Err(error) = sqlx::query(
+            "INSERT INTO deletions (
+                id, deletion_seq, project_id, kind, cutoff, status, registered_at
+             ) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+        )
+        .bind(deletion.id.to_string())
+        .bind(stored_seq)
+        .bind(deletion.project.to_string())
+        .bind(kind)
+        .bind(deletion.cutoff)
+        .bind(now)
+        .execute(transaction.as_mut())
+        .await
+        .map_err(CatalogError::db)
+        {
+            let _ = transaction.rollback().await;
+            return Err(error.into());
+        }
+        for trace in &pending.trace_ids {
+            if let Err(error) =
+                sqlx::query("INSERT INTO deletion_traces (deletion_id, trace_id) VALUES (?, ?)")
+                    .bind(deletion.id.to_string())
+                    .bind(trace.as_slice())
+                    .execute(transaction.as_mut())
+                    .await
+                    .map_err(CatalogError::db)
+            {
+                let _ = transaction.rollback().await;
+                return Err(error.into());
+            }
+        }
+        for user in &pending.users {
+            if let Err(error) =
+                sqlx::query("INSERT INTO deletion_users (deletion_id, user_id) VALUES (?, ?)")
+                    .bind(deletion.id.to_string())
+                    .bind(user)
+                    .execute(transaction.as_mut())
+                    .await
+                    .map_err(CatalogError::db)
+            {
+                let _ = transaction.rollback().await;
+                return Err(error.into());
+            }
+        }
+        for session in &pending.sessions {
+            if let Err(error) =
+                sqlx::query("INSERT INTO deletion_sessions (deletion_id, session_id) VALUES (?, ?)")
+                    .bind(deletion.id.to_string())
+                    .bind(session)
+                    .execute(transaction.as_mut())
+                    .await
+                    .map_err(CatalogError::db)
+            {
+                let _ = transaction.rollback().await;
+                return Err(error.into());
+            }
+        }
+        hooks.pause(HookPoint::CatalogCommit);
+        if let Some(source) = hooks.fail(HookPoint::CatalogCommit) {
+            let _ = transaction.rollback().await;
+            return Err(DeletionError::Catalog(CatalogError::db(sqlx::Error::Io(
+                source,
+            ))));
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|source| DeletionError::Catalog(CatalogError::db(source)))?;
+        inner.tombstones = Arc::new(inner.tombstones.with(pending));
+        publish(&inner.tombstones);
+        Ok(Registered::New { seq })
+    }
+
+    /// Marks a pending deletion applied at `now`, then publishes the tombstones
+    /// without it. An id that is not pending is `Ok(false)` and does not call
+    /// `publish`.
+    ///
+    /// An applied request keeps only its id, project, kind, cut-off, sequence
+    /// and dates: the ids of the person are erased with the data (spec 03 §7);
+    /// the audit record is the server's `meta.db` row.
+    pub(crate) async fn mark_applied<F>(
+        &self,
+        project: ProjectId,
+        id: Uuid,
+        now: i64,
+        publish: F,
+    ) -> Result<bool, CatalogError>
+    where
+        F: FnOnce(&Arc<Tombstones>),
+    {
+        let mut inner = self.inner.lock().await;
+        let mut transaction = inner.connection.begin().await.map_err(CatalogError::db)?;
+        let updated = sqlx::query(
+            "UPDATE deletions SET status = 'applied', applied_at = ?
+             WHERE id = ? AND status = 'pending'",
+        )
+        .bind(now)
+        .bind(id.to_string())
+        .execute(transaction.as_mut())
+        .await
+        .map_err(CatalogError::db)?;
+        if updated.rows_affected() == 0 {
+            let _ = transaction.rollback().await;
+            return Ok(false);
+        }
+        for delete in [
+            "DELETE FROM deletion_traces WHERE deletion_id = ?",
+            "DELETE FROM deletion_users WHERE deletion_id = ?",
+            "DELETE FROM deletion_sessions WHERE deletion_id = ?",
+        ] {
+            if let Err(error) = sqlx::query(delete)
+                .bind(id.to_string())
+                .execute(transaction.as_mut())
+                .await
+                .map_err(CatalogError::db)
+            {
+                let _ = transaction.rollback().await;
+                return Err(error);
+            }
+        }
+        transaction.commit().await.map_err(CatalogError::db)?;
+        inner.tombstones = Arc::new(inner.tombstones.without(project, id));
+        publish(&inner.tombstones);
+        Ok(true)
+    }
+
+    /// `None` for an unknown id.
+    pub(crate) async fn deletion_status(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<DeletionStatus>, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        let row: Option<(String, Option<i64>)> =
+            sqlx::query_as("SELECT status, applied_at FROM deletions WHERE id = ?")
+                .bind(id.to_string())
+                .fetch_optional(&mut inner.connection)
+                .await
+                .map_err(CatalogError::db)?;
+        let Some((status, applied_at)) = row else {
+            return Ok(None);
+        };
+        match status.as_str() {
+            "pending" => Ok(Some(DeletionStatus::Pending)),
+            "applied" => Ok(Some(DeletionStatus::Applied {
+                applied_at: applied_at
+                    .ok_or_else(|| CatalogError::corrupt("invalid applied_at"))?,
+            })),
+            _ => Err(CatalogError::corrupt("invalid deletion status")),
+        }
+    }
+
+    /// Refreshes the blob's `last_seen_at` to `max(last_seen_at, now)` (spec 03
+    /// §9). `true` when the row exists.
+    pub(crate) async fn touch_media(
+        &self,
+        project: ProjectId,
+        sha: &str,
+        now: i64,
+    ) -> Result<bool, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        let updated = sqlx::query(
+            "UPDATE media SET last_seen_at = MAX(last_seen_at, ?)
+             WHERE project_id = ? AND sha256 = ?",
+        )
+        .bind(now)
+        .bind(project.to_string())
+        .bind(sha)
+        .execute(&mut inner.connection)
+        .await
+        .map_err(CatalogError::db)?;
+        Ok(updated.rows_affected() == 1)
+    }
+
+    /// `INSERT OR REPLACE` the blob's path in `staged_objects`: two puts of one
+    /// blob may race.
+    pub(crate) async fn stage_media(&self, path: &str, now: i64) -> Result<(), CatalogError> {
+        let mut inner = self.inner.lock().await;
+        sqlx::query("INSERT OR REPLACE INTO staged_objects (path, created_at) VALUES (?, ?)")
+            .bind(path)
+            .bind(now)
+            .execute(&mut inner.connection)
+            .await
+            .map_err(CatalogError::db)?;
+        Ok(())
+    }
+
+    /// In one transaction: `INSERT OR IGNORE` the `media` row (`first_seen_at =
+    /// last_seen_at = now`), then delete the `staged_objects` row of `path`
+    /// (spec 03 §9). A dropped project is refused with `Ok(false)`: the
+    /// transaction rolls back and the staged row stays, so staged-object GC
+    /// deletes the object later.
+    pub(crate) async fn insert_media(
+        &self,
+        project: ProjectId,
+        sha: &str,
+        mime_type: &str,
+        size: u64,
+        path: &str,
+        now: i64,
+    ) -> Result<bool, CatalogError> {
+        let stored_size = i64::try_from(size)
+            .map_err(|_| CatalogError::corrupt("integer does not fit the catalog"))?;
+        let mut inner = self.inner.lock().await;
+        let mut transaction = inner.connection.begin().await.map_err(CatalogError::db)?;
+        // A put that passed its `is_dropped` check before the drop's commit
+        // must not land a row after the drop deleted the project's media
+        // (spec 03 §7).
+        let dropped: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM projects WHERE project_id = ?")
+                .bind(project.to_string())
+                .fetch_optional(transaction.as_mut())
+                .await
+                .map_err(CatalogError::db)?;
+        if dropped.is_some() {
+            let _ = transaction.rollback().await;
+            return Ok(false);
+        }
+        if let Err(error) = sqlx::query(
+            "INSERT OR IGNORE INTO media (
+                project_id, sha256, mime_type, size_bytes, first_seen_at, last_seen_at
+             ) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(project.to_string())
+        .bind(sha)
+        .bind(mime_type)
+        .bind(stored_size)
+        .bind(now)
+        .bind(now)
+        .execute(transaction.as_mut())
+        .await
+        .map_err(CatalogError::db)
+        {
+            let _ = transaction.rollback().await;
+            return Err(error);
+        }
+        if let Err(error) = sqlx::query("DELETE FROM staged_objects WHERE path = ?")
+            .bind(path)
+            .execute(transaction.as_mut())
+            .await
+            .map_err(CatalogError::db)
+        {
+            let _ = transaction.rollback().await;
+            return Err(error);
+        }
+        transaction.commit().await.map_err(CatalogError::db)?;
+        Ok(true)
+    }
+
+    /// `(mime_type, size)` of the blob's row, or `None`.
+    pub(crate) async fn media_row(
+        &self,
+        project: ProjectId,
+        sha: &str,
+    ) -> Result<Option<(String, u64)>, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        let row: Option<(String, i64)> = sqlx::query_as(
+            "SELECT mime_type, size_bytes FROM media WHERE project_id = ? AND sha256 = ?",
+        )
+        .bind(project.to_string())
+        .bind(sha)
+        .fetch_optional(&mut inner.connection)
+        .await
+        .map_err(CatalogError::db)?;
+        row.map(|(mime_type, size)| {
+            let size = u64::try_from(size).map_err(|_| CatalogError::corrupt("invalid size"))?;
+            Ok((mime_type, size))
+        })
+        .transpose()
+    }
+
+    /// Projects with at least one media row, in id order.
+    pub(crate) async fn media_projects(&self) -> Result<Vec<ProjectId>, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        let rows: Vec<String> =
+            sqlx::query_scalar("SELECT DISTINCT project_id FROM media ORDER BY project_id")
+                .fetch_all(&mut inner.connection)
+                .await
+                .map_err(CatalogError::db)?;
+        rows.into_iter()
+            .map(|project| {
+                project
+                    .parse()
+                    .map_err(|_| CatalogError::corrupt("media project_id"))
+            })
+            .collect()
+    }
+
+    /// Hashes of the project's rows with `last_seen_at < before`, in hash order.
+    pub(crate) async fn stale_media(
+        &self,
+        project: ProjectId,
+        before: i64,
+    ) -> Result<Vec<String>, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        sqlx::query_scalar(
+            "SELECT sha256 FROM media WHERE project_id = ? AND last_seen_at < ? ORDER BY sha256",
+        )
+        .bind(project.to_string())
+        .bind(before)
+        .fetch_all(&mut inner.connection)
+        .await
+        .map_err(CatalogError::db)
+    }
+
+    /// Deletes one stale blob (spec 03 §9), under the mutex and in this order:
+    /// 1. if the row is gone or has `last_seen_at >= before`, return `Ok(None)`;
+    /// 2. in one transaction, delete the `media` row and `INSERT OR REPLACE` a
+    ///    `staged_objects` row for its path with `created_at = 0`;
+    /// 3. hook `MediaBeforeDelete` (pause, then fail → [`MediaError::Fault`]);
+    /// 4. run `delete` (the object);
+    /// 5. delete the `staged_objects` row.
+    ///
+    /// Returns the bytes deleted. A crash after step 2 leaves a staged path
+    /// with no row, which staged-object GC deletes; never a row without its
+    /// object.
+    pub(crate) async fn collect_media<F, Fut>(
+        &self,
+        project: ProjectId,
+        sha: &str,
+        before: i64,
+        hooks: &Hooks,
+        delete: F,
+    ) -> Result<Option<u64>, MediaError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<u64, ObjectError>>,
+    {
+        let mut inner = self.inner.lock().await;
+        let last_seen: Option<i64> = sqlx::query_scalar(
+            "SELECT last_seen_at FROM media WHERE project_id = ? AND sha256 = ?",
+        )
+        .bind(project.to_string())
+        .bind(sha)
+        .fetch_optional(&mut inner.connection)
+        .await
+        .map_err(CatalogError::db)?;
+        let Some(last_seen) = last_seen else {
+            return Ok(None);
+        };
+        if last_seen >= before {
+            return Ok(None);
+        }
+        let path = Objects::media_path(project, sha);
+        let mut transaction = inner.connection.begin().await.map_err(CatalogError::db)?;
+        if let Err(error) = sqlx::query("DELETE FROM media WHERE project_id = ? AND sha256 = ?")
+            .bind(project.to_string())
+            .bind(sha)
+            .execute(transaction.as_mut())
+            .await
+            .map_err(CatalogError::db)
+        {
+            let _ = transaction.rollback().await;
+            return Err(error.into());
+        }
+        if let Err(error) =
+            sqlx::query("INSERT OR REPLACE INTO staged_objects (path, created_at) VALUES (?, 0)")
+                .bind(&path)
+                .execute(transaction.as_mut())
+                .await
+                .map_err(CatalogError::db)
+        {
+            let _ = transaction.rollback().await;
+            return Err(error.into());
+        }
+        transaction.commit().await.map_err(CatalogError::db)?;
+        hooks.pause(HookPoint::MediaBeforeDelete);
+        if hooks.fail(HookPoint::MediaBeforeDelete).is_some() {
+            return Err(MediaError::Fault);
+        }
+        let bytes = delete().await?;
+        sqlx::query("DELETE FROM staged_objects WHERE path = ?")
+            .bind(&path)
+            .execute(&mut inner.connection)
+            .await
+            .map_err(CatalogError::db)?;
+        Ok(Some(bytes))
+    }
+
     /// Paths still in `staged_objects`, in path order.
     #[cfg(test)]
     pub(crate) async fn staged_paths(&self) -> Result<Vec<String>, CatalogError> {
@@ -96,6 +650,61 @@ impl Committer {
             .fetch_all(&mut inner.connection)
             .await
             .map_err(CatalogError::db)
+    }
+
+    /// Hashes of the project's media rows, in hash order.
+    pub(crate) async fn media_of(&self, project: ProjectId) -> Result<Vec<String>, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        sqlx::query_scalar("SELECT sha256 FROM media WHERE project_id = ? ORDER BY sha256")
+            .bind(project.to_string())
+            .fetch_all(&mut inner.connection)
+            .await
+            .map_err(CatalogError::db)
+    }
+
+    /// Deletes the project's `media` row of `sha`.
+    pub(crate) async fn delete_media_row(
+        &self,
+        project: ProjectId,
+        sha: &str,
+    ) -> Result<(), CatalogError> {
+        let mut inner = self.inner.lock().await;
+        sqlx::query("DELETE FROM media WHERE project_id = ? AND sha256 = ?")
+            .bind(project.to_string())
+            .bind(sha)
+            .execute(&mut inner.connection)
+            .await
+            .map_err(CatalogError::db)?;
+        Ok(())
+    }
+
+    /// Projects whose drop has not finished its media step, in id order.
+    pub(crate) async fn dropping_projects(&self) -> Result<Vec<ProjectId>, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT project_id FROM projects WHERE state = 'dropping' ORDER BY project_id",
+        )
+        .fetch_all(&mut inner.connection)
+        .await
+        .map_err(CatalogError::db)?;
+        rows.into_iter()
+            .map(|project| {
+                project
+                    .parse()
+                    .map_err(|_| CatalogError::corrupt("dropped project"))
+            })
+            .collect()
+    }
+
+    /// Marks the project's drop finished: `state = 'dropped'`.
+    pub(crate) async fn finish_drop(&self, project: ProjectId) -> Result<(), CatalogError> {
+        let mut inner = self.inner.lock().await;
+        sqlx::query("UPDATE projects SET state = 'dropped' WHERE project_id = ?")
+            .bind(project.to_string())
+            .execute(&mut inner.connection)
+            .await
+            .map_err(CatalogError::db)?;
+        Ok(())
     }
 
     /// For every active traces file with a source among `spans`, all of its
@@ -185,40 +794,140 @@ impl Committer {
     {
         // Lock order: committer mutex, then (inside `publish`) memtable, then Published.
         let mut inner = self.inner.lock().await;
-        // The transaction borrows the connection, so copy these out first.
-        let current = Arc::clone(&inner.catalog);
-        // Production hooks are `Copy`. Tests share one value and have to clone it.
-        #[allow(clippy::clone_on_copy)]
-        let hooks = inner.hooks.clone();
-        let mut transaction = inner.connection.begin().await.map_err(CommitError::db)?;
-        if let Err(error) = write_edit(transaction.as_mut(), edit).await {
-            let _ = transaction.rollback().await;
-            return Err(error);
-        }
-        let (next, removed) = match current.apply(edit) {
-            Ok((catalog, removed)) => (Arc::new(catalog), removed),
-            Err(error) => {
-                let _ = transaction.rollback().await;
-                return Err(error);
-            }
-        };
-        hooks.pause(HookPoint::CatalogCommit);
-        if let Some(source) = hooks.fail(HookPoint::CatalogCommit) {
-            let _ = transaction.rollback().await;
-            return Err(CommitError::Db {
-                source: sqlx::Error::Io(source),
-            });
-        }
-        transaction.commit().await.map_err(CommitError::db)?;
-        for file in removed {
-            inner.retired.insert(file.id, file);
-        }
-        if let Some((table, sequence)) = edit.flushed_seq {
-            inner.flushed[table_index(table)] = sequence;
-        }
-        inner.catalog = Arc::clone(&next);
+        let next = commit_inner(&mut inner, edit, &Extra::None).await?;
         publish(&next);
         Ok(next)
+    }
+
+    /// Obsoletes every active file of `project` in the days before the
+    /// watermark, stores the watermark in the same transaction, then calls
+    /// `publish` with the new catalog and the watermark before releasing the
+    /// mutex (spec 03 §8). The watermark is the later of the stored one and
+    /// `keep_from`: it never moves back.
+    pub(crate) async fn apply_retention<F>(
+        &self,
+        project: ProjectId,
+        keep_from: NaiveDate,
+        publish: F,
+    ) -> Result<RetentionReport, CommitError>
+    where
+        F: FnOnce(&Arc<Catalog>, NaiveDate),
+    {
+        let mut inner = self.inner.lock().await;
+        // A dropped project has nothing to retain: no commit, no publish.
+        let dropped: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM projects WHERE project_id = ?")
+                .bind(project.to_string())
+                .fetch_optional(&mut inner.connection)
+                .await
+                .map_err(CommitError::db)?;
+        if dropped.is_some() {
+            return Ok(RetentionReport {
+                files: 0,
+                bytes: 0,
+                keep_from,
+            });
+        }
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT keep_from FROM retention_watermarks WHERE project_id = ?")
+                .bind(project.to_string())
+                .fetch_optional(&mut inner.connection)
+                .await
+                .map_err(CommitError::db)?;
+        let stored = stored
+            .map(|day| NaiveDate::parse_from_str(&day, "%Y-%m-%d"))
+            .transpose()
+            .map_err(|_| CommitError::conflict("invalid retention watermark"))?;
+        let watermark = stored.map_or(keep_from, |stored| stored.max(keep_from));
+        // Every active file of the project before the watermark, all three
+        // tables. A `spans` file and its `traces` file share their day, so
+        // both sides of every pair go in one edit.
+        let mut remove = Vec::new();
+        let mut bytes = 0_u64;
+        if let Some(last_day) = watermark.pred_opt() {
+            for table in [FileTable::Spans, FileTable::Traces, FileTable::Scores] {
+                for file in inner
+                    .catalog
+                    .files(table, project, NaiveDate::MIN..=last_day)
+                {
+                    remove.push((file.id, FileState::Active));
+                    bytes = bytes.saturating_add(file.size);
+                }
+            }
+        }
+        let edit = CatalogEdit {
+            add: Vec::new(),
+            remove,
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: Vec::new(),
+        };
+        let next = commit_inner(
+            &mut inner,
+            &edit,
+            &Extra::Retention {
+                project,
+                keep_from: watermark,
+            },
+        )
+        .await?;
+        publish(&next, watermark);
+        Ok(RetentionReport {
+            files: u64::try_from(edit.remove.len()).unwrap_or(u64::MAX),
+            bytes,
+            keep_from: watermark,
+        })
+    }
+
+    /// Obsoletes every active file of `project` in all three tables, records
+    /// the project `dropping`, removes its retention watermark and marks its
+    /// pending deletions applied, all in one transaction (spec 03 §7), then
+    /// calls `publish` with the new catalog and the tombstones without the
+    /// project's deletions before releasing the mutex.
+    ///
+    /// A project already in `projects` is `Ok(false)`: nothing changed and
+    /// `publish` was not called.
+    pub(crate) async fn drop_project<F>(
+        &self,
+        project: ProjectId,
+        now: i64,
+        publish: F,
+    ) -> Result<bool, CommitError>
+    where
+        F: FnOnce(&Arc<Catalog>, &Arc<Tombstones>),
+    {
+        let mut inner = self.inner.lock().await;
+        let known: Option<i64> = sqlx::query_scalar("SELECT 1 FROM projects WHERE project_id = ?")
+            .bind(project.to_string())
+            .fetch_optional(&mut inner.connection)
+            .await
+            .map_err(CommitError::db)?;
+        if known.is_some() {
+            return Ok(false);
+        }
+        // Every active file of the project, all three tables. A `spans` file
+        // and its `traces` file share their day, so both sides of every pair
+        // go in one edit.
+        let mut remove = Vec::new();
+        for table in [FileTable::Spans, FileTable::Traces, FileTable::Scores] {
+            for file in inner
+                .catalog
+                .files(table, project, NaiveDate::MIN..=NaiveDate::MAX)
+            {
+                remove.push((file.id, FileState::Active));
+            }
+        }
+        let edit = CatalogEdit {
+            add: Vec::new(),
+            remove,
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: Vec::new(),
+        };
+        let next = commit_inner(&mut inner, &edit, &Extra::Drop { project, now }).await?;
+        inner.tombstones = Arc::new(inner.tombstones.without_project(project));
+        publish(&next, &inner.tombstones);
+        Ok(true)
     }
 
     /// Staged paths whose `created_at` is strictly before `cutoff_ns`.
@@ -231,21 +940,26 @@ impl Committer {
             .map_err(CatalogError::db)
     }
 
-    /// Delete one staged object that is not a catalog file, then its row.
+    /// Delete one staged object that is not a catalog file or a stored media
+    /// blob, then its row.
     ///
     /// `delete` runs while this mutex is held, so a commit cannot publish the
     /// same path between the check and the delete. A missing object is success
     /// and still drops the row. A path that is also in `data_files` is left
-    /// untouched.
+    /// untouched, and so is the object of a path with a `media` row: only its
+    /// staged row goes (spec 03 §9). A staged row re-created at or after
+    /// `before` (a `put_media` re-staged it since the listing) is left
+    /// completely alone.
     pub(crate) async fn collect_staged_path<F, Fut>(
         &self,
         path: &str,
         hooks: &Hooks,
+        before: i64,
         delete: F,
     ) -> Result<StagedRemoval, GcError>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<u64, crate::error::ObjectError>>,
+        Fut: Future<Output = Result<u64, ObjectError>>,
     {
         let mut inner = self.inner.lock().await;
         let published: Option<i64> = sqlx::query_scalar("SELECT 1 FROM data_files WHERE path = ?")
@@ -256,11 +970,30 @@ impl Committer {
         if published.is_some() {
             return Ok(StagedRemoval::Published);
         }
-        let staged: Option<i64> = sqlx::query_scalar("SELECT 1 FROM staged_objects WHERE path = ?")
-            .bind(path)
-            .fetch_optional(&mut inner.connection)
-            .await
-            .map_err(CatalogError::db)?;
+        if let Some((project, sha)) = media_path_parts(path) {
+            let stored: Option<i64> =
+                sqlx::query_scalar("SELECT 1 FROM media WHERE project_id = ? AND sha256 = ?")
+                    .bind(project)
+                    .bind(sha)
+                    .fetch_optional(&mut inner.connection)
+                    .await
+                    .map_err(CatalogError::db)?;
+            if stored.is_some() {
+                sqlx::query("DELETE FROM staged_objects WHERE path = ?")
+                    .bind(path)
+                    .execute(&mut inner.connection)
+                    .await
+                    .map_err(CatalogError::db)?;
+                return Ok(StagedRemoval::MediaStored);
+            }
+        }
+        let staged: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM staged_objects WHERE path = ? AND created_at < ?")
+                .bind(path)
+                .bind(before)
+                .fetch_optional(&mut inner.connection)
+                .await
+                .map_err(CatalogError::db)?;
         if staged.is_none() {
             return Ok(StagedRemoval::Gone);
         }
@@ -337,7 +1070,7 @@ impl Committer {
     ) -> Result<ObsoleteRemoval, GcError>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<u64, crate::error::ObjectError>>,
+        Fut: Future<Output = Result<u64, ObjectError>>,
     {
         let mut inner = self.inner.lock().await;
         if let Some(retired) = inner.retired.get(&file.id)
@@ -373,6 +1106,18 @@ impl Committer {
         inner.retired.remove(&file.id);
         Ok(ObsoleteRemoval::Deleted { bytes })
     }
+}
+
+/// What [`Committer::register_deletion`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Registered {
+    /// Stored with `seq`; the tombstones include it.
+    New {
+        /// The stored `deletion_seq`.
+        seq: u64,
+    },
+    /// The id was already stored. Nothing changed.
+    Known,
 }
 
 /// One `obsolete` row of `data_files`, named by [`Committer::obsolete_before`].
@@ -412,6 +1157,8 @@ pub(crate) enum StagedRemoval {
     Published,
     /// The staged row was gone. Nothing was deleted.
     Gone,
+    /// A staged media path whose blob is stored; only the staged row was removed.
+    MediaStored,
 }
 
 fn flushed_of(state: TableState) -> [u64; 2] {
@@ -428,6 +1175,134 @@ pub(crate) fn now_ns() -> i64 {
         .unwrap_or(0)
 }
 
+/// `(project_id, sha256)` when `path` is a media path, `media/<project>/<64
+/// hex>` (spec 03 §9). Anything else is not a media path.
+fn media_path_parts(path: &str) -> Option<(&str, &str)> {
+    let mut parts = path.split('/');
+    if parts.next()? != "media" {
+        return None;
+    }
+    let project = parts.next()?;
+    let sha = parts.next()?;
+    if parts.next().is_some()
+        || sha.len() != 64
+        || !sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some((project, sha))
+}
+
+/// The body of [`Committer::commit`] up to and including the SQLite commit
+/// and the in-memory updates, with `extra`'s SQL run after `write_edit` and
+/// before the `CatalogCommit` hook. Does not publish; the caller holds the
+/// mutex and publishes once everything worked.
+async fn commit_inner(
+    inner: &mut CommitterInner,
+    edit: &CatalogEdit,
+    extra: &Extra,
+) -> Result<Arc<Catalog>, CommitError> {
+    // The transaction borrows the connection, so copy these out first.
+    let current = Arc::clone(&inner.catalog);
+    // Production hooks are `Copy`. Tests share one value and have to clone it.
+    #[allow(clippy::clone_on_copy)]
+    let hooks = inner.hooks.clone();
+    let mut transaction = inner.connection.begin().await.map_err(CommitError::db)?;
+    if let Err(error) = write_edit(transaction.as_mut(), edit).await {
+        let _ = transaction.rollback().await;
+        return Err(error);
+    }
+    if let Err(error) = write_extra(transaction.as_mut(), extra).await {
+        let _ = transaction.rollback().await;
+        return Err(error);
+    }
+    let (next, removed) = match current.apply(edit) {
+        Ok((catalog, removed)) => (Arc::new(catalog), removed),
+        Err(error) => {
+            let _ = transaction.rollback().await;
+            return Err(error);
+        }
+    };
+    hooks.pause(HookPoint::CatalogCommit);
+    if let Some(source) = hooks.fail(HookPoint::CatalogCommit) {
+        let _ = transaction.rollback().await;
+        return Err(CommitError::Db {
+            source: sqlx::Error::Io(source),
+        });
+    }
+    transaction.commit().await.map_err(CommitError::db)?;
+    for file in removed {
+        inner.retired.insert(file.id, file);
+    }
+    if let Some((table, sequence)) = edit.flushed_seq {
+        inner.flushed[table_index(table)] = sequence;
+    }
+    inner.catalog = Arc::clone(&next);
+    Ok(next)
+}
+
+/// The SQL of [`Extra`], inside the edit's transaction.
+async fn write_extra(connection: &mut SqliteConnection, extra: &Extra) -> Result<(), CommitError> {
+    match extra {
+        Extra::None => Ok(()),
+        Extra::Retention { project, keep_from } => {
+            sqlx::query(
+                "INSERT OR REPLACE INTO retention_watermarks (project_id, keep_from)
+                 VALUES (?, ?)",
+            )
+            .bind(project.to_string())
+            .bind(keep_from.format("%Y-%m-%d").to_string())
+            .execute(&mut *connection)
+            .await
+            .map_err(CommitError::db)?;
+            Ok(())
+        }
+        Extra::Drop { project, now } => {
+            sqlx::query(
+                "INSERT INTO projects (project_id, state, dropped_at)
+                 VALUES (?, 'dropping', ?)",
+            )
+            .bind(project.to_string())
+            .bind(now)
+            .execute(&mut *connection)
+            .await
+            .map_err(CommitError::db)?;
+            sqlx::query("DELETE FROM retention_watermarks WHERE project_id = ?")
+                .bind(project.to_string())
+                .execute(&mut *connection)
+                .await
+                .map_err(CommitError::db)?;
+            sqlx::query(
+                "UPDATE deletions SET status = 'applied', applied_at = ?
+                 WHERE project_id = ? AND status = 'pending'",
+            )
+            .bind(now)
+            .bind(project.to_string())
+            .execute(&mut *connection)
+            .await
+            .map_err(CommitError::db)?;
+            // An applied deletion keeps none of the ids of the person (spec 03
+            // §7): erase the scope rows of every deletion of the project, as
+            // `mark_applied` does.
+            for delete in [
+                "DELETE FROM deletion_traces
+                 WHERE deletion_id IN (SELECT id FROM deletions WHERE project_id = ?)",
+                "DELETE FROM deletion_users
+                 WHERE deletion_id IN (SELECT id FROM deletions WHERE project_id = ?)",
+                "DELETE FROM deletion_sessions
+                 WHERE deletion_id IN (SELECT id FROM deletions WHERE project_id = ?)",
+            ] {
+                sqlx::query(delete)
+                    .bind(project.to_string())
+                    .execute(&mut *connection)
+                    .await
+                    .map_err(CommitError::db)?;
+            }
+            Ok(())
+        }
+    }
+}
+
 async fn write_edit(
     connection: &mut SqliteConnection,
     edit: &CatalogEdit,
@@ -442,6 +1317,38 @@ async fn write_edit(
             return Err(CommitError::conflict("path is not staged"));
         }
     }
+    // An added file may not be of a dropped project (spec 03 §7): a flush or
+    // compaction prepared before the drop fails here and retries.
+    for file in &edit.add {
+        let dropped: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM projects WHERE project_id = ?")
+                .bind(file.project.to_string())
+                .fetch_optional(&mut *connection)
+                .await
+                .map_err(CommitError::db)?;
+        if dropped.is_some() {
+            return Err(CommitError::conflict("project is dropped"));
+        }
+    }
+    // An added file may not be of a day the project's retention watermark has
+    // dropped (spec 03 §8): a flush or compaction prepared before the
+    // retention fails here and retries. Both columns are `YYYY-MM-DD`, which
+    // compares the same as text as it does as a date.
+    for file in &edit.add {
+        let keep_from: Option<String> =
+            sqlx::query_scalar("SELECT keep_from FROM retention_watermarks WHERE project_id = ?")
+                .bind(file.project.to_string())
+                .fetch_optional(&mut *connection)
+                .await
+                .map_err(CommitError::db)?;
+        if let Some(keep_from) = keep_from
+            && file.day.format("%Y-%m-%d").to_string() < keep_from
+        {
+            return Err(CommitError::conflict(
+                "file day is before the retention watermark",
+            ));
+        }
+    }
     for (id, state) in &edit.remove {
         let current: Option<String> =
             sqlx::query_scalar("SELECT state FROM data_files WHERE id = ?")
@@ -452,6 +1359,42 @@ async fn write_edit(
         if current.as_deref() != Some(state.as_str()) {
             return Err(CommitError::conflict("file is not in the expected state"));
         }
+    }
+    let removed_ids: HashSet<&FileId> = edit.remove.iter().map(|(id, _)| id).collect();
+    for (id, _) in &edit.raise {
+        if removed_ids.contains(id) {
+            return Err(CommitError::conflict("raised file is also removed"));
+        }
+    }
+    for (id, sequence) in &edit.raise {
+        let current: Option<(String, i64)> =
+            sqlx::query_as("SELECT state, deletions_applied_seq FROM data_files WHERE id = ?")
+                .bind(id.to_string())
+                .fetch_optional(&mut *connection)
+                .await
+                .map_err(CommitError::db)?;
+        let Some((state, stored)) = current else {
+            return Err(CommitError::conflict("raised file is not active"));
+        };
+        if state != "active" {
+            return Err(CommitError::conflict("raised file is not active"));
+        }
+        let stored = u64::try_from(stored).map_err(|_| {
+            CommitError::conflict("deletion sequence is not greater than the stored value")
+        })?;
+        if stored >= *sequence {
+            return Err(CommitError::conflict(
+                "deletion sequence is not greater than the stored value",
+            ));
+        }
+        let stored_sequence = i64::try_from(*sequence)
+            .map_err(|_| CommitError::conflict("integer does not fit the catalog"))?;
+        sqlx::query("UPDATE data_files SET deletions_applied_seq = ? WHERE id = ?")
+            .bind(stored_sequence)
+            .bind(id.to_string())
+            .execute(&mut *connection)
+            .await
+            .map_err(CommitError::db)?;
     }
     if let Some((table, sequence)) = edit.flushed_seq {
         let stored: Option<i64> =
@@ -603,8 +1546,8 @@ async fn insert_file(
         "INSERT INTO data_files (
             id, table_name, project_id, day, level, path, size_bytes, footer_size,
             row_count, min_time, max_time, min_ingest_time, max_ingest_time,
-            fully_merged, state, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
+            fully_merged, deletions_applied_seq, state, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
     )
     .bind(file.id.to_string())
     .bind(file.table.as_str())
@@ -620,6 +1563,7 @@ async fn insert_file(
     .bind(file.min_ingest_time)
     .bind(file.max_ingest_time)
     .bind(i64::from(file.fully_merged))
+    .bind(fit_i64(file.deletions_applied_seq)?)
     .bind(created_at)
     .execute(&mut *connection)
     .await
@@ -637,7 +1581,7 @@ mod tests {
     use std::sync::{Arc, Mutex, PoisonError};
 
     use chrono::NaiveDate;
-    use llmobs_core::ids::ProjectId;
+    use llmobs_core::ids::{ProjectId, TraceId};
     use sqlx::Row;
 
     use super::{load, open_catalog_db, *};
@@ -673,6 +1617,7 @@ mod tests {
             min_ingest_time: min_time + 1,
             max_ingest_time: min_time + 11,
             fully_merged: table == FileTable::Scores,
+            deletions_applied_seq: 0,
         }
     }
 
@@ -752,7 +1697,7 @@ mod tests {
             .fetch_one(&mut again)
             .await
             .unwrap();
-        assert_eq!(migrations, 2);
+        assert_eq!(migrations, 6);
         let indexes: Vec<String> = sqlx::query_scalar(
             "SELECT name FROM sqlite_master
              WHERE type = 'index' AND name LIKE 'data_files_%'
@@ -765,14 +1710,14 @@ mod tests {
             indexes,
             vec!["data_files_gc".to_owned(), "data_files_lookup".to_owned()]
         );
-        let dropped: i64 = sqlx::query_scalar(
+        let deletions_applied: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM pragma_table_info('data_files')
              WHERE name = 'deletions_applied_seq'",
         )
         .fetch_one(&mut again)
         .await
         .unwrap();
-        assert_eq!(dropped, 0);
+        assert_eq!(deletions_applied, 1);
         let _ = connection;
     }
 
@@ -789,6 +1734,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: Some((Table::Spans, 4)),
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         committer
             .stage(
@@ -834,12 +1780,14 @@ mod tests {
                 remove: Vec::new(),
                 flushed_seq: None,
                 sources: Vec::new(),
+                raise: Vec::new(),
             },
             CatalogEdit {
                 add: vec![second],
                 remove: Vec::new(),
                 flushed_seq: None,
                 sources: Vec::new(),
+                raise: Vec::new(),
             },
         ] {
             committer.stage(&[edit.add[0].path.clone()]).await.unwrap();
@@ -853,6 +1801,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         committer.stage(&["right-again".to_owned()]).await.unwrap();
         let after = committer.commit(&edit, |_| {}).await.unwrap();
@@ -870,6 +1819,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         committer.stage(&["doomed".to_owned()]).await.unwrap();
         committer.commit(&edit, |_| {}).await.unwrap();
@@ -878,6 +1828,7 @@ mod tests {
             remove: vec![(id, FileState::Active)],
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         let published = committer.commit(&remove, |_| {}).await.unwrap();
         assert!(
@@ -913,6 +1864,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: Some((Table::Spans, 3)),
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         committer.commit(&added, |_| {}).await.unwrap();
         let before = committer.catalog().await;
@@ -922,6 +1874,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: Some((Table::Spans, 4)),
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         let error = committer.commit(&missing, |_| {}).await.unwrap_err();
         assert!(matches!(
@@ -936,6 +1889,7 @@ mod tests {
             remove: vec![(id, FileState::Obsolete)],
             flushed_seq: Some((Table::Spans, 4)),
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         let error = committer.commit(&wrong, |_| {}).await.unwrap_err();
         assert!(matches!(
@@ -951,6 +1905,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: Some((Table::Spans, 3)),
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         let error = committer.commit(&behind, |_| {}).await.unwrap_err();
         assert!(matches!(
@@ -992,6 +1947,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: Some((Table::Spans, 1)),
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         let before = committer.catalog().await;
         let error = committer.commit(&edit, |_| {}).await.unwrap_err();
@@ -1085,6 +2041,7 @@ mod tests {
                     remove: Vec::new(),
                     flushed_seq: None,
                     sources: Vec::new(),
+                    raise: Vec::new(),
                 };
                 committer
                     .commit(&edit, {
@@ -1146,6 +2103,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: None,
             sources: vec![(traces_id, spans_id)],
+            raise: Vec::new(),
         };
         committer
             .stage(&["spans/sourced".to_owned(), "traces/sourced".to_owned()])
@@ -1171,6 +2129,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         committer.stage(&["spans/active".to_owned()]).await.unwrap();
         committer.commit(&first, |_| {}).await.unwrap();
@@ -1182,6 +2141,7 @@ mod tests {
             remove: Vec::new(),
             flushed_seq: None,
             sources: vec![(traces_id, spans_id)],
+            raise: Vec::new(),
         };
         committer
             .stage(&["traces/derived".to_owned()])
@@ -1236,6 +2196,7 @@ mod tests {
                     remove: Vec::new(),
                     flushed_seq: None,
                     sources,
+                    raise: Vec::new(),
                 },
                 |_| {},
             )
@@ -1261,6 +2222,7 @@ mod tests {
             remove: ids.iter().map(|id| (*id, FileState::Active)).collect(),
             flushed_seq: None,
             sources: vec![(traces_id, spans_id)],
+            raise: Vec::new(),
         };
         committer.commit(&edit, |_| {}).await.unwrap();
 
@@ -1301,6 +2263,7 @@ mod tests {
             remove: vec![(spans_one, FileState::Active)],
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         let error = committer.commit(&edit, |_| {}).await.unwrap_err();
         assert!(
@@ -1337,6 +2300,7 @@ mod tests {
             remove: vec![(traces_one, FileState::Active)],
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         let error = committer.commit(&edit, |_| {}).await.unwrap_err();
         assert!(
@@ -1370,6 +2334,7 @@ mod tests {
                 remove: Vec::new(),
                 flushed_seq: None,
                 sources: vec![(traces_id, unknown)],
+                raise: Vec::new(),
             };
             committer
                 .stage(&["traces/orphan".to_owned()])
@@ -1390,5 +2355,543 @@ mod tests {
                     .unwrap();
             assert_eq!(active, 0);
         }
+    }
+
+    /// The `Arc<FileMeta>` of `id` in `catalog`, to compare pointers across a
+    /// raise.
+    fn file_arc(catalog: &Catalog, id: FileId) -> Arc<FileMeta> {
+        catalog
+            .tables
+            .iter()
+            .flat_map(|table| table.values())
+            .flat_map(|days| days.values())
+            .flatten()
+            .find(|file| file.id == id)
+            .map(Arc::clone)
+            .unwrap()
+    }
+
+    fn trace_id(low: u8) -> TraceId {
+        let mut bytes = [0_u8; 16];
+        bytes[15] = low;
+        TraceId::from_bytes(bytes).unwrap()
+    }
+
+    fn deletion(id: Uuid, project: ProjectId, scope: DeletionScope) -> Deletion {
+        Deletion {
+            id,
+            project,
+            cutoff: 1_000,
+            scope,
+        }
+    }
+
+    #[tokio::test]
+    async fn deletions_applied_seq_round_trips_through_the_catalog() {
+        let (dir, committer) = opened().await;
+        let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000081");
+        let mut applied = file(FileTable::Spans, spans, day(1), 1, "spans/applied");
+        applied.deletions_applied_seq = 7;
+        committer
+            .stage(&["spans/applied".to_owned()])
+            .await
+            .unwrap();
+        let edit = CatalogEdit {
+            add: vec![applied],
+            remove: Vec::new(),
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: Vec::new(),
+        };
+        committer.commit(&edit, |_| {}).await.unwrap();
+
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let (loaded, _) = load(&mut connection).await.unwrap();
+        let files = loaded.test_files(FileTable::Spans);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].deletions_applied_seq, 7);
+    }
+
+    #[tokio::test]
+    async fn raising_an_active_file_updates_sqlite_and_the_catalog() {
+        let (dir, committer) = opened().await;
+        let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000082");
+        let raised = file(FileTable::Spans, spans, day(1), 1, "spans/raised");
+        let other = file(FileTable::Spans, spans, day(1), 2, "spans/other");
+        let raised_id = raised.id;
+        let other_id = other.id;
+        let edit = CatalogEdit {
+            add: vec![raised, other],
+            remove: Vec::new(),
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: Vec::new(),
+        };
+        committer
+            .stage(&["spans/raised".to_owned(), "spans/other".to_owned()])
+            .await
+            .unwrap();
+        committer.commit(&edit, |_| {}).await.unwrap();
+        let before = committer.catalog().await;
+        let raised_before = file_arc(&before, raised_id);
+        let other_before = file_arc(&before, other_id);
+
+        let raise = CatalogEdit {
+            add: Vec::new(),
+            remove: Vec::new(),
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: vec![(raised_id, 3)],
+        };
+        let published = committer.commit(&raise, |_| {}).await.unwrap();
+        let raised_after = file_arc(&published, raised_id);
+        assert_eq!(raised_after.deletions_applied_seq, 3);
+        assert!(!Arc::ptr_eq(&raised_before, &raised_after));
+        assert!(Arc::ptr_eq(&other_before, &file_arc(&published, other_id)));
+
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let sequences: Vec<(String, i64)> =
+            sqlx::query_as("SELECT path, deletions_applied_seq FROM data_files ORDER BY path")
+                .fetch_all(&mut connection)
+                .await
+                .unwrap();
+        assert_eq!(
+            sequences,
+            vec![
+                ("spans/other".to_owned(), 0),
+                ("spans/raised".to_owned(), 3),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn raise_conflicts_leave_everything_unchanged() {
+        let (dir, committer) = opened().await;
+        let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000083");
+        let raised = file(FileTable::Spans, spans, day(1), 1, "spans/raised");
+        let doomed = file(FileTable::Spans, spans, day(1), 2, "spans/doomed");
+        let raised_id = raised.id;
+        let doomed_id = doomed.id;
+        let edit = CatalogEdit {
+            add: vec![raised, doomed],
+            remove: Vec::new(),
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: Vec::new(),
+        };
+        committer
+            .stage(&["spans/raised".to_owned(), "spans/doomed".to_owned()])
+            .await
+            .unwrap();
+        committer.commit(&edit, |_| {}).await.unwrap();
+        let remove = CatalogEdit {
+            add: Vec::new(),
+            remove: vec![(doomed_id, FileState::Active)],
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: Vec::new(),
+        };
+        committer.commit(&remove, |_| {}).await.unwrap();
+        let before = committer.catalog().await;
+
+        // A stored value of 0 and a raise to 0: not greater.
+        let not_greater = CatalogEdit {
+            add: Vec::new(),
+            remove: Vec::new(),
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: vec![(raised_id, 0)],
+        };
+        let error = committer.commit(&not_greater, |_| {}).await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                CommitError::Conflict {
+                    reason: "deletion sequence is not greater than the stored value"
+                }
+            ),
+            "{error}"
+        );
+
+        let obsolete = CatalogEdit {
+            add: Vec::new(),
+            remove: Vec::new(),
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: vec![(doomed_id, 5)],
+        };
+        let error = committer.commit(&obsolete, |_| {}).await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                CommitError::Conflict {
+                    reason: "raised file is not active"
+                }
+            ),
+            "{error}"
+        );
+
+        let also_removed = CatalogEdit {
+            add: Vec::new(),
+            remove: vec![(raised_id, FileState::Active)],
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: vec![(raised_id, 5)],
+        };
+        let error = committer.commit(&also_removed, |_| {}).await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                CommitError::Conflict {
+                    reason: "raised file is also removed"
+                }
+            ),
+            "{error}"
+        );
+
+        assert!(Arc::ptr_eq(&before, &committer.catalog().await));
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let states: Vec<(String, String, i64)> = sqlx::query_as(
+            "SELECT path, state, deletions_applied_seq FROM data_files ORDER BY path",
+        )
+        .fetch_all(&mut connection)
+        .await
+        .unwrap();
+        assert_eq!(
+            states,
+            vec![
+                ("spans/doomed".to_owned(), "obsolete".to_owned(), 0),
+                ("spans/raised".to_owned(), "active".to_owned(), 0),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn registrations_take_the_next_seq_and_publish_the_tombstones() {
+        let (dir, committer) = opened().await;
+        let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000084");
+        let first_id = Uuid::now_v7();
+        let second_id = Uuid::now_v7();
+        let mut published: Vec<Arc<Tombstones>> = Vec::new();
+        let first = deletion(
+            first_id,
+            spans,
+            DeletionScope::Traces {
+                trace_ids: vec![trace_id(1)],
+            },
+        );
+        let second = deletion(
+            second_id,
+            spans,
+            DeletionScope::User {
+                user_id: "user".to_owned(),
+                trace_ids: vec![trace_id(2)],
+                session_ids: vec!["session".to_owned()],
+            },
+        );
+        let registered = committer
+            .register_deletion(&first, 100, |tombstones| {
+                published.push(Arc::clone(tombstones));
+            })
+            .await
+            .unwrap();
+        assert_eq!(registered, Registered::New { seq: 1 });
+        let registered = committer
+            .register_deletion(&second, 200, |tombstones| {
+                published.push(Arc::clone(tombstones));
+            })
+            .await
+            .unwrap();
+        assert_eq!(registered, Registered::New { seq: 2 });
+
+        assert_eq!(published.len(), 2);
+        assert_eq!(published[0].known_seq(), 1);
+        let after_second = &published[1];
+        assert_eq!(after_second.known_seq(), 2);
+        let pending = after_second.for_project(spans);
+        let ids: Vec<_> = pending.iter().map(|deletion| deletion.id).collect();
+        assert_eq!(ids, vec![first_id, second_id]);
+
+        let registered = committer
+            .register_deletion(&first, 300, |_| {
+                unreachable!("a known id does not publish");
+            })
+            .await
+            .unwrap();
+        assert_eq!(registered, Registered::Known);
+        assert_eq!(published.len(), 2);
+        assert_eq!(committer.tombstones().await.known_seq(), 2);
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM deletions")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(rows, 2);
+    }
+
+    #[tokio::test]
+    async fn invalid_requests_write_nothing() {
+        let (dir, committer) = opened().await;
+        let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000085");
+        let cases = [
+            (
+                Deletion {
+                    id: Uuid::now_v7(),
+                    project: spans,
+                    cutoff: 0,
+                    scope: DeletionScope::Traces {
+                        trace_ids: vec![trace_id(1)],
+                    },
+                },
+                "cutoff must be positive",
+            ),
+            (
+                deletion(
+                    Uuid::now_v7(),
+                    spans,
+                    DeletionScope::Traces { trace_ids: vec![] },
+                ),
+                "empty scope",
+            ),
+            (
+                deletion(
+                    Uuid::now_v7(),
+                    spans,
+                    DeletionScope::User {
+                        user_id: String::new(),
+                        trace_ids: vec![trace_id(1)],
+                        session_ids: vec!["session".to_owned()],
+                    },
+                ),
+                "empty user id",
+            ),
+        ];
+        for (request, reason) in cases {
+            let error = committer
+                .register_deletion(&request, 100, |_| {
+                    unreachable!("an invalid request does not publish");
+                })
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, DeletionError::Invalid { reason: got } if got == reason),
+                "{error}"
+            );
+        }
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM deletions")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(rows, 0);
+        assert_eq!(committer.tombstones().await.known_seq(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_commit_fault_rolls_back_a_registration() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks = Hooks::default();
+        let committer = Committer::open(dir.path(), hooks.clone()).await.unwrap();
+        let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000086");
+        let first = deletion(
+            Uuid::now_v7(),
+            spans,
+            DeletionScope::Traces {
+                trace_ids: vec![trace_id(1)],
+            },
+        );
+        committer
+            .register_deletion(&first, 100, |_| {})
+            .await
+            .unwrap();
+        let before = committer.tombstones().await;
+
+        let second = deletion(
+            Uuid::now_v7(),
+            spans,
+            DeletionScope::Traces {
+                trace_ids: vec![trace_id(2)],
+            },
+        );
+        hooks.arm_fail(HookPoint::CatalogCommit);
+        let error = committer
+            .register_deletion(&second, 200, |_| {
+                unreachable!("a failed registration does not publish");
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, DeletionError::Catalog(_)), "{error}");
+        let after = committer.tombstones().await;
+        assert_eq!(*after, *before);
+
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM deletions")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(rows, 1);
+
+        // The rolled-back sequence number was not consumed.
+        let retried = committer
+            .register_deletion(&second, 300, |_| {})
+            .await
+            .unwrap();
+        assert_eq!(retried, Registered::New { seq: 2 });
+    }
+
+    #[tokio::test]
+    async fn mark_applied_erases_the_scope_and_reload_keeps_the_rest() {
+        let (dir, committer) = opened().await;
+        let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000087");
+        let first_id = Uuid::now_v7();
+        let second_id = Uuid::now_v7();
+        let first = deletion(
+            first_id,
+            spans,
+            DeletionScope::Traces {
+                trace_ids: vec![trace_id(1), trace_id(2)],
+            },
+        );
+        let second = deletion(
+            second_id,
+            spans,
+            DeletionScope::User {
+                user_id: "user".to_owned(),
+                trace_ids: vec![trace_id(3)],
+                session_ids: vec!["session-a".to_owned(), "session-b".to_owned()],
+            },
+        );
+        committer
+            .register_deletion(&first, 100, |_| {})
+            .await
+            .unwrap();
+        committer
+            .register_deletion(&second, 200, |_| {})
+            .await
+            .unwrap();
+        assert!(
+            committer
+                .mark_applied(spans, first_id, 300, |_| {})
+                .await
+                .unwrap()
+        );
+
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let first_traces: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM deletion_traces WHERE deletion_id = ?")
+                .bind(first_id.to_string())
+                .fetch_one(&mut connection)
+                .await
+                .unwrap();
+        assert_eq!(first_traces, 0);
+        for (count_sql, expected) in [
+            (
+                "SELECT COUNT(*) FROM deletion_traces WHERE deletion_id = ?",
+                1,
+            ),
+            (
+                "SELECT COUNT(*) FROM deletion_users WHERE deletion_id = ?",
+                1,
+            ),
+            (
+                "SELECT COUNT(*) FROM deletion_sessions WHERE deletion_id = ?",
+                2,
+            ),
+        ] {
+            let count: i64 = sqlx::query_scalar(count_sql)
+                .bind(second_id.to_string())
+                .fetch_one(&mut connection)
+                .await
+                .unwrap();
+            assert_eq!(count, expected, "{count_sql}");
+        }
+        drop(connection);
+
+        let reopened = Committer::open(dir.path(), Hooks::default()).await.unwrap();
+        let tombstones = reopened.tombstones().await;
+        assert_eq!(tombstones.known_seq(), 2);
+        let pending = tombstones.for_project(spans);
+        assert_eq!(pending.len(), 1);
+        let deletion = &pending[0];
+        assert_eq!(deletion.id, second_id);
+        assert_eq!(deletion.trace_ids, HashSet::from([*trace_id(3).as_bytes()]));
+        assert_eq!(deletion.users, HashSet::from(["user".to_owned()]));
+        assert_eq!(
+            deletion.sessions,
+            HashSet::from(["session-a".to_owned(), "session-b".to_owned()])
+        );
+        assert_eq!(deletion.cutoff, 1_000);
+        assert_eq!(deletion.registered_at, 200);
+    }
+
+    #[tokio::test]
+    async fn deletion_status_reports_pending_applied_and_unknown() {
+        let (_dir, committer) = opened().await;
+        let spans = project("018f6b4e-7c1a-7c1a-8c1a-000000000088");
+        let id = Uuid::now_v7();
+        assert_eq!(committer.deletion_status(id).await.unwrap(), None);
+        let request = deletion(
+            id,
+            spans,
+            DeletionScope::Traces {
+                trace_ids: vec![trace_id(1)],
+            },
+        );
+        committer
+            .register_deletion(&request, 100, |_| {})
+            .await
+            .unwrap();
+        assert_eq!(
+            committer.deletion_status(id).await.unwrap(),
+            Some(DeletionStatus::Pending)
+        );
+        assert!(
+            committer
+                .mark_applied(spans, id, 5_000, |_| {})
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            committer.deletion_status(id).await.unwrap(),
+            Some(DeletionStatus::Applied { applied_at: 5_000 })
+        );
+        // An applied id is no longer pending: nothing to do, no publish.
+        assert!(
+            !committer
+                .mark_applied(spans, id, 6_000, |_| {})
+                .await
+                .unwrap()
+        );
+    }
+
+    // M5.6 test 7: a put that re-staged a path since GC's listing is left
+    // alone, because the race sits between the listing and this per-path check.
+    #[tokio::test]
+    async fn a_re_staged_media_path_is_left_alone() {
+        let (dir, committer) = opened().await;
+        let sha = "ab".repeat(32);
+        let path = Objects::media_path(project("018f6b4e-7c1a-7c1a-8c1a-000000000089"), &sha);
+        committer.stage_media(&path, 100).await.unwrap();
+        // A second put re-staged the path after GC listed it with cut-off 500.
+        committer.stage_media(&path, 1_000).await.unwrap();
+        let hooks = Hooks::default();
+        let mut deleted = 0_u32;
+        let removal = committer
+            .collect_staged_path(&path, &hooks, 500, || {
+                deleted += 1;
+                async { Ok(0_u64) }
+            })
+            .await
+            .unwrap();
+        assert_eq!(removal, StagedRemoval::Gone);
+        assert_eq!(deleted, 0, "the object was deleted anyway");
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let created_at: i64 =
+            sqlx::query_scalar("SELECT created_at FROM staged_objects WHERE path = ?")
+                .bind(&path)
+                .fetch_one(&mut connection)
+                .await
+                .unwrap();
+        assert_eq!(created_at, 1_000, "the staged row was removed or aged");
     }
 }

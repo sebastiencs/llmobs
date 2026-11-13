@@ -11,16 +11,18 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use arrow::array::RecordBatch;
-#[cfg(test)]
-use arrow::compute::concat_batches;
+use arrow::array::{RecordBatch, TimestampNanosecondArray};
+use arrow::compute::{concat_batches, min};
+use arrow::datatypes::SchemaRef;
 use bytes::Bytes;
+use llmobs_core::ids::ProjectId;
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
 
 use crate::anchor::{AnchorPlan, Anchors};
 use crate::catalog::{Catalog, CatalogEdit, Committer, FileId, FileMeta, FileTable};
 use crate::dedup;
+use crate::deletion::{Tombstones, applicable, covered_predicate, drop_covered};
 use crate::error::FlushError;
 use crate::hooks::{HookPoint, Hooks};
 #[cfg(test)]
@@ -29,6 +31,7 @@ use crate::memtable::{FrozenView, Memtable, PartitionKey};
 use crate::objects::Objects;
 use crate::parquet::{WrittenFile, write_file};
 use crate::partials::partials_from_spans;
+use crate::projects::ProjectStates;
 use crate::read_state::{Published, ReadState};
 use crate::wal::writer::WriterShared;
 use crate::wal::{Table, truncate_segments};
@@ -294,6 +297,9 @@ async fn flush_once(params: &FlushParams) -> Result<Option<u64>, FlushError> {
     let Some(view) = view else {
         return Ok(None);
     };
+    let state = params.published.load();
+    let tombstones = Arc::clone(&state.tombstones);
+    let projects = Arc::clone(&state.projects);
     let partitions = view.partitions.len();
     let max_seq = view.max_seq;
     if fresh {
@@ -305,7 +311,7 @@ async fn flush_once(params: &FlushParams) -> Result<Option<u64>, FlushError> {
     let table = params.table;
     let anchors = params.anchors.clone();
     let prepared = match tokio::task::spawn_blocking(move || {
-        prepare(table, &view, anchors.as_deref())
+        prepare(table, &view, anchors.as_deref(), &tombstones, &projects)
     })
     .await
     {
@@ -318,30 +324,36 @@ async fn flush_once(params: &FlushParams) -> Result<Option<u64>, FlushError> {
         sources,
         anchor_plan,
     } = prepared;
-    let paths: Vec<String> = files.iter().map(|file| file.meta.path.clone()).collect();
-    if let Err(error) = params.committer.stage(&paths).await {
-        return Err(log_retry(
-            params.table,
-            partitions,
-            FlushError::stage(error),
-        ));
-    }
-    params.hooks.pause(HookPoint::FlushAfterStage);
-    if params.hooks.fail(HookPoint::FlushAfterStage).is_some() {
-        return Err(log_retry(params.table, partitions, FlushError::Fault));
-    }
-    if let Err(error) = put_all(&params.objects, &files, params.upload_concurrency).await {
-        return Err(log_retry(params.table, partitions, error));
-    }
-    params.hooks.pause(HookPoint::FlushAfterWrite);
-    if params.hooks.fail(HookPoint::FlushAfterWrite).is_some() {
-        return Err(log_retry(params.table, partitions, FlushError::Fault));
+    // A flush left with no file still commits: every row was covered by a
+    // pending deletion (spec 03 §7), and the sequence must advance so the WAL
+    // segments it covers can go.
+    if !files.is_empty() {
+        let paths: Vec<String> = files.iter().map(|file| file.meta.path.clone()).collect();
+        if let Err(error) = params.committer.stage(&paths).await {
+            return Err(log_retry(
+                params.table,
+                partitions,
+                FlushError::stage(error),
+            ));
+        }
+        params.hooks.pause(HookPoint::FlushAfterStage);
+        if params.hooks.fail(HookPoint::FlushAfterStage).is_some() {
+            return Err(log_retry(params.table, partitions, FlushError::Fault));
+        }
+        if let Err(error) = put_all(&params.objects, &files, params.upload_concurrency).await {
+            return Err(log_retry(params.table, partitions, error));
+        }
+        params.hooks.pause(HookPoint::FlushAfterWrite);
+        if params.hooks.fail(HookPoint::FlushAfterWrite).is_some() {
+            return Err(log_retry(params.table, partitions, FlushError::Fault));
+        }
     }
     let edit = CatalogEdit {
         add: files.into_iter().map(|file| file.meta).collect(),
         remove: Vec::new(),
         flushed_seq: Some((params.table, max_seq)),
         sources,
+        raise: Vec::new(),
     };
     let published = Arc::clone(&params.published);
     let shared = Arc::clone(&params.shared);
@@ -404,11 +416,15 @@ fn publish_flush(
             spans: Arc::clone(&snapshot),
             scores: Arc::clone(&state.scores),
             catalog: Arc::clone(catalog),
+            tombstones: Arc::clone(&state.tombstones),
+            projects: Arc::clone(&state.projects),
         },
         Table::Scores => ReadState {
             spans: Arc::clone(&state.spans),
             scores: Arc::clone(&snapshot),
             catalog: Arc::clone(catalog),
+            tombstones: Arc::clone(&state.tombstones),
+            projects: Arc::clone(&state.projects),
         },
     });
     shared.set_memtable_bytes(bytes);
@@ -418,8 +434,11 @@ fn prepare(
     table: Table,
     view: &FrozenView,
     anchors: Option<&Mutex<Anchors>>,
+    tombstones: &Tombstones,
+    projects: &ProjectStates,
 ) -> Result<Prepared, FlushError> {
     let file_table = FileTable::from(table);
+    let known_seq = tombstones.known_seq();
     let mut files = Vec::new();
     let mut sources = Vec::new();
     let mut anchor_plan = None;
@@ -432,33 +451,108 @@ fn prepare(
                 .partition(view)?;
             anchor_plan = Some(plan);
             for partition in partitions {
-                let batch = dedup::latest_spans(&partition.batch)
+                // A partition of a day the project's retention watermark has
+                // dropped never reaches a file (spec 03 §8).
+                if projects.drops(partition.key.project, partition.key.day) {
+                    continue;
+                }
+                // Rows covered when the flush starts never reach a file
+                // (spec 03 §7). The partition's rows go through the filter
+                // before the duplicate collapsing.
+                let min_ingest = min_ingest_time(&partition.batch, table)?;
+                let batch = uncovered_rows(
+                    file_table,
+                    &llmobs_core::schema::spans_schema(),
+                    &partition.batch,
+                    tombstones,
+                    partition.key.project,
+                    min_ingest,
+                )?;
+                if batch.num_rows() == 0 {
+                    continue;
+                }
+                let batch = dedup::latest_spans(&batch)
                     .map_err(|error| FlushError::dedup(error.reason()))?;
-                push_spans_files(&mut files, &mut sources, &partition.key, batch)?;
+                push_spans_files(&mut files, &mut sources, &partition.key, batch, known_seq)?;
             }
         }
         Table::Scores => {
             for (key, batches) in view.partitions.iter() {
+                if projects.drops(key.project, key.day) {
+                    continue;
+                }
                 if batches.is_empty() {
                     continue;
                 }
-                let refs: Vec<Arc<RecordBatch>> = batches
-                    .iter()
-                    .map(|batch| Arc::clone(&batch.batch))
-                    .collect();
-                let written = write_file(file_table, 0, &refs).map_err(FlushError::prepare)?;
+                let refs: Vec<&RecordBatch> =
+                    batches.iter().map(|batch| batch.batch.as_ref()).collect();
+                let combined = concat_batches(&llmobs_core::schema::scores_schema(), refs)
+                    .map_err(|source| {
+                        FlushError::prepare(crate::error::ParquetWriteError::arrow(source))
+                    })?;
+                let min_ingest = min_ingest_time(&combined, table)?;
+                let combined = uncovered_rows(
+                    file_table,
+                    &llmobs_core::schema::scores_schema(),
+                    &combined,
+                    tombstones,
+                    key.project,
+                    min_ingest,
+                )?;
+                if combined.num_rows() == 0 {
+                    continue;
+                }
+                let written = write_file(file_table, 0, &[Arc::new(combined)])
+                    .map_err(FlushError::prepare)?;
                 let (path, id) = Objects::table_file_path(file_table, key.project, key.day, 0);
-                files.push(prepared_file(id, file_table, key, path, written));
+                files.push(prepared_file(id, file_table, key, path, written, known_seq));
             }
         }
-    }
-    if files.is_empty() {
-        return Err(FlushError::dedup("empty flush"));
     }
     Ok(Prepared {
         files,
         sources,
         anchor_plan,
+    })
+}
+
+/// The minimum `ingest_time` of `batch`. An empty, missing or all-null column
+/// fails the flush: the covered-row rule cannot skip the batch.
+fn min_ingest_time(batch: &RecordBatch, table: Table) -> Result<i64, FlushError> {
+    let column = table.ingest_column();
+    let missing = || FlushError::dedup("missing ingest time");
+    let array = batch
+        .column_by_name(column)
+        .ok_or_else(missing)?
+        .as_any()
+        .downcast_ref::<TimestampNanosecondArray>()
+        .ok_or_else(missing)?;
+    min(array).ok_or_else(missing)
+}
+
+/// The rows of `batch` no pending deletion of `project` covers. Batches no
+/// deletion can cover are returned as they are.
+fn uncovered_rows(
+    table: FileTable,
+    schema: &SchemaRef,
+    batch: &RecordBatch,
+    tombstones: &Tombstones,
+    project: ProjectId,
+    min_ingest: i64,
+) -> Result<RecordBatch, FlushError> {
+    let deletions = applicable(&tombstones.for_project(project), None, min_ingest);
+    if deletions.is_empty() {
+        return Ok(batch.clone());
+    }
+    let Some(predicate) =
+        covered_predicate(table, schema, &deletions).map_err(|_| FlushError::Deletion {
+            reason: "building the deletion filter",
+        })?
+    else {
+        return Ok(batch.clone());
+    };
+    drop_covered(batch, &predicate).map_err(|_| FlushError::Deletion {
+        reason: "applying the deletion filter",
     })
 }
 
@@ -468,6 +562,7 @@ fn push_spans_files(
     sources: &mut Vec<(FileId, FileId)>,
     key: &PartitionKey,
     batch: RecordBatch,
+    known_seq: u64,
 ) -> Result<(), FlushError> {
     let batch = Arc::new(batch);
     let spans_written =
@@ -485,6 +580,7 @@ fn push_spans_files(
         key,
         spans_path,
         spans_written,
+        known_seq,
     ));
     files.push(prepared_file(
         traces_id,
@@ -492,6 +588,7 @@ fn push_spans_files(
         key,
         traces_path,
         traces_written,
+        known_seq,
     ));
     sources.push((traces_id, spans_id));
     Ok(())
@@ -503,6 +600,7 @@ fn prepared_file(
     key: &PartitionKey,
     path: String,
     written: WrittenFile,
+    known_seq: u64,
 ) -> PreparedFile {
     let size = u64::try_from(written.bytes.len()).unwrap_or(u64::MAX);
     PreparedFile {
@@ -521,6 +619,7 @@ fn prepared_file(
             min_ingest_time: written.min_ingest_time,
             max_ingest_time: written.max_ingest_time,
             fully_merged: false,
+            deletions_applied_seq: known_seq,
         },
         bytes: written.bytes,
     }
@@ -599,6 +698,7 @@ fn log_truncate(table: Table, error: &std::io::Error) {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use arrow::array::Array;
@@ -614,17 +714,11 @@ mod tests {
     };
     use crate::hooks::HookPoint;
     use crate::memtable::MemBatch;
+    use crate::test_support::{object_rows, trace_ids_of};
     use crate::wal::{Table, spans_named};
 
     fn batch(starts: &[i64], name: &str) -> MemBatch {
-        let batch = spans_named(starts, name);
-        MemBatch {
-            batch: std::sync::Arc::new(batch.clone()),
-            min_time: starts[0],
-            max_time: *starts.last().unwrap(),
-            bytes: batch.get_array_memory_size(),
-            partials: std::sync::Arc::new(std::sync::OnceLock::new()),
-        }
+        MemBatch::from_batch(Table::Spans, spans_named(starts, name)).unwrap()
     }
 
     fn names(batch: &arrow::array::RecordBatch) -> Vec<String> {
@@ -684,7 +778,54 @@ mod tests {
             anchor: Default::default(),
             gc: Default::default(),
             compaction: Default::default(),
+            deletion: Default::default(),
         }
+    }
+
+    /// A slow-age config: nothing flushes until shutdown, so a test can
+    /// register a deletion before the flush starts.
+    fn config_in(dir: &Path) -> StorageConfig {
+        StorageConfig {
+            data_dir: dir.to_path_buf(),
+            object_store: None,
+            s3: S3Config::default(),
+            wal: WalConfig::default(),
+            flush: FlushConfig::default(),
+            memtable: MemtableConfig::default(),
+            query: QueryConfig::default(),
+            anchor: Default::default(),
+            gc: Default::default(),
+            compaction: Default::default(),
+            deletion: Default::default(),
+        }
+    }
+
+    /// One `Traces` deletion of the given traces, cut off at `cutoff`.
+    fn traces_deletion(traces: &[u16], cutoff: i64) -> crate::deletion::Deletion {
+        crate::deletion::Deletion {
+            id: uuid::Uuid::now_v7(),
+            project: project(),
+            cutoff,
+            scope: crate::deletion::DeletionScope::Traces {
+                trace_ids: traces
+                    .iter()
+                    .map(|trace| crate::test_support::span_row(*trace, 0, 0, 0).trace_id)
+                    .collect(),
+            },
+        }
+    }
+
+    fn values_of(rows: &arrow::array::RecordBatch, column: &str) -> Vec<String> {
+        use arrow::array::Array;
+
+        let column = rows.column_by_name(column).unwrap();
+        let array = column
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .unwrap();
+        (0..array.len())
+            .map(|row| array.value(row).to_owned())
+            .collect()
     }
 
     async fn wait_rows(storage: &Storage, rows: u64) {
@@ -788,6 +929,210 @@ mod tests {
             .unwrap();
         wait_rows(&storage, 2).await;
         assert_eq!(span_days(&storage), vec![day(), day()]);
+        storage.shutdown().await.unwrap();
+    }
+
+    /// The ingest time the deletion tests use for start and `ingest_time`.
+    fn ingest() -> i64 {
+        at(day(), 12, 0, 0)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_flush_drops_the_rows_a_pending_deletion_covers() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(dir.path());
+        let storage = Storage::open(config.clone()).await.unwrap();
+        let rows = crate::test_support::span_rows(&[
+            crate::test_support::span_row(1, 0, ingest(), ingest()),
+            crate::test_support::span_row(2, 0, ingest(), ingest()),
+        ]);
+        storage.append_spans(project(), rows).await.unwrap();
+        storage
+            .register_deletion(traces_deletion(&[1], ingest()))
+            .await
+            .unwrap();
+        storage.shutdown().await.unwrap();
+
+        let storage = Storage::open(config).await.unwrap();
+        let spans_files = storage.catalog_files(Table::Spans);
+        assert_eq!(spans_files.len(), 1);
+        assert_eq!(spans_files[0].deletions_applied_seq, 1);
+        assert_eq!(
+            trace_ids_of(&object_rows(dir.path(), &spans_files[0])),
+            vec![
+                *crate::test_support::span_row(2, 0, 0, 0)
+                    .trace_id
+                    .as_bytes()
+            ],
+            "the file holds only trace 2"
+        );
+        let traces_files = storage.catalog_files(FileTable::Traces);
+        assert_eq!(traces_files.len(), 1);
+        assert_eq!(traces_files[0].rows, 1, "one partial, for trace 2");
+        assert_eq!(traces_files[0].deletions_applied_seq, 1);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_flush_where_every_row_is_covered_commits_only_its_sequence() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(dir.path());
+        let storage = Storage::open(config.clone()).await.unwrap();
+        let rows = crate::test_support::span_rows(&[crate::test_support::span_row(
+            1,
+            0,
+            ingest(),
+            ingest(),
+        )]);
+        let receipt = storage.append_spans(project(), rows).await.unwrap();
+        storage
+            .register_deletion(traces_deletion(&[1], ingest()))
+            .await
+            .unwrap();
+        storage.shutdown().await.unwrap();
+
+        let storage = Storage::open(config).await.unwrap();
+        assert!(storage.catalog_files(Table::Spans).is_empty());
+        assert!(storage.catalog_files(FileTable::Traces).is_empty());
+        assert_eq!(storage.catalog_rows(Table::Spans), 0);
+        // The empty flush advanced the sequence and dropped the frozen rows:
+        // nothing replays at open, so the WAL it covered is gone for good.
+        assert_eq!(storage.flushed_seq(Table::Spans).await, receipt.seq);
+        assert_eq!(storage.published_rows(Table::Spans), 0);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_flush_keeps_a_session_score_and_drops_a_covered_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(dir.path());
+        let storage = Storage::open(config.clone()).await.unwrap();
+        let covered = crate::test_support::score_row(
+            0x11,
+            1,
+            ingest(),
+            ingest(),
+            ingest(),
+            false,
+            "on-trace-1",
+        );
+        let mut session = crate::test_support::score_row(
+            0x22,
+            0,
+            ingest(),
+            ingest(),
+            ingest(),
+            false,
+            "session-score",
+        );
+        session.target = llmobs_core::score::ScoreTarget::Session {
+            session_id: "s".to_owned(),
+        };
+        storage
+            .append_scores(
+                project(),
+                crate::test_support::score_rows(&[covered, session]),
+            )
+            .await
+            .unwrap();
+        storage
+            .register_deletion(traces_deletion(&[1], ingest()))
+            .await
+            .unwrap();
+        storage.shutdown().await.unwrap();
+
+        let storage = Storage::open(config).await.unwrap();
+        let files = storage.catalog_files(Table::Scores);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].deletions_applied_seq, 1);
+        assert_eq!(
+            values_of(
+                &object_rows(dir.path(), &files[0]),
+                llmobs_core::schema::scores::NAME
+            ),
+            vec!["session-score".to_owned()],
+            "the score on trace 1 is not flushed; the session score is"
+        );
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_flush_prepared_before_a_registration_keeps_its_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(anchor_config(dir.path())).await.unwrap();
+        let hooks = storage.hooks().clone();
+        hooks.hold(HookPoint::FlushAfterStage);
+        storage
+            .append_spans(
+                project(),
+                crate::test_support::span_rows(&[crate::test_support::span_row(
+                    1,
+                    0,
+                    ingest(),
+                    ingest(),
+                )]),
+            )
+            .await
+            .unwrap();
+        let started = Instant::now();
+        while storage.hooks().waiting_at(HookPoint::FlushAfterStage) == 0 {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "flush did not reach FlushAfterStage"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        // Registered while the flush is parked: it was prepared before the
+        // registration, so the file keeps the row and records no sequence.
+        storage
+            .register_deletion(traces_deletion(&[1], ingest()))
+            .await
+            .unwrap();
+        hooks.release(HookPoint::FlushAfterStage);
+
+        let started = Instant::now();
+        loop {
+            let files = storage.catalog_files(Table::Spans);
+            if files.len() == 1 && storage.published_rows(Table::Spans) == 0 {
+                assert_eq!(files[0].deletions_applied_seq, 0);
+                assert_eq!(
+                    trace_ids_of(&object_rows(dir.path(), &files[0])),
+                    vec![
+                        *crate::test_support::span_row(1, 0, 0, 0)
+                            .trace_id
+                            .as_bytes()
+                    ],
+                    "the file was prepared before the registration"
+                );
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "flush did not commit"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        // The tombstones still hide the row: the file is gated at query time.
+        let query = storage.query(project(), Default::default()).unwrap();
+        let ctx = datafusion::execution::context::SessionContext::new_with_config_rt(
+            datafusion::execution::context::SessionConfig::new(),
+            Arc::clone(&query.runtime),
+        );
+        ctx.register_table("spans_t", query.spans).unwrap();
+        let counted = ctx
+            .sql("SELECT count(*) FROM spans_t")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let total = counted[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::Int64Array>()
+            .unwrap()
+            .value(0);
+        assert_eq!(total, 0);
         storage.shutdown().await.unwrap();
     }
 }

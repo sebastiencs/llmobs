@@ -3,7 +3,7 @@
 //! `Storage::open` opens it and loads the in-memory [`Catalog`].
 #![allow(dead_code)]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -14,7 +14,9 @@ use sqlx::{ConnectOptions, Row, SqliteConnection};
 use uuid::Uuid;
 
 use super::{Catalog, FileId, FileMeta, FileTable, insert_sorted};
+use crate::deletion::{PendingDeletion, Tombstones};
 use crate::error::CatalogError;
+use crate::projects::ProjectStates;
 
 /// `flushed_seq` for the two tables. A missing `table_state` row is `0`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,7 +58,8 @@ pub(crate) async fn load(
 ) -> Result<(Catalog, TableState), CatalogError> {
     let rows = sqlx::query(
         "SELECT id, table_name, project_id, day, level, path, size_bytes, footer_size,
-                row_count, min_time, max_time, min_ingest_time, max_ingest_time, fully_merged
+                row_count, min_time, max_time, min_ingest_time, max_ingest_time, fully_merged,
+                deletions_applied_seq
          FROM data_files
          WHERE state = 'active'",
     )
@@ -87,6 +90,118 @@ pub(crate) async fn load(
         }
     }
     Ok((Catalog { tables }, state))
+}
+
+/// Read the pending deletions and the highest `deletion_seq` (spec 03 §7).
+///
+/// `known_seq` covers applied deletions too: the next registration takes
+/// `known_seq + 1`, so a sequence number is never reused.
+pub(crate) async fn load_tombstones(
+    connection: &mut SqliteConnection,
+) -> Result<Tombstones, CatalogError> {
+    let stored: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(deletion_seq), 0) FROM deletions")
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(CatalogError::db)?;
+    let known_seq =
+        u64::try_from(stored).map_err(|_| CatalogError::corrupt("invalid deletion_seq"))?;
+    let rows = sqlx::query(
+        "SELECT id, deletion_seq, project_id, kind, cutoff, registered_at FROM deletions
+         WHERE status = 'pending' ORDER BY deletion_seq",
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(CatalogError::db)?;
+    let mut pending = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let id: String = decode(row.try_get("id"))?;
+        let parsed =
+            Uuid::parse_str(&id).map_err(|_| CatalogError::corrupt("invalid deletion id"))?;
+        let seq: i64 = decode(row.try_get("deletion_seq"))?;
+        let seq = u64::try_from(seq).map_err(|_| CatalogError::corrupt("invalid deletion_seq"))?;
+        let project: String = decode(row.try_get("project_id"))?;
+        let kind: String = decode(row.try_get("kind"))?;
+        let traces: Vec<Vec<u8>> =
+            sqlx::query_scalar("SELECT trace_id FROM deletion_traces WHERE deletion_id = ?")
+                .bind(&id)
+                .fetch_all(&mut *connection)
+                .await
+                .map_err(CatalogError::db)?;
+        let mut trace_ids = HashSet::with_capacity(traces.len());
+        for blob in traces {
+            trace_ids.insert(
+                <[u8; 16]>::try_from(blob.as_slice())
+                    .map_err(|_| CatalogError::corrupt("invalid trace_id"))?,
+            );
+        }
+        let (users, sessions) = match kind.as_str() {
+            "traces" => (HashSet::new(), HashSet::new()),
+            "user" => {
+                let users: Vec<String> =
+                    sqlx::query_scalar("SELECT user_id FROM deletion_users WHERE deletion_id = ?")
+                        .bind(&id)
+                        .fetch_all(&mut *connection)
+                        .await
+                        .map_err(CatalogError::db)?;
+                let sessions: Vec<String> = sqlx::query_scalar(
+                    "SELECT session_id FROM deletion_sessions WHERE deletion_id = ?",
+                )
+                .bind(&id)
+                .fetch_all(&mut *connection)
+                .await
+                .map_err(CatalogError::db)?;
+                (users.into_iter().collect(), sessions.into_iter().collect())
+            }
+            _ => return Err(CatalogError::corrupt("unknown deletion kind")),
+        };
+        pending.push(PendingDeletion {
+            id: parsed,
+            seq,
+            project: parse_project(&project)?,
+            cutoff: decode(row.try_get("cutoff"))?,
+            registered_at: decode(row.try_get("registered_at"))?,
+            trace_ids,
+            users,
+            sessions,
+        });
+    }
+    Ok(Tombstones::loaded(known_seq, pending))
+}
+
+/// Read every retention watermark (spec 03 §8) and dropped project (spec 03
+/// §7). `keep_from` is `YYYY-MM-DD`, like `data_files.day`.
+pub(super) async fn load_project_states(
+    connection: &mut SqliteConnection,
+) -> Result<ProjectStates, CatalogError> {
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT project_id, keep_from FROM retention_watermarks")
+            .fetch_all(&mut *connection)
+            .await
+            .map_err(CatalogError::db)?;
+    let mut keep_from = HashMap::with_capacity(rows.len());
+    for (project, day) in rows {
+        let project = project
+            .parse()
+            .map_err(|_| CatalogError::corrupt("retention watermark"))?;
+        let day = NaiveDate::parse_from_str(&day, "%Y-%m-%d")
+            .map_err(|_| CatalogError::corrupt("retention watermark"))?;
+        keep_from.insert(project, day);
+    }
+    // Every row of `projects` counts as dropped, `dropping` and `dropped`
+    // alike: its files are already gone and its appends refused either way.
+    let dropped_rows: Vec<String> = sqlx::query_scalar("SELECT project_id FROM projects")
+        .fetch_all(&mut *connection)
+        .await
+        .map_err(CatalogError::db)?;
+    let mut dropped = HashSet::with_capacity(dropped_rows.len());
+    for project in dropped_rows {
+        dropped.insert(
+            project
+                .parse()
+                .map_err(|_| CatalogError::corrupt("dropped project"))?,
+        );
+    }
+    Ok(ProjectStates::loaded(keep_from, dropped))
 }
 
 /// Enforce spec 03 §3 over `file_sources` (D88), reading `catalog.db` directly.
@@ -220,6 +335,10 @@ fn file_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<FileMeta, CatalogError
         min_ingest_time: decode(row.try_get("min_ingest_time"))?,
         max_ingest_time: decode(row.try_get("max_ingest_time"))?,
         fully_merged: parse_flag(fully_merged)?,
+        deletions_applied_seq: parse_u64(
+            decode(row.try_get("deletions_applied_seq"))?,
+            "deletions_applied_seq",
+        )?,
     })
 }
 
@@ -375,7 +494,68 @@ mod tests {
             .fetch_one(&mut connection)
             .await
             .unwrap();
-        assert_eq!(versions, 2);
+        assert_eq!(versions, 6);
+    }
+
+    #[tokio::test]
+    async fn migration_applies_to_an_m4_catalog() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        insert_file(&mut connection, file_id(1), "spans", DAY).await;
+        // An M4 catalog has only migrations 0001 and 0002 applied. Undo every
+        // migration from 0003 on, newest first, then let open_catalog_db
+        // re-apply them.
+        for statement in [
+            "DROP TABLE projects",
+            "DROP TABLE media",
+            "DROP TABLE retention_watermarks",
+            "DROP INDEX deletions_pending",
+            "DROP TABLE deletion_sessions",
+            "DROP TABLE deletion_users",
+            "DROP TABLE deletion_traces",
+            "DROP TABLE deletions",
+            "ALTER TABLE data_files DROP COLUMN deletions_applied_seq",
+            "DELETE FROM _sqlx_migrations WHERE version >= 3",
+        ] {
+            sqlx::query(statement)
+                .execute(&mut connection)
+                .await
+                .unwrap();
+        }
+        drop(connection);
+
+        let mut connection = open_catalog_db(dir.path()).await.unwrap();
+        let column: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('data_files')
+             WHERE name = 'deletions_applied_seq'",
+        )
+        .fetch_one(&mut connection)
+        .await
+        .unwrap();
+        assert_eq!(column, 1);
+        let seq: i64 = sqlx::query_scalar("SELECT deletions_applied_seq FROM data_files")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(seq, 0);
+        for table in [
+            "deletions",
+            "deletion_traces",
+            "deletion_users",
+            "deletion_sessions",
+            "retention_watermarks",
+            "media",
+            "projects",
+        ] {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+            )
+            .bind(table)
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+            assert_eq!(count, 1, "{table} is missing");
+        }
     }
 
     #[tokio::test]

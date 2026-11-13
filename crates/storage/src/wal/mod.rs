@@ -54,6 +54,14 @@ impl Table {
             Self::Scores => llmobs_core::schema::scores::CREATED_AT,
         }
     }
+
+    /// The `ingest_time` column, non-null in both tables (spec 03 §7).
+    pub(crate) fn ingest_column(self) -> &'static str {
+        match self {
+            Self::Spans => llmobs_core::schema::spans::INGEST_TIME,
+            Self::Scores => llmobs_core::schema::scores::INGEST_TIME,
+        }
+    }
 }
 
 /// `00000000000000000042.wal` for seq 42. Lexical order matches numeric order.

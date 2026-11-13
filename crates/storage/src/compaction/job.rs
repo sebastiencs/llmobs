@@ -7,13 +7,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow::array::RecordBatch;
+use llmobs_core::schema::{scores_schema, spans_schema};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
+use uuid::Uuid;
 
 use crate::catalog::{CatalogEdit, Committer, FileId, FileMeta, FileState, FileTable};
 use crate::compaction::merge::{MergeContext, merge_slice};
 use crate::compaction::plan::{Job, JobKind, Policy, plan};
 use crate::compaction::slice::{slice_count, slices, time_values};
+use crate::deletion::covered_predicate;
 use crate::error::{CommitError, CompactionError, ObjectError};
 use crate::hooks::{HookPoint, Hooks};
 use crate::objects::Objects;
@@ -22,18 +25,31 @@ use crate::read_state::{Published, publish_catalog};
 
 /// Shared by every job: built once in `Storage::open`.
 pub(crate) struct Compactor {
-    committer: Arc<Committer>,
-    objects: Arc<Objects>,
-    published: Arc<Published>,
-    merge: MergeContext,
+    pub(super) committer: Arc<Committer>,
+    pub(super) objects: Arc<Objects>,
+    pub(super) published: Arc<Published>,
+    pub(super) merge: MergeContext,
     /// Read at the start of each pass. Tests replace it ([`Storage::set_policy`]).
-    policy: Mutex<Policy>,
-    threads: usize,
-    claims: Mutex<HashSet<FileId>>,
+    pub(super) policy: Mutex<Policy>,
+    pub(super) threads: usize,
+    /// `storage.deletion.max_delay`, ns.
+    pub(super) max_delay: i64,
+    pub(super) claims: Mutex<HashSet<FileId>>,
     /// Set by [`crate::Storage::shutdown`]; jobs check it before each slice and
     /// before committing.
-    stopping: AtomicBool,
-    hooks: Hooks,
+    pub(super) stopping: AtomicBool,
+    pub(super) hooks: Hooks,
+    /// Deletions already warned about as past `max_delay` (spec 03 §7): each
+    /// is logged once, however many passes see it.
+    pub(super) overdue_logged: Mutex<HashSet<Uuid>>,
+}
+
+/// How much the compactor may do at once, and how late a deletion may be.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CompactorLimits {
+    pub(crate) threads: usize,
+    /// `storage.deletion.max_delay`, ns.
+    pub(crate) max_delay: i64,
 }
 
 impl std::fmt::Debug for Compactor {
@@ -88,9 +104,9 @@ impl CompactionReport {
 
 /// Removes its ids from the claims when dropped. Created as soon as ids are
 /// claimed; lives until the job's task ends, whatever the outcome.
-struct ClaimGuard {
-    compactor: Arc<Compactor>,
-    ids: Vec<FileId>,
+pub(super) struct ClaimGuard {
+    pub(super) compactor: Arc<Compactor>,
+    pub(super) ids: Vec<FileId>,
 }
 
 impl ClaimGuard {
@@ -126,7 +142,7 @@ impl Compactor {
         published: Arc<Published>,
         merge: MergeContext,
         policy: Policy,
-        threads: usize,
+        limits: CompactorLimits,
         hooks: Hooks,
     ) -> Self {
         Self {
@@ -135,10 +151,12 @@ impl Compactor {
             published,
             merge,
             policy: Mutex::new(policy),
-            threads,
+            threads: limits.threads,
+            max_delay: limits.max_delay,
             claims: Mutex::new(HashSet::new()),
             stopping: AtomicBool::new(false),
             hooks,
+            overdue_logged: Mutex::new(HashSet::new()),
         }
     }
 
@@ -185,7 +203,10 @@ impl Compactor {
                 let inputs = job.inputs.len();
                 let outcome = compactor.run(job, policy).await;
                 if let Err(error) = &outcome {
-                    // The error text never carries row content.
+                    // A conflict's text is its static reason. Every other error
+                    // is named by its label only: a DataFusion error raised by a
+                    // plan holding the covered-row predicate may quote its
+                    // literals (spec 03 §7).
                     if matches!(error, CompactionError::Commit(CommitError::Conflict { .. })) {
                         tracing::info!(
                             table,
@@ -198,7 +219,13 @@ impl Compactor {
                         );
                     } else {
                         tracing::warn!(
-                            table, project, day, kind, inputs, %error, "compaction job failed"
+                            table,
+                            project,
+                            day,
+                            kind,
+                            inputs,
+                            error = error.label(),
+                            "compaction job failed"
                         );
                     }
                 }
@@ -244,11 +271,41 @@ impl Compactor {
     }
 
     /// Runs one job to its commit.
-    async fn run(
+    pub(super) async fn run(
         self: &Arc<Self>,
         job: Job,
         policy: Policy,
     ) -> Result<CompactionReport, CompactionError> {
+        // The deletions pending when the job started (spec 03 §7): their rows
+        // are dropped from the output, which records the highest sequence
+        // known now. A deletion registered later is not applied, so the output
+        // stays a candidate for the rewriter.
+        let tombstones = Arc::clone(&self.published.load().tombstones);
+        let known = tombstones.known_seq();
+        let covered = covered_predicate(
+            job.table,
+            &match job.table {
+                FileTable::Spans => spans_schema(),
+                FileTable::Scores => scores_schema(),
+                FileTable::Traces => {
+                    return Err(CompactionError::Input {
+                        reason: "traces are not merged",
+                    });
+                }
+            },
+            &tombstones.for_project(job.project),
+        )
+        .map_err(|_| CompactionError::Deletion {
+            reason: "building the deletion filter",
+        })?;
+        // A rewrite keeps its input's level: it replaces one file, not a
+        // partition. Every other job writes level 1.
+        let level = if job.kind == JobKind::Rewrite {
+            job.inputs[0].level
+        } else {
+            1
+        };
+
         let mut guard = ClaimGuard {
             compactor: Arc::clone(self),
             ids: Vec::new(),
@@ -320,9 +377,9 @@ impl Compactor {
             if self.stopping.load(Ordering::Acquire) {
                 return Err(CompactionError::Stopped);
             }
-            let (path, id) = Objects::table_file_path(job.table, job.project, job.day, 1);
+            let (path, id) = Objects::table_file_path(job.table, job.project, job.day, level);
             let traces = (job.table == FileTable::Spans)
-                .then(|| Objects::table_file_path(FileTable::Traces, job.project, job.day, 1));
+                .then(|| Objects::table_file_path(FileTable::Traces, job.project, job.day, level));
             let mut staged = vec![path.clone()];
             if let Some((traces_path, _)) = &traces {
                 staged.push(traces_path.clone());
@@ -336,7 +393,7 @@ impl Compactor {
             let (target, file) = self.objects.create_output(&path).await?;
             let writer = FileWriter::new(
                 job.table,
-                1,
+                level,
                 file,
                 u64::try_from(*expected_rows).unwrap_or(u64::MAX),
             )?;
@@ -346,6 +403,7 @@ impl Compactor {
                 &job.inputs,
                 *slice,
                 job.drop_deleted,
+                covered.as_ref(),
                 writer,
             )
             .await;
@@ -357,8 +415,8 @@ impl Compactor {
                 }
             };
             if merged.rows == 0 {
-                // A scores day close can drop every row. The staged rows stay
-                // for GC.
+                // Every row of the slice was covered or, for a scores day
+                // close, deleted. The staged rows stay for GC.
                 let _ = self.objects.discard_output(target).await;
                 continue;
             }
@@ -391,14 +449,20 @@ impl Compactor {
 
             let size = self.objects.publish_output(target, file).await?;
             output_bytes = output_bytes.saturating_add(size);
-            let fully_merged = job.whole_partition
-                && (job.table == FileTable::Spans || job.kind == JobKind::DayClose);
+            // Removing rows keeps a merged file merged, so a rewrite keeps its
+            // input's flag.
+            let fully_merged = if job.kind == JobKind::Rewrite {
+                job.inputs[0].fully_merged
+            } else {
+                job.whole_partition
+                    && (job.table == FileTable::Spans || job.kind == JobKind::DayClose)
+            };
             add.push(FileMeta {
                 id,
                 table: job.table,
                 project: job.project,
                 day: job.day,
-                level: 1,
+                level,
                 path,
                 size,
                 footer_size,
@@ -408,6 +472,7 @@ impl Compactor {
                 min_ingest_time: summary.min_ingest_time,
                 max_ingest_time: summary.max_ingest_time,
                 fully_merged,
+                deletions_applied_seq: known,
             });
 
             if job.table == FileTable::Spans {
@@ -418,7 +483,7 @@ impl Compactor {
                 };
                 let partials: Vec<Arc<RecordBatch>> = partials.into_iter().map(Arc::new).collect();
                 let written = tokio::task::spawn_blocking(move || {
-                    write_file(FileTable::Traces, 1, &partials)
+                    write_file(FileTable::Traces, level, &partials)
                 })
                 .await
                 .map_err(|_| CompactionError::Task)??;
@@ -430,7 +495,7 @@ impl Compactor {
                     table: FileTable::Traces,
                     project: job.project,
                     day: job.day,
-                    level: 1,
+                    level,
                     path: traces_path,
                     size: u64::try_from(written.bytes.len()).unwrap_or(u64::MAX),
                     footer_size: written.footer_size,
@@ -440,6 +505,7 @@ impl Compactor {
                     min_ingest_time: written.min_ingest_time,
                     max_ingest_time: written.max_ingest_time,
                     fully_merged,
+                    deletions_applied_seq: known,
                 });
                 sources.push((traces_id, id));
             }
@@ -471,6 +537,7 @@ impl Compactor {
             remove,
             flushed_seq: None,
             sources,
+            raise: Vec::new(),
         };
         let published = Arc::clone(&self.published);
         self.committer
@@ -522,11 +589,12 @@ fn kind_label(kind: JobKind) -> &'static str {
     match kind {
         JobKind::L0Merge => "l0-merge",
         JobKind::DayClose => "day-close",
+        JobKind::Rewrite => "rewrite",
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -536,7 +604,6 @@ mod tests {
     use datafusion::execution::context::{SessionConfig, SessionContext};
     use llmobs_core::batch::scores_to_record_batch;
     use llmobs_core::ids::ProjectId;
-    use llmobs_core::score::{Score, ScoreTarget, ScoreValue};
     use uuid::Uuid;
 
     use crate::Storage;
@@ -552,16 +619,16 @@ mod tests {
 
     const DAY_NS: i64 = 86_400_000_000_000;
 
-    fn project() -> ProjectId {
+    pub(crate) fn project() -> ProjectId {
         "018f6b4e-7c1a-7c1a-8c1a-000000000001".parse().unwrap()
     }
 
-    fn day() -> NaiveDate {
+    pub(crate) fn day() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 3, 5).unwrap()
     }
 
     /// Day D at `hour:minute:second`, in ns.
-    fn at(hour: i64, minute: i64, second: i64) -> i64 {
+    pub(crate) fn at(hour: i64, minute: i64, second: i64) -> i64 {
         let midnight = (i64::from(day().num_days_from_ce()) - 719_163) * DAY_NS;
         midnight + (hour * 3_600 + minute * 60 + second) * 1_000_000_000
     }
@@ -571,7 +638,11 @@ mod tests {
         (i64::from(date.num_days_from_ce()) - 719_163) * DAY_NS
     }
 
-    fn config_in(dir: &Path, compaction: CompactionConfig, flush_age: Duration) -> StorageConfig {
+    pub(crate) fn config_in(
+        dir: &Path,
+        compaction: CompactionConfig,
+        flush_age: Duration,
+    ) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
             object_store: None,
@@ -586,11 +657,12 @@ mod tests {
             anchor: Default::default(),
             gc: Default::default(),
             compaction,
+            deletion: Default::default(),
         }
     }
 
     /// `[storage.compaction]` for hand-run passes with `l0_files` set.
-    fn quiet_compaction(l0_files: usize) -> CompactionConfig {
+    pub(crate) fn quiet_compaction(l0_files: usize) -> CompactionConfig {
         CompactionConfig {
             interval: Duration::from_secs(3_600),
             l0_files,
@@ -599,13 +671,21 @@ mod tests {
     }
 
     /// Appends `batch`, shuts down and reopens: one L0 file per partition.
-    async fn flush_cycle(config: &StorageConfig, storage: Storage, batch: RecordBatch) -> Storage {
+    pub(crate) async fn flush_cycle(
+        config: &StorageConfig,
+        storage: Storage,
+        batch: RecordBatch,
+    ) -> Storage {
         storage.append_spans(project(), batch).await.unwrap();
         storage.shutdown().await.unwrap();
         Storage::open(config.clone()).await.unwrap()
     }
 
-    async fn flush_scores(config: &StorageConfig, storage: Storage, batch: RecordBatch) -> Storage {
+    pub(crate) async fn flush_scores(
+        config: &StorageConfig,
+        storage: Storage,
+        batch: RecordBatch,
+    ) -> Storage {
         storage.append_scores(project(), batch).await.unwrap();
         storage.shutdown().await.unwrap();
         Storage::open(config.clone()).await.unwrap()
@@ -714,7 +794,7 @@ mod tests {
 
     /// `(score_id, deleted)` of every row of the active scores files, read
     /// from the objects themselves.
-    fn score_file_rows(dir: &Path, storage: &Storage) -> Vec<(String, bool)> {
+    pub(crate) fn score_file_rows(dir: &Path, storage: &Storage) -> Vec<(String, bool)> {
         let mut out = Vec::new();
         for file in storage.catalog_files(crate::wal::Table::Scores) {
             let object = std::fs::File::open(dir.join("objects").join(&file.path)).unwrap();
@@ -744,7 +824,7 @@ mod tests {
         out
     }
 
-    fn wait_at(storage: &Storage, point: HookPoint) {
+    pub(crate) fn wait_at(storage: &Storage, point: HookPoint) {
         let started = Instant::now();
         while storage.hooks().waiting_at(point) == 0 {
             assert!(
@@ -1009,49 +1089,44 @@ mod tests {
         storage.shutdown().await.unwrap();
     }
 
-    fn score_version(id: u128, updated_at: i64, ingest: i64, deleted: bool, name: &str) -> Score {
-        Score {
-            project_id: project(),
-            score_id: Uuid::from_u128(id),
-            target: ScoreTarget::Trace {
-                trace_id: "4bf92f3577b34da6a3ce929d0e0e4736".parse().unwrap(),
-            },
-            session_id: None,
-            user_id: None,
-            name: name.to_owned(),
-            value: ScoreValue::Numeric(0.5),
-            reason: None,
-            source: llmobs_core::enums::ScoreSource::Api,
-            evaluator_id: None,
-            rule_id: None,
-            experiment_id: None,
-            dataset_item_id: None,
-            author_user_id: None,
-            metadata: Default::default(),
-            created_at: at(10, 0, 0),
-            updated_at,
-            deleted,
-            ingest_time: ingest,
-        }
-    }
-
     /// Score `s` in three L0 files (newest deleted), score `t` live once.
     async fn score_setup(config: &StorageConfig) -> Storage {
         let mut storage = Storage::open(config.clone()).await.unwrap();
+        let created = at(10, 0, 0);
         let batches = [
             vec![
-                score_version(0x11, at(10, 0, 1), at(10, 0, 1), false, "s-old"),
-                score_version(0x22, at(10, 0, 5), at(10, 0, 5), false, "t"),
+                crate::test_support::score_row(
+                    0x11,
+                    0,
+                    created,
+                    at(10, 0, 1),
+                    at(10, 0, 1),
+                    false,
+                    "s-old",
+                ),
+                crate::test_support::score_row(
+                    0x22,
+                    0,
+                    created,
+                    at(10, 0, 5),
+                    at(10, 0, 5),
+                    false,
+                    "t",
+                ),
             ],
-            vec![score_version(
+            vec![crate::test_support::score_row(
                 0x11,
+                0,
+                created,
                 at(10, 0, 3),
                 at(10, 0, 3),
                 true,
                 "s-deleted",
             )],
-            vec![score_version(
+            vec![crate::test_support::score_row(
                 0x11,
+                0,
+                created,
                 at(10, 0, 2),
                 at(10, 0, 2),
                 false,
@@ -1162,6 +1237,7 @@ mod tests {
             ],
             flushed_seq: None,
             sources: Vec::new(),
+            raise: Vec::new(),
         };
         storage.commit_test_edit(&edit).await.unwrap();
 

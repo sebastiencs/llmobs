@@ -8,6 +8,7 @@ use tokio::task::JoinHandle;
 
 use crate::catalog::now_ns;
 use crate::compaction::job::Compactor;
+use crate::media::MediaGc;
 
 /// A running compaction task. Drop cancels it.
 #[derive(Debug)]
@@ -50,7 +51,11 @@ impl CompactionHandle {
 }
 
 /// Starts the periodic task. Each tick runs one pass at the wall clock.
-pub(crate) fn spawn(compactor: std::sync::Arc<Compactor>, interval: Duration) -> CompactionHandle {
+pub(crate) fn spawn(
+    compactor: std::sync::Arc<Compactor>,
+    media: MediaGc,
+    interval: Duration,
+) -> CompactionHandle {
     let (stop_tx, mut stop) = watch::channel(false);
     let task = tokio::spawn(async move {
         let mut interval =
@@ -80,6 +85,44 @@ pub(crate) fn spawn(compactor: std::sync::Arc<Compactor>, interval: Duration) ->
                         Ok(_) => {}
                         Err(error) => {
                             tracing::warn!(%error, "compaction pass failed");
+                        }
+                    }
+                    let now = now_ns();
+                    let pass = compactor.deletion_pass(now).await;
+                    match &pass {
+                        Ok(report)
+                            if report.rewritten + report.raised + report.applied + report.failed
+                                > 0 =>
+                        {
+                            tracing::debug!(
+                                rewritten = report.rewritten,
+                                raised = report.raised,
+                                applied = report.applied,
+                                failed = report.failed,
+                                "deletion pass"
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            // The label only: a DataFusion error raised by a
+                            // plan holding the covered-row predicate may quote
+                            // its literals (spec 03 §7).
+                            tracing::warn!(error = error.label(), "deletion pass failed");
+                        }
+                    }
+                    // A deletion's rows are gone: collect its project's
+                    // unreferenced media at the pass's own `now` (D-A1-6).
+                    if let Ok(report) = &pass {
+                        for project in &report.applied_projects {
+                            if let Err(error) = media.collect(*project, now).await {
+                                // The label only: the error names an object
+                                // path, which holds the blob's hash.
+                                tracing::warn!(
+                                    project = %project,
+                                    error = error.label(),
+                                    "media collection failed"
+                                );
+                            }
                         }
                     }
                 }

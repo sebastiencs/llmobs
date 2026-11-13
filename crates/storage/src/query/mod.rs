@@ -23,11 +23,16 @@ use chrono::{Datelike, NaiveDate};
 use datafusion::catalog::Session;
 use datafusion::common::{DFSchema, ScalarValue};
 use datafusion::datasource::physical_plan::ParquetSource;
+use datafusion::error::DataFusionError;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{Between, BinaryExpr, Expr, Operator};
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::{Column, NotExpr};
 use datafusion::physical_expr::utils::conjunction;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::GlobalLimitExec;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion_datasource::PartitionedFile;
 use datafusion_datasource::file_groups::FileGroup;
@@ -39,6 +44,7 @@ use llmobs_core::ids::TraceId;
 use llmobs_core::schema::traces as trace_schema;
 
 use crate::catalog::{Catalog, FileMeta, FileTable};
+use crate::deletion::{PendingDeletion, applicable, covered_predicate, key_columns};
 use crate::memtable::{MemBatch, MemSnapshot};
 use crate::objects::OBJECT_STORE_URL;
 use crate::wal::Table;
@@ -353,6 +359,10 @@ pub(crate) fn memory_plan(
 }
 
 /// One file-and-memtable scan. The providers fill this in.
+///
+/// `Clone` only: `schema` is an `Arc`, so `Copy` cannot hold. The tombstone
+/// filter builds its extended-projection copy with a clone.
+#[derive(Clone)]
 pub(crate) struct ScanUnion<'a> {
     /// Project the files and batches belong to.
     pub project: ProjectId,
@@ -378,6 +388,9 @@ pub(crate) struct ScanUnion<'a> {
     pub target_partitions: usize,
     /// Session that owns the registered object store and plans expressions.
     pub session: &'a dyn Session,
+    /// The project's pending deletions; files they may cover go through the
+    /// tombstone filter (spec 03 §7).
+    pub deletions: &'a [Arc<PendingDeletion>],
 }
 
 /// The `trace_id`s named by a scan's top-level id conjuncts, or `None` when
@@ -509,6 +522,10 @@ pub(crate) fn overlapping_files(
 }
 
 /// Union of the Parquet files and the memtable. An empty side is left out.
+///
+/// Files a pending deletion may cover go through [`gated_file_plan`] instead of
+/// [`file_plan`] (spec 03 §7). The gated plan counts as a side of the union,
+/// so no side keeps a limit that the other side could starve.
 pub(crate) fn scan_union(
     scan: &ScanUnion<'_>,
 ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
@@ -521,12 +538,34 @@ pub(crate) fn scan_union(
         scan.filters,
         scan.around,
     );
-    let both = !batches.is_empty() && !files.is_empty();
+    let mut clean = Vec::with_capacity(files.len());
+    let mut gated = Vec::with_capacity(files.len());
+    for file in files {
+        if applicable(
+            scan.deletions,
+            Some(file.deletions_applied_seq),
+            file.min_ingest_time,
+        )
+        .is_empty()
+        {
+            clean.push(file);
+        } else {
+            gated.push(file);
+        }
+    }
+    let sides = [!clean.is_empty(), !gated.is_empty(), !batches.is_empty()]
+        .iter()
+        .filter(|side| **side)
+        .count();
+    let several = sides > 1;
     // A limit on each side would drop rows the other side still has.
-    let side_limit = if both { None } else { scan.limit };
+    let side_limit = if several { None } else { scan.limit };
     let mut plans = Vec::new();
-    if !files.is_empty() {
-        plans.push(file_plan(scan, &files, side_limit)?);
+    if !clean.is_empty() {
+        plans.push(file_plan(scan, &clean, side_limit)?);
+    }
+    if !gated.is_empty() {
+        plans.push(gated_file_plan(scan, &gated)?);
     }
     if !batches.is_empty() {
         plans.push(memory_plan(
@@ -550,11 +589,72 @@ pub(crate) fn scan_union(
     } else {
         UnionExec::try_new(plans)?
     };
-    if both
+    if several
         && scan.filters.is_empty()
         && let Some(fetch) = scan.limit
     {
         return Ok(Arc::new(GlobalLimitExec::new(plan, 0, Some(fetch))));
+    }
+    Ok(plan)
+}
+
+/// The file side for files a pending deletion may cover: the scan projection is
+/// extended with the key columns the covered-row predicate reads, a filter
+/// drops the covered rows, and a projection restores the requested columns
+/// (spec 03 §7).
+///
+/// The predicate is built against every pending deletion of the project, not
+/// only the applicable ones: applying a deletion to a file already clean of it
+/// removes nothing, and the cut-off is tested per row.
+fn gated_file_plan(
+    scan: &ScanUnion<'_>,
+    gated: &[Arc<FileMeta>],
+) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+    let table = FileTable::from(scan.table);
+    let requested: Vec<usize> = scan
+        .projection
+        .cloned()
+        .unwrap_or_else(|| (0..scan.schema.fields().len()).collect());
+    let mut indices = requested.clone();
+    let mut missing: Vec<usize> = Vec::new();
+    for column in key_columns(table) {
+        let index = scan.schema.index_of(column).map_err(|_| {
+            DataFusionError::Plan(format!("{column} is missing from the stored schema"))
+        })?;
+        if !indices.contains(&index) && !missing.contains(&index) {
+            missing.push(index);
+        }
+    }
+    // Appended key columns go in schema order, so the projected schema is
+    // deterministic.
+    missing.sort_unstable();
+    indices.extend(missing.iter().copied());
+
+    // A copy of the scan with the extended projection, and no limit: the filter
+    // runs above it, so a limit here could drop rows the filter keeps.
+    let extended = ScanUnion {
+        projection: Some(&indices),
+        ..scan.clone()
+    };
+    let mut plan = file_plan(&extended, gated, None)?;
+    let projected = Arc::new(scan.schema.project(&indices)?);
+    if let Some(predicate) = covered_predicate(table, &projected, scan.deletions)? {
+        plan = Arc::new(FilterExec::try_new(
+            Arc::new(NotExpr::new(predicate)),
+            plan,
+        )?);
+    }
+    if !missing.is_empty() {
+        let keeps: Vec<(Arc<dyn PhysicalExpr>, String)> = (0..requested.len())
+            .map(|position| {
+                let name = scan.schema.field(indices[position]).name().to_owned();
+                (
+                    Arc::new(Column::new(&name, position)) as Arc<dyn PhysicalExpr>,
+                    name,
+                )
+            })
+            .collect();
+        plan = Arc::new(ProjectionExec::try_new(keeps, plan)?);
     }
     Ok(plan)
 }
@@ -579,7 +679,7 @@ fn file_plan(
         source = source.with_predicate(conjunction(physical));
     }
     let url = ObjectStoreUrl::parse(OBJECT_STORE_URL)
-        .map_err(|error| datafusion::error::DataFusionError::Internal(error.to_string()))?;
+        .map_err(|error| DataFusionError::Internal(error.to_string()))?;
     let mut builder = FileScanConfigBuilder::new(url, Arc::new(source))
         .with_file_groups(file_groups(files, scan.target_partitions))
         // No work stealing: each partition reads only its own files.
@@ -1098,6 +1198,7 @@ mod tests {
             min_ingest_time: min_time,
             max_ingest_time: max_time,
             fully_merged: false,
+            deletions_applied_seq: 0,
         }
     }
 
@@ -1108,6 +1209,7 @@ mod tests {
                 remove: Vec::new(),
                 flushed_seq: None,
                 sources: Vec::new(),
+                raise: Vec::new(),
             })
             .unwrap()
             .0
