@@ -130,7 +130,7 @@ it("renders not found for an unknown org", async () => {
   expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("href", "/");
 });
 
-it("shows the signed-out state for a 401", async () => {
+it("sends a signed-out user to the login page", async () => {
   server.use(
     http.get("/api/auth/me", () =>
       HttpResponse.json(
@@ -140,9 +140,10 @@ it("shows the signed-out state for a 401", async () => {
     ),
   );
 
-  await renderApp("/");
-  expect(screen.getByRole("heading", { name: "You are signed out" })).toBeInTheDocument();
-  expect(screen.getByText("Sign in again to continue.")).toBeInTheDocument();
+  const { router } = await renderApp("/");
+  expect(router.state.location.pathname).toBe("/login");
+  expect(router.state.location.search).toEqual({ redirect: "/" });
+  expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
 });
 
 it("shows a problem and retries it", async () => {

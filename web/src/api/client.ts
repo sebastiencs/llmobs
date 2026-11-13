@@ -3,6 +3,7 @@ import createClient from "openapi-fetch";
 import createQueryHooks from "openapi-react-query";
 import { problemOf } from "./problem";
 import type { paths } from "./schema.gen";
+import { unauthorizedMiddleware } from "./session";
 
 export const api = createClient<paths>({
   baseUrl: window.location.origin,
@@ -10,6 +11,8 @@ export const api = createClient<paths>({
   // Read fetch at call time. The client is created at import, before tests install MSW.
   fetch: (request: Request) => globalThis.fetch(request),
 });
+
+api.use(unauthorizedMiddleware);
 
 export const $api = createQueryHooks(api);
 

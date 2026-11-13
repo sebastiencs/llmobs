@@ -1,4 +1,6 @@
+import { LogOut } from "lucide-react";
 import { $api } from "@/api/client";
+import { useSignOut } from "@/components/auth/use-sign-out";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -6,6 +8,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -22,6 +25,7 @@ export function initials(name: string | null | undefined, email: string): string
 }
 
 export function UserMenu() {
+  const { signOut, pending } = useSignOut();
   const { data: me } = $api.useSuspenseQuery("get", "/api/auth/me");
   const name = me.user.name?.trim() ? me.user.name : undefined;
   const letters = initials(me.user.name, me.user.email);
@@ -58,6 +62,11 @@ export function UserMenu() {
         >
           Show times in UTC
         </DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem disabled={pending} onSelect={signOut}>
+          <LogOut aria-hidden="true" />
+          Sign out
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
