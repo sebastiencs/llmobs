@@ -197,6 +197,7 @@ function TracesPage() {
     url: liveOn
       ? traceStreamUrl(projectRef(org, project), {
           filter: search.filter,
+          search: search.search,
           includeEval: search.eval === 1,
           includeExperiments: search.exp === 1,
         })
@@ -368,7 +369,7 @@ function TracesPage() {
                     notice={
                       live.pending > 0 ? (
                         <Button type="button" size="xs" variant="secondary" onClick={live.reveal}>
-                          {live.pending} new traces ↑
+                          {live.overflowed ? `${live.pending}+` : live.pending} new traces ↑
                         </Button>
                       ) : null
                     }
@@ -498,8 +499,7 @@ function withoutConstraints(search: TracesSearch): TracesSearch {
     view: _view,
     ...rest
   } = search;
-  // An empty search would reapply the default saved view and put the filter back.
-  return Object.keys(rest).length === 0 ? { range: "24h" } : rest;
+  return rest;
 }
 
 function withoutTrace(search: TracesSearch): TracesSearch {

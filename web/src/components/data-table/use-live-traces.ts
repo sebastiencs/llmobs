@@ -5,7 +5,11 @@ import { ROW_HEIGHT } from "@/components/data-table/data-table";
 import {
   belongsAtTop,
   firstPageOnly,
+  firstPageWouldExceed,
+  LIVE_BUFFER_MAX,
+  LIVE_PAGE_MAX,
   prependLiveTraces,
+  pushBuffered,
   replaceLiveTrace,
   type TracePages,
   traceInList,
@@ -13,6 +17,13 @@ import {
 import { type StreamEvent, type StreamStatus, useStream } from "@/lib/sse";
 
 const HIGHLIGHT_MS = 1_500;
+
+let limits = { buffer: LIVE_BUFFER_MAX, page: LIVE_PAGE_MAX };
+
+/** Tests only: lower the live caps. Restore with `setLiveLimits({ buffer: LIVE_BUFFER_MAX, page: LIVE_PAGE_MAX })`. */
+export function setLiveLimits(next: { buffer: number; page: number }): void {
+  limits = next;
+}
 
 export function useLiveTraces({
   url,
@@ -30,6 +41,7 @@ export function useLiveTraces({
   pending: number;
   highlighted: ReadonlySet<string>;
   reveal: () => void;
+  overflowed: boolean;
 } {
   const queryClient = useQueryClient();
   const queryKeyRef = useRef(queryKey);
@@ -38,6 +50,8 @@ export function useLiveTraces({
   selectedRef.current = selectedId;
   const bufferRef = useRef<Schema<"TraceSummary">[]>([]);
   const [pending, setPending] = useState(0);
+  const overflowRef = useRef(false);
+  const [overflowed, setOverflowed] = useState(false);
   const [highlighted, setHighlighted] = useState<ReadonlySet<string>>(() => new Set());
   const timers = useRef<number[]>([]);
   const pinTop = useRef(false);
@@ -70,6 +84,7 @@ export function useLiveTraces({
         }
         return next;
       });
+      timers.current = timers.current.filter((id) => id !== timer);
     }, HIGHLIGHT_MS);
     timers.current.push(timer);
   }
@@ -79,12 +94,26 @@ export function useLiveTraces({
     setPending(next.length);
   }
 
+  /** Drops every page after the first and refetches page 1 from the server, with a correct cursor. */
+  function refetchFirstPage() {
+    const key = queryKeyRef.current;
+    queryClient.setQueryData<TracePages>(key, (current) =>
+      current ? firstPageOnly(current) : current,
+    );
+    void queryClient.invalidateQueries({ queryKey: key, exact: true });
+  }
+
   function insertBuffered(rows: readonly Schema<"TraceSummary">[]) {
     const current = queryClient.getQueryData<TracePages>(queryKeyRef.current);
     if (!current) {
       return;
     }
     const unseen = rows.filter((trace) => !traceInList(current, trace.trace_id));
+    if (firstPageWouldExceed(current, unseen.length, limits.page)) {
+      refetchFirstPage();
+      mark(unseen.map((trace) => trace.trace_id));
+      return;
+    }
     queryClient.setQueryData<TracePages>(queryKeyRef.current, (data) => {
       if (!data) {
         return data;
@@ -109,6 +138,13 @@ export function useLiveTraces({
     writeBuffer([]);
     pinTop.current = true;
     scrollAdjust.current = 0;
+    if (overflowRef.current) {
+      overflowRef.current = false;
+      setOverflowed(false);
+      refetchFirstPage();
+      mark(rows.map((trace) => trace.trace_id));
+      return;
+    }
     insertBuffered(rows);
   }
 
@@ -117,11 +153,7 @@ export function useLiveTraces({
 
   function onEvent(event: StreamEvent) {
     if (event.type === "resync") {
-      const key = queryKeyRef.current;
-      queryClient.setQueryData<TracePages>(key, (current) =>
-        current ? firstPageOnly(current) : current,
-      );
-      void queryClient.invalidateQueries({ queryKey: key, exact: true });
+      refetchFirstPage();
       return;
     }
     if (event.type !== "trace") {
@@ -146,10 +178,20 @@ export function useLiveTraces({
     const node = tracesScroller();
     const atTop = (node?.scrollTop ?? 0) <= 0;
     if (!atTop) {
-      writeBuffer([trace, ...bufferRef.current]);
+      const pushed = pushBuffered(bufferRef.current, trace, limits.buffer);
+      if (pushed.overflowed && !overflowRef.current) {
+        overflowRef.current = true;
+        setOverflowed(true);
+      }
+      writeBuffer(pushed.buffer);
       return;
     }
     if (!current || !belongsAtTop(current, trace)) {
+      return;
+    }
+    if (firstPageWouldExceed(current, 1, limits.page)) {
+      refetchFirstPage();
+      mark([trace.trace_id]);
       return;
     }
     queryClient.setQueryData<TracePages>(key, (data) =>
@@ -203,7 +245,7 @@ export function useLiveTraces({
     node.dispatchEvent(new Event("scroll"));
   });
 
-  return { status, pending, highlighted, reveal };
+  return { status, pending, highlighted, reveal, overflowed };
 }
 
 function tracesScroller(): HTMLElement | null {

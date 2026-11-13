@@ -68,7 +68,11 @@ export function ProjectSidebar({ children }: { children: ReactNode }) {
                         )}
                         tooltip={item.label}
                       >
-                        <Link to={item.to} params={{ org, project }}>
+                        <Link
+                          to={item.to}
+                          params={{ org, project }}
+                          state={(current) => ({ ...current, applyDefaultView: true })}
+                        >
                           <item.icon />
                           <span>{item.label}</span>
                         </Link>

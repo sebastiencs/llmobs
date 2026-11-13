@@ -764,6 +764,10 @@ pub struct TraceStreamParams {
     /// Filter DSL expression over the light columns of the `traces` view (spec 05).
     #[serde(default)]
     pub filter: Option<String>,
+    /// Full-text search (spec 05 § Full-text search). A trace is sent once any of its spans
+    /// matches, then on every later update while the stream stays open.
+    #[serde(default)]
+    pub search: Option<String>,
     /// Include traces from the evaluation environment. Default false. Spec 05 § Default exclusions.
     #[serde(default)]
     pub include_eval: bool,

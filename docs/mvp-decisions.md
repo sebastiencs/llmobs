@@ -275,6 +275,18 @@ Decisions from blessing and reviewing the 51 captured fixtures (`fixtures/otlp`,
 | D-A1-11 | S3 read cache | **A cache store wraps the S3 store and serves data-file ranges from 1 MiB blocks on local disk, each with a CRC-32C, kept across restarts.** Blocks rather than exact ranges, so different queries over the same pages share entries. Flush and compaction write their outputs through; GC deletes drop blocks; verification bypasses the cache. The cache never writes under twice the disk floor (spec 03 §6). |
 | D-A1-12 | Benchmarks | **Benchmarks are `#[ignore]` integration tests run by hand in release mode, with results in `docs/research/storage/benchmarks.md`.** No criterion micro-benchmarks and no `tools/bench-storage` crate: the engine's internals are crate-private, and spec 03's capacity check is about end-to-end numbers. The S3 runs use the Versity Gateway documented in `crates/storage/tests/s3.rs`. |
 
+## Track C — Web UI
+
+Decisions from the review of track C (`docs/reviews/c-web-ui.md`) and its fixes (`docs/plans/c-fixes/`).
+
+| # | Topic | Decision |
+|---|---|---|
+| D-C-1 | OR in the filter bar | **A filter with a top-level `OR` is one raw chip.** `AND` binds tighter than `OR`, so splitting `a OR b AND c` on `AND` and re-joining the chips would apply `(a OR b) AND c`. `splitConjuncts` returns the whole text as one conjunct when it has a top-level `OR`; the `AND` of `[NOT] BETWEEN x AND y` is never a split point; click-to-filter wraps a filter with a top-level `OR` in parentheses before appending `AND`. Refines D129. |
+| D-C-2 | Default saved view | **The default view applies only when a list page is entered with an empty search**: on the history entry the page mounted on, or on an entry whose history state carries `applyDefaultView` (set by the sidebar, the ⌘K palette, the `g` shortcuts and the project switcher). It applies once per history entry. An in-page change that empties the search (a toggle, removing the last chip, deleting the loaded view, "Clear filters") never re-applies it. |
+| D-C-3 | Chart keyboard | **Each dashboard chart is one tab stop** (`role="group"`, `aria-roledescription="chart"`). ←/→ move between buckets (from none: the first or the last), Home/End jump, Enter/Space opens the bucket's traces like a click, Escape clears; the bucket is announced in a polite live region (time and each series' value) and marked with a reference line. The per-point click targets stay for the mouse with `tabIndex=-1` inside an `aria-hidden` `foreignObject`, and Recharts' own keyboard layer is off (`accessibilityLayer={false}`). |
+| D-C-4 | Live caps | **Live mode keeps memory bounded.** The paused buffer keeps the newest 500 traces; once one is dropped the pill reads "500+ new traces" and revealing refetches page 1 (drop later pages, invalidate) instead of inserting. A live insert that would make page 1 longer than 500 rows refetches page 1 instead; trimming it in place would break page 2's cursor. |
+| D-C-5 | Live search | **`GET /traces/stream` takes `search`** (05 § Full-text search). The stream checks each arriving span against the search columns of the `spans` view and sends its trace from the first match on; later updates of a matched trace are sent while the stream stays open. Spans that arrived before the stream opened are not checked (the client refetches on `resync`). Track G implements the matching with the stream handler. |
+
 ## Open
 
 - License (D9).

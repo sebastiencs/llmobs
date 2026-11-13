@@ -1,17 +1,19 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
-import { expect, it, vi } from "vitest";
+import { beforeAll, expect, it, vi } from "vitest";
 import type { Schema } from "@/api/types";
 import { columnChoiceKey } from "@/components/data-table/column-layout";
 import { ROW_HEIGHT } from "@/components/data-table/data-table";
+import { LIVE_BUFFER_MAX, LIVE_PAGE_MAX } from "@/components/data-table/live-list";
+import { setLiveLimits } from "@/components/data-table/use-live-traces";
 import { ONBOARDING_POLL_MS, setOnboardingPollMs } from "@/components/onboarding/poll";
 import { otelSnippet } from "@/components/onboarding/snippets";
 import { defaultCollapsed } from "@/lib/tree";
-import { createDataset } from "@/mocks/generated/dataset";
+import { createDataset, type Dataset } from "@/mocks/generated/dataset";
 import { largeHandlers } from "@/mocks/generated/handlers";
 import { server } from "@/mocks/node";
 import { savedViewHandlers } from "@/mocks/saved-views";
-import { type StreamEmit, traceStreamHandler } from "@/mocks/sse";
+import { type StreamEmit, spanStreamHandler, traceStreamHandler } from "@/mocks/sse";
 import { renderApp } from "@/test/render";
 
 const FIRST = "a1000000000000000000000000000006";
@@ -96,9 +98,14 @@ it("sorts from the URL without reordering the server page", async () => {
   }
 });
 
+let traces5k: Dataset;
+
+beforeAll(() => {
+  traces5k = createDataset({ seed: 1, now: Date.now(), traces: 5000 });
+});
+
 it("virtualizes a large list and loads the next page on scroll", async () => {
-  const now = Date.now();
-  server.use(...largeHandlers(createDataset({ seed: 1, now, traces: 5000 })));
+  server.use(...largeHandlers(traces5k));
   const urls: URL[] = [];
   const onStart = ({ request }: { request: Request }) => {
     const url = new URL(request.url);
@@ -141,6 +148,54 @@ it("moves with j and k and activates the focused row", async () => {
   expect(await within(grid).findByRole("row", { selected: true })).toHaveTextContent(
     "chat claude-sonnet-4-5",
   );
+});
+
+it("scrolls the header with the rows", async () => {
+  await renderApp("/acme/support-bot/traces?range=1h");
+  const grid = await screen.findByRole("grid", { name: "Traces" });
+  const scroller = grid.querySelector("[data-scroll-container]");
+  if (!(scroller instanceof HTMLElement)) {
+    throw new Error("missing scroll container");
+  }
+  const [header, firstRow] = within(grid).getAllByRole("row");
+  if (!header || !firstRow) {
+    throw new Error("missing rows");
+  }
+  expect(header.style.minWidth).toMatch(/^\d+px$/);
+  expect(firstRow.style.minWidth).toBe(header.style.minWidth);
+  scroller.scrollLeft = 300;
+  fireEvent.scroll(scroller);
+  expect(header.parentElement?.scrollLeft).toBe(300);
+});
+
+it("moves from the open trace after a deep link", async () => {
+  const { router } = await renderApp(
+    "/acme/support-bot/traces?range=1h&trace=a1000000000000000000000000000003",
+  );
+  const list = await screen.findByRole("grid", { name: "Traces" });
+  await screen.findByRole("grid", { name: "Trace" });
+  list.focus();
+  fireEvent.keyDown(list, { key: "j" });
+  await waitFor(() => {
+    expect(router.state.location.search.trace).toBe("a1000000000000000000000000000002");
+  });
+  fireEvent.keyDown(list, { key: "k" });
+  await waitFor(() => {
+    expect(router.state.location.search.trace).toBe("a1000000000000000000000000000003");
+  });
+});
+
+it("moves up from the open trace after a deep link", async () => {
+  const { router } = await renderApp(
+    "/acme/support-bot/traces?range=1h&trace=a1000000000000000000000000000003",
+  );
+  const list = await screen.findByRole("grid", { name: "Traces" });
+  await screen.findByRole("grid", { name: "Trace" });
+  list.focus();
+  fireEvent.keyDown(list, { key: "k" });
+  await waitFor(() => {
+    expect(router.state.location.search.trace).toBe("a1000000000000000000000000000004");
+  });
 });
 
 it("persists a column width and restores the default on double-click", async () => {
@@ -478,7 +533,7 @@ it("clears a filter and shows onboarding when nothing is left", async () => {
   await waitFor(() => {
     expect(router.state.location.search.filter).toBeUndefined();
   });
-  expect(router.state.location.search.range).toBe("24h");
+  expect(router.state.location.search).toEqual({});
   expect(await screen.findByRole("tab", { name: "OTel env vars" })).toBeInTheDocument();
 });
 
@@ -507,7 +562,7 @@ it("replaces onboarding with the table when a trace arrives", async () => {
   }
 });
 
-it("opens the trace stream with the list filter", async () => {
+it("opens the trace stream with the list filter and search", async () => {
   const streams: URL[] = [];
   const onStart = ({ request }: { request: Request }) => {
     const url = new URL(request.url);
@@ -519,10 +574,11 @@ it("opens the trace stream with the list filter", async () => {
   server.use(traceStreamHandler(() => undefined));
   try {
     await renderApp(
-      `/acme/support-bot/traces?live=1&filter=${encodeURIComponent("status = 'error'")}&eval=1&exp=1`,
+      `/acme/support-bot/traces?live=1&filter=${encodeURIComponent("status = 'error'")}&search=refund&eval=1&exp=1`,
     );
     await waitFor(() => expect(streams.length).toBeGreaterThan(0));
     expect(streams[0]?.searchParams.get("filter")).toBe("status = 'error'");
+    expect(streams[0]?.searchParams.get("search")).toBe("refund");
     expect(streams[0]?.searchParams.get("include_eval")).toBe("true");
     expect(streams[0]?.searchParams.get("include_experiments")).toBe("true");
     expect(screen.getByRole("switch", { name: "Live" })).toBeEnabled();
@@ -598,6 +654,7 @@ it("refetches the list when the stream resyncs", async () => {
 });
 
 it("keeps the selected row in place when a trace is prepended", async () => {
+  server.use(spanStreamHandler(() => undefined));
   const { emit } = await openLive(`/acme/support-bot/traces?live=1&trace=${FIRST}`);
   const scroller = tracesScroller();
   expect(scroller.scrollTop).toBe(0);
@@ -683,6 +740,57 @@ it("re-anchors the range when live is turned on", async () => {
     }
   } finally {
     server.events.removeListener("request:start", onStart);
+  }
+});
+
+it("caps the paused buffer and refetches the first page on reveal", async () => {
+  setLiveLimits({ buffer: 2, page: LIVE_PAGE_MAX });
+  const urls: URL[] = [];
+  const onStart = ({ request }: { request: Request }) => {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/traces")) urls.push(url);
+  };
+  server.events.on("request:start", onStart);
+  try {
+    const { emit } = await openLive("/acme/support-bot/traces?live=1");
+    const scroller = tracesScroller();
+    scroller.scrollTop = 400;
+    fireEvent.scroll(scroller);
+    emit.trace(liveTrace("c1000000000000000000000000000011", "first over", LATER));
+    emit.trace(liveTrace("c1000000000000000000000000000012", "second over", LATER));
+    emit.trace(liveTrace("c1000000000000000000000000000013", "third over", LATER_STILL));
+    const pill = await screen.findByRole("button", { name: "2+ new traces ↑" });
+    const before = urls.length;
+    fireEvent.click(pill);
+    await waitFor(() => expect(urls.length).toBeGreaterThan(before));
+    expect(scroller.scrollTop).toBe(0);
+    expect(screen.queryByRole("button", { name: /new traces/ })).not.toBeInTheDocument();
+    expect(await screen.findByText("5 loaded")).toBeInTheDocument();
+  } finally {
+    server.events.removeListener("request:start", onStart);
+    setLiveLimits({ buffer: LIVE_BUFFER_MAX, page: LIVE_PAGE_MAX });
+  }
+});
+
+it("refetches the first page instead of growing it past the cap", async () => {
+  setLiveLimits({ buffer: LIVE_BUFFER_MAX, page: 5 });
+  const urls: URL[] = [];
+  const onStart = ({ request }: { request: Request }) => {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/traces")) urls.push(url);
+  };
+  server.events.on("request:start", onStart);
+  try {
+    const { emit } = await openLive("/acme/support-bot/traces?live=1");
+    expect(screen.getByText("5 loaded")).toBeInTheDocument();
+    const before = urls.length;
+    emit.trace(liveTrace("c1000000000000000000000000000014", "over the cap", LATER));
+    await waitFor(() => expect(urls.length).toBeGreaterThan(before));
+    await waitFor(() => expect(screen.getByText("5 loaded")).toBeInTheDocument());
+    expect(screen.queryByText("6 loaded")).not.toBeInTheDocument();
+  } finally {
+    server.events.removeListener("request:start", onStart);
+    setLiveLimits({ buffer: LIVE_BUFFER_MAX, page: LIVE_PAGE_MAX });
   }
 });
 

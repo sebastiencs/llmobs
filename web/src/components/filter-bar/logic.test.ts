@@ -2,7 +2,7 @@ import { CompletionContext } from "@codemirror/autocomplete";
 import { EditorState } from "@codemirror/state";
 import { expect, it } from "vitest";
 import type { Schema } from "@/api/types";
-import { completeFilter, errorMarkRange } from "@/components/filter-bar/logic";
+import { appendFilter, completeFilter, errorMarkRange } from "@/components/filter-bar/logic";
 
 const schema = {
   views: [
@@ -92,4 +92,14 @@ it("offers operators for the column before the cursor", () => {
 it("marks a filter error from the reported column through the token", () => {
   expect(errorMarkRange("nme = 1", 1)).toEqual({ from: 0, to: 3 });
   expect(errorMarkRange("nme = 1", 4)).toEqual({ from: 3, to: 4 });
+});
+
+it("appends a conjunct and parenthesizes a top-level OR", () => {
+  expect(appendFilter("", "x = 1")).toBe("x = 1");
+  expect(appendFilter("  ", "x = 1")).toBe("x = 1");
+  expect(appendFilter("a = 1", "b = 2")).toBe("a = 1 AND b = 2");
+  expect(appendFilter("a = 1 OR b = 2", "status = 'error'")).toBe(
+    "(a = 1 OR b = 2) AND status = 'error'",
+  );
+  expect(appendFilter("(a = 1 OR b = 2)", "c = 3")).toBe("(a = 1 OR b = 2) AND c = 3");
 });

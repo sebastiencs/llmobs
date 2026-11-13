@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { expect, it } from "vitest";
 import { server } from "@/mocks/node";
 import { renderApp } from "@/test/render";
@@ -121,4 +121,59 @@ it("opens traces for the clicked bucket", async () => {
     exp: 1,
   });
   expect(router.state.location.search).not.toHaveProperty("range");
+});
+
+it("gives each chart one tab stop", async () => {
+  await renderApp("/acme/support-bot/dashboard");
+  const card = await screen.findByRole("region", { name: /Traces & errors/ });
+  await waitFor(() => {
+    expect(card.querySelector('[aria-label^="Open bucket"]')).toBeInstanceOf(Element);
+  });
+  const stops = [...card.querySelectorAll<HTMLElement>("button, [tabindex]")].filter(
+    (element) => element.tabIndex >= 0,
+  );
+  expect(stops).toHaveLength(1);
+  expect(stops[0]).toHaveAttribute("role", "group");
+  for (const point of document.querySelectorAll<HTMLElement>("foreignObject button")) {
+    expect(point.tabIndex).toBe(-1);
+  }
+});
+
+it("opens a bucket from the keyboard", async () => {
+  const { router } = await renderApp(
+    "/acme/support-bot/dashboard?filter=status%20%3D%20'error'&eval=1&exp=1",
+  );
+  const card = await screen.findByRole("region", { name: /Traces & errors/ });
+  const chart = await within(card).findByRole("group", { name: /^Traces & errors\./ });
+  chart.focus();
+  fireEvent.keyDown(chart, { key: "ArrowRight" });
+  fireEvent.keyDown(chart, { key: "ArrowRight" });
+  const live = card.querySelector('[aria-live="polite"]');
+  expect(live?.textContent).toContain("Traces");
+  fireEvent.keyDown(chart, { key: "Enter" });
+  await waitFor(() => {
+    expect(router.state.location.pathname).toContain("/traces");
+  });
+  expect(router.state.location.search).toMatchObject({
+    from: "2026-01-01T10:10:00.000Z",
+    to: "2026-01-01T10:20:00.000Z",
+    filter: "status = 'error'",
+    eval: 1,
+    exp: 1,
+  });
+});
+
+it("jumps to the last bucket with End", async () => {
+  const { router } = await renderApp("/acme/support-bot/dashboard");
+  const card = await screen.findByRole("region", { name: /Traces & errors/ });
+  const chart = await within(card).findByRole("group", { name: /^Traces & errors\./ });
+  chart.focus();
+  fireEvent.keyDown(chart, { key: "End" });
+  fireEvent.keyDown(chart, { key: "Enter" });
+  await waitFor(() => {
+    expect(router.state.location.search).toMatchObject({
+      from: "2026-01-01T10:50:00.000Z",
+      to: "2026-01-01T11:00:00.000Z",
+    });
+  });
 });
