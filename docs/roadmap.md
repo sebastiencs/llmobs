@@ -7,7 +7,7 @@ How the MVP (`mvp-decisions.md` § MVP scope) gets built: phases, the tracks ins
 ## How the work is organised
 
 - **Phase 0** (serial) set the contracts: workspace, `llmobs-core`, OTLP fixtures, the API contract, web and SDK scaffolds, CI (D53).
-- **Waves** run tracks in parallel, each in its own worktree and branch, at most 3 sessions at a time (D53). A track owns the directories its plan names (`AGENTS.md` § Parallel work and ownership).
+- **Waves** run tracks in parallel, each in its own worktree and branch, at most 6 sessions at a time (D53). A track owns the directories its plan names (`AGENTS.md` § Parallel work and ownership).
 - **Each track gets a plan before any code**: one plan of small sub-phases, or a design doc plus one plan per milestone when the track has real unknowns (A1). Another model implements the plan one sub-phase per commit.
 - **Wave 1** builds each area on its own, against fixtures and mocks.
 - **Wave 2** connects the areas into a running product and adds the features that need several of them.
@@ -30,14 +30,14 @@ Plans: [`plans/phase-0/`](plans/phase-0/). Decisions D52–D82; D1–D51 are the
 
 | Track | Area | Plan | Status | PRs | Decisions |
 |---|---|---|---|---|---|
-| **A1** Storage engine | `crates/storage`: WAL, memtable, Parquet, catalog, traces, compaction, deletion (spec 03) | [`plans/a1-storage/`](plans/a1-storage/): design doc, then one plan per milestone | **In review.** M1–M5 merged. M6 (resources and hardening) is implemented and in review; benchmarks in `research/storage/benchmarks.md`. Open finding: range-mode `traces` merges need ~2.4 GB per 1M traces in the window. | #8, #11, #18, #20, #22, #24, #27, #28, #30, #34, #37, #40 | D83–D90, D119–D120, D152–D154, D168; M4 onwards `D-A1-n` |
-| **A2** Query layer | `crates/storage` `filter/`, `sql/`, views: filter DSL, SQL sandbox, reads, metrics (spec 05) | [`plans/a2-query/`](plans/a2-query/) (Q1–Q20) | **Implemented** (not yet audited sub-phase by sub-phase). | #9, #13 | D91–D101 |
-| **B1** Normalization | `crates/otel`: decoding, conventions, payloads, media, truncation, cost (spec 02) | [`plans/b1-normalization/`](plans/b1-normalization/) (N1–N23) | **Implemented.** The 51 captured fixture cases are blessed and reviewed; the review's fixes follow D-B1-1–D-B1-9. | #10, #12, #14, #16 | D102–D113, D-B1-1–D-B1-9 |
+| **A1** Storage engine | `crates/storage`: WAL, memtable, Parquet, catalog, traces, compaction, deletion (spec 03) | [`plans/a1-storage/`](plans/a1-storage/): design doc, then one plan per milestone | **In review.** M1–M5 merged. M6 (resources and hardening) is implemented and in review; benchmarks in `research/storage/benchmarks.md`. Open finding: range-mode `traces` merges need ~2.4 GB per 1M traces in the window. | #8, #11, #18, #20, #22, #24, #27, #28, #30, #34, #37, #40, #44 | D83–D90, D119–D120, D152–D154, D168; M4 onwards `D-A1-n` |
+| **A2** Query layer | `crates/storage` `filter/`, `sql/`, views: filter DSL, SQL sandbox, reads, metrics (spec 05) | [`plans/a2-query/`](plans/a2-query/) (Q1–Q20) | **Implemented.** Reviewed against the plan (`reviews/a2-query.md`: 2 blockers, both SQL-console resource limits, and 4 majors); fixes in progress. | #9, #13 | D91–D101 |
+| **B1** Normalization | `crates/otel`: decoding, conventions, payloads, media, truncation, cost (spec 02) | [`plans/b1-normalization/`](plans/b1-normalization/) (N1–N23) | **Implemented.** The 51 captured fixture cases are blessed and reviewed; the review's fixes follow D-B1-1–D-B1-9. | #10, #12, #14, #16, #35 | D102–D113, D-B1-1–D-B1-9 |
 | **B2** Fixture capture | `tools/capture`: mock provider, OTLP receiver, scenarios | [`plans/b2-capture/`](plans/b2-capture/) (K1–K20) | **Implemented.** | #15 | D114–D118, D121–D122 |
-| **C** Web UI on mocks | `web/`: pages with an API contract, on MSW mocks (spec 11) | [`plans/c-web-ui/`](plans/c-web-ui/) (U1–U29) | **Implemented** on mocks (not yet audited sub-phase by sub-phase). Wiring to the real API is track G. | #17, #19 | D123–D134 |
+| **C** Web UI on mocks | `web/`: pages with an API contract, on MSW mocks (spec 11) | [`plans/c-web-ui/`](plans/c-web-ui/) (U1–U29) | **Implemented** on mocks. Reviewed (`docs/reviews/c-web-ui.md`); the review's major findings are fixed by [`plans/c-fixes/`](plans/c-fixes/) (CF1–CF11). Wiring to the real API is track G. | #17, #19 | D123–D134, D-C-1–D-C-5 |
 | **D** Metadata DB and auth | `crates/server`: config, axum app, `meta.db`, identity, sessions, keys, orgs, members, invites, email, OAuth/OIDC, admin (specs 04, 08, 09) | [`plans/d-meta-auth/`](plans/d-meta-auth/) (P1–P26) | **Implemented.** | #21, #25 | D135–D151 |
 | **E** Eval library | `crates/eval`: checks, mapping, templating, judge adapters, webhook, judge traces, runner (spec 06) | [`plans/e-eval/`](plans/e-eval/) (E1–E20) | **Implemented.** The database side of evaluation is track I (D156). | #23, #26 | D155–D167 |
-| **F** SDK tracing | `sdks/python`, `sdks/typescript`: init, exporter, `observe`, context, manual spans, `score` (spec 10, tracing half) | `plans/f-sdk/`: a shared contract, then a Python and a TypeScript track (28 sub-phases) | **In progress.** Plan in review; F1 implemented on branch `f-sdk-shared`. | open: #31 | `D-F-n` |
+| **F** SDK tracing | `sdks/python`, `sdks/typescript`: init, exporter, `observe`, context, manual spans, `score` (spec 10, tracing half) | [`plans/f-sdk/`](plans/f-sdk/): a shared contract, then a Python and a TypeScript track (28 sub-phases) | **Implemented.** Both SDKs pass the shared conformance fixtures. | #31, #36 | `D-F-n` |
 
 ## Wave 2 — integration (proposed)
 

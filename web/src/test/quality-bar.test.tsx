@@ -1,15 +1,21 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { expect, it } from "vitest";
+import { beforeAll, expect, it } from "vitest";
 import { JsonView } from "@/components/payload/json-view";
-import { createDataset } from "@/mocks/generated/dataset";
+import { createDataset, type Dataset } from "@/mocks/generated/dataset";
 import { largeHandlers } from "@/mocks/generated/handlers";
 import { server } from "@/mocks/node";
 import { renderApp } from "@/test/render";
 
 const LARGE = `a${"0".repeat(31)}`;
 
+let traces5k: Dataset;
+
+beforeAll(() => {
+  traces5k = createDataset({ seed: 1, now: Date.now(), traces: 5_000 });
+});
+
 it("keeps a 5 000-trace list under 60 rendered rows in the middle", async () => {
-  server.use(...largeHandlers(createDataset({ seed: 1, now: Date.now(), traces: 5_000 })));
+  server.use(...largeHandlers(traces5k));
   await renderApp("/acme/support-bot/traces");
   const grid = await screen.findByRole("grid", { name: "Traces" });
   const scroller = grid.querySelector("[data-scroll-container]");

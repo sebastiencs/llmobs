@@ -6,6 +6,7 @@ import {
   type ChipValue,
   type CompareOp,
   type Field,
+  hasTopLevelOr,
   parseChip,
   serializeChip,
   type Token,
@@ -196,7 +197,10 @@ export function stringContains(column: string, value: string): string {
 
 export function appendFilter(current: string, conjunct: string): string {
   const base = current.trim();
-  return base.length === 0 ? conjunct : `${base} AND ${conjunct}`;
+  if (base.length === 0) {
+    return conjunct;
+  }
+  return hasTopLevelOr(base) ? `(${base}) AND ${conjunct}` : `${base} AND ${conjunct}`;
 }
 
 export function filterMessage(problem: Problem): string {

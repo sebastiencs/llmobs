@@ -5072,6 +5072,15 @@
             }
           },
           {
+            "name": "search",
+            "in": "query",
+            "description": "Full-text search (spec 05 § Full-text search). A trace is sent once any of its spans\nmatches, then on every later update while the stream stays open.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "include_eval",
             "in": "query",
             "description": "Include traces from the evaluation environment. Default false. Spec 05 § Default exclusions.",

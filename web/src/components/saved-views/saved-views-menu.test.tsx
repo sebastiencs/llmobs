@@ -2,9 +2,11 @@ import { screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
 import { server } from "@/mocks/node";
+import { savedViewHandlers, seedSavedViews } from "@/mocks/saved-views";
 import { renderApp } from "@/test/render";
 
 const ERRORS = "01900000-0000-7000-8000-000000000210";
+const REFUNDS = "01900000-0000-7000-8000-000000000299";
 
 it("lists trace views and marks the shared default", async () => {
   const { user } = await renderApp("/acme/support-bot/traces?range=1h");
@@ -113,4 +115,58 @@ it("shows a failed save in the menu", async () => {
   await user.click(await screen.findByRole("button", { name: "Errors" }));
   await user.click(screen.getByRole("menuitem", { name: "Save" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Not Found");
+});
+
+it("keeps the search empty after an in-page change", async () => {
+  const { router, user } = await renderApp("/acme/support-bot/traces?eval=1");
+  await screen.findByRole("grid", { name: "Traces" });
+  await user.click(screen.getByRole("switch", { name: "Eval" }));
+  await waitFor(() => {
+    expect(router.state.location.search).toEqual({});
+  });
+  // Give a wrongly re-applied default view time to land.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  expect(router.state.location.search).toEqual({});
+});
+
+it("does not apply the default view after deleting the loaded view", async () => {
+  server.use(
+    ...savedViewHandlers([
+      ...seedSavedViews(),
+      {
+        id: REFUNDS,
+        kind: "traces",
+        name: "Refunds",
+        state: { filter: "name = 'refund'" },
+        owner_user_id: "01900000-0000-7000-8000-000000000100",
+        shared: false,
+        is_default: false,
+        created_at: "2026-01-01T09:00:00.000000000Z",
+        updated_at: "2026-01-01T09:00:00.000000000Z",
+      },
+    ]),
+  );
+  // Only `view` in the URL, so deleting the view leaves the search empty.
+  const { router, user } = await renderApp(`/acme/support-bot/traces?view=${REFUNDS}`);
+  await user.click(await screen.findByRole("button", { name: /Refunds/ }));
+  await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+  await user.click(screen.getByRole("button", { name: "Delete view" }));
+  await waitFor(() => {
+    expect(router.state.location.search.view).toBeUndefined();
+  });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  expect(router.state.location.search).toEqual({});
+});
+
+it("applies the default view again from the sidebar", async () => {
+  const { router, user } = await renderApp("/acme/support-bot/traces?range=1h");
+  await screen.findByRole("grid", { name: "Traces" });
+  await user.click(screen.getByRole("link", { name: "Traces" }));
+  await waitFor(() => {
+    expect(router.state.location.search).toMatchObject({
+      filter: "status = 'error'",
+      range: "24h",
+      view: ERRORS,
+    });
+  });
 });

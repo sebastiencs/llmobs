@@ -3,6 +3,26 @@ import type { Schema } from "@/api/types";
 
 export type TracePages = InfiniteData<Schema<"TracePage">, string | null>;
 
+export const LIVE_BUFFER_MAX = 500;
+export const LIVE_PAGE_MAX = 500;
+
+/** Newest first. Keeps at most `max` traces; `overflowed` is true when one was dropped. */
+export function pushBuffered(
+  buffer: readonly Schema<"TraceSummary">[],
+  trace: Schema<"TraceSummary">,
+  max: number,
+): { buffer: Schema<"TraceSummary">[]; overflowed: boolean } {
+  const next = [trace, ...buffer];
+  return next.length > max
+    ? { buffer: next.slice(0, max), overflowed: true }
+    : { buffer: next, overflowed: false };
+}
+
+/** True when adding `adding` rows to the first page would make it longer than `max`. */
+export function firstPageWouldExceed(data: TracePages, adding: number, max: number): boolean {
+  return (data.pages[0]?.data.length ?? 0) + adding > max;
+}
+
 export function traceInList(data: TracePages, traceId: string): boolean {
   return data.pages.some((page) => page.data.some((row) => row.trace_id === traceId));
 }

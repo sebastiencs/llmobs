@@ -3,7 +3,9 @@ import type { Schema } from "@/api/types";
 import {
   belongsAtTop,
   firstPageOnly,
+  firstPageWouldExceed,
   prependLiveTraces,
+  pushBuffered,
   replaceLiveTrace,
   type TracePages,
 } from "./live-list";
@@ -71,4 +73,23 @@ it("drops every page after the first on resync", () => {
   const first = firstPageOnly(data);
   expect(first.pages).toHaveLength(1);
   expect(firstPageOnly(first)).toBe(first);
+});
+
+it("pushes onto the paused buffer and drops the oldest past the cap", () => {
+  const older = trace("c1000000000000000000000000000001", "2026-11-11T21:00:00.000000000Z");
+  const newer = trace("c1000000000000000000000000000002", "2026-11-11T21:00:01.000000000Z");
+  const newest = trace("c1000000000000000000000000000003", "2026-11-11T21:00:02.000000000Z");
+  const room = pushBuffered([older], newer, 2);
+  expect(room).toEqual({ buffer: [newer, older], overflowed: false });
+  const full = pushBuffered(room.buffer, newest, 2);
+  expect(full.overflowed).toBe(true);
+  expect(full.buffer.map((row) => row.trace_id)).toEqual([newest.trace_id, newer.trace_id]);
+});
+
+it("reports when adding rows would grow the first page past the cap", () => {
+  const data = list([["a1000000000000000000000000000001", "a1000000000000000000000000000002"]]);
+  expect(firstPageWouldExceed(data, 0, 2)).toBe(false);
+  expect(firstPageWouldExceed(data, 1, 2)).toBe(true);
+  const none: TracePages = { pages: [], pageParams: [] };
+  expect(firstPageWouldExceed(none, 1, 0)).toBe(true);
 });

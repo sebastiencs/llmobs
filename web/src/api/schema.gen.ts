@@ -6616,6 +6616,11 @@ export interface operations {
             query?: {
                 /** @description Filter DSL expression over the light columns of the `traces` view (spec 05). */
                 filter?: string;
+                /**
+                 * @description Full-text search (spec 05 § Full-text search). A trace is sent once any of its spans
+                 *     matches, then on every later update while the stream stays open.
+                 */
+                search?: string;
                 /** @description Include traces from the evaluation environment. Default false. Spec 05 § Default exclusions. */
                 include_eval?: boolean;
                 /** @description Include experiment traces. Default false. Spec 05 § Default exclusions. */

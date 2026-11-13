@@ -20,6 +20,7 @@ export function traceStreamUrl(
   project: string,
   query: {
     filter?: string;
+    search?: string;
     includeEval?: boolean;
     includeExperiments?: boolean;
   },
@@ -27,6 +28,9 @@ export function traceStreamUrl(
   const params = new URLSearchParams();
   if (query.filter) {
     params.set("filter", query.filter);
+  }
+  if (query.search) {
+    params.set("search", query.search);
   }
   if (query.includeEval) {
     params.set("include_eval", "true");

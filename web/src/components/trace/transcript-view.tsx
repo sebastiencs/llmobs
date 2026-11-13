@@ -71,10 +71,18 @@ export function TranscriptView({
     },
     overscan: OVERSCAN,
   });
-  const visibleIds = virtualizer
-    .getVirtualItems()
-    .map((item) => rows[item.index])
-    .flatMap((row) => (row?.kind === "turn" ? [row.item.span.span.span_id] : []));
+  const visibleIds = [
+    ...new Set(
+      virtualizer
+        .getVirtualItems()
+        .map((item) => rows[item.index])
+        .flatMap((row) =>
+          row?.kind === "turn"
+            ? [...(row.previousLlmId ? [row.previousLlmId] : []), row.item.span.span.span_id]
+            : [],
+        ),
+    ),
+  ];
   useDetailLoader(traceId, visibleIds);
 
   return (
@@ -214,20 +222,24 @@ function TurnRow({
           <span className="num shrink-0 text-muted-foreground">{formatCost(span.cost_total)}</span>
         ) : null}
       </button>
-      {loaded ? (
-        span.span_kind === "tool" ? (
-          <ToolTurn detail={loaded} />
-        ) : (
+      {detail.isError ? (
+        <p className="text-xs">Could not load this span</p>
+      ) : !loaded ||
+        (span.span_kind === "llm" && previousLlmId !== undefined && previous.isPending) ? (
+        <Skeleton className="h-4 w-2/3" />
+      ) : span.span_kind === "tool" ? (
+        <ToolTurn detail={loaded} />
+      ) : (
+        <>
+          {previousLlmId !== undefined && previous.isError ? (
+            <p className="text-xs text-muted-foreground">Earlier context could not be loaded</p>
+          ) : null}
           <LlmTurn
             detail={loaded}
-            previous={previousLlmId ? previous.data : undefined}
+            previous={previousLlmId !== undefined ? previous.data : undefined}
             projectRef={ref}
           />
-        )
-      ) : detail.isError ? (
-        <p className="text-xs">Could not load this span</p>
-      ) : (
-        <Skeleton className="h-4 w-2/3" />
+        </>
       )}
     </div>
   );

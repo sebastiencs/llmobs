@@ -9,7 +9,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { mediaUrl } from "@/lib/media";
+import { classifyMedia } from "@/lib/media";
 
 export function MediaView({
   part,
@@ -20,21 +20,24 @@ export function MediaView({
 }) {
   const mime = typeof part.mime_type === "string" ? part.mime_type : undefined;
   const modality = typeof part.modality === "string" ? part.modality : undefined;
-  if (part.type === "uri" && part.uri === "llmobs:dropped") {
+  if (part.type === "blob") {
+    const src = blobUrl(part);
+    if (isImage(modality, mime)) return <ImageMedia src={src} />;
+    if (isAudio(modality, mime)) return <AudioControl src={src} />;
+    return <MediaChip uri={src} mimeType={mime} projectRef={projectRef} />;
+  }
+  const source = classifyMedia(projectRef, part.uri);
+  if (source.kind === "dropped") {
     return <p className="text-xs text-muted-foreground">{droppedLabel(part.size)}</p>;
   }
-  if (part.type === "uri" && isExternal(part.uri)) {
-    return <ExternalMedia uri={part.uri} mime={mime} modality={modality} />;
+  if (source.kind === "external") {
+    return <ExternalMedia uri={source.url} mime={mime} modality={modality} />;
   }
-  const src = part.type === "blob" ? blobUrl(part) : sourceUrl(part.uri, projectRef);
-  if (!src) {
-    const uri = part.type === "uri" ? part.uri : "";
-    return <MediaChip uri={uri} mimeType={mime} projectRef={projectRef} />;
+  if (source.kind === "stored" || source.kind === "inline") {
+    if (isImage(modality, mime)) return <ImageMedia src={source.url} />;
+    if (isAudio(modality, mime)) return <AudioControl src={source.url} />;
   }
-  if (isImage(modality, mime)) return <ImageMedia src={src} />;
-  if (isAudio(modality, mime)) return <AudioControl src={src} />;
-  const uri = part.type === "uri" ? part.uri : src;
-  return <MediaChip uri={uri} mimeType={mime} projectRef={projectRef} />;
+  return <MediaChip uri={part.uri} mimeType={mime} projectRef={projectRef} />;
 }
 
 function ExternalMedia({ uri, mime, modality }: { uri: string; mime?: string; modality?: string }) {
@@ -80,22 +83,12 @@ function ImageMedia({ src }: { src: string }) {
   );
 }
 
-function sourceUrl(uri: string, projectRef: string | undefined): string | undefined {
-  if (projectRef) return mediaUrl(projectRef, uri);
-  if (uri.startsWith("media://") || uri === "llmobs:dropped") return undefined;
-  return uri;
-}
-
 function blobUrl(part: Schema<"BlobPart">): string {
   const mime =
     typeof part.mime_type === "string" && part.mime_type.length > 0
       ? part.mime_type
       : "application/octet-stream";
   return `data:${mime};base64,${part.content}`;
-}
-
-function isExternal(uri: string): boolean {
-  return uri.startsWith("https:") || uri.startsWith("http:");
 }
 
 function isImage(modality: string | undefined, mime: string | undefined): boolean {

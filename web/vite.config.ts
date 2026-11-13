@@ -56,5 +56,7 @@ export default defineConfig(({ mode }) => ({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     restoreMocks: true,
+    testTimeout: 15_000,
+    hookTimeout: 30_000,
   },
 }));

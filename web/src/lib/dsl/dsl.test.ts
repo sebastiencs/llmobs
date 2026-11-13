@@ -342,6 +342,45 @@ const cases: { name: string; input: string; chips: Chip[]; canonical: string }[]
     canonical: "(a = 1 OR b = 2)",
   },
   {
+    name: "or binds looser than and",
+    input: "a = 1 OR b = 2 AND c = 3",
+    chips: [{ kind: "raw", text: "a = 1 OR b = 2 AND c = 3" }],
+    canonical: "(a = 1 OR b = 2 AND c = 3)",
+  },
+  {
+    name: "and before a top-level or",
+    input: "status = 'error' AND a = 1 OR b = 2",
+    chips: [{ kind: "raw", text: "status = 'error' AND a = 1 OR b = 2" }],
+    canonical: "(status = 'error' AND a = 1 OR b = 2)",
+  },
+  {
+    name: "or inside parentheses still splits",
+    input: "(a = 1 OR b = 2) AND c = 3",
+    chips: [{ kind: "raw", text: "(a = 1 OR b = 2)" }, compare("c", "=", num(3, "3"))],
+    canonical: "(a = 1 OR b = 2) AND c = 3",
+  },
+  {
+    name: "between keeps its and",
+    input: "cost_total BETWEEN 1 AND 2",
+    chips: [{ kind: "raw", text: "cost_total BETWEEN 1 AND 2" }],
+    canonical: "cost_total BETWEEN 1 AND 2",
+  },
+  {
+    name: "between then another conjunct",
+    input: "cost_total BETWEEN 1 AND 2 AND status = 'ok'",
+    chips: [{ kind: "raw", text: "cost_total BETWEEN 1 AND 2" }, compare("status", "=", str("ok"))],
+    canonical: "cost_total BETWEEN 1 AND 2 AND status = 'ok'",
+  },
+  {
+    name: "not between, lower case",
+    input: "duration_ms not between 1 and 2 AND a = 1",
+    chips: [
+      { kind: "raw", text: "duration_ms not between 1 and 2" },
+      compare("a", "=", num(1, "1")),
+    ],
+    canonical: "duration_ms not between 1 and 2 AND a = 1",
+  },
+  {
     name: "unknown map",
     input: "foo['k'] = 1",
     chips: [{ kind: "raw", text: "foo['k'] = 1" }],
@@ -412,6 +451,12 @@ it("records conjunct offsets", () => {
   expect(splitConjuncts(input)).toEqual([
     { text: "a = 1", start: 2, end: 7 },
     { text: "b = 2", start: 14, end: 19 },
+  ]);
+});
+
+it("records the offsets of a whole OR filter", () => {
+  expect(splitConjuncts("  a = 1 OR b = 2  ")).toEqual([
+    { text: "a = 1 OR b = 2", start: 2, end: 16 },
   ]);
 });
 

@@ -1,19 +1,46 @@
 import { expect, it } from "vitest";
-import { mediaUrl } from "@/lib/media";
+import { classifyMedia } from "@/lib/media";
 
-it("encodes the project ref in a media url", () => {
-  expect(mediaUrl("acme/support-bot", "media://497790947d466676")).toBe(
-    "/api/v1/projects/acme%2Fsupport-bot/media/497790947d466676",
-  );
-});
-
-it("returns undefined for media dropped at ingest", () => {
-  expect(mediaUrl("acme/support-bot", "llmobs:dropped")).toBeUndefined();
-});
-
-it("returns https and data uris unchanged", () => {
-  expect(mediaUrl("acme/support-bot", "https://example.com/a.png")).toBe(
+it.each([
+  ["llmobs:dropped", "acme/support-bot", { kind: "dropped" }],
+  [
+    "media://497790947d466676",
+    "acme/support-bot",
+    { kind: "stored", url: "/api/v1/projects/acme%2Fsupport-bot/media/497790947d466676" },
+  ],
+  ["media://497790947d466676", undefined, { kind: "unsupported" }],
+  [
     "https://example.com/a.png",
-  );
-  expect(mediaUrl("acme/support-bot", "data:text/plain,hi")).toBe("data:text/plain,hi");
+    "acme/support-bot",
+    { kind: "external", url: "https://example.com/a.png" },
+  ],
+  [
+    "HTTPS://example.com/a.png",
+    "acme/support-bot",
+    { kind: "external", url: "HTTPS://example.com/a.png" },
+  ],
+  [
+    "Http://example.com/a.png",
+    "acme/support-bot",
+    { kind: "external", url: "Http://example.com/a.png" },
+  ],
+  ["//example.com/a.png", "acme/support-bot", { kind: "external", url: "//example.com/a.png" }],
+  [
+    "data:image/png;base64,AAAA",
+    "acme/support-bot",
+    { kind: "inline", url: "data:image/png;base64,AAAA" },
+  ],
+  [
+    "DATA:AUDIO/wav;base64,AAAA",
+    "acme/support-bot",
+    { kind: "inline", url: "DATA:AUDIO/wav;base64,AAAA" },
+  ],
+  ["data:text/html,<b>x</b>", "acme/support-bot", { kind: "unsupported" }],
+  ["javascript:alert(1)", "acme/support-bot", { kind: "unsupported" }],
+  ["ftp://example.com/a.png", "acme/support-bot", { kind: "unsupported" }],
+  ["gs://bucket/a.png", "acme/support-bot", { kind: "unsupported" }],
+  ["a.png", "acme/support-bot", { kind: "unsupported" }],
+  ["/a.png", "acme/support-bot", { kind: "unsupported" }],
+])("classifies %s", (uri, ref, expected) => {
+  expect(classifyMedia(ref, uri)).toEqual(expected);
 });

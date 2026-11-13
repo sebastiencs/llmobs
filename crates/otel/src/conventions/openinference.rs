@@ -2,6 +2,7 @@
 //!
 //! Spec 02 § Input and output. Flattened messages win over `input.value` and
 //! `output.value`. Mime types are consumed attributes, not payload attributes.
+//! OpenInference's redaction placeholder ([`REDACTED`]) is not captured content.
 
 use llmobs_core::enums::SpanKind;
 use llmobs_core::message::Message;
@@ -23,6 +24,15 @@ const OUTPUT_MIME: &str = "output.mime_type";
 const TOOLS: &str = "llm.tools.";
 const DOCUMENTS: &str = "retrieval.documents.";
 const EMBEDDINGS: &str = "embedding.embeddings.";
+
+/// The value OpenInference writes in place of hidden content (`hideInputs`,
+/// `hideInputText`, `OPENINFERENCE_HIDE_INPUTS`, …), in Python and TypeScript.
+pub(crate) const REDACTED: &str = "__REDACTED__";
+
+/// A non-empty string that is not the redaction placeholder.
+pub(crate) fn captured_text(text: &str) -> bool {
+    !text.is_empty() && text != REDACTED
+}
 
 pub(crate) const PAYLOAD_KEYS: &[(Field, KeyPattern)] = &[
     (Field::Input, KeyPattern::IndexedPrefix(INPUT_MESSAGES)),
@@ -176,8 +186,13 @@ fn tool_definitions(ctx: &mut ReadContext<'_, '_>) -> Option<Vec<Json>> {
 }
 
 fn raw_value(ctx: &mut ReadContext<'_, '_>, key: &str, mime_key: &str) -> Option<(Payload, bool)> {
-    if as_str(ctx.bag.get(key)?) == Some("") {
-        return None;
+    match as_str(ctx.bag.get(key)?) {
+        Some("") => return None,
+        Some(REDACTED) => {
+            drop_raw(ctx, key, mime_key);
+            return None;
+        }
+        _ => {}
     }
     let mime = ctx
         .bag
@@ -233,9 +248,5 @@ fn consume_prefix(ctx: &mut ReadContext<'_, '_>, prefix: &str) {
 
 fn text_at(ctx: &ReadContext<'_, '_>, key: &str) -> Option<String> {
     let text = as_str(ctx.bag.get(key)?)?;
-    if text.is_empty() {
-        None
-    } else {
-        Some(text.to_owned())
-    }
+    captured_text(text).then(|| text.to_owned())
 }

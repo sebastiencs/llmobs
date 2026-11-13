@@ -1,6 +1,16 @@
-import { useMemo } from "react";
+import { type KeyboardEvent, useMemo, useState } from "react";
 import type { BarShapeProps } from "recharts";
-import { Bar, CartesianGrid, ComposedChart, Legend, Line, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  Bar,
+  CartesianGrid,
+  ComposedChart,
+  Legend,
+  Line,
+  ReferenceLine,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import type { Schema } from "@/api/types";
 import { CardHeading, NoData, TopModels } from "@/components/charts/top-models";
 import { type ChartConfig, ChartContainer } from "@/components/ui/chart";
@@ -172,7 +182,7 @@ function ChartCard({
     >
       <CardHeading title={spec.title} unit={spec.unit} />
       {described.hasData ? (
-        <MetricPlot columns={columns} rows={rows} onBucket={onBucket} />
+        <MetricPlot title={spec.title} columns={columns} rows={rows} onBucket={onBucket} />
       ) : (
         <NoData />
       )}
@@ -181,10 +191,12 @@ function ChartCard({
 }
 
 function MetricPlot({
+  title,
   columns,
   rows,
   onBucket,
 }: {
+  title: string;
   columns: Column[];
   rows: ChartRow[];
   onBucket: (timeMs: number) => void;
@@ -193,64 +205,118 @@ function MetricPlot({
   const style = axisStyle(rows);
   const config = useMemo(() => chartConfig(columns), [columns]);
   const yMetric = columns[0]?.metric ?? "traces";
+  const [active, setActive] = useState<number | null>(null);
+  const index = active !== null && active < rows.length ? active : null;
+  const activeRow = index === null ? undefined : rows[index];
+
+  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (rows.length === 0) return;
+    const last = rows.length - 1;
+    let next: number | null | undefined;
+    if (event.key === "ArrowRight") next = index === null ? 0 : Math.min(last, index + 1);
+    else if (event.key === "ArrowLeft") next = index === null ? last : Math.max(0, index - 1);
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = last;
+    else if (event.key === "Escape") next = null;
+    else if ((event.key === "Enter" || event.key === " ") && activeRow) {
+      event.preventDefault();
+      onBucket(activeRow.time);
+      return;
+    }
+    if (next === undefined) return;
+    event.preventDefault();
+    setActive(next);
+  }
+
   return (
-    <ChartContainer
-      config={config}
-      data-chart-container=""
-      initialDimension={{ width: 640, height: 160 }}
-      className="mt-2 aspect-auto min-h-0 w-full flex-1"
+    // biome-ignore lint/a11y/useSemanticElements: a chart is a focusable group with a custom keyboard model (D-C-3)
+    <div
+      role="group"
+      aria-roledescription="chart"
+      aria-label={`${title}. Arrow keys move between time buckets; Enter opens the traces of the bucket.`}
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: the chart is one keyboard stop (D-C-3)
+      tabIndex={0}
+      className="focus-ring mt-2 flex min-h-0 flex-1 flex-col rounded-sm"
+      onKeyDown={onKeyDown}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setActive(null);
+      }}
     >
-      <ComposedChart data={rows} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-        <CartesianGrid stroke="var(--border)" strokeOpacity={0.7} vertical={false} />
-        <XAxis
-          dataKey="time"
-          tick={AXIS_TICK}
-          tickFormatter={(value) => formatTick(value, zone, style)}
-          minTickGap={28}
-          axisLine={false}
-          tickLine={false}
-        />
-        <YAxis
-          tick={AXIS_TICK}
-          tickFormatter={(value) => formatMetric(yMetric, typeof value === "number" ? value : null)}
-          width={72}
-          axisLine={false}
-          tickLine={false}
-        />
-        <Tooltip
-          content={<SeriesTooltip columns={columns} zone={zone} axisStyle={style} />}
-          cursor={{ stroke: "var(--border)" }}
-        />
-        {columns.length > 1 ? <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} /> : null}
-        {columns.map((column) =>
-          column.mark === "bar" ? (
-            <Bar
-              key={column.key}
-              dataKey={column.key}
-              name={column.label}
-              fill={column.color}
-              stackId={column.stacked ? "stack" : undefined}
-              isAnimationActive={false}
-              shape={(props: BarShapeProps) => <BucketBar {...props} onBucket={onBucket} />}
-            />
-          ) : (
-            <Line
-              key={column.key}
-              dataKey={column.key}
-              name={column.label}
-              stroke={column.color}
+      <ChartContainer
+        config={config}
+        data-chart-container=""
+        initialDimension={{ width: 640, height: 160 }}
+        className="aspect-auto min-h-0 w-full flex-1"
+      >
+        <ComposedChart
+          data={rows}
+          margin={{ top: 8, right: 12, left: 0, bottom: 0 }}
+          accessibilityLayer={false}
+        >
+          <CartesianGrid stroke="var(--border)" strokeOpacity={0.7} vertical={false} />
+          <XAxis
+            dataKey="time"
+            tick={AXIS_TICK}
+            tickFormatter={(value) => formatTick(value, zone, style)}
+            minTickGap={28}
+            axisLine={false}
+            tickLine={false}
+          />
+          <YAxis
+            tick={AXIS_TICK}
+            tickFormatter={(value) =>
+              formatMetric(yMetric, typeof value === "number" ? value : null)
+            }
+            width={72}
+            axisLine={false}
+            tickLine={false}
+          />
+          <Tooltip
+            content={<SeriesTooltip columns={columns} zone={zone} axisStyle={style} />}
+            cursor={{ stroke: "var(--border)" }}
+          />
+          {columns.length > 1 ? <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} /> : null}
+          {columns.map((column) =>
+            column.mark === "bar" ? (
+              <Bar
+                key={column.key}
+                dataKey={column.key}
+                name={column.label}
+                fill={column.color}
+                stackId={column.stacked ? "stack" : undefined}
+                isAnimationActive={false}
+                shape={(props: BarShapeProps) => <BucketBar {...props} onBucket={onBucket} />}
+              />
+            ) : (
+              <Line
+                key={column.key}
+                dataKey={column.key}
+                name={column.label}
+                stroke={column.color}
+                strokeWidth={1.5}
+                strokeDasharray={column.dashed}
+                dot={lineDot(column.key, onBucket, solitary(rows, column.key))}
+                activeDot={{ r: 3, strokeWidth: 1.5 }}
+                connectNulls={false}
+                isAnimationActive={false}
+                type="linear"
+              />
+            ),
+          )}
+          {activeRow ? (
+            <ReferenceLine
+              x={activeRow.time}
+              stroke="var(--ring)"
               strokeWidth={1.5}
-              strokeDasharray={column.dashed}
-              dot={lineDot(column.key, onBucket, solitary(rows, column.key))}
-              activeDot={{ r: 3, strokeWidth: 1.5 }}
-              connectNulls={false}
-              isAnimationActive={false}
-              type="linear"
+              ifOverflow="extendDomain"
             />
-          ),
-        )}
-      </ComposedChart>
-    </ChartContainer>
+          ) : null}
+        </ComposedChart>
+      </ChartContainer>
+      <p className="sr-only" aria-live="polite">
+        {activeRow ? bucketSummary(activeRow, columns, zone, style) : ""}
+      </p>
+    </div>
   );
 }
 
@@ -311,9 +377,11 @@ function BucketBar({
   return (
     <g>
       <rect x={left} y={top} width={width} height={height} fill={fill} />
-      <foreignObject x={left} y={top} width={width} height={height}>
+      {/* biome-ignore lint/a11y/noAriaHiddenOnFocusable: mouse-only bucket target with tabIndex -1; the chart group is the keyboard path (D-C-3) */}
+      <foreignObject x={left} y={top} width={width} height={height} aria-hidden="true">
         <button
           type="button"
+          tabIndex={-1}
           aria-label={bucketLabel(time)}
           className="focus-ring block h-full w-full cursor-pointer border-0 bg-transparent p-0"
           onClick={() => onBucket(time)}
@@ -349,9 +417,11 @@ function lineDot(dataKey: string, onBucket: (timeMs: number) => void, showMarker
     return (
       <g>
         {showMarker ? <circle cx={point.cx} cy={point.cy} r={3} fill={point.stroke} /> : null}
-        <foreignObject x={point.cx - 8} y={point.cy - 8} width={16} height={16}>
+        {/* biome-ignore lint/a11y/noAriaHiddenOnFocusable: mouse-only bucket target with tabIndex -1; the chart group is the keyboard path (D-C-3) */}
+        <foreignObject x={point.cx - 8} y={point.cy - 8} width={16} height={16} aria-hidden="true">
           <button
             type="button"
+            tabIndex={-1}
             aria-label={bucketLabel(time)}
             className="focus-ring block size-full cursor-pointer border-0 bg-transparent p-0"
             onClick={() => onBucket(time)}
@@ -378,6 +448,18 @@ function solitary(rows: readonly ChartRow[], key: string): boolean {
 
 function bucketLabel(timeMs: number): string {
   return `Open bucket ${new Date(timeMs).toISOString()}`;
+}
+
+function bucketSummary(
+  row: ChartRow,
+  columns: readonly Column[],
+  zone: TimeZoneSetting,
+  style: "time" | "datetime",
+): string {
+  const values = columns
+    .map((column) => `${column.label} ${formatMetric(column.metric, row[column.key] ?? null)}`)
+    .join(", ");
+  return `${formatTimestamp(new Date(row.time).toISOString(), zone, style)}: ${values}`;
 }
 
 function rowTime(payload: unknown): number | undefined {
