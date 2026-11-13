@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { parseLoginSearch } from "./auth";
+import { parseLoginSearch, parseSetupSearch } from "./auth";
 
 it("keeps a safe redirect, a known error and an email", () => {
   expect(
@@ -21,4 +21,12 @@ it("drops values that are not strings", () => {
   expect(result.redirect).toBeUndefined();
   expect(result.error).toBeUndefined();
   expect(result.email).toBeUndefined();
+});
+
+it("keeps a setup token and drops an empty one", () => {
+  expect(parseSetupSearch({ token: "abc" })).toEqual({ token: "abc" });
+  const empty = parseSetupSearch({ token: "" });
+  expect("token" in empty).toBe(true);
+  expect(empty.token).toBeUndefined();
+  expect(parseSetupSearch({ token: "x".repeat(257) }).token).toBeUndefined();
 });

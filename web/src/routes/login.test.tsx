@@ -57,6 +57,14 @@ it("goes home after signing in without a redirect", async () => {
   await waitFor(() => expect(router.state.location.pathname).toBe("/acme"));
 });
 
+it("sends the user to setup when the server needs it", async () => {
+  signedOut();
+  withConfig({ setup_required: true });
+  const { router } = await renderApp("/login");
+  await waitFor(() => expect(router.state.location.pathname).toBe("/setup"));
+  expect(screen.getByText(/Open the setup link printed in the server log/)).toBeInTheDocument();
+});
+
 it("ignores an unsafe redirect", async () => {
   signedOut();
   loginSucceeds();

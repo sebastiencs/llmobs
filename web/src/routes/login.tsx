@@ -23,7 +23,10 @@ import { parseLoginSearch } from "@/lib/search/auth";
 export const Route = createFileRoute("/login")({
   validateSearch: (search) => parseLoginSearch(search),
   beforeLoad: async ({ context, search }) => {
-    await context.queryClient.ensureQueryData(authConfigQuery);
+    const config = await context.queryClient.ensureQueryData(authConfigQuery);
+    if (config.setup_required) {
+      throw redirect({ to: "/setup" });
+    }
     // staleTime 0: a cached `me` from before a sign-out or a 401 must not count.
     const me = await context.queryClient
       .fetchQuery({ ...meQuery, staleTime: 0 })

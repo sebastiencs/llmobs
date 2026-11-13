@@ -33,3 +33,13 @@ export function parseLoginSearch(search: Record<string, unknown>): LoginSearch {
     email: parseString(search.email, EMAIL_MAX),
   };
 }
+
+/** Longest token the UI keeps from a `?token=` link. Server tokens are 43 characters. */
+export const TOKEN_MAX = 256;
+
+export type SetupSearch = { token?: string };
+
+/** Returns `token` even when rejected (`undefined`), as L3 step 2 explains. */
+export function parseSetupSearch(search: Record<string, unknown>): SetupSearch {
+  return { token: parseString(search.token, TOKEN_MAX) };
+}
