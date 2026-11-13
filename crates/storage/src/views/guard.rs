@@ -2,13 +2,21 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray};
+use std::collections::HashMap;
+
+use arrow::array::{Array, ArrayRef, AsArray, RecordBatch};
 use arrow::compute::kernels::length::length;
-use arrow::datatypes::{DataType, FieldRef, Int64Type};
+use arrow::datatypes::{DataType, Field, FieldRef, Int64Type, Schema};
 use datafusion::common::config::ConfigOptions;
-use datafusion::common::{ExprSchema, Result, ScalarValue};
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::{
+    DFSchema, ExprSchema, Result, ScalarValue, exec_err, internal_err, plan_err,
+};
+use datafusion::error::DataFusionError;
 use datafusion::execution::SessionStateDefaults;
 use datafusion::execution::memory_pool::{MemoryConsumer, MemoryPool};
+use datafusion::logical_expr::expr::ScalarFunction;
+use datafusion::logical_expr::expr_rewriter::NamePreserver;
 use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion::logical_expr::preimage::PreimageResult;
 use datafusion::logical_expr::ptr_eq::PtrEq;
@@ -16,9 +24,15 @@ use datafusion::logical_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion::logical_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion::logical_expr::udf_eq::UdfEq;
 use datafusion::logical_expr::{
-    ColumnarValue, Documentation, Expr, ExpressionPlacement, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDF, ScalarUDFImpl, Signature, StructFieldMapping,
+    ColumnarValue, Documentation, Expr, ExprSchemable, ExpressionPlacement, LogicalPlan, Operator,
+    ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, StructFieldMapping,
+    Volatility,
 };
+use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::{BinaryExpr as PhysicalBinary, Column};
+
+use super::hex::expression_schema;
 
 /// Scalar functions the session does not register, with their aliases (D-A2-2).
 pub(crate) const DENIED_FUNCTIONS: &[&str] = &[
@@ -194,6 +208,213 @@ impl ScalarUDFImpl for GuardedScalar {
     }
 }
 
+/// `a || b` on strings, run through DataFusion's own kernel after the same
+/// reservation as [`GuardedScalar`].
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub(crate) struct GuardedStringConcat {
+    return_type: DataType,
+    signature: Signature,
+    pool: PtrEq<Arc<dyn MemoryPool>>,
+}
+
+impl GuardedStringConcat {
+    pub(crate) fn new(return_type: DataType, pool: Arc<dyn MemoryPool>) -> Self {
+        Self {
+            return_type,
+            signature: Signature::any(2, Volatility::Immutable),
+            pool: pool.into(),
+        }
+    }
+}
+
+impl ScalarUDFImpl for GuardedStringConcat {
+    fn name(&self) -> &str {
+        "guarded_string_concat"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(self.return_type.clone())
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
+        Ok(Arc::new(Field::new(
+            self.name(),
+            self.return_type.clone(),
+            nullable,
+        )))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let bytes = argument_bytes(&args.args, args.number_rows);
+        // Arrow's Utf8 concatenation unwraps an i32 offset and panics past 2 GiB
+        // (arrow-string concat_elements.rs); fail instead.
+        if self.return_type == DataType::Utf8 && bytes > i32::MAX as usize {
+            return exec_err!("string concatenation result is larger than 2 GiB");
+        }
+        let reservation = MemoryConsumer::new("string concatenation").register(&self.pool);
+        reservation.try_grow(bytes)?;
+        let result = concat_strings(&args.args, args.number_rows);
+        drop(reservation);
+        result
+    }
+}
+
+/// `left || right` with DataFusion's `BinaryExpr` kernel. All-scalar arguments
+/// give a scalar, as the operator would.
+fn concat_strings(args: &[ColumnarValue], rows: usize) -> Result<ColumnarValue> {
+    let [left, right] = args else {
+        return internal_err!("guarded_string_concat takes two arguments");
+    };
+    let scalar =
+        matches!(left, ColumnarValue::Scalar(_)) && matches!(right, ColumnarValue::Scalar(_));
+    let rows = if scalar { 1 } else { rows };
+    let left = left.to_array(rows)?;
+    let right = right.to_array(rows)?;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("left", left.data_type().clone(), true),
+        Field::new("right", right.data_type().clone(), true),
+    ]));
+    let batch = RecordBatch::try_new(schema, vec![left, right])?;
+    let expr = PhysicalBinary::new(
+        Arc::new(Column::new("left", 0)),
+        Operator::StringConcat,
+        Arc::new(Column::new("right", 1)),
+    );
+    let value = expr.evaluate(&batch)?;
+    if scalar {
+        let array = value.into_array(1)?;
+        return Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+            &array, 0,
+        )?));
+    }
+    Ok(value)
+}
+
+/// Routes every scalar function call through the guard (D-A2-2): swaps unguarded
+/// functions for their guarded twins by name, and turns `a || b` on strings into
+/// `guarded_string_concat`.
+#[derive(Debug)]
+pub(crate) struct GuardRule {
+    /// Guarded functions by name and alias.
+    functions: HashMap<String, Arc<ScalarUDF>>,
+    pool: Arc<dyn MemoryPool>,
+}
+
+impl GuardRule {
+    /// `functions` is [`guarded_functions`]; the unguarded ones in it are skipped.
+    pub(crate) fn new(functions: &[Arc<ScalarUDF>], pool: Arc<dyn MemoryPool>) -> Self {
+        let mut by_name = HashMap::new();
+        for udf in functions
+            .iter()
+            .filter(|udf| udf.inner().is::<GuardedScalar>())
+        {
+            by_name.insert(udf.name().to_owned(), Arc::clone(udf));
+            for alias in udf.aliases() {
+                by_name.insert(alias.clone(), Arc::clone(udf));
+            }
+        }
+        Self {
+            functions: by_name,
+            pool,
+        }
+    }
+
+    fn guard_named(
+        &self,
+        expr: Expr,
+        names: &NamePreserver,
+        schema: &DFSchema,
+    ) -> Result<Transformed<Expr>, DataFusionError> {
+        let saved = names.save(&expr);
+        let rewritten = expr.transform_up(|expr| self.guard_one(expr, schema))?;
+        Ok(Transformed::new_transformed(
+            saved.restore(rewritten.data),
+            rewritten.transformed,
+        ))
+    }
+
+    fn guard_one(
+        &self,
+        expr: Expr,
+        schema: &DFSchema,
+    ) -> Result<Transformed<Expr>, DataFusionError> {
+        match expr {
+            Expr::ScalarFunction(call) => {
+                let inner = call.func.inner();
+                let name = call.func.name();
+                if inner.is::<GuardedScalar>()
+                    || inner.is::<GuardedStringConcat>()
+                    || UNGUARDED_FUNCTIONS.contains(&name)
+                {
+                    return Ok(Transformed::no(Expr::ScalarFunction(call)));
+                }
+                if let Some(guarded) = self.functions.get(name) {
+                    return Ok(Transformed::yes(Expr::ScalarFunction(
+                        ScalarFunction::new_udf(Arc::clone(guarded), call.args),
+                    )));
+                }
+                if DENIED_FUNCTIONS.contains(&name) {
+                    return plan_err!("function `{name}` is not available");
+                }
+                Ok(Transformed::no(Expr::ScalarFunction(call)))
+            }
+            Expr::BinaryExpr(binary) if binary.op == Operator::StringConcat => {
+                let original = Expr::BinaryExpr(binary);
+                let return_type = original.get_type(schema)?;
+                let Expr::BinaryExpr(binary) = original else {
+                    return internal_err!("string concatenation changed shape");
+                };
+                let udf = ScalarUDF::new_from_impl(GuardedStringConcat::new(
+                    return_type,
+                    Arc::clone(&self.pool),
+                ));
+                Ok(Transformed::yes(Expr::ScalarFunction(
+                    ScalarFunction::new_udf(Arc::new(udf), vec![*binary.left, *binary.right]),
+                )))
+            }
+            other => Ok(Transformed::no(other)),
+        }
+    }
+}
+
+impl OptimizerRule for GuardRule {
+    fn name(&self) -> &str {
+        "guard_scalar_functions"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::BottomUp)
+    }
+
+    #[allow(deprecated)]
+    fn supports_rewrite(&self) -> bool {
+        true
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
+        let schema = expression_schema(&plan)?;
+        let names = NamePreserver::new(&plan);
+        plan.map_expressions(|expr| {
+            // A grouping set keeps its own children's names; aliasing the set
+            // itself would hide it from the Aggregate (as SimplifyExpressions does).
+            if let Expr::GroupingSet(_) = &expr {
+                expr.map_children(|child| self.guard_named(child, &names, &schema))
+            } else {
+                self.guard_named(expr, &names, &schema)
+            }
+        })
+    }
+}
+
 /// Bytes a call reads: arrays by their buffer size, scalars once per row.
 /// Conservative: shared buffers and the scalar struct size are counted whole.
 pub(crate) fn argument_bytes(args: &[ColumnarValue], rows: usize) -> usize {
@@ -305,6 +526,8 @@ mod tests {
     use arrow::array::{Int64Array, ListBuilder, StringArray, StringBuilder};
     use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
     use serde_json::{Map, json};
+
+    use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 
     use super::*;
     use crate::query_error::RunError;
@@ -509,5 +732,145 @@ mod tests {
         .await
         .expect("short separator");
         assert_eq!(light.rows.len(), 14);
+    }
+
+    /// Every scalar function call and `||` in `plan` and its subqueries that the
+    /// guard does not cover, as SQL text.
+    fn unguarded_expressions(plan: &LogicalPlan) -> Vec<String> {
+        let mut found = Vec::new();
+        plan.apply_with_subqueries(|node| {
+            node.apply_expressions(|expr| {
+                expr.apply(|e| {
+                    match e {
+                        Expr::ScalarFunction(call) => {
+                            let inner = call.func.inner();
+                            let guarded =
+                                inner.is::<GuardedScalar>() || inner.is::<GuardedStringConcat>();
+                            if !guarded && !UNGUARDED_FUNCTIONS.contains(&call.func.name()) {
+                                found.push(e.to_string());
+                            }
+                        }
+                        Expr::BinaryExpr(binary) if binary.op == Operator::StringConcat => {
+                            found.push(e.to_string());
+                        }
+                        _ => {}
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })
+            })
+        })
+        .expect("walk the plan");
+        found
+    }
+
+    #[tokio::test]
+    async fn every_call_in_an_optimized_plan_is_guarded() {
+        let ctx = QueryContext::new(example_query(), None).expect("context");
+        let queries = [
+            "SELECT tags || tags AS a, name || 'x' AS b, metadata['k'] AS c, tags[1] AS d, upper(name) AS e FROM spans WHERE name || '!' <> ''",
+            "SELECT span_id FROM spans WHERE trace_id IN (SELECT trace_id FROM traces WHERE name || 'x' <> '')",
+            "WITH a AS (SELECT name || name AS x FROM spans) SELECT x || x AS y FROM a",
+            "SELECT date_bin(INTERVAL '1 hour', start_time, TIMESTAMP '1970-01-01T00:00:00Z') AS b, count(*) AS n FROM spans GROUP BY 1",
+            "SELECT name || 'x' AS a, count(*) AS n FROM spans GROUP BY ROLLUP(name || 'x')",
+        ];
+        for query in queries {
+            let frame = ctx.session().sql(query).await.expect(query);
+            let plan = ctx
+                .session()
+                .state()
+                .optimize(frame.logical_plan())
+                .expect("optimize");
+            let found = unguarded_expressions(&plan);
+            assert!(found.is_empty(), "{query}: unguarded {found:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn string_concatenation_keeps_its_semantics() {
+        let ctx = QueryContext::new(example_query(), None).expect("context");
+        let json = run(
+            &ctx,
+            "SELECT name, name || '!' AS a, name || CASE WHEN name = 'no such name' THEN 'x' END AS b FROM spans ORDER BY span_id LIMIT 3",
+        )
+        .await
+        .expect("concatenation");
+        assert_eq!(json.rows.len(), 3);
+        for row in &json.rows {
+            let name = row["name"].as_str().expect("name is text");
+            assert_eq!(row["a"], json!(format!("{name}!")));
+            assert_eq!(row["b"], json!(null));
+        }
+
+        let rolled = run(
+            &ctx,
+            "SELECT name || 'x' AS a, count(*) AS n FROM spans GROUP BY ROLLUP(name || 'x') ORDER BY a NULLS FIRST",
+        )
+        .await
+        .expect("rollup over a concatenation");
+        let total = rolled
+            .rows
+            .iter()
+            .find(|row| row["a"].is_null())
+            .expect("grand total row");
+        assert_eq!(total["n"], json!(14));
+    }
+
+    #[tokio::test]
+    async fn the_rule_keeps_the_plan_schema() {
+        let ctx = QueryContext::new(example_query(), None).expect("context");
+        let queries = [
+            "SELECT name || 'x' FROM spans",
+            "SELECT name || 'x' AS a, count(*) AS n FROM spans GROUP BY name || 'x'",
+            "SELECT name || 'x' AS a, count(*) AS n FROM spans GROUP BY ROLLUP(name || 'x')",
+        ];
+        let fields = |plan: &LogicalPlan| -> Vec<(String, DataType, bool)> {
+            plan.schema()
+                .fields()
+                .iter()
+                .map(|field| {
+                    (
+                        field.name().clone(),
+                        field.data_type().clone(),
+                        field.is_nullable(),
+                    )
+                })
+                .collect()
+        };
+        for query in queries {
+            let frame = ctx.session().sql(query).await.expect(query);
+            let unoptimized = frame.logical_plan().clone();
+            let optimized = ctx
+                .session()
+                .state()
+                .optimize(&unoptimized)
+                .expect("optimize");
+            assert_eq!(fields(&optimized), fields(&unoptimized), "{query}");
+        }
+    }
+
+    #[tokio::test]
+    async fn cte_doubling_hits_the_memory_limit() {
+        let (ctx, runtime) = big_input_context(64 * 1024 * 1024, 100_000);
+        let doubling = |levels: usize| {
+            let mut sql = String::from("WITH a0 AS (SELECT input AS x FROM spans)");
+            for level in 1..=levels {
+                sql += &format!(", a{level} AS (SELECT x || x AS x FROM a{})", level - 1);
+            }
+            sql += &format!(" SELECT length(x) AS n FROM a{levels}");
+            sql
+        };
+
+        let error = run(&ctx, &doubling(12))
+            .await
+            .expect_err("doubling over the pool");
+        assert!(matches!(error, RunError::TooLarge), "{error:?}");
+        assert_eq!(runtime.memory_pool.reserved(), 0);
+
+        let json = run(&ctx, &doubling(3)).await.expect("three levels fit");
+        assert_eq!(json.rows.len(), 14);
+        for row in &json.rows {
+            assert_eq!(row["n"], json!(800_000));
+        }
+        assert_eq!(runtime.memory_pool.reserved(), 0);
     }
 }
