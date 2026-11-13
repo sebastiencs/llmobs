@@ -3242,6 +3242,8 @@ dependencies = [
  "minijinja",
  "oauth2",
  "openidconnect",
+ "opentelemetry-proto",
+ "prost",
  "rand 0.10.3",
  "reqwest",
  "rsa 0.10.0",

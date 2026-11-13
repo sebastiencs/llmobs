@@ -45,6 +45,8 @@ bytes.workspace = true
 flate2.workspace = true
 http-body-util.workspace = true
 zstd.workspace = true
+prost.workspace = true
+opentelemetry-proto.workspace = true
 
 [dev-dependencies]
 futures.workspace = true

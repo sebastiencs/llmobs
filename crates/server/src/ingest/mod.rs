@@ -2,3 +2,5 @@
 #![cfg_attr(not(test), allow(dead_code))] // no non-test caller until the route lands (G1.7)
 
 pub(crate) mod body;
+pub(crate) mod environment;
+pub(crate) mod otlp;
