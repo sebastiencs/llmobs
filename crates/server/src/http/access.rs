@@ -49,6 +49,11 @@ pub(crate) enum Access {
         /// Session cookie only.
         session_only: bool,
     },
+    /// A project API key with `scope`. Sessions and PATs are refused.
+    Key {
+        /// The scope the key must hold.
+        scope: KeyScope,
+    },
 }
 
 /// One row of the route table.
@@ -111,6 +116,7 @@ pub(crate) fn routes() -> Vec<RouteDef> {
     routes.extend(crate::routes::members::routes());
     routes.extend(crate::routes::api_keys::routes());
     routes.extend(crate::routes::tokens::routes());
+    routes.extend(crate::routes::otlp::routes());
     routes
 }
 
@@ -227,6 +233,18 @@ async fn prepare(state: AppState, access: Access, request: Request) -> Result<Re
         Access::Project { perm, session_only } => {
             let key = path_value(&mut parts, &state, "project").await?;
             grant_project(&state, &mut parts, &principal, &key, perm, session_only).await?;
+        }
+        Access::Key { scope } => {
+            let Principal::ApiKey {
+                project_id, scopes, ..
+            } = &principal
+            else {
+                return Err(forbidden());
+            };
+            if !scopes.contains(scope) {
+                return Err(forbidden());
+            }
+            grant_key_only_project(&state, &mut parts, *project_id).await?;
         }
     }
     parts.extensions.insert(principal);
@@ -426,6 +444,33 @@ async fn grant_key_project(
     Ok(())
 }
 
+/// The key's own project, for an [`Access::Key`] route. The route has no
+/// `{project}` in its path, so the project comes from the key. A project or org
+/// that is not `active` is 404, as for the other project routes.
+async fn grant_key_only_project(
+    state: &AppState,
+    parts: &mut Parts,
+    project_id: ProjectId,
+) -> Result<(), ApiError> {
+    let Some(project) = project_by_id(state.meta.reader(), project_id).await? else {
+        return Err(ApiError::NotFound);
+    };
+    if project.state != "active" {
+        return Err(ApiError::NotFound);
+    }
+    let Some(org) = org_by_id(state.meta.reader(), project.org_id).await? else {
+        return Err(ApiError::NotFound);
+    };
+    if org.state != "active" {
+        return Err(ApiError::NotFound);
+    }
+    parts.extensions.insert(ProjectAccess {
+        project,
+        role: None,
+    });
+    Ok(())
+}
+
 async fn load_project(state: &AppState, key: &str) -> Result<Option<ProjectRow>, ApiError> {
     let pool = state.meta.reader();
     if let Ok(id) = key.parse::<ProjectId>() {
@@ -459,19 +504,21 @@ mod access_suite;
 mod tests {
     use axum::Json;
     use axum::extract::Extension;
-    use axum::http::Method;
+    use axum::http::{Method, StatusCode};
     use axum::routing::{get, post};
     use serde_json::{Value, json};
     use utoipa::openapi::security::SecurityRequirement;
 
     use super::*;
     use crate::auth::roles::{ProjectOverride, org_role_str};
+    use crate::auth::secret::{self, KeyKind};
     use crate::auth::session::start_session;
     use crate::meta::members::{add_org_member, set_project_override};
     use crate::meta::orgs::insert_org;
+    use crate::meta::personal_tokens::{self, NewToken};
     use crate::meta::projects::insert_project;
-    use crate::meta::users::{NewUser, insert_user};
-    use crate::test_support::TestApp;
+    use crate::meta::users::{self, NewUser, insert_user};
+    use crate::test_support::{TestApp, TestResponse};
 
     struct People {
         ada: HeaderValueCookie,
@@ -908,6 +955,130 @@ mod tests {
         assert_eq!(org.status, 404);
     }
 
+    async fn key_route(Extension(_access): Extension<ProjectAccess>) -> StatusCode {
+        StatusCode::NO_CONTENT
+    }
+
+    async fn post_key(app: &TestApp, cookie: Option<&str>, bearer: Option<&str>) -> TestResponse {
+        let mut request = app.request(Method::POST, "/test/key");
+        if let Some(cookie) = cookie {
+            request = request.header("cookie", cookie);
+        }
+        if let Some(bearer) = bearer {
+            request = request.header("authorization", &format!("Bearer {bearer}"));
+        }
+        request.send().await
+    }
+
+    fn assert_outcome(response: &TestResponse, status: StatusCode, marker: &str, case: &str) {
+        assert_eq!(response.status, status, "{case}");
+        assert_eq!(response.header("x-test-access"), Some(marker), "{case}");
+    }
+
+    async fn personal_token(app: &TestApp, email: &str, scopes: Vec<KeyScope>) -> String {
+        let user = users::user_by_email(app.state.meta.reader(), email)
+            .await
+            .unwrap()
+            .expect("user exists");
+        let minted = secret::new_key(KeyKind::Personal).unwrap();
+        let plaintext = minted.plaintext.clone();
+        let now = app.state.clock.now_ns();
+        app.state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    personal_tokens::insert_token(
+                        conn,
+                        NewToken {
+                            user_id: user.id,
+                            name: "test".to_owned(),
+                            prefix: minted.prefix,
+                            hash: minted.hash,
+                            scopes,
+                            expires_at: None,
+                        },
+                        now,
+                    )
+                    .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
+        plaintext
+    }
+
+    #[tokio::test]
+    async fn a_key_route_admits_only_an_ingest_key_of_an_active_project() {
+        let app = TestApp::with_route_table(vec![route(
+            Method::POST,
+            "/test/key",
+            Access::Key {
+                scope: KeyScope::Ingest,
+            },
+            post(key_route),
+        )])
+        .await;
+        let seeded = app.seed().await;
+        assert_eq!(seeded.project.slug, "support-bot");
+        // Never used before the project is deleted.
+        let (_, unused_key) = app.add_project(&seeded, "other-bot", None).await;
+        let read_pat = personal_token(&app, "ada@example.com", vec![KeyScope::Read]).await;
+        let write_pat = personal_token(
+            &app,
+            "ada@example.com",
+            vec![KeyScope::Read, KeyScope::Write],
+        )
+        .await;
+
+        let anonymous = post_key(&app, None, None).await;
+        assert_outcome(
+            &anonymous,
+            StatusCode::UNAUTHORIZED,
+            "denied-401",
+            "anonymous",
+        );
+        let session = post_key(&app, Some(&seeded.cookie), None).await;
+        assert_outcome(&session, StatusCode::FORBIDDEN, "denied-403", "session");
+        let read_token = post_key(&app, None, Some(&read_pat)).await;
+        assert_outcome(&read_token, StatusCode::FORBIDDEN, "denied-403", "read PAT");
+        let write_token = post_key(&app, None, Some(&write_pat)).await;
+        assert_outcome(
+            &write_token,
+            StatusCode::FORBIDDEN,
+            "denied-403",
+            "write PAT",
+        );
+        let read_key = post_key(&app, None, Some(&seeded.read_key)).await;
+        assert_outcome(&read_key, StatusCode::FORBIDDEN, "denied-403", "read key");
+        let public_key = post_key(&app, None, Some(&seeded.public_key)).await;
+        assert_outcome(&public_key, StatusCode::FORBIDDEN, "denied-403", "pk key");
+        let ingest_key = post_key(&app, None, Some(&seeded.ingest_key)).await;
+        assert_outcome(&ingest_key, StatusCode::NO_CONTENT, "allowed", "ingest key");
+
+        app.state
+            .meta
+            .write(|conn| {
+                Box::pin(async move {
+                    sqlx::query("UPDATE projects SET state = 'deleting'")
+                        .execute(&mut *conn)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
+        // The key is not cached, and its project is not active, so the
+        // authenticator refuses it before the route is reached. That refusal
+        // happens outside `enforce`, so there is no access marker.
+        let unused = post_key(&app, None, Some(&unused_key)).await;
+        assert_eq!(unused.status, StatusCode::UNAUTHORIZED, "unused key");
+        // The key was cached by its successful use, so the route's own project
+        // check answers 404.
+        let used = post_key(&app, None, Some(&seeded.ingest_key)).await;
+        assert_outcome(&used, StatusCode::NOT_FOUND, "denied-404", "used key");
+    }
+
     #[test]
     fn route_table_matches_parameters_and_openapi_security() {
         let document = crate::api::openapi::openapi();
@@ -965,7 +1136,10 @@ mod tests {
                 | Access::Project {
                     session_only: false,
                     ..
-                } => None,
+                }
+                // M1's only key route is undocumented. M3 documents
+                // `POST /api/v1/scores` and revisits this arm.
+                | Access::Key { .. } => None,
             };
             assert!(
                 operation.security == expected,

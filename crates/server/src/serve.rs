@@ -15,6 +15,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use llmobs_otel::{PriceError, PriceTable, builtin_price_rows};
 use llmobs_storage::Storage;
 use llmobs_storage::error::OpenError;
 use tokio::net::TcpListener;
@@ -24,7 +25,8 @@ use tokio::task::JoinHandle;
 use crate::auth::Limits;
 use crate::clock::Clock;
 use crate::config::{ConfigError, ServerConfig};
-use crate::http::{AppInner, AppState, router};
+use crate::http::{AppInner, AppState, otlp_router, router};
+use crate::ingest::Ingest;
 use crate::meta::{MetaDb, MetaError};
 
 /// How long in-flight HTTP may finish after stop-accepting (spec 12).
@@ -66,6 +68,9 @@ pub enum ServeError {
     /// Creating `data_dir`, or the accept loop, failed.
     #[error(transparent)]
     Serve(io::Error),
+    /// The built-in price table did not compile. A build defect, not a config value.
+    #[error("built-in price table")]
+    Prices(#[source] PriceError),
     /// Headless init failed a check. The reason names the rule or the variable,
     /// not the password, the key, or the email.
     #[error("init failed: {reason}")]
@@ -110,8 +115,12 @@ fn storage_message(error: &OpenError) -> String {
 pub struct Running {
     /// The address `bind` actually got, including an ephemeral port.
     pub local_addr: SocketAddr,
+    /// The OTLP/HTTP listener's address, when `otlp_http_addr` is set (D-G-21).
+    pub otlp_local_addr: Option<SocketAddr>,
     serve: Option<JoinHandle<io::Result<()>>>,
     shutdown_tx: Option<oneshot::Sender<()>>,
+    otlp_serve: Option<JoinHandle<io::Result<()>>>,
+    otlp_shutdown_tx: Option<oneshot::Sender<()>>,
     state: Option<AppState>,
     /// Background work. Shutdown aborts whatever is here.
     tasks: Vec<JoinHandle<()>>,
@@ -129,6 +138,9 @@ impl std::fmt::Debug for Running {
 impl Drop for Running {
     fn drop(&mut self) {
         if let Some(serve) = self.serve.take() {
+            serve.abort();
+        }
+        if let Some(serve) = self.otlp_serve.take() {
             serve.abort();
         }
         for task in &self.tasks {
@@ -162,6 +174,7 @@ pub async fn run(
 pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
     let data_dir = config.data_dir.clone();
     let http_addr = config.http_addr;
+    let otlp_http_addr = config.otlp_http_addr;
     if let Err(source) = tokio::fs::create_dir_all(&data_dir).await {
         return Err(directory_error(&data_dir, &source));
     }
@@ -173,6 +186,15 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
             return Err(error.into());
         }
     };
+    let prices = match PriceTable::new(builtin_price_rows()) {
+        Ok(prices) => prices,
+        Err(error) => {
+            release_storage(storage).await;
+            meta.close().await;
+            return Err(ServeError::Prices(error));
+        }
+    };
+    let ingest = Ingest::new(&config.ingest, &config.media, prices);
     let mailer = match crate::email::Mailer::from_config(&config) {
         Ok(mailer) => mailer.map(Arc::new),
         Err(_error) => {
@@ -233,30 +255,30 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         mailer,
         providers,
         oauth_key,
+        ingest,
     });
     if let Err(error) = crate::bootstrap::prepare(&state).await {
         release_state(state).await;
         return Err(serve_bootstrap(error));
     }
-    let listener = match TcpListener::bind(http_addr).await {
-        Ok(listener) => listener,
-        Err(source) => {
+    // Both sockets are bound before either server starts. A failure drops the
+    // sockets already bound and releases the state, so `LOCK` is free after `Err`.
+    let (listener, local_addr) = match bind_listener(http_addr).await {
+        Ok(bound) => bound,
+        Err(error) => {
             release_state(state).await;
-            return Err(ServeError::Bind {
-                addr: http_addr,
-                source,
-            });
+            return Err(error);
         }
     };
-    let local_addr = match listener.local_addr() {
-        Ok(addr) => addr,
-        Err(source) => {
-            release_state(state).await;
-            return Err(ServeError::Bind {
-                addr: http_addr,
-                source,
-            });
-        }
+    let otlp = match otlp_http_addr {
+        None => None,
+        Some(addr) => match bind_listener(addr).await {
+            Ok(bound) => Some(bound),
+            Err(error) => {
+                release_state(state).await;
+                return Err(error);
+            }
+        },
     };
     tracing::info!(%local_addr, "listening");
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -268,10 +290,30 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
             })
             .await
     });
+    let (otlp_local_addr, otlp_serve, otlp_shutdown_tx) = match otlp {
+        None => (None, None, None),
+        Some((listener, addr)) => {
+            tracing::info!(otlp_http_local_addr = %addr, "listening");
+            let (tx, rx) = oneshot::channel();
+            let app =
+                otlp_router(state.clone()).into_make_service_with_connect_info::<SocketAddr>();
+            let serve = tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async move {
+                        let _ = rx.await;
+                    })
+                    .await
+            });
+            (Some(addr), Some(serve), Some(tx))
+        }
+    };
     Ok(Running {
         local_addr,
+        otlp_local_addr,
         serve: Some(serve),
         shutdown_tx: Some(shutdown_tx),
+        otlp_serve,
+        otlp_shutdown_tx,
         state: Some(state.clone()),
         tasks: vec![
             spawn_prune(state.clone()),
@@ -279,6 +321,14 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
             spawn_last_used(state),
         ],
     })
+}
+
+/// Binds `addr` and returns the listener with the address it actually got.
+async fn bind_listener(addr: SocketAddr) -> Result<(TcpListener, SocketAddr), ServeError> {
+    let bind_error = |source| ServeError::Bind { addr, source };
+    let listener = TcpListener::bind(addr).await.map_err(bind_error)?;
+    let local_addr = listener.local_addr().map_err(bind_error)?;
+    Ok((listener, local_addr))
 }
 
 fn spawn_purge(state: AppState) -> JoinHandle<()> {
@@ -353,10 +403,14 @@ impl Running {
         if let Some(sender) = self.shutdown_tx.take() {
             let _ = sender.send(());
         }
-        let serve_error = match self.serve.take() {
-            Some(serve) => drain(serve).await,
-            None => None,
-        };
+        if let Some(sender) = self.otlp_shutdown_tx.take() {
+            let _ = sender.send(());
+        }
+        let (serve_result, otlp_result) = tokio::join!(
+            drain_optional(self.serve.take()),
+            drain_optional(self.otlp_serve.take()),
+        );
+        let serve_error = serve_result.or(otlp_result);
         for task in self.tasks.drain(..) {
             task.abort();
             let _ = task.await;
@@ -383,6 +437,13 @@ impl Running {
             Some(error) => Err(error),
             None => Ok(()),
         }
+    }
+}
+
+async fn drain_optional(serve: Option<JoinHandle<io::Result<()>>>) -> Option<ServeError> {
+    match serve {
+        Some(serve) => drain(serve).await,
+        None => None,
     }
 }
 
@@ -441,7 +502,9 @@ mod tests {
     use bytesize::ByteSize;
 
     use super::*;
-    use crate::config::{AuthSettings, InitConfig, LogConfig, PublicUrl};
+    use crate::config::{
+        AuthSettings, IngestConfig, InitConfig, LogConfig, MediaConfig, PublicUrl,
+    };
 
     #[tokio::test]
     async fn an_empty_database_logs_the_setup_url_once() {
@@ -636,12 +699,127 @@ mod tests {
         meta.close().await;
     }
 
+    const OTLP_KEY: &str = "sk-llmobs-0123456789ABCDEFGHIJKLMNOPQRSTUV";
+    const TRACES: &str =
+        include_str!("../../../fixtures/otlp/genai/finish-reasons-fill/input.json");
+
+    fn with_init(mut config: ServerConfig) -> ServerConfig {
+        config.init = serde_json::from_value(serde_json::json!({
+            "admin_email": "ada@example.com",
+            "admin_password": "llmobs-ok1",
+            "org": "Acme",
+            "project": "Support bot",
+            "secret_key": OTLP_KEY,
+        }))
+        .unwrap();
+        config
+    }
+
+    async fn send_raw(addr: SocketAddr, request: &[u8]) -> String {
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        stream.write_all(request).await.unwrap();
+        String::from_utf8_lossy(&read_response(&mut stream).await).into_owned()
+    }
+
+    async fn post_traces(addr: SocketAddr, key: &str) -> String {
+        let request = format!(
+            "POST /v1/traces HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAuthorization: Bearer {key}\r\nConnection: close\r\n\r\n{TRACES}",
+            TRACES.len()
+        );
+        send_raw(addr, request.as_bytes()).await
+    }
+
+    #[tokio::test]
+    async fn otlp_port_takes_traces_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut both = with_init(config(dir.path()));
+        both.otlp_http_addr = Some(SocketAddr::from(([127, 0, 0, 1], 0)));
+        let running = bind(both).await.unwrap();
+        let otlp = running.otlp_local_addr.expect("the OTLP listener is bound");
+        assert_ne!(otlp, running.local_addr);
+
+        let accepted = post_traces(otlp, OTLP_KEY).await;
+        assert!(accepted.starts_with("HTTP/1.1 200"), "{accepted}");
+
+        let health = send_raw(
+            otlp,
+            b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(health.starts_with("HTTP/1.1 404"), "{health}");
+
+        let on_main = post_traces(running.local_addr, OTLP_KEY).await;
+        assert!(on_main.starts_with("HTTP/1.1 200"), "{on_main}");
+        running.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn no_otlp_address_binds_one_listener() {
+        let dir = tempfile::tempdir().unwrap();
+        let running = bind(config(dir.path())).await.unwrap();
+        assert!(running.otlp_local_addr.is_none());
+        running.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn empty_otlp_address_in_toml_binds_one_listener() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("llmobs.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "data_dir = \"{}\"\nhttp_addr = \"127.0.0.1:0\"\notlp_http_addr = \"\"\n",
+                dir.path().display()
+            ),
+        )
+        .unwrap();
+        let loaded = ServerConfig::load(Some(&path)).unwrap();
+        assert_eq!(loaded.otlp_http_addr, None);
+        let running = bind(loaded).await.unwrap();
+        assert!(running.otlp_local_addr.is_none());
+        running.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_occupied_otlp_port_fails_bind_and_releases_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let taken = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let taken_addr = taken.local_addr().unwrap();
+        let mut clash = config(dir.path());
+        clash.otlp_http_addr = Some(taken_addr);
+        let error = bind(clash).await.unwrap_err();
+        let text = error.to_string();
+        assert!(
+            matches!(error, ServeError::Bind { addr, .. } if addr == taken_addr),
+            "{text}"
+        );
+        assert!(text.contains(&taken_addr.to_string()), "{text}");
+        drop(taken);
+
+        let again = bind(config(dir.path())).await.unwrap();
+        again.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn shutdown_with_both_listeners_releases_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut both = config(dir.path());
+        both.otlp_http_addr = Some(SocketAddr::from(([127, 0, 0, 1], 0)));
+        let running = bind(both).await.unwrap();
+        assert!(running.otlp_local_addr.is_some());
+        running.shutdown().await.unwrap();
+
+        let again = bind(config(dir.path())).await.unwrap();
+        again.shutdown().await.unwrap();
+    }
+
     fn config(data_dir: &Path) -> ServerConfig {
         ServerConfig {
             data_dir: data_dir.to_path_buf(),
             public_url: PublicUrl::default(),
             http_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             trusted_proxies: Vec::new(),
+            otlp_http_addr: None,
             storage: StorageConfig {
                 data_dir: data_dir.to_path_buf(),
                 min_free_bytes: ByteSize::b(0),
@@ -656,6 +834,8 @@ mod tests {
                 compaction: Default::default(),
                 deletion: Default::default(),
             },
+            ingest: IngestConfig::default(),
+            media: MediaConfig::default(),
             auth: AuthSettings::default(),
             smtp_url: None,
             email_from: None,

@@ -12,7 +12,7 @@ GitHub and Google also accept the split form (`LLMOBS_AUTH__GITHUB__CLIENT_ID`, 
 | `public_url` | `LLMOBS_PUBLIC_URL` | `http://localhost:8080` |
 | `http_addr` | `LLMOBS_HTTP_ADDR` | `0.0.0.0:8080` |
 | `trusted_proxies` | `LLMOBS_TRUSTED_PROXIES` | empty (comma-separated CIDRs, D142) |
-| `grpc_addr` | `LLMOBS_GRPC_ADDR` | `0.0.0.0:4317` |
+| `grpc_addr` | `LLMOBS_GRPC_ADDR` | `0.0.0.0:4317` (empty = disabled; a config key from track G M3) |
 | `otlp_http_addr` | `LLMOBS_OTLP_HTTP_ADDR` | `0.0.0.0:4318` (empty = disabled) |
 | `storage.object_store` | `LLMOBS_OBJECT_STORE` | `file://<data_dir>/objects`. A set value is `file://<absolute path>` or `s3://<bucket>[/<prefix>]` |
 | `storage.s3.region` | `AWS_REGION` | unset |
@@ -27,9 +27,12 @@ GitHub and Google also accept the split form (`LLMOBS_AUTH__GITHUB__CLIENT_ID`, 
 | `init.org` | `LLMOBS_INIT_ORG` | unset |
 | `init.project` | `LLMOBS_INIT_PROJECT` | unset |
 | `init.secret_key` | `LLMOBS_INIT_SECRET_KEY` | unset (optional `sk-llmobs-` key for headless init) |
-| `ingest.max_request_bytes` | | 10 MiB |
-| `ingest.max_attribute_bytes` | | 8 MiB |
-| `media.min_bytes` / `media.max_bytes` | | 4 KiB / 32 MiB |
+| `ingest.max_request_bytes` | | `"10MiB"` (before and after decompression) |
+| `ingest.max_spans_per_request` | | `50000` |
+| `ingest.max_inflight_bytes` | | `"256MiB"` (request bytes held at once, D-G-5) |
+| `ingest.max_grpc_message_bytes` | | `"32MiB"` (with the gRPC listener, track G M3) |
+| `ingest.max_attribute_bytes` | | `"8MiB"` |
+| `media.min_bytes` / `media.max_bytes` | | `"4KiB"` / `"32MiB"` |
 | `storage.wal.sync` | | `"always"` (or a duration such as `"5ms"`: fsync at most that often) |
 | `storage.flush.max_bytes` / `storage.flush.max_age` / `storage.flush.upload_concurrency` | | `"256MiB"` / `"120s"` / `8` |
 | `storage.memtable.hard_limit` | | `"1GiB"` |
@@ -42,7 +45,7 @@ GitHub and Google also accept the split form (`LLMOBS_AUTH__GITHUB__CLIENT_ID`, 
 | `storage.query.metadata_cache_bytes` | | `"512MiB"` |
 | `storage.deletion.max_delay` | | `"24h"` |
 
-The storage engine's settings form the `[storage]` section, with one sub-table per area (`wal`, `s3`, `flush`, `memtable`, `compaction`, `query`, `gc`, `deletion`, `anchor`); spec 03 names them without the `storage.` prefix. Sizes are strings with a binary unit (`"256MiB"`, `"1GiB"`) and durations are strings with a unit (`"2ms"`, `"120s"`, `"24h"`) (D90). S3 credentials are the standard `AWS_*` environment variables and are not config keys. The full list, with defaults, is the `StorageConfig` doc in `llmobs-storage`.
+The storage engine's settings form the `[storage]` section, with one sub-table per area (`wal`, `s3`, `flush`, `memtable`, `compaction`, `query`, `gc`, `deletion`, `anchor`); spec 03 names them without the `storage.` prefix. Sizes are strings with a binary unit (`"256MiB"`, `"1GiB"`) and durations are strings with a unit (`"2ms"`, `"120s"`, `"24h"`) (D90). The `[ingest]` and `[media]` sections use the same formats. S3 credentials are the standard `AWS_*` environment variables and are not config keys. The full list, with defaults, is the `StorageConfig` doc in `llmobs-storage`.
 | `eval.workers` | | 16 |
 | `log.format` / `log.level` | `LLMOBS_LOG` | `pretty` on TTY else `json` / `info` |
 | `telemetry.enabled` | `LLMOBS_TELEMETRY` | decided with the license (anonymous usage ping, opt-out) |

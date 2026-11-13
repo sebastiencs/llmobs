@@ -11,7 +11,7 @@ OTLP/JSON follows the OTLP specification strictly (D108): lowerCamelCase fields,
 
 Authentication: `Authorization: Bearer <sk-…>` (project secret key with `ingest` scope). For OTel exporters that only support custom headers this is set via `OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer sk-…"`. The key determines the project; there is no project header.
 
-Responses follow OTLP: `200` with `ExportTraceServiceResponse` (with `partial_success.rejected_spans` and an error message when some spans were dropped), `400` malformed, `401` bad key, `413` too large, `429` rate limited (with `Retry-After`), `503` when the WAL is unavailable / disk full.
+Responses follow OTLP: `200` with `ExportTraceServiceResponse` in the request's encoding (with `partial_success.rejected_spans` and an error message when some spans were dropped), `400` malformed, `401` no or bad key, `403` a credential that is not a key with the `ingest` scope, `413` too large, `415` unknown `Content-Type` (parameters such as `charset` are ignored) or `Content-Encoding`, `429` per-org rate limit or quota (with `Retry-After`, track N), `503` with `Retry-After: 1` when the server is overloaded (memtable at its hard limit, in-flight budget full), the WAL has failed, the disk is full or the server is shutting down (D-G-3). Error bodies are the API's problem+json, not a `google.rpc.Status` (D-G-6). gRPC uses `UNAUTHENTICATED`, `PERMISSION_DENIED`, `INVALID_ARGUMENT`, `RESOURCE_EXHAUSTED` (message size and per-org limits) and `UNAVAILABLE` (overload) the same way.
 
 **Durability contract:** a `200` means every accepted span is in the fsynced WAL.
 
@@ -19,20 +19,25 @@ Responses follow OTLP: `200` with `ExportTraceServiceResponse` (with `partial_su
 
 | Limit | Default | On violation |
 |---|---|---|
-| HTTP request body (after decompression) | 10 MiB | 413 |
+| HTTP request body, before and after decompression (`ingest.max_request_bytes`); decompression stops at the limit | 10 MiB | 413 |
 | gRPC message | 32 MiB | `RESOURCE_EXHAUSTED` |
 | Single attribute value | 8 MiB | truncated (below) |
-| Spans per request | 50 000 | 413 |
+| Spans per request, counted after decoding (`ingest.max_spans_per_request`) | 50 000 | 413 (gRPC `INVALID_ARGUMENT`) |
+| Request bytes held at once, all requests: raw bodies reserved before reading, decompressed output reserved per 64 KiB (`ingest.max_inflight_bytes`, D-G-5) | 256 MiB | 503, `Retry-After: 1`, no waiting |
 | Per-org ingest rate | from org limits (12) | 429 |
 
 ## Pipeline
 
 ```
-decode ─► authenticate ─► rate-limit/meter ─► for each span:
-   detect conventions ─► normalize ─► extract media ─► truncate ─► compute cost ─► store media ─► build row
-─► append batch to WAL (group commit, fsync) ─► insert into memtable
-─► publish to live bus ─► enqueue online-eval triggers ─► respond 200
+authenticate ─► read body (capped) ─► in-flight budget ─► rate-limit (track N)
+accept:  decompress (capped) ─► decode ─► count spans ─► normalize (for each span: detect conventions ─►
+         normalize ─► extract media ─► truncate ─► compute cost) ─► rewrite reserved environment
+commit:  store media ─► build batch ─► append batch to WAL (group commit, fsync) ─► insert into memtable
+         ─► publish to live bus ─► count usage ─► enqueue online-eval triggers (track I)
+─► respond 200
 ```
+
+The server runs this per request, with no queue between the request and storage; decoding and normalization run on a blocking thread (D-G-2). `accept` exists only for OTLP. `commit` is the in-process entry point: track I commits judge traces with it, so they skip the environment rewrite (D-G-8).
 
 Normalization is a pure function in `llmobs-otel`: `normalize(request, ingest_context, price_table) -> Normalized { spans, media, rejections }` (D102, D103, D105). It does no I/O. The server stores each returned media blob through `llmobs-storage` before the WAL append. Re-sends are safe because blobs are content-addressed. `ingest_context` carries the project ID, the ingest time, the project's `retention_days` and the limits.
 
@@ -160,7 +165,7 @@ Per-modality counts (`gen_ai.usage.{audio,image,text}.*`, `llm.token_count.*_det
 | `user_id` | `llmobs.user.id`, `user.id`, `enduser.id`, `traceloop.association.properties.user_id`, `ai.telemetry.metadata.userId`, `ai.settings.context.userId` (D-B1-5), `langfuse.user.id`, `lmnr.association.properties.user_id` |
 | `tags` | `llmobs.tags`, `tag.tags`, `ai.telemetry.metadata.tags`, `langfuse.trace.tags`, `lmnr.association.properties.tags`. Each source is a string array or a string containing a JSON array of strings. Any other form, such as a comma-separated list, is not a tag source: it is consumed and stays in `attributes` (rule 2) |
 | `metadata` | `llmobs.metadata.*` (one attribute per key), `metadata` (OI, JSON object string), `ai.telemetry.metadata.*`, `ai.settings.context.*` (Vercel v7's `context` option, D-B1-5), `ai.telemetry.functionId` (stored as `functionId`), `traceloop.association.properties.*`, `traceloop.workflow.name` (stored as `workflow`), `langfuse.trace.metadata.*`, `lmnr.association.properties.metadata.*` |
-| `environment` | `llmobs.environment`, resource `deployment.environment.name`, `deployment.environment`, `langfuse.environment`. A value `llmobs-eval` received over OTLP is rewritten to `llmobs-eval-external` by the OTLP handler after normalization, with a warning attribute (D161). `normalize` itself does not rewrite it, so in-process evaluation spans keep the name |
+| `environment` | `llmobs.environment`, resource `deployment.environment.name`, `deployment.environment`, `langfuse.environment`. A value `llmobs-eval` received over OTLP is rewritten to `llmobs-eval-external` by the OTLP handler after normalization, and the warning code `reserved_environment` is added to `llmobs.normalize_warning` (rule 18; D161, D-G-7). `normalize` itself does not rewrite it, so in-process evaluation spans keep the name |
 | `release` | `llmobs.release`, resource `service.version`, `langfuse.release`, `lmnr.span.release` (span) |
 | `service_name` | resource `service.name` |
 | experiment linkage | `llmobs.experiment.id`, `llmobs.dataset_item.id` → stored in `metadata` under the reserved keys `llmobs.experiment_id`, `llmobs.dataset_item_id` (06) |
@@ -204,7 +209,7 @@ These rules resolve ambiguities in the tables above. They were fixed while writi
     The other spans of the request are still accepted. An all-zero `parentSpanId`, or one whose length is not 8 bytes, is treated as absent. `partial_success.error_message` is rule 21.
 16. **Finish reasons.** In a GenAI output message list, each message keeps its own `finish_reason`. A missing one is filled from `gen_ai.response.finish_reasons[i]`. For OpenLLMetry, `gen_ai.completion.N.finish_reason` goes on message N. For OpenInference, `llm.output_messages.N.message.finish_reason` goes on message N when present. For a message built from flat attributes (Vercel `doGenerate`/`doStream`): the first element of `gen_ai.response.finish_reasons` when present, else `ai.response.finishReason`. GenAI wins by the precedence of § Convention detection. The flat-attribute source attributes are consumed attributes (rule 2).
 17. **Timestamps** (D106). `start_time_unix_nano` and `end_time_unix_nano` above `i64::MAX` reject the span. `end < start` sets `end_time = start_time` and records the warning `end_before_start`. A zero `end_time_unix_nano` (an unended span) counts as `end < start`.
-18. **Warnings.** Recoverable oddities are recorded as warning codes in the attribute `llmobs.normalize_warning`: a JSON array of strings, sorted, without duplicates. The normalizer writes this attribute and replaces a client-sent value with the same key. Codes: `duplicate_key`, `end_before_start`, `input_excludes_cache`, `invalid_event_time`, `invalid_number`, `max_depth`. The set is closed. Adding a code means updating this rule.
+18. **Warnings.** Recoverable oddities are recorded as warning codes in the attribute `llmobs.normalize_warning`: a JSON array of strings, sorted, without duplicates. The normalizer writes this attribute and replaces a client-sent value with the same key. Codes: `duplicate_key`, `end_before_start`, `input_excludes_cache`, `invalid_event_time`, `invalid_number`, `max_depth`, and `reserved_environment`, which only the server's OTLP handler writes (D-G-7). The set is closed. Adding a code means updating this rule.
 19. **AnyValue limits** (D107). Nesting deeper than 32 levels (array or kvlist inside array or kvlist) is replaced at depth 33 by the string `[llmobs: max depth]`. The attribute name goes into `truncated`, and the `max_depth` warning is recorded. Duplicate keys in one key-value list: the last one wins, and `duplicate_key` is recorded. This applies to attributes, resource attributes, event and link attributes, and nested kvlists.
 20. **Numbers.** A field typed as an integer accepts `intValue`, a `doubleValue` with no fractional part, or a string holding a decimal integer. A field typed as a float accepts `intValue`, `doubleValue` or a numeric string. Anything else does not fill the field. The attribute stays in `attributes`, unconsumed, and `invalid_number` is recorded. Negative token counts are invalid numbers.
 21. **Rejection reasons** (D111). The rejection reasons are `invalid_trace_id`, `invalid_span_id`, `timestamp_overflow` and `start_time_out_of_range`. `partial_success.error_message` lists at most 4 of them with counts, sorted by count descending then by code, for example `rejected 3 spans: invalid_span_id ×2, start_time_out_of_range ×1`. When more than 4 exist, the rest are `, … ×{rest}`. The word is `span` when the total is 1. The message never contains a value from the request.
@@ -257,7 +262,7 @@ Embedding spans use the `input` price only: `cost_output` is null and `cost_tota
 
 ## Live bus
 
-After WAL commit, each batch is published on an in-process `tokio::sync::broadcast` channel as lightweight events `{project_id, trace_id, span_id, start_time, …light columns}`. SSE handlers subscribe and filter by project / trace. Slow subscribers that lag are sent a `resync` event and the client refetches.
+After `append_spans` returns (the batch is in the WAL and the memtable), `commit` publishes it on an in-process `tokio::sync::broadcast` channel as one event with a monotonic id, the project id, the touched trace ids and the spans' light columns, whatever the source (OTLP/HTTP, gRPC, judge traces). SSE handlers subscribe and filter by project / trace. Nothing is replayed: a subscriber that lags, or a client that reconnects with `Last-Event-ID`, is sent a `resync` event and refetches (D-G-12).
 
 ## Online-eval triggers
 

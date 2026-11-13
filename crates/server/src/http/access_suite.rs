@@ -272,7 +272,7 @@ fn emails_and_passwords() -> Vec<String> {
 }
 
 async fn drive(app: &TestApp, world: &mut World) -> usize {
-    let routes = documented_routes();
+    let routes = checked_routes();
     let mut checked = 0;
     for route in routes {
         let path = concrete_path(&route, world);
@@ -347,10 +347,11 @@ fn cookie_of(callers: &[Caller], who: Who) -> String {
         .unwrap()
 }
 
-fn documented_routes() -> Vec<RouteDef> {
+/// Documented routes, and every key route (which stays out of the document, D-G-6).
+fn checked_routes() -> Vec<RouteDef> {
     routes()
         .into_iter()
-        .filter(|route| route.documented)
+        .filter(|route| route.documented || matches!(route.access, Access::Key { .. }))
         .collect()
 }
 
@@ -448,6 +449,13 @@ fn expected(access: Access, method: &Method, who: Who) -> Outcome {
                     Outcome::Denied403
                 }
                 Some(_) => Outcome::Allowed,
+            }
+        }
+        Access::Key { scope } => {
+            if is_key(who) && holds_scope(who, scope) {
+                Outcome::Allowed
+            } else {
+                Outcome::Denied403
             }
         }
         Access::Project { perm, session_only } => {
@@ -557,7 +565,8 @@ fn assert_every_route_declares_access() {
             | Access::User { .. }
             | Access::InstanceAdmin
             | Access::Org { .. }
-            | Access::Project { .. } => {}
+            | Access::Project { .. }
+            | Access::Key { .. } => {}
         }
         if route.path.contains("{project}") {
             assert!(
@@ -572,7 +581,7 @@ fn assert_every_route_declares_access() {
 
 async fn assert_lists_omit_secrets(app: &TestApp, world: &World) {
     let ada = cookie_of(&world.callers, Who::Ada);
-    for route in documented_routes() {
+    for route in routes().into_iter().filter(|route| route.documented) {
         if !is_list(&route) {
             continue;
         }

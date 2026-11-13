@@ -30,10 +30,23 @@ const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+
 pub(crate) enum ApiError {
     /// The body is larger than the route's limit.
     #[error("payload too large")]
-    PayloadTooLarge,
-    /// The content type is not accepted.
+    PayloadTooLarge {
+        /// Static text shown as the problem `detail`.
+        detail: &'static str,
+    },
+    /// The content type or encoding is not accepted.
     #[error("unsupported media type")]
-    UnsupportedMediaType,
+    UnsupportedMediaType {
+        /// Static text shown as the problem `detail`.
+        detail: &'static str,
+    },
+    /// The server cannot take the request now. The client may retry after
+    /// `Retry-After`.
+    #[error("unavailable")]
+    Unavailable {
+        /// Static text shown as the problem `detail`.
+        detail: &'static str,
+    },
     /// The request is malformed.
     #[error("bad request")]
     BadRequest {
@@ -79,14 +92,16 @@ pub(crate) enum ApiError {
 impl ApiError {
     fn problem(&self) -> Problem {
         match self {
-            Self::PayloadTooLarge => Problem::new(
-                ProblemCode::PayloadTooLarge,
-                Some("request body is too large".to_owned()),
-            ),
-            Self::UnsupportedMediaType => Problem::new(
+            Self::PayloadTooLarge { detail } => {
+                Problem::new(ProblemCode::PayloadTooLarge, Some((*detail).to_owned()))
+            }
+            Self::UnsupportedMediaType { detail } => Problem::new(
                 ProblemCode::UnsupportedMediaType,
-                Some("expected Content-Type application/json".to_owned()),
+                Some((*detail).to_owned()),
             ),
+            Self::Unavailable { detail } => {
+                Problem::new(ProblemCode::Busy, Some((*detail).to_owned()))
+            }
             Self::BadRequest { detail, errors } => {
                 let mut problem = Problem::new(ProblemCode::BadRequest, detail.clone());
                 problem.errors.clone_from(errors);
@@ -112,12 +127,18 @@ impl IntoResponse for ApiError {
             tracing::error!(error = %source, "internal error");
         }
         let mut headers = HeaderMap::new();
-        if let Self::RateLimited { retry_after_s } = self {
-            let seconds = header_u64(retry_after_s);
-            headers.insert(axum::http::header::RETRY_AFTER, seconds.clone());
-            headers.insert(header("ratelimit-limit"), seconds.clone());
-            headers.insert(header("ratelimit-remaining"), header_u64(0));
-            headers.insert(header("ratelimit-reset"), seconds);
+        match self {
+            Self::RateLimited { retry_after_s } => {
+                let seconds = header_u64(retry_after_s);
+                headers.insert(axum::http::header::RETRY_AFTER, seconds.clone());
+                headers.insert(header("ratelimit-limit"), seconds.clone());
+                headers.insert(header("ratelimit-remaining"), header_u64(0));
+                headers.insert(header("ratelimit-reset"), seconds);
+            }
+            Self::Unavailable { .. } => {
+                headers.insert(axum::http::header::RETRY_AFTER, header_u64(1));
+            }
+            _ => {}
         }
         problem_with_headers(&self.problem(), headers)
     }
@@ -240,10 +261,14 @@ where
 
 fn json_rejection(rejection: &JsonRejection) -> ApiError {
     match rejection {
-        JsonRejection::MissingJsonContentType(_) => ApiError::UnsupportedMediaType,
+        JsonRejection::MissingJsonContentType(_) => ApiError::UnsupportedMediaType {
+            detail: "expected Content-Type application/json",
+        },
         JsonRejection::BytesRejection(BytesRejection::FailedToBufferBody(
             FailedToBufferBody::LengthLimitError(_),
-        )) => ApiError::PayloadTooLarge,
+        )) => ApiError::PayloadTooLarge {
+            detail: "request body is too large",
+        },
         JsonRejection::JsonDataError(_) | JsonRejection::JsonSyntaxError(_) => {
             bad_request(with_path(
                 "invalid JSON body",

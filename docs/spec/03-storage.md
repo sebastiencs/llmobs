@@ -96,7 +96,7 @@ Per table: `active` (accepting inserts) and at most one `frozen` (being flushed)
 
 **Flush triggers:** active size ≥ `flush.max_bytes` (default 256 MiB), oldest row age ≥ `flush.max_age` (default 120 s), or shutdown.
 
-**Backpressure:** if `active + frozen` exceeds `memtable.hard_limit` (default 1 GiB) ingestion answers `429 Retry-After: 1` / `RESOURCE_EXHAUSTED`.
+**Backpressure:** if `active + frozen` exceeds `memtable.hard_limit` (default 1 GiB) ingestion answers `503 Retry-After: 1` / `UNAVAILABLE` (D-G-3; `429` is kept for per-org limits).
 
 ### Flush
 

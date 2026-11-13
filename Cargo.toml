@@ -200,8 +200,13 @@ proptest = "1.12.0"
 rsa = { version = "0.10.0", features = ["pkcs1v15"] }
 # axum 0.8.9's body trait. The capture mock's stream implements it; axum does not re-export `Frame`.
 http-body = "1.1.0"
-# Dev-dependency of llmobs-capture, for `oneshot` tests of the axum apps.
+# Capped request body reads (`Limited`) for OTLP ingest, and `oneshot` tests of the axum apps in llmobs-capture.
 http-body-util = "0.1.5"
+# gzip and deflate OTLP request bodies. Same version as `parquet`'s `flate2-zlib-rs` pin (`Cargo.lock`).
+# `zlib-rs` is the backend parquet already uses, so no `miniz_oxide` is added.
+flate2 = { version = "1.1.11", default-features = false, features = ["zlib-rs"] }
+# zstd OTLP request bodies. Same version as `parquet`'s pin (`Cargo.lock`). Default features stay off.
+zstd = { version = "0.13.4", default-features = false }
 
 [profile.dev]
 debug = "line-tables-only"

@@ -3222,12 +3222,19 @@ name = "llmobs-server"
 version = "0.0.0"
 dependencies = [
  "argon2",
+ "arrow",
  "axum",
  "axum-extra",
  "base64 0.23.1",
+ "bytes",
  "bytesize",
+ "datafusion",
  "figment",
+ "flate2",
+ "futures",
+ "hex",
  "hmac 0.13.0",
+ "http-body-util",
  "insta",
  "ipnet",
  "jsonschema",
@@ -3238,6 +3245,8 @@ dependencies = [
  "minijinja",
  "oauth2",
  "openidconnect",
+ "opentelemetry-proto",
+ "prost",
  "rand 0.10.3",
  "reqwest",
  "rsa 0.10.0",
@@ -3259,6 +3268,7 @@ dependencies = [
  "url",
  "utoipa",
  "uuid",
+ "zstd",
 ]
 
 [[package]]

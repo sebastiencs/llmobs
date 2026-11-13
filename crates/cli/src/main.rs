@@ -169,6 +169,7 @@ fn annotate(error: ServeError) -> anyhow::Error {
         ServeError::Storage(_) => "opening storage",
         ServeError::Meta(_) => "opening meta.db",
         ServeError::Bind { .. } => "binding",
+        ServeError::Prices(_) => "building the price table",
         ServeError::Serve(_) => "serving",
         ServeError::Init { .. } => "applying init",
     };
