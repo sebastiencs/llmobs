@@ -1,5 +1,4 @@
 import { screen, waitFor } from "@testing-library/react";
-import type { UserEvent } from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
 import { server } from "@/mocks/node";
