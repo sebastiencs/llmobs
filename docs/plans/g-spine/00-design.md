@@ -137,13 +137,13 @@ usage.add(org, project, spans, bytes) (M3)
 | `Content-Encoding` not `gzip`, `deflate`, `zstd` or identity | 415 | — (tonic handles gzip) | `unsupported_media_type` |
 | raw or decompressed body above `max_request_bytes`; more than `max_spans_per_request` spans | 413 | `RESOURCE_EXHAUSTED` (tonic's own message limit), `INVALID_ARGUMENT` for the span count | `payload_too_large` |
 | corrupt compressed stream, decode error; a media blob `put_media` refuses as invalid (an over-long MIME type) | 400 | `INVALID_ARGUMENT` | `bad_request` |
-| in-flight budget full; `AppendError::Backpressure`, `WalFailed`, `ShuttingDown`; `MediaError::Object`, `Catalog`, `Query` | 503 + `Retry-After: 1` | `UNAVAILABLE` | `busy` |
+| in-flight budget full; `AppendError::Backpressure`, `WalFailed`, `ShuttingDown`, `DiskFull`; `MediaError::Object`, `Catalog`, `Query`, `DiskFull` | 503 + `Retry-After: 1` | `UNAVAILABLE` | `busy` |
 | `AppendError::ProjectDropped`, `MediaError::ProjectDropped` | 404 | `NOT_FOUND` | `not_found` |
 | `AppendError::InvalidBatch`, `MediaError::HashMismatch` / `NotFound` / `InvalidRange` / `Fault`, batch conversion failure | 500 | `INTERNAL` | `internal` |
 
 The `detail` never contains request content. Decode errors carry `DecodeError`'s display, which never contains payload bytes (`crates/otel/src/error.rs`). Logs carry the project id, the request size, the span and rejected counts, and the duration (AGENTS.md § Privacy).
 
-The disk-full condition (spec 03 §10, `storage.min_free_bytes`) is A1 M6; when it lands as an `AppendError` variant, it joins the 503 row.
+The disk-full condition (spec 03 §10, `storage.min_free_bytes`, A1 M6) arrives as `AppendError::DiskFull` / `MediaError::DiskFull` and is in the 503 row, with the detail "storage is out of disk space".
 
 ### Commit API (for track I)
 
@@ -281,7 +281,6 @@ M2 and M3 are independent of each other after M1; they stay in order because G r
 
 - **B1 (`llmobs-otel`):** cap the MIME type of an extracted blob at 255 bytes (storage's `put_media` limit; `is_mime` checks characters only), falling back to `application/octet-stream`. Until then G answers such a request `400`.
 - **A1:** the doc comment of `AppendError` (`crates/storage/src/error.rs`) still says `Backpressure` is answered `429`; D-G-3 makes it `503`.
-- **A1 (M6):** when disk-full handling lands, report it as an `AppendError` variant (or `MediaError`) so G maps it to 503; keep `Backpressure` meaning "retry soon".
 - **A2 / A1:** the review fixes listed in § Review findings (M-2, M-3, M-4 before M2; B-1, B-2, M-1 before H).
 - **C:** the review fixes listed in § Review findings, before M5. C's R2 (batch span payloads) and R3 (autocomplete values) are not in G; they need A2 reads first.
 - **Coordinator:** assign `model_prices` and `/models` (D-G-10) to a track.

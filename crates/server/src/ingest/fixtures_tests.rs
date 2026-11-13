@@ -202,6 +202,7 @@ fn span_key(
 async fn stored_batch(storage: &Storage, project: ProjectId) -> RecordBatch {
     let query = storage
         .query(project, QueryOptions::default())
+        .await
         .expect("query opens");
     // The query's runtime carries the object store that the Parquet files are read from.
     let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), query.runtime);
@@ -447,6 +448,7 @@ fn serve_config(data_dir: &Path) -> ServerConfig {
             gc: Default::default(),
             compaction: Default::default(),
             deletion: Default::default(),
+            min_free_bytes: ByteSize::b(0),
         },
         ingest: IngestConfig::default(),
         media: MediaConfig::default(),
@@ -491,6 +493,7 @@ async fn post_over_tcp(addr: SocketAddr, body: &str) -> Option<u16> {
 async fn stored_span_ids(storage: &Storage, project: ProjectId) -> HashSet<u64> {
     let query = storage
         .query(project, QueryOptions::default())
+        .await
         .expect("query opens");
     // The query's runtime carries the object store that the Parquet files are read from.
     let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), query.runtime);

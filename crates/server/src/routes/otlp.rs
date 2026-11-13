@@ -143,12 +143,14 @@ fn log_refusal(project: ProjectId, error: &IngestError, started: Instant) {
             llmobs_storage::error::AppendError::Backpressure => "backpressure",
             llmobs_storage::error::AppendError::WalFailed => "wal_failed",
             llmobs_storage::error::AppendError::ShuttingDown => "shutting_down",
+            llmobs_storage::error::AppendError::DiskFull => "disk_full",
             llmobs_storage::error::AppendError::ProjectDropped => "project_dropped",
             llmobs_storage::error::AppendError::InvalidBatch { .. } => return,
         },
         IngestError::Media(media) => match media {
             llmobs_storage::error::MediaError::Invalid { .. } => "invalid_media",
             llmobs_storage::error::MediaError::ProjectDropped => "project_dropped",
+            llmobs_storage::error::MediaError::DiskFull => "disk_full",
             llmobs_storage::error::MediaError::Object(_)
             | llmobs_storage::error::MediaError::Catalog(_)
             | llmobs_storage::error::MediaError::Query(_) => "storage_unavailable",
@@ -269,6 +271,7 @@ mod tests {
             .state
             .storage
             .query(project, QueryOptions::default())
+            .await
             .expect("query opens");
         let ctx = SessionContext::new();
         ctx.register_table("raw_spans", query.spans)
@@ -287,6 +290,7 @@ mod tests {
             .state
             .storage
             .query(project, QueryOptions::default())
+            .await
             .expect("query opens");
         let ctx = SessionContext::new();
         ctx.register_table("raw_spans", query.spans)

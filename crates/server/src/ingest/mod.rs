@@ -322,6 +322,10 @@ impl From<IngestError> for ApiError {
             ) => ApiError::Unavailable {
                 detail: "storage is unavailable",
             },
+            IngestError::Append(AppendError::DiskFull)
+            | IngestError::Media(MediaError::DiskFull) => ApiError::Unavailable {
+                detail: "storage is out of disk space",
+            },
             IngestError::Append(AppendError::ShuttingDown) => ApiError::Unavailable {
                 detail: "server is shutting down",
             },
@@ -454,6 +458,7 @@ mod tests {
             .state
             .storage
             .query(project, QueryOptions::default())
+            .await
             .expect("query opens");
         let ctx = datafusion::prelude::SessionContext::new();
         ctx.register_table("raw_spans", query.spans)
@@ -685,6 +690,7 @@ mod tests {
             .state
             .storage
             .query(seeded.project.id, QueryOptions::default())
+            .await
             .expect("query opens");
         let ctx = datafusion::prelude::SessionContext::new();
         ctx.register_table("raw_spans", query.spans)
