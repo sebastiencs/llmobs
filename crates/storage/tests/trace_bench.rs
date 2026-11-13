@@ -515,11 +515,6 @@ fn config(backend: &Backend, max_bytes: ByteSize, read_cache: Option<ByteSize>) 
         query: QueryConfig {
             target_partitions: PARTITIONS,
             read_cache_bytes: read_cache,
-            // The range-mode reference query (`trace_list(&range, ...)`, used for
-            // `differing`) merges every trace in its window. It needs ~2.4 GB at
-            // 1M traces over 8 partitions, above the default 2 GiB per query.
-            max_memory: ByteSize::gib(8),
-            max_memory_total: Some(ByteSize::gib(16)),
             ..QueryConfig::default()
         },
         anchor: AnchorConfig::default(),

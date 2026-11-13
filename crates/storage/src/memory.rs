@@ -2,16 +2,19 @@
 //! per query over it (spec 03 §6, D-A1-8).
 //!
 //! A query is admitted by taking its initial bytes from the shared pool. Past
-//! those it grows from the shared pool up to its own cap. When the query's
-//! runtime is dropped, everything it holds goes back and wakes the queries
-//! waiting for admission.
+//! those it grows from the shared pool up to its own cap. Within the cap, each
+//! operator that can spill gets a fair share of what the others leave (D-A1-13).
+//! When the query's runtime is dropped, everything it holds goes back and wakes
+//! the queries waiting for admission.
 
 use std::fmt::{self, Display};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use datafusion::error::{DataFusionError, Result as DataFusionResult};
-use datafusion::execution::memory_pool::{MemoryLimit, MemoryPool, MemoryReservation};
+use datafusion::execution::memory_pool::{
+    MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation,
+};
 
 /// Total memory for the query pool default (spec 03 §6): half of the machine's
 /// memory, or of its cgroup limit when that is lower, at most 8 GiB.
@@ -118,6 +121,8 @@ impl SharedPool {
 }
 
 /// One query's pool: a [`MemoryPool`] over the shared pool, capped at `cap`.
+/// A spilling reservation may hold at most `(cap - unspillable) / spillable
+/// consumers` bytes, so one spilling operator cannot starve the others (D-A1-13).
 #[derive(Debug)]
 pub(crate) struct QueryPool {
     shared: Arc<SharedPool>,
@@ -131,8 +136,34 @@ pub(crate) struct QueryPool {
 struct PoolState {
     /// Bytes the query's reservations hold.
     used: usize,
+    /// Bytes held by reservations whose consumer cannot spill.
+    unspillable: usize,
+    /// Bytes held by reservations whose consumer can spill.
+    spillable: usize,
+    /// Registered consumers that can spill.
+    spillable_consumers: usize,
     /// Bytes taken from the shared pool: `max(initial, used)` at rest.
     held: usize,
+}
+
+impl PoolState {
+    /// Adds `bytes` to the bytes of the kind `spills` names.
+    fn add(&mut self, spills: bool, bytes: usize) {
+        if spills {
+            self.spillable = self.spillable.saturating_add(bytes);
+        } else {
+            self.unspillable = self.unspillable.saturating_add(bytes);
+        }
+    }
+
+    /// Takes `bytes` from the bytes of the kind `spills` names.
+    fn sub(&mut self, spills: bool, bytes: usize) {
+        if spills {
+            self.spillable = self.spillable.saturating_sub(bytes);
+        } else {
+            self.unspillable = self.unspillable.saturating_sub(bytes);
+        }
+    }
 }
 
 impl QueryPool {
@@ -143,8 +174,8 @@ impl QueryPool {
             initial,
             cap,
             state: Mutex::new(PoolState {
-                used: 0,
                 held: initial,
+                ..PoolState::default()
             }),
         }
     }
@@ -159,9 +190,24 @@ impl MemoryPool for QueryPool {
         "llmobs_query"
     }
 
-    fn grow(&self, _: &MemoryReservation, additional: usize) {
+    fn register(&self, consumer: &MemoryConsumer) {
+        if consumer.can_spill() {
+            let mut state = self.lock();
+            state.spillable_consumers += 1;
+        }
+    }
+
+    fn unregister(&self, consumer: &MemoryConsumer) {
+        if consumer.can_spill() {
+            let mut state = self.lock();
+            state.spillable_consumers = state.spillable_consumers.saturating_sub(1);
+        }
+    }
+
+    fn grow(&self, reservation: &MemoryReservation, additional: usize) {
         let mut guard = self.lock();
         let state = &mut *guard;
+        state.add(reservation.consumer().can_spill(), additional);
         state.used = state.used.saturating_add(additional);
         if state.used > state.held {
             self.shared.force_take(state.used - state.held);
@@ -169,9 +215,20 @@ impl MemoryPool for QueryPool {
         }
     }
 
-    fn try_grow(&self, _: &MemoryReservation, additional: usize) -> DataFusionResult<()> {
+    fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> DataFusionResult<()> {
+        let spills = reservation.consumer().can_spill();
         let mut guard = self.lock();
         let state = &mut *guard;
+        if spills {
+            let share =
+                self.cap.saturating_sub(state.unspillable) / state.spillable_consumers.max(1);
+            if reservation.size().saturating_add(additional) > share {
+                return Err(DataFusionError::ResourcesExhausted(format!(
+                    "a spilling operator needs more than its {share} bytes of the query's {} bytes",
+                    self.cap
+                )));
+            }
+        }
         let next = state.used.saturating_add(additional);
         if next > self.cap {
             return Err(DataFusionError::ResourcesExhausted(format!(
@@ -186,12 +243,14 @@ impl MemoryPool for QueryPool {
         }
         state.held = state.held.max(next);
         state.used = next;
+        state.add(spills, additional);
         Ok(())
     }
 
-    fn shrink(&self, _: &MemoryReservation, shrink: usize) {
+    fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
         let mut guard = self.lock();
         let state = &mut *guard;
+        state.sub(reservation.consumer().can_spill(), shrink);
         state.used = state.used.saturating_sub(shrink);
         let keep = state.used.max(self.initial);
         if state.held > keep {
@@ -228,8 +287,6 @@ impl Drop for QueryPool {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::execution::memory_pool::MemoryConsumer;
-
     use super::*;
 
     const MIB: usize = 1024 * 1024;
@@ -248,6 +305,78 @@ mod tests {
         let as_dyn: Arc<dyn MemoryPool> = pool.clone();
         let reservation = MemoryConsumer::new("test").register(&as_dyn);
         (pool, as_dyn, reservation)
+    }
+
+    /// Registers a spilling reservation (a sort, say) on `pool`.
+    fn spiller(pool: &Arc<dyn MemoryPool>, name: &'static str) -> MemoryReservation {
+        MemoryConsumer::new(name)
+            .with_can_spill(true)
+            .register(pool)
+    }
+
+    #[tokio::test]
+    async fn a_spilling_reservation_is_held_to_its_share() {
+        let shared = Arc::new(SharedPool::new(100 * MIB));
+        let (_pool, as_dyn, _unused) = admitted(&shared, MIB, 10 * MIB).await;
+        let a = spiller(&as_dyn, "s1");
+        let b = spiller(&as_dyn, "s2");
+        // Two spillers share the 10 MiB cap: 5 MiB each.
+        a.try_grow(5 * MIB).unwrap();
+        let error = a.try_grow(1).unwrap_err();
+        assert!(
+            matches!(error, DataFusionError::ResourcesExhausted(_)),
+            "{error:?}"
+        );
+        b.try_grow(5 * MIB).unwrap();
+        assert_eq!(as_dyn.reserved(), 10 * MIB);
+    }
+
+    #[tokio::test]
+    async fn unspillable_memory_shrinks_the_shares() {
+        let shared = Arc::new(SharedPool::new(100 * MIB));
+        let (_pool, as_dyn, _unused) = admitted(&shared, MIB, 10 * MIB).await;
+        let unspillable = MemoryConsumer::new("u").register(&as_dyn);
+        unspillable.try_grow(4 * MIB).unwrap();
+        // 6 MiB are left for the two spillers: 3 MiB each.
+        let a = spiller(&as_dyn, "s1");
+        let b = spiller(&as_dyn, "s2");
+        a.try_grow(3 * MIB).unwrap();
+        assert!(a.try_grow(1).is_err());
+        b.try_grow(3 * MIB).unwrap();
+        assert!(b.try_grow(1).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_lone_spiller_gets_everything_left() {
+        let shared = Arc::new(SharedPool::new(100 * MIB));
+        let (_pool, as_dyn, _unused) = admitted(&shared, MIB, 10 * MIB).await;
+        let a = spiller(&as_dyn, "s1");
+        a.try_grow(10 * MIB).unwrap();
+        assert_eq!(as_dyn.reserved(), 10 * MIB);
+    }
+
+    #[tokio::test]
+    async fn dropping_a_spiller_widens_the_others_share() {
+        let shared = Arc::new(SharedPool::new(100 * MIB));
+        let (_pool, as_dyn, _unused) = admitted(&shared, MIB, 10 * MIB).await;
+        let a = spiller(&as_dyn, "s1");
+        let b = spiller(&as_dyn, "s2");
+        a.try_grow(5 * MIB).unwrap();
+        assert!(a.try_grow(MIB).is_err());
+        drop(b);
+        a.try_grow(5 * MIB).unwrap();
+        assert_eq!(a.size(), 10 * MIB);
+    }
+
+    #[tokio::test]
+    async fn unspillable_reservations_are_first_come_first_served() {
+        let shared = Arc::new(SharedPool::new(100 * MIB));
+        let (_pool, as_dyn, _unused) = admitted(&shared, MIB, 10 * MIB).await;
+        let a = spiller(&as_dyn, "s1");
+        a.try_grow(5 * MIB).unwrap();
+        let unspillable = MemoryConsumer::new("u").register(&as_dyn);
+        unspillable.try_grow(5 * MIB).unwrap();
+        assert!(unspillable.try_grow(1).is_err());
     }
 
     #[tokio::test]
