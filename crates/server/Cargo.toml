@@ -41,8 +41,13 @@ openidconnect.workspace = true
 oauth2.workspace = true
 reqwest.workspace = true
 hmac.workspace = true
+bytes.workspace = true
+flate2.workspace = true
+http-body-util.workspace = true
+zstd.workspace = true
 
 [dev-dependencies]
+futures.workspace = true
 tower.workspace = true
 tracing-subscriber.workspace = true
 insta.workspace = true

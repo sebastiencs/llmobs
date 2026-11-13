@@ -3225,9 +3225,13 @@ dependencies = [
  "axum",
  "axum-extra",
  "base64 0.23.1",
+ "bytes",
  "bytesize",
  "figment",
+ "flate2",
+ "futures",
  "hmac 0.13.0",
+ "http-body-util",
  "insta",
  "ipnet",
  "jsonschema",
@@ -3259,6 +3263,7 @@ dependencies = [
  "url",
  "utoipa",
  "uuid",
+ "zstd",
 ]
 
 [[package]]
