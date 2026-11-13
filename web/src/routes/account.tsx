@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { PasswordForm } from "@/components/account/password-form";
+import { PersonalTokens } from "@/components/account/personal-tokens";
 import { ProfileForm } from "@/components/account/profile-form";
 import { TopBarLayout } from "@/components/shell/top-bar-layout";
 
@@ -23,6 +24,12 @@ function AccountPage() {
             Password
           </h2>
           <PasswordForm />
+        </section>
+        <section className="flex flex-col gap-3" aria-labelledby="tokens-heading">
+          <h2 id="tokens-heading" className="text-lg font-medium">
+            Personal access tokens
+          </h2>
+          <PersonalTokens />
         </section>
       </main>
     </TopBarLayout>
