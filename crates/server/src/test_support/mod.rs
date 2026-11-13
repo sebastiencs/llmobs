@@ -15,6 +15,7 @@ use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
+use llmobs_core::ids::{OrgId, ProjectId};
 use llmobs_core::names::PRODUCT;
 use llmobs_storage::Storage;
 use llmobs_storage::config::{
@@ -22,18 +23,28 @@ use llmobs_storage::config::{
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use sqlx::SqliteConnection;
 use tempfile::TempDir;
 use tower::ServiceExt;
+use uuid::Uuid;
 
 use crate::api::common::Problem;
 use crate::auth::Limits;
+use crate::auth::roles::{KeyScope, OrgRole};
+use crate::auth::secret::{self, KeyKind, NewKey};
+use crate::auth::session::start_session;
 use crate::clock::Clock;
 use crate::config::{
     AuthSettings, IngestConfig, InitConfig, LogConfig, MediaConfig, PublicUrl, ServerConfig,
 };
 use crate::http::access::RouteDef;
 use crate::http::{AppInner, AppState, router, router_with, serve_router};
-use crate::meta::MetaDb;
+use crate::meta::api_keys::{self, NewApiKey};
+use crate::meta::members::add_org_member;
+use crate::meta::orgs::insert_org;
+use crate::meta::projects::{ProjectRow, insert_project};
+use crate::meta::users::{self, NewUser, insert_user};
+use crate::meta::{MetaDb, MetaError};
 
 /// `2026-01-01T00:00:00Z`.
 const MANUAL_NOW_NS: i64 = 1_767_225_600_000_000_000;
@@ -183,6 +194,159 @@ impl TestApp {
             origin: OriginChoice::Default,
         }
     }
+}
+
+/// A user (`ada@example.com`, instance admin), an org `acme` they own, a
+/// project `support-bot`, a session cookie, and one `sk` key per scope set.
+pub(crate) struct Seeded {
+    pub(crate) org_id: OrgId,
+    pub(crate) project: ProjectRow,
+    pub(crate) cookie: String,
+    /// `sk-llmobs-…` with `["ingest"]`.
+    pub(crate) ingest_key: String,
+    /// `sk-llmobs-…` with `["read"]`.
+    pub(crate) read_key: String,
+    /// `pk-llmobs-…` with `["feedback"]`.
+    pub(crate) public_key: String,
+}
+
+impl TestApp {
+    /// Writes the [`Seeded`] rows directly, without HTTP.
+    pub(crate) async fn seed(&self) -> Seeded {
+        let now = self.state.clock.now_ns();
+        let ingest = secret::new_key(KeyKind::Secret).unwrap();
+        let read = secret::new_key(KeyKind::Secret).unwrap();
+        let public = secret::new_key(KeyKind::Public).unwrap();
+        let ingest_key = ingest.plaintext.clone();
+        let read_key = read.plaintext.clone();
+        let public_key = public.plaintext.clone();
+        let (user_id, org_id, project) = self
+            .state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    let user = insert_user(
+                        conn,
+                        NewUser {
+                            email: "ada@example.com".to_owned(),
+                            name: None,
+                            password_hash: None,
+                            email_verified_at: None,
+                            is_instance_admin: true,
+                        },
+                        now,
+                    )
+                    .await?;
+                    let org = insert_org(conn, "Acme", "acme", now).await?;
+                    add_org_member(conn, org.id, user.id, OrgRole::Owner, now).await?;
+                    let project =
+                        insert_project(conn, org.id, "Support", "support-bot", None, now).await?;
+                    let scoped = [
+                        (ingest, "secret", vec![KeyScope::Ingest]),
+                        (read, "secret", vec![KeyScope::Read]),
+                        (public, "public", vec![KeyScope::Feedback]),
+                    ];
+                    for (key, kind, scopes) in scoped {
+                        insert_key(conn, project.id, key, kind, scopes, user.id, now).await?;
+                    }
+                    Ok((user.id, org.id, project))
+                })
+            })
+            .await
+            .unwrap();
+        let cookie = session_cookie(self, user_id).await;
+        Seeded {
+            org_id,
+            project,
+            cookie,
+            ingest_key,
+            read_key,
+            public_key,
+        }
+    }
+
+    /// Another project in `seeded`'s org, with optional retention, and one `sk`
+    /// key with `["ingest"]` for it. The key is returned as its plaintext.
+    pub(crate) async fn add_project(
+        &self,
+        seeded: &Seeded,
+        slug: &str,
+        retention_days: Option<u32>,
+    ) -> (ProjectRow, String) {
+        let now = self.state.clock.now_ns();
+        let ingest = secret::new_key(KeyKind::Secret).unwrap();
+        let plaintext = ingest.plaintext.clone();
+        let org_id = seeded.org_id;
+        let slug = slug.to_owned();
+        let user = users::user_by_email(self.state.meta.reader(), "ada@example.com")
+            .await
+            .unwrap()
+            .expect("seeded user exists");
+        let user_id = user.id;
+        let project = self
+            .state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    let project =
+                        insert_project(conn, org_id, &slug, &slug, retention_days, now).await?;
+                    insert_key(
+                        conn,
+                        project.id,
+                        ingest,
+                        "secret",
+                        vec![KeyScope::Ingest],
+                        user_id,
+                        now,
+                    )
+                    .await?;
+                    Ok(project)
+                })
+            })
+            .await
+            .unwrap();
+        (project, plaintext)
+    }
+}
+
+async fn insert_key(
+    conn: &mut SqliteConnection,
+    project_id: ProjectId,
+    key: NewKey,
+    kind: &'static str,
+    scopes: Vec<KeyScope>,
+    created_by: Uuid,
+    now: i64,
+) -> Result<(), MetaError> {
+    api_keys::insert_api_key(
+        conn,
+        NewApiKey {
+            project_id,
+            kind,
+            scopes,
+            name: None,
+            prefix: key.prefix,
+            hash: key.hash,
+            created_by,
+            expires_at: None,
+        },
+        now,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn session_cookie(app: &TestApp, user_id: Uuid) -> String {
+    let header = start_session(&app.state, user_id, None, None)
+        .await
+        .unwrap();
+    header
+        .to_str()
+        .unwrap()
+        .split_once(';')
+        .unwrap()
+        .0
+        .to_owned()
 }
 
 fn default_config(data_dir: &std::path::Path) -> ServerConfig {
