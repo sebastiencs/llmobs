@@ -118,6 +118,9 @@ pub(crate) fn spawn(start: GcStart) -> GcHandle {
                         }
                         next_media = tokio::time::Instant::now() + MEDIA_INTERVAL;
                     }
+                    // Half-finished drops get their media step retried
+                    // (spec 03 §7).
+                    start.media.finish_drops().await;
                 }
             }
         }

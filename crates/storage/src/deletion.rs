@@ -155,6 +155,26 @@ impl Tombstones {
         }
     }
 
+    /// A copy with `known_seq = max(known_seq, seq)` and the same deletions
+    /// (M5.7: a deletion registered for a dropped project).
+    pub(crate) fn with_known_seq(&self, seq: u64) -> Tombstones {
+        Tombstones {
+            known_seq: self.known_seq.max(seq),
+            by_project: self.by_project.clone(),
+        }
+    }
+
+    /// A copy without any deletion of `project` (M5.7). `known_seq` is
+    /// unchanged.
+    pub(crate) fn without_project(&self, project: ProjectId) -> Tombstones {
+        let mut by_project = self.by_project.clone();
+        by_project.remove(&project);
+        Tombstones {
+            known_seq: self.known_seq,
+            by_project,
+        }
+    }
+
     /// The tombstones loaded from `catalog.db`: `deletions` in any order, under
     /// the `known_seq` read beside them (the highest sequence overall, pending
     /// or applied). Each project's slice is sorted by `seq`.

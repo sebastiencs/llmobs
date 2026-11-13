@@ -125,8 +125,9 @@ pub(crate) struct Memtable {
 /// A cheap copy of the batches a query sees.
 ///
 /// Cloning copies the `Arc`s, not the columns. A later coalesce replaces the
-/// memtable's `Arc`s and leaves this snapshot alone.
-#[derive(Debug, Clone)]
+/// memtable's `Arc`s and leaves this snapshot alone. `default` has no
+/// partitions: the providers of a dropped project read it (spec 03 §7).
+#[derive(Debug, Clone, Default)]
 pub(crate) struct MemSnapshot {
     /// Batches grouped by partition, in key order.
     pub partitions: BTreeMap<PartitionKey, Vec<MemBatch>>,

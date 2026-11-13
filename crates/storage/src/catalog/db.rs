@@ -168,8 +168,8 @@ pub(crate) async fn load_tombstones(
     Ok(Tombstones::loaded(known_seq, pending))
 }
 
-/// Read every retention watermark (spec 03 §8). `keep_from` is `YYYY-MM-DD`,
-/// like `data_files.day`.
+/// Read every retention watermark (spec 03 §8) and dropped project (spec 03
+/// §7). `keep_from` is `YYYY-MM-DD`, like `data_files.day`.
 pub(super) async fn load_project_states(
     connection: &mut SqliteConnection,
 ) -> Result<ProjectStates, CatalogError> {
@@ -187,7 +187,21 @@ pub(super) async fn load_project_states(
             .map_err(|_| CatalogError::corrupt("retention watermark"))?;
         keep_from.insert(project, day);
     }
-    Ok(ProjectStates::loaded(keep_from))
+    // Every row of `projects` counts as dropped, `dropping` and `dropped`
+    // alike: its files are already gone and its appends refused either way.
+    let dropped_rows: Vec<String> = sqlx::query_scalar("SELECT project_id FROM projects")
+        .fetch_all(&mut *connection)
+        .await
+        .map_err(CatalogError::db)?;
+    let mut dropped = HashSet::with_capacity(dropped_rows.len());
+    for project in dropped_rows {
+        dropped.insert(
+            project
+                .parse()
+                .map_err(|_| CatalogError::corrupt("dropped project"))?,
+        );
+    }
+    Ok(ProjectStates::loaded(keep_from, dropped))
 }
 
 /// Enforce spec 03 §3 over `file_sources` (D88), reading `catalog.db` directly.
@@ -480,7 +494,7 @@ mod tests {
             .fetch_one(&mut connection)
             .await
             .unwrap();
-        assert_eq!(versions, 5);
+        assert_eq!(versions, 6);
     }
 
     #[tokio::test]
@@ -492,6 +506,7 @@ mod tests {
         // migration from 0003 on, newest first, then let open_catalog_db
         // re-apply them.
         for statement in [
+            "DROP TABLE projects",
             "DROP TABLE media",
             "DROP TABLE retention_watermarks",
             "DROP INDEX deletions_pending",
@@ -530,6 +545,7 @@ mod tests {
             "deletion_sessions",
             "retention_watermarks",
             "media",
+            "projects",
         ] {
             let count: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",

@@ -19,7 +19,7 @@ use llmobs_core::ids::ProjectId;
 
 use crate::catalog::Committer;
 use crate::error::{MediaError, QueryError};
-use crate::hooks::Hooks;
+use crate::hooks::{HookPoint, Hooks};
 use crate::objects::Objects;
 use crate::read_state::Published;
 use crate::{QueryOptions, project_query};
@@ -126,13 +126,18 @@ impl MediaGc {
         Ok(report)
     }
 
-    /// Every project with media rows, summed. A project whose collection fails
-    /// is logged (`error = error.label()`) and skipped, and retried on the next
-    /// run; the others are still collected. Only reading the project list can
-    /// fail the whole call.
+    /// Every project with media rows, summed. A dropped project is skipped:
+    /// [`Self::finish_drop`] deletes its media (spec 03 §7). A project whose
+    /// collection fails is logged (`error = error.label()`) and skipped, and
+    /// retried on the next run; the others are still collected. Only reading
+    /// the project list can fail the whole call.
     pub(crate) async fn collect_all(&self, now: i64) -> Result<MediaReport, MediaError> {
+        let state = self.published.load();
         let mut report = MediaReport::default();
         for project in self.committer.media_projects().await? {
+            if state.projects.is_dropped(project) {
+                continue;
+            }
             match self.collect(project, now).await {
                 Ok(one) => {
                     report.deleted += one.deleted;
@@ -150,6 +155,52 @@ impl MediaGc {
             }
         }
         Ok(report)
+    }
+
+    /// Deletes a dropped project's media, then marks the drop finished (spec
+    /// 03 §7). [`crate::Storage::drop_project`] calls it right after its
+    /// commit; the GC task calls it again for a drop whose media step failed
+    /// or was interrupted by a crash.
+    ///
+    /// Idempotent: a project with no media row left only gets its `dropped`
+    /// state. Errors are logged by the callers as `error = error.label()`.
+    pub(crate) async fn finish_drop(&self, project: ProjectId) -> Result<(), MediaError> {
+        for sha in self.committer.media_of(project).await? {
+            let path = Objects::media_path(project, &sha);
+            self.hooks.pause(HookPoint::MediaBeforeDelete);
+            if self.hooks.fail(HookPoint::MediaBeforeDelete).is_some() {
+                return Err(MediaError::Fault);
+            }
+            self.objects.delete(&path).await?;
+            self.committer.delete_media_row(project, &sha).await?;
+        }
+        self.committer.finish_drop(project).await?;
+        Ok(())
+    }
+
+    /// Finishes every half-finished drop (spec 03 §7): the GC task calls this
+    /// at open and on each tick, and a project that fails again is retried on
+    /// the next tick.
+    pub(crate) async fn finish_drops(&self) {
+        let projects = match self.committer.dropping_projects().await {
+            Ok(projects) => projects,
+            Err(error) => {
+                tracing::warn!("reading half-finished project drops failed");
+                tracing::debug!(%error, "reading half-finished project drops failed");
+                return;
+            }
+        };
+        for project in projects {
+            if let Err(error) = self.finish_drop(project).await {
+                // The label only: the error names an object path, which holds
+                // the blob's hash (spec 03 §9).
+                tracing::warn!(
+                    project = %project,
+                    error = error.label(),
+                    "finishing a project drop failed"
+                );
+            }
+        }
     }
 
     /// Every hash the project's `spans` rows reference, from one published

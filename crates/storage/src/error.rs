@@ -102,11 +102,14 @@ pub enum AppendError {
     /// Shutdown has started.
     #[error("storage is shutting down")]
     ShuttingDown,
+    /// The project was dropped (spec 03 §7). The server maps it to 404.
+    #[error("project is dropped")]
+    ProjectDropped,
 }
 
 /// Shutdown failed, or a later maintenance call failed.
 ///
-/// Returned by `shutdown`, `apply_retention` and (M5.7) `drop_project`.
+/// Returned by `shutdown`, `apply_retention` and `drop_project`.
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
     /// The table's writer stopped after a WAL error.
@@ -127,6 +130,10 @@ pub enum StorageError {
     /// `catalog.db` failed.
     #[error(transparent)]
     Catalog(#[from] CatalogError),
+    /// Deleting a dropped project's media failed (spec 03 §7). The project is
+    /// already dropped; GC finishes the media.
+    #[error(transparent)]
+    Media(#[from] MediaError),
 }
 
 /// `Storage::query` failed.
@@ -363,6 +370,9 @@ pub enum MediaError {
     /// An injected test fault.
     #[error("injected fault")]
     Fault,
+    /// The project is dropped (spec 03 §7).
+    #[error("project is dropped")]
+    ProjectDropped,
 }
 
 impl MediaError {
@@ -379,6 +389,7 @@ impl MediaError {
             Self::Catalog(_) => "catalog",
             Self::Query(_) => "query",
             Self::Fault => "fault",
+            Self::ProjectDropped => "project_dropped",
         }
     }
 }

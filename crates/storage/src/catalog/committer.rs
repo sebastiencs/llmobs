@@ -63,6 +63,14 @@ enum Extra {
         /// The watermark to store.
         keep_from: NaiveDate,
     },
+    /// Records the project `dropping`, removes its retention watermark and
+    /// marks its pending deletions applied (spec 03 §7).
+    Drop {
+        /// The project being dropped.
+        project: ProjectId,
+        /// The drop's time, ns: the `dropped_at` and `applied_at` to store.
+        now: i64,
+    },
 }
 
 struct CommitterInner {
@@ -126,7 +134,7 @@ impl Committer {
     }
 
     /// The project states stored in `catalog.db`: retention watermarks
-    /// (spec 03 §8).
+    /// (spec 03 §8) and dropped projects (spec 03 §7).
     pub(crate) async fn project_states(&self) -> Result<ProjectStates, CatalogError> {
         let mut inner = self.inner.lock().await;
         load_project_states(&mut inner.connection).await
@@ -192,6 +200,48 @@ impl Committer {
             .map_err(CatalogError::db)?;
         if known.is_some() {
             return Ok(Registered::Known);
+        }
+        // A dropped project keeps the audit row only: stored already applied,
+        // with no scope rows (an applied request keeps none, M5.1). Nothing is
+        // published: no pending deletion changed, and a `known_seq` that lags
+        // an already-applied deletion is safe for new files (spec 03 §7).
+        let dropped: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM projects WHERE project_id = ?")
+                .bind(deletion.project.to_string())
+                .fetch_optional(&mut inner.connection)
+                .await
+                .map_err(CatalogError::db)?;
+        if dropped.is_some() {
+            let seq = inner.tombstones.known_seq() + 1;
+            let stored_seq = i64::try_from(seq).map_err(|_| DeletionError::Invalid {
+                reason: "integer does not fit the catalog",
+            })?;
+            let mut transaction = inner.connection.begin().await.map_err(CatalogError::db)?;
+            if let Err(error) = sqlx::query(
+                "INSERT INTO deletions (
+                    id, deletion_seq, project_id, kind, cutoff, status, registered_at, applied_at
+                 ) VALUES (?, ?, ?, ?, ?, 'applied', ?, ?)",
+            )
+            .bind(deletion.id.to_string())
+            .bind(stored_seq)
+            .bind(deletion.project.to_string())
+            .bind(kind)
+            .bind(deletion.cutoff)
+            .bind(now)
+            .bind(now)
+            .execute(transaction.as_mut())
+            .await
+            .map_err(CatalogError::db)
+            {
+                let _ = transaction.rollback().await;
+                return Err(error.into());
+            }
+            transaction
+                .commit()
+                .await
+                .map_err(|source| DeletionError::Catalog(CatalogError::db(source)))?;
+            inner.tombstones = Arc::new(inner.tombstones.with_known_seq(seq));
+            return Ok(Registered::New { seq });
         }
         let seq = inner.tombstones.known_seq() + 1;
         // `known_seq` was read from an SQLite INTEGER, so only the `+ 1` above
@@ -402,7 +452,9 @@ impl Committer {
 
     /// In one transaction: `INSERT OR IGNORE` the `media` row (`first_seen_at =
     /// last_seen_at = now`), then delete the `staged_objects` row of `path`
-    /// (spec 03 §9).
+    /// (spec 03 §9). A dropped project is refused with `Ok(false)`: the
+    /// transaction rolls back and the staged row stays, so staged-object GC
+    /// deletes the object later.
     pub(crate) async fn insert_media(
         &self,
         project: ProjectId,
@@ -411,11 +463,24 @@ impl Committer {
         size: u64,
         path: &str,
         now: i64,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<bool, CatalogError> {
         let stored_size = i64::try_from(size)
             .map_err(|_| CatalogError::corrupt("integer does not fit the catalog"))?;
         let mut inner = self.inner.lock().await;
         let mut transaction = inner.connection.begin().await.map_err(CatalogError::db)?;
+        // A put that passed its `is_dropped` check before the drop's commit
+        // must not land a row after the drop deleted the project's media
+        // (spec 03 §7).
+        let dropped: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM projects WHERE project_id = ?")
+                .bind(project.to_string())
+                .fetch_optional(transaction.as_mut())
+                .await
+                .map_err(CatalogError::db)?;
+        if dropped.is_some() {
+            let _ = transaction.rollback().await;
+            return Ok(false);
+        }
         if let Err(error) = sqlx::query(
             "INSERT OR IGNORE INTO media (
                 project_id, sha256, mime_type, size_bytes, first_seen_at, last_seen_at
@@ -444,7 +509,7 @@ impl Committer {
             return Err(error);
         }
         transaction.commit().await.map_err(CatalogError::db)?;
-        Ok(())
+        Ok(true)
     }
 
     /// `(mime_type, size)` of the blob's row, or `None`.
@@ -587,6 +652,61 @@ impl Committer {
             .map_err(CatalogError::db)
     }
 
+    /// Hashes of the project's media rows, in hash order.
+    pub(crate) async fn media_of(&self, project: ProjectId) -> Result<Vec<String>, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        sqlx::query_scalar("SELECT sha256 FROM media WHERE project_id = ? ORDER BY sha256")
+            .bind(project.to_string())
+            .fetch_all(&mut inner.connection)
+            .await
+            .map_err(CatalogError::db)
+    }
+
+    /// Deletes the project's `media` row of `sha`.
+    pub(crate) async fn delete_media_row(
+        &self,
+        project: ProjectId,
+        sha: &str,
+    ) -> Result<(), CatalogError> {
+        let mut inner = self.inner.lock().await;
+        sqlx::query("DELETE FROM media WHERE project_id = ? AND sha256 = ?")
+            .bind(project.to_string())
+            .bind(sha)
+            .execute(&mut inner.connection)
+            .await
+            .map_err(CatalogError::db)?;
+        Ok(())
+    }
+
+    /// Projects whose drop has not finished its media step, in id order.
+    pub(crate) async fn dropping_projects(&self) -> Result<Vec<ProjectId>, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT project_id FROM projects WHERE state = 'dropping' ORDER BY project_id",
+        )
+        .fetch_all(&mut inner.connection)
+        .await
+        .map_err(CatalogError::db)?;
+        rows.into_iter()
+            .map(|project| {
+                project
+                    .parse()
+                    .map_err(|_| CatalogError::corrupt("dropped project"))
+            })
+            .collect()
+    }
+
+    /// Marks the project's drop finished: `state = 'dropped'`.
+    pub(crate) async fn finish_drop(&self, project: ProjectId) -> Result<(), CatalogError> {
+        let mut inner = self.inner.lock().await;
+        sqlx::query("UPDATE projects SET state = 'dropped' WHERE project_id = ?")
+            .bind(project.to_string())
+            .execute(&mut inner.connection)
+            .await
+            .map_err(CatalogError::db)?;
+        Ok(())
+    }
+
     /// For every active traces file with a source among `spans`, all of its
     /// source pairs, deduplicated and in `(traces, spans)` order.
     pub(crate) async fn derived_traces(
@@ -694,6 +814,20 @@ impl Committer {
         F: FnOnce(&Arc<Catalog>, NaiveDate),
     {
         let mut inner = self.inner.lock().await;
+        // A dropped project has nothing to retain: no commit, no publish.
+        let dropped: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM projects WHERE project_id = ?")
+                .bind(project.to_string())
+                .fetch_optional(&mut inner.connection)
+                .await
+                .map_err(CommitError::db)?;
+        if dropped.is_some() {
+            return Ok(RetentionReport {
+                files: 0,
+                bytes: 0,
+                keep_from,
+            });
+        }
         let stored: Option<String> =
             sqlx::query_scalar("SELECT keep_from FROM retention_watermarks WHERE project_id = ?")
                 .bind(project.to_string())
@@ -743,6 +877,57 @@ impl Committer {
             bytes,
             keep_from: watermark,
         })
+    }
+
+    /// Obsoletes every active file of `project` in all three tables, records
+    /// the project `dropping`, removes its retention watermark and marks its
+    /// pending deletions applied, all in one transaction (spec 03 §7), then
+    /// calls `publish` with the new catalog and the tombstones without the
+    /// project's deletions before releasing the mutex.
+    ///
+    /// A project already in `projects` is `Ok(false)`: nothing changed and
+    /// `publish` was not called.
+    pub(crate) async fn drop_project<F>(
+        &self,
+        project: ProjectId,
+        now: i64,
+        publish: F,
+    ) -> Result<bool, CommitError>
+    where
+        F: FnOnce(&Arc<Catalog>, &Arc<Tombstones>),
+    {
+        let mut inner = self.inner.lock().await;
+        let known: Option<i64> = sqlx::query_scalar("SELECT 1 FROM projects WHERE project_id = ?")
+            .bind(project.to_string())
+            .fetch_optional(&mut inner.connection)
+            .await
+            .map_err(CommitError::db)?;
+        if known.is_some() {
+            return Ok(false);
+        }
+        // Every active file of the project, all three tables. A `spans` file
+        // and its `traces` file share their day, so both sides of every pair
+        // go in one edit.
+        let mut remove = Vec::new();
+        for table in [FileTable::Spans, FileTable::Traces, FileTable::Scores] {
+            for file in inner
+                .catalog
+                .files(table, project, NaiveDate::MIN..=NaiveDate::MAX)
+            {
+                remove.push((file.id, FileState::Active));
+            }
+        }
+        let edit = CatalogEdit {
+            add: Vec::new(),
+            remove,
+            flushed_seq: None,
+            sources: Vec::new(),
+            raise: Vec::new(),
+        };
+        let next = commit_inner(&mut inner, &edit, &Extra::Drop { project, now }).await?;
+        inner.tombstones = Arc::new(inner.tombstones.without_project(project));
+        publish(&next, &inner.tombstones);
+        Ok(true)
     }
 
     /// Staged paths whose `created_at` is strictly before `cutoff_ns`.
@@ -1072,6 +1257,32 @@ async fn write_extra(connection: &mut SqliteConnection, extra: &Extra) -> Result
             .map_err(CommitError::db)?;
             Ok(())
         }
+        Extra::Drop { project, now } => {
+            sqlx::query(
+                "INSERT INTO projects (project_id, state, dropped_at)
+                 VALUES (?, 'dropping', ?)",
+            )
+            .bind(project.to_string())
+            .bind(now)
+            .execute(&mut *connection)
+            .await
+            .map_err(CommitError::db)?;
+            sqlx::query("DELETE FROM retention_watermarks WHERE project_id = ?")
+                .bind(project.to_string())
+                .execute(&mut *connection)
+                .await
+                .map_err(CommitError::db)?;
+            sqlx::query(
+                "UPDATE deletions SET status = 'applied', applied_at = ?
+                 WHERE project_id = ? AND status = 'pending'",
+            )
+            .bind(now)
+            .bind(project.to_string())
+            .execute(&mut *connection)
+            .await
+            .map_err(CommitError::db)?;
+            Ok(())
+        }
     }
 }
 
@@ -1087,6 +1298,19 @@ async fn write_edit(
             .map_err(CommitError::db)?;
         if staged.is_none() {
             return Err(CommitError::conflict("path is not staged"));
+        }
+    }
+    // An added file may not be of a dropped project (spec 03 §7): a flush or
+    // compaction prepared before the drop fails here and retries.
+    for file in &edit.add {
+        let dropped: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM projects WHERE project_id = ?")
+                .bind(file.project.to_string())
+                .fetch_optional(&mut *connection)
+                .await
+                .map_err(CommitError::db)?;
+        if dropped.is_some() {
+            return Err(CommitError::conflict("project is dropped"));
         }
     }
     // An added file may not be of a day the project's retention watermark has
@@ -1456,7 +1680,7 @@ mod tests {
             .fetch_one(&mut again)
             .await
             .unwrap();
-        assert_eq!(migrations, 5);
+        assert_eq!(migrations, 6);
         let indexes: Vec<String> = sqlx::query_scalar(
             "SELECT name FROM sqlite_master
              WHERE type = 'index' AND name LIKE 'data_files_%'
