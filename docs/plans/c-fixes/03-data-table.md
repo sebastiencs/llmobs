@@ -54,6 +54,7 @@ When the columns are wider than the pane, the body scrolls horizontally and the 
 
    - Move `shrink-0` from the row's class list to the wrapper. Keep every other class of the row as it is.
    - Add `[scrollbar-gutter:stable]` to the scroll container's class list as well. Both the header clip and the body then reserve the same vertical-scrollbar gutter, so their widths, and their maximum `scrollLeft`, are equal. Without it, at the far right the header would stop one scrollbar width short.
+   - *Added after implementation (checked in Chrome on 2026-11-13):* the gutter alone was not enough. With `overflow: hidden`, Chrome still capped the header's `scrollLeft` one gutter short of the body's. So the wrapper is `flex`, the row is `shrink-0`, and an empty `aria-hidden` `w-8` spacer follows the row. The header can then always scroll as far as the body.
    - The wrapper has no role. It is a generic container, which ARIA allows between a `grid` and its `row`.
 
 3. **Mirror the scroll.** On the scroll container (`data-scroll-container`), add:

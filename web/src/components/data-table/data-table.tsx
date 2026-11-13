@@ -218,11 +218,11 @@ export function DataTable<Row extends RowData>({
       onKeyDown={onKeyDown}
     >
       {headerGroup ? (
-        <div ref={headerRef} className="shrink-0 overflow-hidden [scrollbar-gutter:stable]">
+        <div ref={headerRef} className="flex shrink-0 overflow-hidden [scrollbar-gutter:stable]">
           <div
             role="row"
             aria-rowindex={1}
-            className="grid h-row items-center border-b bg-background text-[11px] font-medium text-muted-foreground uppercase"
+            className="grid h-row shrink-0 items-center border-b bg-background text-[11px] font-medium text-muted-foreground uppercase"
             style={{ gridTemplateColumns: template, minWidth: totalWidth }}
           >
             {headerGroup.headers.map((header) => {
@@ -296,6 +296,8 @@ export function DataTable<Row extends RowData>({
               );
             })}
           </div>
+          {/* Lets the header scroll as far as the body, whose overflow-auto can scroll one gutter further. */}
+          <div aria-hidden="true" className="w-8 shrink-0 border-b" />
         </div>
       ) : null}
       <div
