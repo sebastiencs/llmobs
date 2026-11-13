@@ -29,6 +29,11 @@ Top-level design of the storage track (Wave 1, track A1). It settles what specs 
 | D-A1-5 | **The rewriter is a compaction job kind.** A deletion pass after each compaction pass rewrites the files with covered rows and raises `deletions_applied_seq` on clean ones. | M5 plan |
 | D-A1-6 | **Media: verified hash, last-seen grace, GC on deletion.** `put_media` checks the SHA-256; GC keeps blobs seen in the last hour and runs for a project when one of its deletions is applied. | User |
 | D-A1-7 | **Project drop refuses appends.** Appends to a dropped project fail with `ProjectDropped`; its files are obsoleted in one commit and collected by GC. | User |
+| D-A1-8 | **Query admission.** Each query has its own memory pool over the process-wide one; `Storage::query` takes `query.initial_memory` first and fails as busy after `query.admission_wait`. | User |
+| D-A1-9 | **Disk full.** Appends and `put_media` fail under `min_free_bytes`; compaction jobs reserve their input size in both modes and are deferred when it doesn't fit. | M6 plan |
+| D-A1-10 | **Quarantine.** Failing reads (maintenance and queries) queue suspects; a verify pass re-reads them and quarantines corrupt `spans`/`scores` files; corrupt `traces` files are rebuilt. | User |
+| D-A1-11 | **S3 read cache.** A cache store over S3 with 1 MiB CRC-checked blocks under `cache/`, kept across restarts, written through by flush and compaction. | User |
+| D-A1-12 | **Benchmarks.** `#[ignore]` integration tests, results in `docs/research/storage/benchmarks.md`; no criterion, no `tools/bench-storage`. | M6 plan |
 | D88 | **`traces` files are derived from `spans` files.** Every `traces` file records the `spans` files it was computed from. Whatever replaces a `spans` file (compaction, deletion rewrite) recomputes the `traces` files derived from it. Duplicate spans therefore stop inflating trace totals once their spans are compacted, and deletion never needs separate logic for `traces`. | Research G17 |
 
 ## Scope
@@ -126,7 +131,7 @@ pub struct ProjectQuery {
     pub spans: Arc<dyn TableProvider>,   // stored schema, binary ids, project_id included
     pub traces: Arc<dyn TableProvider>,  // merged partials (D152)
     pub scores: Arc<dyn TableProvider>,  // stored schema; latest live row per score_id
-    pub runtime: Arc<RuntimeEnv>,        // object store and metadata cache; default memory pool until M6
+    pub runtime: Arc<RuntimeEnv>,        // this query's memory pool; shared caches, store, spill dir (M6)
     pub target_partitions: NonZeroUsize,
     /// Physical optimizer rules the session must append: the trace list fast path (D153).
     pub optimizer_rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
@@ -338,7 +343,7 @@ Spec 03 §5 is the full policy. The M4 plans are `07-m4a-gc-and-merge.md` and `0
 - **Day close** of `spans` merges all files of the partition when their total is at most `compaction.target_file_size`. Above that, it merges only the L0 files. `scores` always merge every file, which lets them drop deleted scores.
 - **Traces follow spans** (D-A1-1): each `spans` output gets its own `traces` output.
 - **Memory bound.** Each merge streams its inputs in `(trace_id, start_time)` order: the inputs are sorted runs, so a k-way merge needs one batch per input. Slice boundaries are exact quantiles of the inputs' time column. Merge memory is capped by `compaction.max_memory` (default 1 GiB) across running merges, and outputs stream through temp files (D-A1-2).
-- **Disk reservation** (VictoriaLogs' rule) moves to M6 with the disk-full handling (D-A1-2).
+- **Disk reservation** (VictoriaLogs' rule): every job reserves its input size against free disk first and is deferred when it doesn't fit (M6, D-A1-9).
 - **Late data** re-opens a closed day. A new L0 file in a day already closed triggers another day close after `compaction.close_delay` (G13).
 - **Outputs** apply every tombstone pending when the job started, and record the known deletion sequence (§ Deletion).
 
@@ -389,16 +394,15 @@ Tables (migrations owned by `llmobs-storage`, `sqlx::migrate!` like the server's
 
 ## Query resources
 
-- One process-wide DataFusion memory pool of `query.max_memory_total` (default 50% of RAM, at most 8 GiB), with each query capped at `query.max_memory` (default 2 GiB), spilling to `<data_dir>/tmp` (G21).
-- **Admission.** A query that can't reserve its initial memory waits up to `query.admission_wait` (default 5 s), then fails with a "busy" error that the server maps to 503.
+- One process-wide memory pool of `query.max_memory_total` (default 50% of RAM or of the cgroup limit, at most 8 GiB). Each query gets a DataFusion memory pool of its own over it, capped at `query.max_memory` (default 2 GiB), spilling to `<data_dir>/tmp/query` (G21, D-A1-8).
+- **Admission.** `Storage::query` is async: it takes `query.initial_memory` (default 64 MiB) from the shared pool first, waits up to `query.admission_wait` (default 5 s) for it, then fails with `QueryError::Busy`, which the server maps to 503.
 - **Metadata cache.** DataFusion 55's built-in file metadata cache is enough (G22, M2). `query.metadata_cache_bytes` (default 512 MiB; zero disables it) limits that cache. It holds decoded footers and, when configured, column and offset indexes. Bloom-filter bitsets are not in it: a pruning read fetches the bitset from the object. There is no custom `ParquetFileReaderFactory`. On a flushed file whose one row group contained the queried `trace_id`, the bloom was evaluated (`1 total → 1 matched`) and did not prune; the page index was not loaded because the row-group statistics already matched.
 - **S3 read cache** (M6). In S3 mode every page read is a ranged GET: tens of milliseconds each, and charged per request. Parseable (hot tier), OpenObserve (disk cache) and GreptimeDB (read and write caches) all keep data locally for that reason.
   - A bounded on-disk cache under `<data_dir>/cache/` holds byte ranges of data files, keyed by file id and range.
   - Files are immutable, so entries never go stale. Eviction is LRU by bytes (`query.read_cache_bytes`, default 10% of the disk, at most 100 GiB). Entries of obsolete files are dropped when GC deletes the file.
   - A flush or compaction in S3 mode also writes its fresh output into the cache, since recent data is what gets read.
   - In local mode the cache is off: the files are already local.
-  - The metadata cache is DataFusion's built-in cache, so this read cache does not share a reader factory with it. M6 decides how the byte cache is attached.
-  - Until M6 lands, S3 mode is correct but not fast. That is a documented MVP limit if M6 slips.
+  - The metadata cache is DataFusion's built-in cache, so this read cache does not share a reader factory with it. M6 attaches it as an `ObjectStore` wrapper with 1 MiB blocks (D-A1-11, plan `12-m6b-read-cache-benchmarks.md`).
 
 ## Configuration
 
@@ -412,7 +416,7 @@ Present after M2:
 - `memtable`: `hard_limit`;
 - `query`: `target_partitions` (default: the process parallelism), `metadata_cache_bytes` (default 512 MiB).
 
-Later milestones add, when they implement them: `min_free_bytes`; `query.max_memory_total`, `query.max_memory`, `query.read_cache_bytes`, `query.admission_wait`. M3 adds `query.trace_lookback` (default 1 h) and `anchor.window` (default: `trace_lookback`). M4 adds `gc.grace` and `compaction.*` (`interval`, `threads`, `target_file_size`, `size_ratio`, `l0_files`, `l0_bytes`, `l0_age`, `close_delay`, `max_memory`). M5 adds `deletion.max_delay` (default 24 h).
+M3 adds `query.trace_lookback` (default 1 h) and `anchor.window` (default: `trace_lookback`). M4 adds `gc.grace` and `compaction.*` (`interval`, `threads`, `target_file_size`, `size_ratio`, `l0_files`, `l0_bytes`, `l0_age`, `close_delay`, `max_memory`). M5 adds `deletion.max_delay` (default 24 h). M6 adds `min_free_bytes` (default 2 GiB), `query.max_memory_total` (default: half of RAM or of the cgroup limit, at most 8 GiB), `query.max_memory` (2 GiB), `query.initial_memory` (64 MiB), `query.admission_wait` (5 s) and `query.read_cache_bytes` (default: 10% of the `data_dir` file system, at most 100 GiB).
 
 ## Testing
 
@@ -431,7 +435,7 @@ AGENTS.md requires crash-recovery and concurrency tests for storage. The tools, 
 - **Fault-injecting object store.** A wrapper implementing `object_store::ObjectStore` around the real one that fails, delays, or reports failure after the write succeeded (GreptimeDB's ambiguous-upload case). Two real implementations of an external trait, so allowed.
 - **Durability ordering.** A test-only recorder of fsync/rename/commit calls asserts the order of § Durability items 2–4 for flush and compaction.
 - **Model test.** A randomized sequence of append, flush, compact, delete, retention, restart and query operations, checked against a simple in-memory model of the expected rows (Quickwit's "rows in = rows out").
-- **Benchmarks** (M6): `criterion` micro-benchmarks in `crates/storage/benches`, and an end-to-end load generator in `tools/bench-storage` (not shipped) that reports ingest throughput, flush and compaction rates, and query latency against spec 03's capacity numbers.
+- **Benchmarks** (M6): `#[ignore]` integration tests run by hand in release mode, `tests/ingest_bench.rs` (ingest, flush and compaction rates) and `tests/trace_bench.rs` (query latency, local and S3 with a cold, warm or no read cache), reporting against spec 03's capacity numbers in `docs/research/storage/benchmarks.md` (D-A1-12).
 
 ## Milestones
 
@@ -445,7 +449,7 @@ Each milestone ends merged, with `just check` green, and gets its own implementa
 | M3 | **Traces.** Plans `05-m3a-traces-write.md` and `06-m3b-traces-read.md`. The merge operator (D152), partials at flush, `file_sources`, the anchor (D86), `TracesProvider` (window, exact filters, latest-N rule and two-phase list mode D153, single-trace lookup with bloom filters and `QueryOptions::around` D154), the S1-shaped benchmark. The duplicate drop at flush already landed in M2. | Golden tests on the traces view: late partials, midnight crossing, duplicates, filters that only pass after the merge. The S1 latency targets hold on the real implementation. | M2, S1 |
 | M4 | **Compaction and GC.** Plans `07-m4a-gc-and-merge.md` and `08-m4b-compaction.md`. L0 merge with the size ratio, day close, streaming merge with a memory cap and temp-file outputs, traces rebuilt per spans output (D-A1-1), obsolete-file GC with reference counts. Disk reservation moved to M6 (D-A1-2). | Write amplification measured on a synthetic day stays bounded. Crash and race tests (compaction vs query, vs flush). | M3 (traces rebuild); spans/scores parts could start after M2 |
 | M5 | **Deletion, retention, project drop, media.** Plans `09-m5a-deletion.md` and `10-m5b-retention-media-drop.md`. Tombstones and the covered-row filter (D-A1-3), `deletion_seq` bookkeeping, rewriter, `apply_retention`, `drop_project`, media blobs and GC. | Deleted rows vanish from queries at once and from files within `deletion.max_delay`. The race test "compaction started before a deletion commits after it" keeps the rows gone. | M2 (deletion of spans/scores); M3 for traces |
-| M6 | **Resources and hardening.** Process-wide memory pool and admission, disk-full behaviour (including compaction's disk reservation, D-A1-2), quarantine of corrupt files, the S3 read cache (§ Query resources), benchmarks. | Benchmarks recorded against spec 03's capacity check, on local disk and on S3 with a warm and a cold cache. Disk-full and corrupt-file tests. | M2 |
+| M6 | **Resources and hardening.** Plans `11-m6a-resources-hardening.md` and `12-m6b-read-cache-benchmarks.md`. Process-wide memory pool and admission, disk-full behaviour (including compaction's disk reservation, D-A1-2), quarantine of corrupt files, the S3 read cache (§ Query resources), benchmarks. | Benchmarks recorded against spec 03's capacity check, on local disk and on S3 with a warm and a cold cache. Disk-full and corrupt-file tests. | M2 |
 
 **What can run in parallel:**
 - A2 runs alongside the whole of A1.
