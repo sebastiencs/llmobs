@@ -719,6 +719,103 @@
         "security": []
       }
     },
+    "/api/public/feedback": {
+      "post": {
+        "tags": [
+          "scores"
+        ],
+        "summary": "Send end-user feedback",
+        "description": "Needs a `pk` key with the `feedback` scope. CORS allows any origin. At most 4 KiB, 10 requests per second per key and client IP.",
+        "operationId": "post_feedback",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The stored feedback score.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is larger than the limit.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/settings": {
       "get": {
         "tags": [
@@ -4469,6 +4566,213 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "scores"
+        ],
+        "summary": "Write scores",
+        "description": "Writes 1–1000 scores in one batch. The answer has one id per item, in input order.",
+        "operationId": "create_scores",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScoreBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The id of each written score, in input order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoreWriteResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is larger than the limit.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/scores/{score_id}": {
+      "delete": {
+        "tags": [
+          "scores"
+        ],
+        "summary": "Delete a score",
+        "description": "Appends a deleted version of the score. Its `created_at` is kept.",
+        "operationId": "delete_score",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "score_id",
+            "in": "path",
+            "description": "Score id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/projects/{project}/sessions": {
@@ -5930,6 +6234,113 @@
           }
         }
       }
+    },
+    "/api/v1/scores": {
+      "post": {
+        "tags": [
+          "scores"
+        ],
+        "summary": "Write scores with an ingest key",
+        "description": "Writes 1–1000 scores in one batch. The answer has one id per item, in input order. The project comes from the `sk` key, which needs the `ingest` scope.",
+        "operationId": "create_key_scores",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScoreBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The id of each written score, in input order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoreWriteResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is larger than the limit.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -6717,6 +7128,69 @@
             "description": "End-user id."
           }
         }
+      },
+      "FeedbackRequest": {
+        "type": "object",
+        "description": "`POST /api/public/feedback` body (spec 06 § End-user feedback).",
+        "required": [
+          "trace_id",
+          "value"
+        ],
+        "properties": {
+          "comment": {
+            "type": "string",
+            "description": "Free-text comment."
+          },
+          "name": {
+            "type": "string",
+            "description": "Default `user_feedback`."
+          },
+          "span_id": {
+            "$ref": "#/components/schemas/SpanId",
+            "description": "Span of the trace, when the feedback is about one span."
+          },
+          "trace_id": {
+            "$ref": "#/components/schemas/TraceId",
+            "description": "Trace the feedback is about."
+          },
+          "value": {
+            "$ref": "#/components/schemas/FeedbackValue",
+            "description": "The feedback value."
+          }
+        },
+        "additionalProperties": false
+      },
+      "FeedbackResult": {
+        "type": "object",
+        "description": "Answer of `POST /api/public/feedback`.",
+        "required": [
+          "score_id"
+        ],
+        "properties": {
+          "score_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The id of the stored score."
+          }
+        }
+      },
+      "FeedbackValue": {
+        "oneOf": [
+          {
+            "type": "boolean",
+            "description": "True or false."
+          },
+          {
+            "type": "number",
+            "format": "double",
+            "description": "A finite number."
+          },
+          {
+            "type": "string",
+            "description": "A label or text."
+          }
+        ],
+        "description": "A number, a boolean or a string."
       },
       "FieldError": {
         "type": "object",
@@ -7994,6 +8468,23 @@
           }
         }
       },
+      "ScoreBatch": {
+        "type": "object",
+        "description": "`POST …/scores` and `POST /api/v1/scores` body.",
+        "required": [
+          "scores"
+        ],
+        "properties": {
+          "scores": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScoreCreate"
+            },
+            "description": "Between 1 and 1000 scores."
+          }
+        },
+        "additionalProperties": false
+      },
       "ScoreBrief": {
         "type": "object",
         "description": "The latest score of one name on a trace or session row.\n\nSpec 09 § Response shapes.",
@@ -8022,6 +8513,61 @@
             "description": "Score value."
           }
         }
+      },
+      "ScoreCreate": {
+        "type": "object",
+        "description": "One score to write. Spec 06 § Scores, D-F-1, D-G-28.",
+        "required": [
+          "target",
+          "name",
+          "value"
+        ],
+        "properties": {
+          "metadata": {
+            "type": "object",
+            "description": "String metadata stored with the score.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string",
+            "description": "Score name."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Free-text reason for the value."
+          },
+          "score_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Client id; a UUIDv7 gives `created_at` from its time (D-G-26). Derived when absent."
+          },
+          "session_id": {
+            "type": "string",
+            "description": "Session of a span or trace target. Ignored for a session target."
+          },
+          "source": {
+            "$ref": "#/components/schemas/ScoreSource",
+            "description": "Who wrote the score. Defaults by caller (D-G-27)."
+          },
+          "target": {
+            "$ref": "#/components/schemas/ScoreTarget",
+            "description": "Span, trace or session the score is attached to."
+          },
+          "user_id": {
+            "type": "string",
+            "description": "End user the score is about, when known."
+          },
+          "value": {
+            "$ref": "#/components/schemas/ScoreValue",
+            "description": "The score value."
+          }
+        },
+        "additionalProperties": false
       },
       "ScorePage": {
         "type": "object",
@@ -8238,6 +8784,23 @@
           }
         ],
         "description": "The value carried by a score.\n\nJSON is adjacently tagged: `{\"data_type\":\"numeric\",\"value\":0.8}`. A categorical value is\n`{\"data_type\":\"categorical\",\"value\":{\"label\":\"correct\",\"value\":1.0}}`. Spec 01 § Score."
+      },
+      "ScoreWriteResult": {
+        "type": "object",
+        "description": "Answer of a score write: one id per input item, in input order.",
+        "required": [
+          "score_ids"
+        ],
+        "properties": {
+          "score_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "One id per input item, in input order."
+          }
+        }
       },
       "SessionDetail": {
         "type": "object",
@@ -9682,7 +10245,7 @@
       "bearer": {
         "type": "http",
         "scheme": "bearer",
-        "description": "A personal access token (`pat-…`) or a secret key (`sk-…`)."
+        "description": "A personal access token (`pat-…`), a secret key (`sk-…`), or a public key (`pk-…`, feedback only)."
       },
       "session": {
         "type": "apiKey",

@@ -1,0 +1,23 @@
+{
+  "scores": [
+    {
+      "score_id": "01900000-0000-7000-8000-000000000401",
+      "target": {
+        "type": "span",
+        "trace_id": "a1000000000000000000000000000001",
+        "span_id": "b100000000000012"
+      },
+      "user_id": "user-42",
+      "name": "accuracy",
+      "value": {
+        "data_type": "numeric",
+        "value": 0.8
+      },
+      "reason": "Matches the reference answer.",
+      "source": "sdk",
+      "metadata": {
+        "k": "v"
+      }
+    }
+  ]
+}

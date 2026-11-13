@@ -24,6 +24,7 @@ use llmobs_server::api::openapi::openapi;
 use llmobs_server::api::payload::Payload;
 use llmobs_server::api::saved_views::SavedView;
 use llmobs_server::api::schema::SchemaResponse;
+use llmobs_server::api::scores::{FeedbackRequest, ScoreBatch};
 use llmobs_server::api::sessions::{SessionDetail, SessionSummary};
 use llmobs_server::api::traces::{SpanDetail, SpanSummary, TraceDetail, TraceSummary};
 use llmobs_server::api::users::{EndUserDetail, EndUserSummary};
@@ -157,6 +158,8 @@ fn every_fixture_file_is_used() {
     let manifest: Vec<Example> = read_json(&api_dir().join("manifest.json"));
     let used: BTreeSet<String> = manifest.into_iter().map(|entry| entry.file).collect();
     let uris = media_uris(&dataset_spans());
+    // `requests/` is not walked: its files are checked by
+    // `request_examples_match_their_types_and_the_openapi_document`, not through the manifest.
     let mut unused = Vec::new();
     for file in files_under(&api_dir().join("static"), "static") {
         if !used.contains(&file) {
@@ -369,6 +372,62 @@ fn static_files_match_their_types() {
     roundtrip::<CreatedPersonalToken>("static/personal-token-created.json");
     roundtrip::<SchemaResponse>("static/schema.json");
     roundtrip::<Page<SavedView>>("static/saved-views.json");
+}
+
+#[test]
+fn request_examples_match_their_types_and_the_openapi_document() {
+    roundtrip::<ScoreBatch>("requests/score-batch.json");
+    roundtrip::<FeedbackRequest>("requests/feedback.json");
+    let document = read_json::<Value>(&contract_document());
+    let registry = jsonschema::Registry::new()
+        .add(OPENAPI_URI, document.clone())
+        .unwrap_or_else(|error| panic!("openapi registry: {error}"))
+        .prepare()
+        .unwrap_or_else(|error| panic!("openapi registry: {error}"));
+    let requests = [
+        ("create_key_scores", "requests/score-batch.json"),
+        ("post_feedback", "requests/feedback.json"),
+    ];
+    let mut failures = Vec::new();
+    for (operation_id, file) in requests {
+        let Some((path, method, operation)) = operation_at(&document, operation_id) else {
+            failures.push(format!("{file}: operation {operation_id} is missing"));
+            continue;
+        };
+        let schema = &operation["requestBody"]["content"]["application/json"]["schema"];
+        if schema.is_null() {
+            failures.push(format!("{file}: no request schema for {operation_id}"));
+            continue;
+        }
+        let pointer = format!(
+            "/paths/{}/{}/requestBody/content/{}/schema",
+            uri_escape(&pointer_token(&path)),
+            uri_escape(&pointer_token(&method)),
+            uri_escape(&pointer_token("application/json")),
+        );
+        let schema = serde_json::json!({ "$ref": format!("{OPENAPI_URI}#{pointer}") });
+        let validator = match jsonschema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .with_registry(&registry)
+            .offline()
+            .build(&schema)
+        {
+            Ok(validator) => validator,
+            Err(error) => {
+                failures.push(format!("{file}: schema: {error}"));
+                continue;
+            }
+        };
+        let instance: Value = read_json(&api_dir().join(file));
+        for error in validator.iter_errors(&instance) {
+            failures.push(format!(
+                "{file}: {}: {}",
+                error.instance_path(),
+                kind_label(error.kind())
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
