@@ -76,6 +76,7 @@ fn child_config(dir: &Path) -> StorageConfig {
             target_file_size: ByteSize::mib(1),
             ..CompactionConfig::default()
         },
+        deletion: Default::default(),
     }
 }
 

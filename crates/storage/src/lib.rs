@@ -6,8 +6,7 @@
 //!
 //! # What this crate does not do yet
 //!
-//! - retention, media blobs and project drop are absent; deletion hides rows
-//!   from queries, and its flush, compaction and rewriter erasures land next;
+//! - retention, media blobs and project drop are absent;
 //! - the query runtime uses DataFusion's default memory pool.
 //!   Parquet footers and page indexes use DataFusion's built-in metadata cache.
 
@@ -62,6 +61,7 @@ mod sql;
 mod views;
 
 pub use crate::compaction::job::CompactionReport;
+pub use crate::compaction::rewrite::DeletionReport;
 pub use crate::deletion::{Deletion, DeletionScope, DeletionStatus};
 pub use crate::error::CompactionError;
 pub use crate::gc::ObsoleteReport;
@@ -297,7 +297,11 @@ impl Storage {
                     batch_size: 8192,
                 },
                 compaction::plan::Policy::from(&config.compaction),
-                config.compaction.threads,
+                compaction::job::CompactorLimits {
+                    threads: config.compaction.threads,
+                    max_delay: i64::try_from(config.deletion.max_delay.as_nanos())
+                        .unwrap_or(i64::MAX),
+                },
                 share_hooks(&hooks),
             ))
         };
@@ -554,6 +558,13 @@ impl Storage {
     #[doc(hidden)]
     pub async fn compact(&self, now: i64) -> Result<CompactionReport, CompactionError> {
         self.compactor.pass(now).await
+    }
+
+    /// One deletion pass at `now` (ns), run to completion: rewrites, raises, and
+    /// marks applied. The background task runs one after each compaction pass.
+    #[doc(hidden)]
+    pub async fn apply_deletions(&self, now: i64) -> Result<DeletionReport, CompactionError> {
+        self.compactor.deletion_pass(now).await
     }
 
     /// Replaces the compaction policy read at the start of each pass.
@@ -1114,6 +1125,7 @@ mod tests {
             anchor: Default::default(),
             gc: Default::default(),
             compaction: Default::default(),
+            deletion: Default::default(),
         }
     }
 

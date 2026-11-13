@@ -538,6 +538,34 @@ pub enum CompactionError {
     /// The storage is shutting down; the job gave up before committing.
     #[error("compaction stopped for shutdown")]
     Stopped,
+    /// The covered-row filter failed while merging or checking inputs.
+    #[error("deletion filter: {reason}")]
+    Deletion {
+        /// Static reason. Never a cell value.
+        reason: &'static str,
+    },
+}
+
+impl CompactionError {
+    /// The variant name in snake case. The job failure logs print this instead
+    /// of the error text: a DataFusion error raised by a plan that holds the
+    /// covered-row predicate may quote its literals (spec 03 §7).
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            Self::Read { .. } => "read",
+            Self::Write(_) => "write",
+            Self::Object(_) => "object",
+            Self::Commit(_) => "commit",
+            Self::Stage(_) => "stage",
+            Self::Dedup(_) => "dedup",
+            Self::Partials(_) => "partials",
+            Self::Input { .. } => "input",
+            Self::Task => "task",
+            Self::Fault => "fault",
+            Self::Stopped => "stopped",
+            Self::Deletion { .. } => "deletion",
+        }
+    }
 }
 
 /// A batch could not be deduplicated. `reason` is a static description, never row content.

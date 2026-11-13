@@ -51,6 +51,9 @@ pub(crate) enum JobKind {
     /// Close the partition day: everything (or, for a big `spans` day, the L0
     /// files) into level-1 files.
     DayClose,
+    /// Rewrite one file without its covered rows (spec 03 §7). Built by the
+    /// deletion pass, never by [`plan`].
+    Rewrite,
 }
 
 /// One compaction job: some files of one `(table, project, day)` partition.

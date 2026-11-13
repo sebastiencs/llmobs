@@ -200,6 +200,7 @@ fn default_config(data_dir: &std::path::Path) -> ServerConfig {
             anchor: AnchorConfig::default(),
             gc: Default::default(),
             compaction: Default::default(),
+            deletion: Default::default(),
         },
         auth: AuthSettings::default(),
         smtp_url: None,

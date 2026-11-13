@@ -82,6 +82,27 @@ pub(crate) fn spawn(compactor: std::sync::Arc<Compactor>, interval: Duration) ->
                             tracing::warn!(%error, "compaction pass failed");
                         }
                     }
+                    match compactor.deletion_pass(now_ns()).await {
+                        Ok(report)
+                            if report.rewritten + report.raised + report.applied + report.failed
+                                > 0 =>
+                        {
+                            tracing::debug!(
+                                rewritten = report.rewritten,
+                                raised = report.raised,
+                                applied = report.applied,
+                                failed = report.failed,
+                                "deletion pass"
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            // The label only: a DataFusion error raised by a
+                            // plan holding the covered-row predicate may quote
+                            // its literals (spec 03 §7).
+                            tracing::warn!(error = error.label(), "deletion pass failed");
+                        }
+                    }
                 }
             }
         }

@@ -68,6 +68,7 @@ fn config_in(dir: &std::path::Path) -> StorageConfig {
             l0_files: 2,
             ..CompactionConfig::default()
         },
+        deletion: Default::default(),
     }
 }
 
