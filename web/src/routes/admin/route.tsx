@@ -24,6 +24,7 @@ function AdminLayout() {
         <h1 className="text-2xl font-medium">Instance admin</h1>
         <nav aria-label="Instance admin" className="flex gap-1 border-b">
           <AdminTab to="/admin/users" label="Users" />
+          <AdminTab to="/admin/settings" label="Settings" />
         </nav>
         <Outlet />
       </main>
@@ -31,7 +32,7 @@ function AdminLayout() {
   );
 }
 
-function AdminTab({ to, label }: { to: "/admin/users"; label: string }) {
+function AdminTab({ to, label }: { to: "/admin/users" | "/admin/settings"; label: string }) {
   return (
     <Link
       to={to}
