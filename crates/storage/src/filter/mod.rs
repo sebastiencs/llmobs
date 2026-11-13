@@ -785,6 +785,7 @@ mod tests {
                 runtime: Arc::new(RuntimeEnv::default()),
                 target_partitions: NonZeroUsize::new(2).expect("two partitions"),
                 optimizer_rules: Vec::new(),
+                suspects: crate::verify::Suspects::detached(),
             },
             None,
         )
@@ -974,6 +975,7 @@ mod tests {
                 runtime: Arc::new(RuntimeEnv::default()),
                 target_partitions: NonZeroUsize::new(2).expect("two partitions"),
                 optimizer_rules: Vec::new(),
+                suspects: crate::verify::Suspects::detached(),
             },
             None,
         )

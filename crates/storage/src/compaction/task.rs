@@ -125,6 +125,22 @@ pub(crate) fn spawn(
                             }
                         }
                     }
+                    // Suspect files are read whole and corrupt ones quarantined
+                    // (spec 03 §10).
+                    let verify = compactor.verify_pass(now_ns()).await;
+                    if verify.healthy + verify.quarantined + verify.repaired + verify.unavailable
+                        + verify.failed
+                        > 0
+                    {
+                        tracing::debug!(
+                            healthy = verify.healthy,
+                            quarantined = verify.quarantined,
+                            repaired = verify.repaired,
+                            unavailable = verify.unavailable,
+                            failed = verify.failed,
+                            "verify pass"
+                        );
+                    }
                 }
             }
         }

@@ -239,6 +239,7 @@ pub(crate) async fn collect_obsolete(
 
 #[cfg(test)]
 mod tests {
+    use bytesize::ByteSize;
     use std::path::Path;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -265,6 +266,7 @@ mod tests {
     fn config_in(dir: &Path) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            min_free_bytes: ByteSize::b(0),
             object_store: None,
             s3: S3Config::default(),
             wal: WalConfig::default(),
@@ -501,6 +503,7 @@ mod tests {
             flushed_seq: None,
             sources: vec![(traces_id, spans_id)],
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         f.committer
             .stage(&[spans_path.clone(), traces_path.clone()])
@@ -530,6 +533,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         f.committer.commit(&remove, |_| {}).await.unwrap();
     }
@@ -550,6 +554,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         f.committer
             .stage(std::slice::from_ref(&path))
@@ -568,6 +573,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         f.committer.commit(&remove, |_| {}).await.unwrap();
         (id, path)

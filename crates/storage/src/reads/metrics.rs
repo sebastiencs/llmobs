@@ -450,7 +450,7 @@ async fn trace_rows(
     let batches = aggregate(frame, request.group_by.is_some())?
         .collect()
         .await
-        .map_err(classify)?;
+        .map_err(|error| ctx.fail(error))?;
     rows_from(&batches, request.group_by.is_some(), grid)
 }
 
@@ -494,7 +494,7 @@ async fn eval_cost(
         .map_err(classify)?
         .collect()
         .await
-        .map_err(classify)?;
+        .map_err(|error| ctx.fail(error))?;
     cost_rows(&batches, grid)
 }
 
@@ -649,7 +649,7 @@ async fn token_rows(
         .map_err(classify)?
         .collect()
         .await
-        .map_err(classify)?;
+        .map_err(|error| ctx.fail(error))?;
     map_rows(
         value_rows(&batches, group.is_some(), grid, &columns)?,
         |values| {
@@ -700,7 +700,7 @@ async fn ttft_rows(
         .map_err(classify)?
         .collect()
         .await
-        .map_err(classify)?;
+        .map_err(|error| ctx.fail(error))?;
     map_rows(
         value_rows(&batches, group.is_some(), grid, &[P50, P95])?,
         |values| {
@@ -742,7 +742,7 @@ async fn llm_rows(
         .map_err(classify)?
         .collect()
         .await
-        .map_err(classify)?;
+        .map_err(|error| ctx.fail(error))?;
     map_rows(
         value_rows(&batches, true, grid, &[P50, P95, COST])?,
         |values| {
@@ -795,7 +795,7 @@ async fn score_rows(
         .map_err(classify)?
         .collect()
         .await
-        .map_err(classify)?;
+        .map_err(|error| ctx.fail(error))?;
     map_rows(value_rows(&batches, true, grid, &[VALUE])?, |values| {
         let [value] = values
             .try_into()
@@ -884,7 +884,7 @@ async fn kpi_range(
         .map_err(classify)?
         .collect()
         .await
-        .map_err(classify)?;
+        .map_err(|error| ctx.fail(error))?;
     kpi_values(&batches)
 }
 
@@ -947,7 +947,7 @@ async fn top_model_rows(
         .map_err(classify)?
         .collect()
         .await
-        .map_err(classify)?;
+        .map_err(|error| ctx.fail(error))?;
     model_rows(&batches)
 }
 
@@ -2504,6 +2504,8 @@ mod tests {
                 runtime: Arc::new(RuntimeEnv::default()),
                 target_partitions: NonZeroUsize::new(2).expect("two partitions"),
                 optimizer_rules: Vec::new(),
+
+                suspects: crate::verify::Suspects::detached(),
             },
             None,
         )

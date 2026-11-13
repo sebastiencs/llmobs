@@ -412,6 +412,7 @@ fn arrow_error(source: arrow::error::ArrowError) -> CompactionError {
 
 #[cfg(test)]
 mod tests {
+    use bytesize::ByteSize;
     use std::io::{Read, Seek, SeekFrom};
     use std::sync::Arc;
 
@@ -455,6 +456,7 @@ mod tests {
     async fn objects(dir: &tempfile::TempDir) -> Arc<Objects> {
         let config = StorageConfig {
             data_dir: dir.path().to_path_buf(),
+            min_free_bytes: ByteSize::b(0),
             object_store: Some(ObjectStoreUrl::Local(dir.path().join("objects"))),
             s3: S3Config::default(),
             wal: WalConfig::default(),

@@ -23,7 +23,8 @@ use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, col, lit};
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::prelude::{SessionContext, cast, encode};
 
-use crate::query_error::RunError;
+use crate::query_error::{RunError, classify};
+use crate::verify::Suspects;
 
 // Q6 reads this limit when it tokenizes caller text.
 pub use catalog::{
@@ -46,12 +47,15 @@ pub struct ProjectQuery {
     pub traces: Arc<dyn TableProvider>,
     /// Stored `scores` schema. Live rows only: last writer wins, tombstones dropped.
     pub scores: Arc<dyn TableProvider>,
-    /// Per-query memory pool and spill directory.
+    /// This query's runtime: its own memory pool over the process-wide one, and
+    /// the shared spill directory and caches.
     pub runtime: Arc<RuntimeEnv>,
     /// DataFusion `target_partitions` for this query.
     pub target_partitions: NonZeroUsize,
     /// Physical optimizer rules the session must append: the trace list fast path (D153).
     pub optimizer_rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
+    /// Files this query's scans read; a decode failure queues them for verification (spec 03 §10).
+    pub suspects: Suspects,
 }
 
 /// Inclusive `from`, exclusive `to`, nanoseconds since the Unix epoch, UTC (D101).
@@ -160,6 +164,8 @@ pub struct QueryContext {
     schemas: HashMap<ViewName, DFSchemaRef>,
     /// View names the SQL console may reference. SQLite views join this set.
     registered: Mutex<HashSet<ViewName>>,
+    /// Files this query's scans read, reported when execution fails on a corrupt one.
+    suspects: Suspects,
 }
 
 impl std::fmt::Debug for QueryContext {
@@ -180,6 +186,7 @@ impl QueryContext {
     ///
     /// Returns [`RunError::Internal`] when a view cannot be planned or registered.
     pub fn new(source: ProjectQuery, window: Option<TimeWindow>) -> Result<Self, RunError> {
+        let suspects = source.suspects;
         let state = session::session_state(
             source.runtime,
             source.target_partitions,
@@ -225,7 +232,21 @@ impl QueryContext {
                 ViewName::Sessions,
                 ViewName::Scores,
             ])),
+            suspects,
         })
+    }
+
+    /// The suspects of this query, for a stream that outlives the call.
+    pub(crate) fn suspects(&self) -> Suspects {
+        self.suspects.clone()
+    }
+
+    /// [`classify`], after queueing this query's files when `error` may come
+    /// from a corrupt file (spec 03 §10). Use it for errors of DataFusion
+    /// execution calls; planning errors read no file and keep `classify`.
+    pub(crate) fn fail(&self, error: DataFusionError) -> RunError {
+        self.suspects.report(&error);
+        classify(error)
     }
 
     /// Register a server-built table under its view name.
@@ -799,6 +820,8 @@ mod tests {
                 runtime: Arc::new(RuntimeEnv::default()),
                 target_partitions: NonZeroUsize::new(2).expect("partitions"),
                 optimizer_rules: Vec::new(),
+
+                suspects: Suspects::detached(),
             },
             Some(window),
         )

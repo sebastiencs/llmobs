@@ -12,21 +12,27 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-use crate::catalog::{CatalogEdit, Committer, FileId, FileMeta, FileState, FileTable};
+use crate::catalog::{CatalogEdit, Committer, FileId, FileMeta, FileState, FileTable, now_ns};
 use crate::compaction::merge::{MergeContext, merge_slice};
 use crate::compaction::plan::{Job, JobKind, Policy, plan};
 use crate::compaction::slice::{slice_count, slices, time_values};
 use crate::deletion::covered_predicate;
+use crate::disk::Disk;
 use crate::error::{CommitError, CompactionError, ObjectError};
 use crate::hooks::{HookPoint, Hooks};
 use crate::objects::Objects;
 use crate::parquet::{FileWriter, footer_size_from_tail, time_column, write_file};
 use crate::read_state::{Published, publish_catalog};
+use crate::verify::{VerifyQueue, may_be_corrupt};
 
 /// Shared by every job: built once in `Storage::open`.
 pub(crate) struct Compactor {
     pub(super) committer: Arc<Committer>,
     pub(super) objects: Arc<Objects>,
+    /// Free disk: every job reserves its inputs' size before it reads anything.
+    pub(super) disk: Arc<Disk>,
+    /// Suspect files, read whole by the verify pass (spec 03 §10).
+    pub(super) verify: Arc<VerifyQueue>,
     pub(super) published: Arc<Published>,
     pub(super) merge: MergeContext,
     /// Read at the start of each pass. Tests replace it ([`Storage::set_policy`]).
@@ -136,9 +142,12 @@ impl Drop for ClaimGuard {
 impl Compactor {
     /// Built once in `Storage::open`. `merge` carries the compaction runtime
     /// with the `compaction.max_memory` pool and the registered object store.
+    #[allow(clippy::too_many_arguments)] // the shared handles of one job, as spec 03 §5 lists them
     pub(crate) fn new(
         committer: Arc<Committer>,
         objects: Arc<Objects>,
+        disk: Arc<Disk>,
+        verify: Arc<VerifyQueue>,
         published: Arc<Published>,
         merge: MergeContext,
         policy: Policy,
@@ -148,6 +157,8 @@ impl Compactor {
         Self {
             committer,
             objects,
+            disk,
+            verify,
             published,
             merge,
             policy: Mutex::new(policy),
@@ -217,6 +228,16 @@ impl Compactor {
                             %error,
                             "compaction job lost a conflict; a later pass redoes it"
                         );
+                    } else if matches!(error, CompactionError::DiskFull) {
+                        tracing::info!(
+                            table,
+                            project,
+                            day,
+                            kind,
+                            inputs,
+                            error = error.label(),
+                            "compaction job deferred: not enough free disk"
+                        );
                     } else {
                         tracing::warn!(
                             table,
@@ -270,12 +291,38 @@ impl Compactor {
             .len()
     }
 
-    /// Runs one job to its commit.
+    /// Runs one job to its commit. A read that may be a corrupt input makes
+    /// every input a suspect (spec 03 §10).
     pub(super) async fn run(
         self: &Arc<Self>,
         job: Job,
         policy: Policy,
     ) -> Result<CompactionReport, CompactionError> {
+        let inputs: Vec<FileId> = job.inputs.iter().map(|file| file.id).collect();
+        let outcome = self.run_job(job, policy).await;
+        if let Err(CompactionError::Read { source }) = &outcome
+            && may_be_corrupt(source)
+        {
+            self.verify.suspect(inputs, now_ns());
+        }
+        outcome
+    }
+
+    async fn run_job(
+        self: &Arc<Self>,
+        job: Job,
+        policy: Policy,
+    ) -> Result<CompactionReport, CompactionError> {
+        // Reserved before anything is read; released when `run` returns, with
+        // the job's claims (spec 03 §5, D-A1-9).
+        let reserved = job
+            .inputs
+            .iter()
+            .fold(0_u64, |sum, file| sum.saturating_add(file.size));
+        let _reservation = self
+            .disk
+            .try_reserve(reserved)
+            .ok_or(CompactionError::DiskFull)?;
         // The deletions pending when the job started (spec 03 §7): their rows
         // are dropped from the output, which records the highest sequence
         // known now. A deletion registered later is not applied, so the output
@@ -538,6 +585,7 @@ impl Compactor {
             flushed_seq: None,
             sources,
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         let published = Arc::clone(&self.published);
         self.committer
@@ -595,6 +643,7 @@ fn kind_label(kind: JobKind) -> &'static str {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use bytesize::ByteSize;
     use std::path::Path;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -645,6 +694,7 @@ pub(crate) mod tests {
     ) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            min_free_bytes: ByteSize::b(0),
             object_store: None,
             s3: S3Config::default(),
             wal: WalConfig::default(),
@@ -710,7 +760,7 @@ pub(crate) mod tests {
     }
 
     async fn view_rows(storage: &Storage, sql: &str) -> Vec<Vec<String>> {
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let ctx = QueryContext::new(query, None).unwrap();
         text_rows(&rows(&ctx, sql).await)
     }
@@ -741,7 +791,7 @@ pub(crate) mod tests {
 
     /// Rows of the raw provider behind the `traces` view, read with SQL.
     async fn raw_traces(storage: &Storage, columns: &str) -> Vec<RecordBatch> {
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let ctx =
             SessionContext::new_with_config_rt(SessionConfig::new(), Arc::clone(&query.runtime));
         ctx.register_table("traces", Arc::clone(&query.traces))
@@ -1238,6 +1288,7 @@ pub(crate) mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         storage.commit_test_edit(&edit).await.unwrap();
 
@@ -1315,11 +1366,13 @@ pub(crate) mod tests {
             )
             .await;
         }
-        let pinned = storage.query(project(), Default::default()).unwrap();
+        let pinned = storage.query(project(), Default::default()).await.unwrap();
         let before = {
-            let ctx =
-                QueryContext::new(storage.query(project(), Default::default()).unwrap(), None)
-                    .unwrap();
+            let ctx = QueryContext::new(
+                storage.query(project(), Default::default()).await.unwrap(),
+                None,
+            )
+            .unwrap();
             text_rows(&rows(&ctx, "SELECT trace_id, span_id FROM spans ORDER BY span_id").await)
         };
 
@@ -1484,8 +1537,8 @@ pub(crate) mod tests {
     async fn write_amplification_of_a_synthetic_day() {
         let dir = tempfile::tempdir().unwrap();
         let mut config = config_in(dir.path(), quiet_compaction(8), Duration::from_secs(3_600));
-        config.compaction.target_file_size = bytesize::ByteSize::mib(64);
-        config.compaction.l0_bytes = bytesize::ByteSize::mib(64);
+        config.compaction.target_file_size = ByteSize::mib(64);
+        config.compaction.l0_bytes = ByteSize::mib(64);
         let wa_policy = Policy::from(&config.compaction);
         let mut storage = Storage::open(config.clone()).await.unwrap();
 

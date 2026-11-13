@@ -319,6 +319,7 @@ mod tests {
                 flushed_seq: None,
                 sources: Vec::new(),
                 raise: Vec::new(),
+                quarantine: Vec::new(),
             })
             .unwrap()
             .0

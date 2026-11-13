@@ -17,6 +17,7 @@ use crate::catalog::Catalog;
 use crate::catalog::FileMeta;
 use crate::deletion::PendingDeletion;
 use crate::memtable::MemSnapshot;
+use crate::verify::Suspects;
 use crate::wal::Table;
 
 /// Spans of one project at one read snapshot.
@@ -29,6 +30,7 @@ pub(crate) struct SpansProvider {
     around: Option<i64>,
     /// The project's pending deletions (spec 03 §7).
     deletions: Arc<[Arc<PendingDeletion>]>,
+    suspects: Suspects,
 }
 
 impl SpansProvider {
@@ -39,6 +41,7 @@ impl SpansProvider {
         target_partitions: usize,
         around: Option<i64>,
         deletions: Arc<[Arc<PendingDeletion>]>,
+        suspects: Suspects,
     ) -> Self {
         Self {
             project,
@@ -47,6 +50,7 @@ impl SpansProvider {
             target_partitions,
             around,
             deletions,
+            suspects,
         }
     }
 
@@ -108,12 +112,14 @@ impl TableProvider for SpansProvider {
             target_partitions: self.target_partitions,
             session: state,
             deletions: &self.deletions,
+            suspects: &self.suspects,
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use bytesize::ByteSize;
     use std::path::Path;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -148,6 +154,7 @@ mod tests {
     fn config_in(dir: &Path) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            min_free_bytes: ByteSize::b(0),
             object_store: None,
             s3: S3Config::default(),
             wal: WalConfig::default(),
@@ -216,7 +223,7 @@ mod tests {
             .append_spans(project(), spans_at(&[1, 2]))
             .await
             .unwrap();
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         assert_eq!(query.target_partitions.get(), 2);
         let ctx = SessionContext::new();
         ctx.register_table("spans_t", Arc::clone(&query.spans))
@@ -262,7 +269,7 @@ mod tests {
             .append_spans(project(), spans_at(&[DAY_NS + 1_000]))
             .await
             .unwrap();
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let spans = query.spans.downcast_ref::<SpansProvider>().unwrap();
         let bound = start_ge(DAY_NS);
         assert_eq!(spans.candidate_batches(std::slice::from_ref(&bound)), 1);
@@ -316,7 +323,7 @@ mod tests {
             .await
             .unwrap();
         for (id, expected) in [(project(), 1), (other_project(), 1)] {
-            let query = storage.query(id, Default::default()).unwrap();
+            let query = storage.query(id, Default::default()).await.unwrap();
             let ctx = SessionContext::new();
             ctx.register_table("spans_t", query.spans).unwrap();
             let count = collect(&ctx, "SELECT count(*) FROM spans_t").await;
@@ -329,12 +336,12 @@ mod tests {
     async fn a_query_keeps_the_snapshot_it_was_opened_on() {
         let dir = tempfile::tempdir().unwrap();
         let storage = crate::Storage::open(config_in(dir.path())).await.unwrap();
-        let before = storage.query(project(), Default::default()).unwrap();
+        let before = storage.query(project(), Default::default()).await.unwrap();
         storage
             .append_spans(project(), spans_at(&[1]))
             .await
             .unwrap();
-        let after = storage.query(project(), Default::default()).unwrap();
+        let after = storage.query(project(), Default::default()).await.unwrap();
 
         let old = SessionContext::new();
         old.register_table("spans_t", before.spans).unwrap();
@@ -424,7 +431,7 @@ mod tests {
     async fn wait_flushed(storage: &crate::Storage, files: usize) {
         let started = Instant::now();
         loop {
-            let query = storage.query(project(), Default::default()).unwrap();
+            let query = storage.query(project(), Default::default()).await.unwrap();
             let spans = provider(&query);
             if spans.candidate_files(&[]).len() == files && spans.candidate_batches(&[]) == 0 {
                 return;
@@ -479,7 +486,7 @@ mod tests {
             .await
             .unwrap();
 
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let spans = provider(&query);
         assert_eq!(spans.candidate_files(&[]).len(), 1);
         assert!(spans.candidate_batches(&[]) >= 1);
@@ -513,7 +520,7 @@ mod tests {
                 .await
                 .unwrap();
             wait_held(&storage, point).await;
-            let query = storage.query(project(), Default::default()).unwrap();
+            let query = storage.query(project(), Default::default()).await.unwrap();
             let spans = provider(&query);
             let times =
                 start_times(&collect_off_runtime(&query, "SELECT start_time FROM spans_t").await);
@@ -533,7 +540,7 @@ mod tests {
                 };
                 drop(release);
                 wait_held(&storage, HookPoint::FlushAfterCommit).await;
-                let query = storage.query(project(), Default::default()).unwrap();
+                let query = storage.query(project(), Default::default()).await.unwrap();
                 let spans = provider(&query);
                 assert!(!spans.candidate_files(&[]).is_empty());
                 assert_eq!(spans.candidate_batches(&[]), 0);
@@ -564,7 +571,7 @@ mod tests {
             .await
             .unwrap();
         wait_flushed(&storage, 1).await;
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let spans = provider(&query);
         let bound = start_ge(DAY_NS);
         // One day of file slack finds that day-1 file for a day-2 range.
@@ -605,7 +612,10 @@ mod tests {
                 None,
             )),
         ));
-        let all = storage.query(project(), QueryOptions::default()).unwrap();
+        let all = storage
+            .query(project(), QueryOptions::default())
+            .await
+            .unwrap();
         assert_eq!(
             provider(&all)
                 .candidate_files(std::slice::from_ref(&lookup))
@@ -614,6 +624,7 @@ mod tests {
         );
         let hinted = storage
             .query(project(), QueryOptions { around: Some(base) })
+            .await
             .unwrap();
         let selected = provider(&hinted).candidate_files(&[lookup]);
         assert_eq!(selected.len(), 1, "{selected:?}");
@@ -630,7 +641,7 @@ mod tests {
             .await
             .unwrap();
         wait_flushed(&storage, 1).await;
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let ctx = session(&query);
         ctx.register_table("spans_t", Arc::clone(&query.spans))
             .unwrap();
@@ -676,8 +687,11 @@ mod tests {
             .unwrap();
         let started = Instant::now();
         loop {
-            let left = storage.query(project(), Default::default()).unwrap();
-            let right = storage.query(other_project(), Default::default()).unwrap();
+            let left = storage.query(project(), Default::default()).await.unwrap();
+            let right = storage
+                .query(other_project(), Default::default())
+                .await
+                .unwrap();
             let left_spans = provider(&left);
             let right_spans = right.spans.downcast_ref::<SpansProvider>().unwrap();
             if left_spans.candidate_files(&[]).len() == 1
@@ -706,7 +720,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         for (id, expected) in [(project(), 1_i64), (other_project(), 1)] {
-            let query = storage.query(id, Default::default()).unwrap();
+            let query = storage.query(id, Default::default()).await.unwrap();
             let ctx = session(&query);
             ctx.register_table("spans_t", query.spans).unwrap();
             let count = collect(&ctx, "SELECT count(*) FROM spans_t").await;

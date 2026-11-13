@@ -17,6 +17,7 @@ use serde_json::{Map, Value};
 use super::encode::{self, json_rows};
 use super::prepare_sql;
 use crate::query_error::{RunError, classify};
+use crate::verify::Suspects;
 use crate::views::QueryContext;
 
 /// One console request.
@@ -118,8 +119,11 @@ impl QueryContext {
         let schema = Schema::new(frame.schema().fields().clone());
         // The plan's limit stops the stream at `limit + 1` rows. `collect` pulls
         // that stream; the caller's timeout drops it, which cancels the query.
-        let stream = frame.execute_stream().await.map_err(classify)?;
-        let batches = collect(stream).await.map_err(classify)?;
+        let stream = frame
+            .execute_stream()
+            .await
+            .map_err(|error| self.fail(error))?;
+        let batches = collect(stream).await.map_err(|error| self.fail(error))?;
         let (batches, truncated) = cap_rows(batches, request.limit);
         let rows = json_rows(&batches, &schema)?;
         Ok(SqlJson {
@@ -183,13 +187,17 @@ impl QueryContext {
                 ExportBody::Parquet(Box::new(encode::ParquetEncoder::new(&schema)?))
             }
         };
-        let inner = frame.execute_stream().await.map_err(classify)?;
+        let inner = frame
+            .execute_stream()
+            .await
+            .map_err(|error| self.fail(error))?;
         if tokio::time::Instant::now() >= deadline {
             drop(inner);
             return Ok(timeout_stream());
         }
         Ok(ExportStream {
             inner: Some(inner),
+            suspects: self.suspects(),
             schema,
             remaining: row_cap,
             deadline,
@@ -217,6 +225,8 @@ enum ExportBody {
 /// Pulls up to `remaining` rows and encodes them until `deadline`.
 struct ExportStream {
     inner: Option<SendableRecordBatchStream>,
+    /// Reported to when a batch fails with an error that may be corruption.
+    suspects: Suspects,
     schema: Schema,
     remaining: usize,
     deadline: tokio::time::Instant,
@@ -317,7 +327,10 @@ impl ExportStream {
                 self.inner.take();
                 Poll::Ready(None)
             }
-            Poll::Ready(Some(Err(error))) => Poll::Ready(Some(Err(classify(error)))),
+            Poll::Ready(Some(Err(error))) => {
+                self.suspects.report(&error);
+                Poll::Ready(Some(Err(classify(error))))
+            }
             Poll::Ready(Some(Ok(batch))) => Poll::Ready(Some(Ok(batch))),
         }
     }

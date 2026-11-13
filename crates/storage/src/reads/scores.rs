@@ -175,7 +175,7 @@ async fn list(ctx: &QueryContext, request: &ScoreListRequest<'_>) -> Result<Page
         .map_err(classify)?
         .limit(0, Some(request.limit + 1))
         .map_err(classify)?;
-    let batches = frame.collect().await.map_err(classify)?;
+    let batches = frame.collect().await.map_err(|error| ctx.fail(error))?;
     assemble(
         batches,
         request.limit,
@@ -260,7 +260,7 @@ async fn latest(
         .map_err(classify)?
         .collect()
         .await
-        .map_err(classify)?;
+        .map_err(|error| ctx.fail(error))?;
     Ok(batches)
 }
 
@@ -707,6 +707,8 @@ mod tests {
                 runtime: Arc::new(RuntimeEnv::default()),
                 target_partitions: NonZeroUsize::new(1).expect("one partition"),
                 optimizer_rules: Vec::new(),
+
+                suspects: crate::verify::Suspects::detached(),
             },
             None,
         )

@@ -73,6 +73,7 @@ use crate::deletion::{PendingDeletion, applicable, covered_predicate};
 use crate::memtable::{MemBatch, MemSnapshot};
 use crate::objects::OBJECT_STORE_URL;
 use crate::partials::{MergeColumns, TraceMerger};
+use crate::verify::Suspects;
 
 /// Traces of one project at one read snapshot (D152/D154, D153 in list mode).
 #[derive(Debug)]
@@ -88,9 +89,11 @@ pub(crate) struct TracesProvider {
     /// The project's pending deletions (spec 03 §7). The `traces` view hides a
     /// covered trace's partials by trace id alone.
     deletions: Arc<[Arc<PendingDeletion>]>,
+    suspects: Suspects,
 }
 
 impl TracesProvider {
+    #[allow(clippy::too_many_arguments)] // one input per field, the query's suspects last
     pub(crate) fn new(
         project: ProjectId,
         catalog: Arc<Catalog>,
@@ -99,6 +102,7 @@ impl TracesProvider {
         lookback: i64,
         partitions: usize,
         deletions: Arc<[Arc<PendingDeletion>]>,
+        suspects: Suspects,
     ) -> Self {
         Self {
             project,
@@ -108,6 +112,7 @@ impl TracesProvider {
             lookback,
             partitions,
             deletions,
+            suspects,
         }
     }
 }
@@ -147,6 +152,8 @@ struct ScanContext {
     around: Option<i64>,
     /// The project's pending deletions (spec 03 §7).
     deletions: Arc<[Arc<PendingDeletion>]>,
+    /// The query's suspects, for the file plans of this scan.
+    suspects: Suspects,
 }
 
 impl ScanContext {
@@ -167,6 +174,7 @@ impl ScanContext {
             filters: filters.to_vec(),
             around: provider.options.around,
             deletions: Arc::clone(&provider.deletions),
+            suspects: provider.suspects.clone(),
         })
     }
 
@@ -305,6 +313,7 @@ fn build_range_plan(ctx: &ScanContext, spec: RangeSpec) -> DfResult<Arc<dyn Exec
             &input_df,
             file_pred.as_ref(),
             ctx.partitions,
+            &ctx.suspects,
         )?);
     }
     if !gated.is_empty() {
@@ -318,6 +327,7 @@ fn build_range_plan(ctx: &ScanContext, spec: RangeSpec) -> DfResult<Arc<dyn Exec
             &input_df,
             file_pred.as_ref(),
             ctx.partitions,
+            &ctx.suspects,
         )?;
         let gated_plan = match covered_predicate(FileTable::Traces, &input_schema, &ctx.deletions)?
         {
@@ -637,7 +647,9 @@ fn file_plan(
     _input_df: &DFSchema,
     predicate: Option<&Arc<dyn PhysicalExpr>>,
     partitions: usize,
+    suspects: &Suspects,
 ) -> DfResult<Arc<dyn ExecutionPlan>> {
+    suspects.record(files);
     let mut source = ParquetSource::new(Arc::clone(schema))
         .with_pushdown_filters(true)
         .with_enable_page_index(true);
@@ -1337,6 +1349,7 @@ fn project_final(
 
 #[cfg(test)]
 mod tests {
+    use bytesize::ByteSize;
     use std::collections::BTreeMap;
     use std::path::Path;
     use std::sync::Arc;
@@ -1388,6 +1401,7 @@ mod tests {
     fn config_in(dir: &Path) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            min_free_bytes: ByteSize::b(0),
             object_store: None,
             s3: S3Config::default(),
             wal: WalConfig::default(),
@@ -1700,7 +1714,7 @@ mod tests {
             .unwrap();
         let storage = reopen(dir.path(), storage).await;
 
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let ctx = session(&query);
         ctx.register_table("traces", Arc::clone(&query.traces))
             .unwrap();
@@ -1785,6 +1799,7 @@ mod tests {
 
         let query = storage
             .query(dataset_project(), Default::default())
+            .await
             .unwrap();
         let ctx = session(&query);
         ctx.register_table("traces", Arc::clone(&query.traces))
@@ -1828,7 +1843,7 @@ mod tests {
             .await
             .unwrap();
 
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let ctx = session(&query);
         ctx.register_table("traces", Arc::clone(&query.traces))
             .unwrap();
@@ -1859,7 +1874,7 @@ mod tests {
                 .unwrap();
             storage = reopen(dir.path(), storage).await;
         }
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let ctx = session(&query);
         ctx.register_table("traces", Arc::clone(&query.traces))
             .unwrap();
@@ -1885,7 +1900,7 @@ mod tests {
             .unwrap();
         let storage = reopen(dir.path(), storage).await;
 
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let ctx = session(&query);
         ctx.register_table("traces", Arc::clone(&query.traces))
             .unwrap();
@@ -1948,7 +1963,7 @@ mod tests {
                 around: Some(d + 100),
             },
         ] {
-            let query = storage.query(project(), options).unwrap();
+            let query = storage.query(project(), options).await.unwrap();
             let ctx = session(&query);
             ctx.register_table("traces", Arc::clone(&query.traces))
                 .unwrap();
@@ -1957,7 +1972,7 @@ mod tests {
             assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
         }
 
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let ctx = session(&query);
         ctx.register_table("traces", Arc::clone(&query.traces))
             .unwrap();
@@ -2097,7 +2112,7 @@ mod tests {
             .unwrap();
         let storage = reopen(dir.path(), storage).await;
 
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let ctx = session(&query);
         let in_window = scan_with(
             &ctx,
@@ -2158,7 +2173,7 @@ mod tests {
             .await
             .unwrap();
 
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let ctx = session(&query);
         ctx.register_table("traces", Arc::clone(&query.traces))
             .unwrap();
@@ -2195,7 +2210,7 @@ mod tests {
         // window and the trace is not returned.
         let dir1 = tempfile::tempdir().unwrap();
         let s1 = window_storage(dir1.path(), root, 50 * MIN).await;
-        let q1 = s1.query(project(), Default::default()).unwrap();
+        let q1 = s1.query(project(), Default::default()).await.unwrap();
         let ctx1 = session(&q1);
         let early = scan_with(
             &ctx1,
@@ -2213,7 +2228,7 @@ mod tests {
         // with the late partial's start. This is the documented window limit.
         let dir2 = tempfile::tempdir().unwrap();
         let s2 = window_storage(dir2.path(), root, 70 * MIN).await;
-        let q2 = s2.query(project(), Default::default()).unwrap();
+        let q2 = s2.query(project(), Default::default()).await.unwrap();
         let ctx2 = session(&q2);
         let late = scan_with(
             &ctx2,
@@ -2250,7 +2265,7 @@ mod tests {
             .unwrap();
         wait_held(&storage, HookPoint::FlushAfterWrite).await;
 
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let before = concat(
             &collect_off(&query, "SELECT * FROM traces").await,
             traces_schema(),
@@ -2266,7 +2281,7 @@ mod tests {
         };
         drop(release);
         wait_held(&storage, HookPoint::FlushAfterCommit).await;
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let after = concat(
             &collect_off(&query, "SELECT * FROM traces").await,
             traces_schema(),
@@ -2312,7 +2327,7 @@ mod tests {
             .await
             .unwrap()
             .register(&runtime);
-        let mut query = storage.query(project(), Default::default()).unwrap();
+        let mut query = storage.query(project(), Default::default()).await.unwrap();
         query.runtime = Arc::new(runtime);
         let ctx = session(&query);
         ctx.register_table("traces", Arc::clone(&query.traces))
@@ -2358,6 +2373,7 @@ mod tests {
         let real = QueryContext::new(
             storage
                 .query(dataset_project(), Default::default())
+                .await
                 .unwrap(),
             None,
         )
@@ -2413,7 +2429,7 @@ mod tests {
             .unwrap();
         let storage = reopen(dir.path(), storage).await;
 
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let ctx = session(&query);
         ctx.register_table("traces", Arc::clone(&query.traces))
             .unwrap();
@@ -2448,11 +2464,11 @@ mod tests {
 
     /// A list-mode context (with `TraceListRule`) and a range-mode context
     /// (rules cleared), both over the same providers.
-    fn query_contexts(
+    async fn query_contexts(
         storage: &crate::Storage,
         project: ProjectId,
     ) -> (QueryContext, QueryContext) {
-        let query = storage.query(project, Default::default()).unwrap();
+        let query = storage.query(project, Default::default()).await.unwrap();
         let range = ProjectQuery {
             spans: Arc::clone(&query.spans),
             traces: Arc::clone(&query.traces),
@@ -2460,6 +2476,8 @@ mod tests {
             runtime: Arc::clone(&query.runtime),
             target_partitions: query.target_partitions,
             optimizer_rules: Vec::new(),
+
+            suspects: crate::verify::Suspects::detached(),
         };
         (
             QueryContext::new(query, None).unwrap(),
@@ -2583,7 +2601,7 @@ mod tests {
         let spans = generated_spans(seed, 40);
         let dir = tempfile::tempdir().unwrap();
         let storage = ingest(dir.path(), &spans, 3).await;
-        let (list, range) = query_contexts(&storage, project());
+        let (list, range) = query_contexts(&storage, project()).await;
         let filter = match filter_case {
             0 => None,
             1 => Some("cost_total > 0.5"),
@@ -2662,7 +2680,7 @@ mod tests {
         let spans = generated_spans(0x2545_F491_4F6C_DD1D, 20);
         let dir = tempfile::tempdir().unwrap();
         let storage = ingest(dir.path(), &spans, 2).await;
-        let (list, _) = query_contexts(&storage, project());
+        let (list, _) = query_contexts(&storage, project()).await;
         let session = list.session();
 
         // The default list.
@@ -2794,7 +2812,7 @@ mod tests {
         let spans = generated_spans(0x51ED_270B, 30);
         let dir = tempfile::tempdir().unwrap();
         let storage = ingest(dir.path(), &spans, 2).await;
-        let (list, _) = query_contexts(&storage, project());
+        let (list, _) = query_contexts(&storage, project()).await;
 
         let mut walked = Vec::new();
         let mut cursor: Option<String> = None;
@@ -2841,7 +2859,7 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         let storage = ingest(dir.path(), &spans, 3).await;
-        let (list, range) = query_contexts(&storage, project());
+        let (list, range) = query_contexts(&storage, project()).await;
         assert_equivalent(&list, &range, None, 50, None).await;
         let page = trace_list(&list, request(None, 50, None)).await.unwrap();
         assert_eq!(hex_ids(&page).len(), 50);
@@ -2869,7 +2887,7 @@ mod tests {
         spans.push(fresh);
         let dir = tempfile::tempdir().unwrap();
         let storage = ingest(dir.path(), &spans, 2).await;
-        let (list, range) = query_contexts(&storage, project());
+        let (list, range) = query_contexts(&storage, project()).await;
         assert_equivalent(&list, &range, Some("cost_total > 0.5"), 50, None).await;
         let page = trace_list(&list, request(Some("cost_total > 0.5"), 50, None))
             .await
@@ -2899,7 +2917,7 @@ mod tests {
         spans.push(top);
         let dir = tempfile::tempdir().unwrap();
         let storage = ingest(dir.path(), &spans, 2).await;
-        let (list, range) = query_contexts(&storage, project());
+        let (list, range) = query_contexts(&storage, project()).await;
         assert_equivalent(&list, &range, None, 50, None).await;
         let page = trace_list(&list, request(None, 50, None)).await.unwrap();
         assert_eq!(hex_ids(&page).len(), 21);
@@ -2919,7 +2937,7 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         let storage = ingest(dir.path(), &spans, 2).await;
-        let (list, range) = query_contexts(&storage, project());
+        let (list, range) = query_contexts(&storage, project()).await;
         assert_equivalent(&list, &range, None, 50, None).await;
         let page = trace_list(&list, request(None, 50, None)).await.unwrap();
         assert_eq!(hex_ids(&page).len(), 10);
@@ -2949,7 +2967,7 @@ mod tests {
             .append_spans(project(), spans_batch(&[late_span]))
             .await
             .unwrap();
-        let (list, _) = query_contexts(&storage, project());
+        let (list, _) = query_contexts(&storage, project()).await;
 
         let page = trace_list(&list, request(None, 50, None)).await.unwrap();
         assert_eq!(hex_ids(&page).len(), 1);

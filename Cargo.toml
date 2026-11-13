@@ -152,6 +152,10 @@ crc32c = "0.6.9"
 bytesize = { version = "2.7.0", features = ["serde"] }
 # `[storage]` durations, for example `"120s"` (D90).
 humantime-serde = "1.1.1"
+# Total memory for the query pool default (spec 03 §6).
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+# Free disk for the disk-full check (spec 03 §10).
+rustix = { version = "1.1.6", default-features = false, features = ["std", "fs"] }
 # Same prost as `opentelemetry-proto` 0.33.1 (`Cargo.lock`). Decode only; no `derive`.
 prost = { version = "0.14.4", default-features = false, features = ["std"] }
 # OTLP messages for fixture validation. Default features stay off: `full` enables the tonic service.

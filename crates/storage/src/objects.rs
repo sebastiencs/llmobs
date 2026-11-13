@@ -34,6 +34,7 @@ use crate::catalog::{FileId, FileTable};
 use crate::config::{ObjectStoreUrl, S3Config, StorageConfig};
 use crate::error::ObjectError;
 use crate::hooks::{HookPoint, Hooks};
+use crate::read_cache::{CacheStore, ReadCache, cached_name};
 use crate::wal;
 use tokio::io::AsyncReadExt;
 
@@ -54,7 +55,13 @@ const MULTIPART_PART: usize = 16 * 1024 * 1024;
 #[derive(Debug)]
 pub(crate) struct Objects {
     kind: Kind,
+    /// The store itself: S3, or a test store standing in for it.
+    raw: Arc<dyn ObjectStore>,
+    /// `raw` behind the read cache (spec 03 §6), or `raw` itself. Registered
+    /// with DataFusion, so queries, compaction and GC read through the cache.
     store: Arc<dyn ObjectStore>,
+    /// Set by [`Self::with_read_cache`], remote stores only.
+    cache: Option<Arc<ReadCache>>,
     url: RegisteredUrl,
     /// `<data_dir>/tmp/compaction`, where remote outputs spill before upload.
     spill_dir: PathBuf,
@@ -88,21 +95,37 @@ impl Objects {
                         io::Error::other(source),
                     )
                 })??;
+                let store: Arc<dyn ObjectStore> = Arc::new(store);
                 Ok(Self {
                     kind: Kind::Local { root },
-                    store: Arc::new(store),
+                    raw: Arc::clone(&store),
+                    store,
+                    cache: None,
                     url,
                     spill_dir,
                     hooks,
                 })
             }
-            ObjectStoreUrl::S3 { bucket, prefix } => Ok(Self {
-                kind: Kind::Remote,
-                store: build_s3(&bucket, &prefix, &config.s3)?,
-                url,
-                spill_dir,
-                hooks,
-            }),
+            ObjectStoreUrl::S3 { bucket, prefix } => {
+                let store = build_s3(&bucket, &prefix, &config.s3)?;
+                Ok(Self {
+                    kind: Kind::Remote,
+                    raw: Arc::clone(&store),
+                    store,
+                    cache: None,
+                    url,
+                    spill_dir,
+                    hooks,
+                })
+            }
+        }
+    }
+
+    /// The local object root, `None` for a remote store.
+    pub(crate) fn local_root(&self) -> Option<&Path> {
+        match &self.kind {
+            Kind::Local { root } => Some(root),
+            Kind::Remote => None,
         }
     }
 
@@ -115,11 +138,35 @@ impl Objects {
     ) -> Result<Self, ObjectError> {
         Ok(Self {
             kind: Kind::Remote,
+            raw: Arc::clone(&store),
             store,
+            cache: None,
             url: registered_url()?,
             spill_dir: data_dir.join("tmp").join("compaction"),
             hooks,
         })
+    }
+
+    /// Puts `cache` in front of the remote store (spec 03 §6). Data-file reads
+    /// go through it; writes and everything else pass through.
+    pub(crate) fn with_read_cache(mut self, cache: Arc<ReadCache>) -> Self {
+        self.store = Arc::new(CacheStore {
+            inner: Arc::clone(&self.raw),
+            cache: Arc::clone(&cache),
+        });
+        self.cache = Some(cache);
+        self
+    }
+
+    /// The read cache, `None` without one.
+    pub(crate) fn read_cache(&self) -> Option<&Arc<ReadCache>> {
+        self.cache.as_ref()
+    }
+
+    /// The store without the read cache. Verification reads through it, so a
+    /// corrupt cached block cannot make a healthy file look corrupt (spec 03 §10).
+    pub(crate) fn raw_store(&self) -> Arc<dyn ObjectStore> {
+        Arc::clone(&self.raw)
     }
 
     /// Registers `store` under [`OBJECT_STORE_URL`].
@@ -164,7 +211,8 @@ impl Objects {
     ///
     /// Local writes run on `spawn_blocking`. An existing final file is
     /// [`ObjectError::AlreadyExists`]. A remote error is [`ObjectError::Upload`]
-    /// and is not retried here.
+    /// and is not retried here. A remote data file is written through the read
+    /// cache after its upload.
     pub(crate) async fn put_durable(&self, path: &str, bytes: Bytes) -> Result<(), ObjectError> {
         validate_key(path)?;
         match &self.kind {
@@ -178,8 +226,26 @@ impl Objects {
                         ObjectError::io("writing object", Path::new(path), io::Error::other(source))
                     })?
             }
-            Kind::Remote => put_remote(&self.store, path, bytes).await,
+            Kind::Remote => {
+                let through = self.write_through(path);
+                let copy = through.as_ref().map(|_| bytes.clone());
+                put_remote(&self.store, path, bytes).await?;
+                if let (Some((cache, name)), Some(copy)) = (through, copy) {
+                    // Best effort: an unwritten block is fetched from S3 later.
+                    let _ =
+                        tokio::task::spawn_blocking(move || cache.insert_bytes(&name, &copy)).await;
+                }
+                Ok(())
+            }
         }
+    }
+
+    /// The read cache and the cache name of `key`, when a remote write of `key`
+    /// is written through (a data file of a store with a read cache).
+    fn write_through(&self, key: &str) -> Option<(Arc<ReadCache>, String)> {
+        let cache = self.cache.as_ref()?;
+        let name = cached_name(&object_key(key).ok()?)?;
+        Some((Arc::clone(cache), name))
     }
 
     /// Deletes one object. A missing object is success. Used by GC.
@@ -368,6 +434,7 @@ impl Objects {
                 let temp = target.temp.clone();
                 let temp_for_cleanup = target.temp.clone();
                 let store = Arc::clone(&self.store);
+                let through = self.write_through(&key);
                 let upload = async move {
                     let size = file
                         .metadata()
@@ -397,9 +464,10 @@ impl Objects {
                             async move {
                                 let mut buffer = vec![0_u8; MULTIPART_PART];
                                 let mut file = reader.lock().await;
-                                let read = file.read(&mut buffer).await.map_err(|source| {
-                                    ObjectError::io("reading output", &temp, source)
-                                })?;
+                                let read =
+                                    read_part(&mut *file, &mut buffer).await.map_err(|source| {
+                                        ObjectError::io("reading output", &temp, source)
+                                    })?;
                                 if read == 0 {
                                     Ok(None)
                                 } else {
@@ -413,6 +481,17 @@ impl Objects {
                     Ok(size)
                 }
                 .await;
+                if let (Some((cache, name)), Ok(size)) = (through, &upload) {
+                    // Written through after the upload, from the spill file.
+                    let size = *size;
+                    let spill = temp_for_cleanup.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        if let Ok(mut file) = fs::File::open(&spill) {
+                            cache.insert_file(&name, &mut file, size);
+                        }
+                    })
+                    .await;
+                }
                 // The spill file is scratch: remove it either way.
                 let removed = remove_spill_file(&temp_for_cleanup).await;
                 let size = upload?;
@@ -846,8 +925,48 @@ fn object_key(path: &str) -> Result<ObjectPath, ObjectError> {
     ObjectPath::parse(path).map_err(|_| ObjectError::InvalidPath)
 }
 
+/// Reads until `buffer` is full or the reader ends, and returns the bytes read.
+///
+/// A single `read` may return less than asked, and S3 refuses a multipart part
+/// other than the last under 5 MiB, so each part is filled before it is sent.
+async fn read_part<R>(reader: &mut R, buffer: &mut [u8]) -> io::Result<usize>
+where
+    R: tokio::io::AsyncRead + Unpin + ?Sized,
+{
+    let mut filled = 0;
+    while filled < buffer.len() {
+        let read = reader.read(&mut buffer[filled..]).await?;
+        if read == 0 {
+            break;
+        }
+        filled += read;
+    }
+    Ok(filled)
+}
+
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn a_multipart_part_is_filled_across_short_reads() {
+        use tokio::io::AsyncReadExt as _;
+        // Three sources chained: each `read` stops at a source boundary.
+        let first = [1_u8; 3];
+        let second = [2_u8; 4];
+        let third = [3_u8; 5];
+        let mut reader = (&first[..]).chain(&second[..]).chain(&third[..]);
+        let mut buffer = [0_u8; 10];
+        assert_eq!(
+            super::read_part(&mut reader, &mut buffer).await.unwrap(),
+            10
+        );
+        assert_eq!(buffer, [1, 1, 1, 2, 2, 2, 2, 3, 3, 3]);
+        let mut rest = [0_u8; 10];
+        assert_eq!(super::read_part(&mut reader, &mut rest).await.unwrap(), 2);
+        assert_eq!(rest[..2], [3, 3]);
+        assert_eq!(super::read_part(&mut reader, &mut rest).await.unwrap(), 0);
+    }
+
+    use bytesize::ByteSize;
     use std::io::Write;
     use std::sync::Arc;
     use std::time::Duration;
@@ -873,6 +992,7 @@ mod tests {
     fn local_config(dir: &std::path::Path) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            min_free_bytes: ByteSize::b(0),
             object_store: Some(ObjectStoreUrl::Local(dir.join("objects"))),
             s3: S3Config::default(),
             wal: WalConfig::default(),

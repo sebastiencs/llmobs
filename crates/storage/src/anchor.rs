@@ -24,10 +24,11 @@ use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::statistics::Statistics;
 
-use crate::catalog::{Catalog, FileMeta, FileTable};
+use crate::catalog::{Catalog, FileMeta, FileTable, now_ns};
 use crate::error::AnchorError;
 use crate::memtable::{FrozenView, PartitionKey};
 use crate::objects::Objects;
+use crate::verify::{VerifyQueue, is_store_error};
 
 /// Nanoseconds in a UTC day.
 pub(crate) const DAY_NS: i64 = 86_400_000_000_000;
@@ -217,10 +218,14 @@ impl Anchors {
     }
 
     /// Rebuilds the state from recent `traces` files, before the flush task starts.
+    ///
+    /// A traces file that cannot be read is skipped and becomes a suspect (spec
+    /// 03 §10). A store failure still fails the open, as before.
     pub(crate) async fn rebuild(
         &mut self,
         catalog: &Catalog,
         objects: &Objects,
+        verify: &VerifyQueue,
     ) -> Result<(), AnchorError> {
         let started = Instant::now();
         self.clock = catalog
@@ -235,32 +240,19 @@ impl Anchors {
             .collect();
         let mut rows_read = 0_usize;
         for file in &files {
-            #[allow(deprecated)]
-            let reader =
-                ParquetObjectReader::new(objects.store(), ObjectPath::from(file.path.as_str()))
-                    .with_file_size(file.size);
-            let builder = ParquetRecordBatchStreamBuilder::new(reader)
-                .await
-                .map_err(AnchorError::parquet)?;
-            let groups = row_groups_to_read(builder.metadata(), since);
-            let mask = ProjectionMask::columns(
-                builder.parquet_schema(),
-                [
-                    traces::TRACE_ID,
-                    traces::START_TIME,
-                    traces::END_TIME,
-                    traces::LAST_INGEST_TIME,
-                ],
-            );
-            let mut stream = builder
-                .with_row_groups(groups)
-                .with_projection(mask)
-                .build()
-                .map_err(AnchorError::parquet)?;
-            while let Some(batch) = stream.next().await {
-                let batch = batch.map_err(AnchorError::parquet)?;
-                rows_read = rows_read.saturating_add(batch.num_rows());
-                collect_rebuild_rows(self, file, &batch, since)?;
+            match self.rebuild_file(file, objects, since).await {
+                Ok(rows) => rows_read = rows_read.saturating_add(rows),
+                Err(AnchorError::Parquet(error)) if is_store_error(&error) => {
+                    return Err(AnchorError::Parquet(error));
+                }
+                Err(_) => {
+                    // The anchors collected from this file stay: they are hints.
+                    tracing::warn!(
+                        file_id = %file.id,
+                        "skipping an unreadable traces file in the anchor rebuild"
+                    );
+                    verify.suspect([file.id], now_ns());
+                }
             }
         }
         tracing::info!(
@@ -271,6 +263,46 @@ impl Anchors {
             "rebuilt trace anchors"
         );
         Ok(())
+    }
+}
+
+impl Anchors {
+    /// Reads the recent row groups of one `traces` file; returns the rows read.
+    async fn rebuild_file(
+        &mut self,
+        file: &FileMeta,
+        objects: &Objects,
+        since: i64,
+    ) -> Result<usize, AnchorError> {
+        #[allow(deprecated)]
+        let reader =
+            ParquetObjectReader::new(objects.store(), ObjectPath::from(file.path.as_str()))
+                .with_file_size(file.size);
+        let builder = ParquetRecordBatchStreamBuilder::new(reader)
+            .await
+            .map_err(AnchorError::parquet)?;
+        let groups = row_groups_to_read(builder.metadata(), since);
+        let mask = ProjectionMask::columns(
+            builder.parquet_schema(),
+            [
+                traces::TRACE_ID,
+                traces::START_TIME,
+                traces::END_TIME,
+                traces::LAST_INGEST_TIME,
+            ],
+        );
+        let mut stream = builder
+            .with_row_groups(groups)
+            .with_projection(mask)
+            .build()
+            .map_err(AnchorError::parquet)?;
+        let mut rows = 0_usize;
+        while let Some(batch) = stream.next().await {
+            let batch = batch.map_err(AnchorError::parquet)?;
+            rows = rows.saturating_add(batch.num_rows());
+            collect_rebuild_rows(self, file, &batch, since)?;
+        }
+        Ok(rows)
     }
 }
 

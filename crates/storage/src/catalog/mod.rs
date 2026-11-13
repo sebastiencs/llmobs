@@ -209,6 +209,13 @@ impl Catalog {
                 }
             }
         }
+        // A quarantined file leaves the snapshot but is not retired: GC never
+        // deletes it through the in-use check (spec 03 §10).
+        for id in &edit.quarantine {
+            if remove_active(&mut tables, *id).is_none() {
+                return Err(CommitError::conflict("file is not active in the catalog"));
+            }
+        }
         for (id, seq) in &edit.raise {
             // Before `add`: the SQL check rejects a raise of an added file
             // before its row is inserted, and this keeps the two in step.
@@ -362,6 +369,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         let (catalog, removed) = Catalog::empty().apply(&edit).unwrap();
         assert!(removed.is_empty());
