@@ -41,18 +41,18 @@ Plans: [`plans/phase-0/`](plans/phase-0/). Decisions D52–D82; D1–D51 are the
 
 ## Wave 2 — integration (proposed)
 
-None of these tracks is planned yet. Each still gets the usual choice of one plan or a design doc first. The split puts one serial track first, G, which connects ingest, storage, the read API and the UI, and settles the wiring every other track extends: the server's app state and route table, `openapi.json`, the `fixtures/api` manifest and the web router. The feature tracks then add routes and pages in parallel.
+Only G is planned so far. Each other track still gets the usual choice of one plan or a design doc first. The split puts one serial track first, G, which connects ingest, storage, the read API and the UI, and settles the wiring every other track extends: the server's app state and route table, `openapi.json`, the `fixtures/api` manifest and the web router. The feature tracks then add routes and pages in parallel.
 
-| Track | Scope | Specs | Depends on |
-|---|---|---|---|
-| **G** Spine | OTLP HTTP and gRPC ingest (`sk`/`pk` keys, ingest-only scope, 413 limits, normalizer → storage append, media blobs, usage counters); read handlers for traces, spans, sessions, users, scores, metrics, schema and media; score writes and the public feedback endpoint; SSE; `llmobs serve` serving the embedded UI; the existing pages moved from mocks to the API; one end-to-end test from SDK to UI API | 02, 03, 05, 09, 11, 12 | A1 M1–M3, A2, B1, C, D |
-| **H** Console and agents | SQL console endpoint, saved SQL queries, saved views on the server, MCP server, CLI query commands | 05, 09 | G |
-| **I** Online evaluation | LLM connections, secret encryption, evaluators, online rules, the `eval_jobs` queue in `meta.db` with sampling and cost caps, judge traces through the internal ingest path, "run evaluator on this trace", the annotation form, and their UI pages | 04, 06, 11 | G, E |
-| **J** Datasets and experiments | Versioned datasets, CSV/JSONL import, add-from-trace, the experiments API, SDK `evaluate()` (spec 10, second half), the comparison UI | 06, 09, 10, 11 | G, F |
-| **K** Alerts | Rule evaluation over A2's metrics; Slack, webhook and email delivery (D's mailer, E's egress client); the alerts UI | 07, 11 | G |
-| **L** Admin UI | Login, signup and setup; orgs, projects, members, API keys, personal access tokens, invites and instance-admin pages over D's API | 08, 09, 11 | D (can start before G) |
-| **M** Deletion and retention | Delete by user, by trace or filter, by project and by org, cascading to `meta.db`; per-project retention | 03, 04, 09, 12 | A1 M5, G |
-| **N** Packaging and ops | Docker image, docker-compose, Helm chart, backup docs, usage metering and per-org limits (D10), release CI | 12 | G |
+| Track | Scope | Specs | Depends on | Plan | Status | Decisions |
+|---|---|---|---|---|---|---|
+| **G** Spine | OTLP HTTP and gRPC ingest (`sk`/`pk` keys, ingest-only scope, 413 limits, normalizer → storage append, media blobs, usage counters); read handlers for traces, spans, sessions, users, scores, metrics, schema and media; score writes and the public feedback endpoint; SSE; `llmobs serve` serving the embedded UI; the existing pages moved from mocks to the API; one end-to-end test from SDK to UI API | 02, 03, 05, 09, 11, 12 | A1 M1–M3, A2, B1, C, D | [`plans/g-spine/`](plans/g-spine/): design doc, then one plan per milestone (M1 written) | **Planned.** Design and M1 plan written; code waits for the A2 and C reviews. | `D-G-n` |
+| **H** Console and agents | SQL console endpoint, saved SQL queries, saved views on the server, MCP server, CLI query commands | 05, 09 | G | — | Not planned | — |
+| **I** Online evaluation | LLM connections, secret encryption, evaluators, online rules, the `eval_jobs` queue in `meta.db` with sampling and cost caps, judge traces through the internal ingest path, "run evaluator on this trace", the annotation form, and their UI pages | 04, 06, 11 | G, E | — | Not planned | — |
+| **J** Datasets and experiments | Versioned datasets, CSV/JSONL import, add-from-trace, the experiments API, SDK `evaluate()` (spec 10, second half), the comparison UI | 06, 09, 10, 11 | G, F | — | Not planned | — |
+| **K** Alerts | Rule evaluation over A2's metrics; Slack, webhook and email delivery (D's mailer, E's egress client); the alerts UI | 07, 11 | G | — | Not planned | — |
+| **L** Admin UI | Login (restyling G's minimal page, D-G-19), signup and setup; orgs, projects, members, API keys, personal access tokens, invites and instance-admin pages over D's API | 08, 09, 11 | D (can start before G) | — | Not planned | — |
+| **M** Deletion and retention | Delete by user, by trace or filter, by project and by org, cascading to `meta.db`; per-project retention | 03, 04, 09, 12 | A1 M5, G | — | Not planned | — |
+| **N** Packaging and ops | Docker image, docker-compose, Helm chart, backup docs, per-org limits, quotas and the usage API over G's `usage_daily` counters (D10, D-G-11), release CI | 12 | G | — | Not planned | — |
 
 **Order.** G and L start first; L needs only D's API, which is merged. A1 M4–M6 and F continue alongside. After G: H, I, J and K, three at a time. M starts when A1 M5 lands. N comes last, though a Docker image can come earlier.
 
