@@ -113,7 +113,7 @@ Later (post-MVP): Tantivy index per partition built at compaction.
 
 `GET /api/v1/projects/{p}/metrics?from&to&bucket=auto&filter=<dsl>&group_by=model|environment|release`
 
-`bucket=auto` picks the smallest width in `1m, 5m, 10m, 15m, 30m, 1h, 6h, 12h, 1d` giving at most 120 buckets over `[from, to)`, else `1d`. Buckets are aligned to their width from the Unix epoch, UTC: a 10-minute bucket starts at :00, :10, …; a 1-day bucket at midnight UTC. The first bucket starts at `from` rounded down to the width, so it may cover part of its range only; the last one is the bucket containing `to − 1 ns`. An explicit bucket giving more than 2,000 buckets is a 400. Points cover every bucket. A bucket with no rows has no value (count series included). Rows are bucketed with `date_bin` over the series' time column.
+`bucket=auto` picks the smallest width in `1m, 5m, 10m, 15m, 30m, 1h, 6h, 12h, 1d` giving at most 120 buckets over `[from, to)`, else `1d`; past 2,000 daily buckets (aligned to midnight UTC, so a 2,000-day window that does not start at midnight already has 2,001) it is a 400, as for an explicit bucket (D-A2-3). Buckets are aligned to their width from the Unix epoch, UTC: a 10-minute bucket starts at :00, :10, …; a 1-day bucket at midnight UTC. The first bucket starts at `from` rounded down to the width, so it may cover part of its range only; the last one is the bucket containing `to − 1 ns`. An explicit bucket giving more than 2,000 buckets is a 400. Points cover every bucket. A bucket with no rows has no value (count series included). Rows are bucketed with `date_bin` over the series' time column.
 
 Returns time series:
 

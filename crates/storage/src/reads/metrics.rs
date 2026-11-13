@@ -320,8 +320,9 @@ impl KpiValues {
 ///
 /// # Errors
 ///
-/// [`RunError::InvalidRequest`] when a fixed bucket would emit more than
-/// 2,000 points. [`RunError::Invalid`] for filter text. [`RunError::Timeout`]
+/// [`RunError::InvalidRequest`] when the buckets would emit more than 2,000
+/// points (an explicit bucket, or `Auto` over more than 2,000 aligned daily
+/// buckets). [`RunError::Invalid`] for filter text. [`RunError::Timeout`]
 /// when the query exceeds `timeout`.
 pub async fn metrics(
     ctx: &QueryContext,
@@ -377,7 +378,11 @@ fn resolve(window: TimeWindow, bucket: Bucket) -> Result<i64, RunError> {
                     return Ok(width.ns());
                 }
             }
-            Ok(BucketWidth::D1.ns())
+            let width = BucketWidth::D1.ns();
+            if bucket_count(window, width)? > FIXED_LIMIT {
+                return Err(too_many());
+            }
+            Ok(width)
         }
     }
 }
@@ -1593,6 +1598,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use super::resolve;
     use datafusion::execution::runtime_env::RuntimeEnv;
     use llmobs_core::enums::SpanKind;
     use llmobs_core::ids::{SpanId, TraceId};
@@ -2130,6 +2136,61 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn auto_buckets_stop_at_two_thousand_days() {
+        let day = BucketWidth::D1.ns();
+        let window = |from, to| TimeWindow::new(from, to).expect("window");
+        assert_eq!(
+            resolve(window(0, 2_000 * day), Bucket::Auto).expect("2,000 days"),
+            day
+        );
+        for to in [2_000 * day + 1, i64::MAX] {
+            match resolve(window(0, to), Bucket::Auto) {
+                Err(RunError::InvalidRequest(message)) => {
+                    assert_eq!(message, "too many buckets; pick a wider bucket");
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        assert!(matches!(
+            resolve(window(i64::MIN, i64::MAX), Bucket::Auto),
+            Err(RunError::InvalidRequest(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn metrics_reject_an_auto_window_past_two_thousand_days() {
+        let span = 2_001i64.checked_mul(BucketWidth::D1.ns()).expect("span");
+        let request = MetricsRequest {
+            window: TimeWindow::new(0, span).expect("window"),
+            bucket: Bucket::Auto,
+            filter: None,
+            group_by: None,
+            include_eval: false,
+            include_experiments: false,
+            timeout: TIMEOUT,
+        };
+        match metrics(&context(), request).await {
+            Err(RunError::InvalidRequest(message)) => {
+                assert_eq!(message, "too many buckets; pick a wider bucket");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn exactly_two_thousand_fixed_buckets_are_accepted() {
+        let span = 2_000i64.checked_mul(BucketWidth::M1.ns()).expect("span");
+        assert_eq!(
+            resolve(
+                TimeWindow::new(0, span).expect("window"),
+                Bucket::Fixed(BucketWidth::M1)
+            )
+            .expect("2,000 buckets"),
+            BucketWidth::M1.ns()
+        );
     }
 
     #[derive(Clone)]
