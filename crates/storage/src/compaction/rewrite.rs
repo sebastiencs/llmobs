@@ -22,7 +22,7 @@ use llmobs_core::schema::{scores_schema, spans_schema};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-use crate::catalog::{CatalogEdit, FileId, FileMeta, FileTable};
+use crate::catalog::{CatalogEdit, FileId, FileMeta, FileTable, now_ns};
 use crate::compaction::job::{ClaimGuard, Compactor};
 use crate::compaction::merge::{MergeContext, file_scan, ordering_of, read_error};
 use crate::compaction::plan::{Job, JobKind, Policy};
@@ -30,6 +30,7 @@ use crate::deletion::{PendingDeletion, Tombstones, applicable, covered_predicate
 use crate::error::{CommitError, CompactionError};
 use crate::memtable::MemSnapshot;
 use crate::read_state::{ReadState, publish_catalog, publish_tombstones};
+use crate::verify::may_be_corrupt;
 
 /// What one deletion pass did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -124,6 +125,37 @@ impl Compactor {
                     }
                 }
             }
+            // A quarantined file a deletion may cover cannot be rewritten: it
+            // is deleted instead (spec 03 §10). GC collects it once it is
+            // obsolete.
+            let quarantined = match self.committer.quarantined(project).await {
+                Ok(quarantined) => quarantined,
+                Err(_) => {
+                    report.failed += 1;
+                    tracing::warn!(project = %project, "listing quarantined files failed");
+                    Vec::new()
+                }
+            };
+            let doomed: Vec<FileId> = quarantined
+                .into_iter()
+                .filter(|(_, _, min_ingest_time, applied)| {
+                    !applicable(&deletions, Some(*applied), *min_ingest_time).is_empty()
+                })
+                .map(|(id, _, _, _)| id)
+                .collect();
+            if !doomed.is_empty() {
+                match self.committer.retire_quarantined(&doomed).await {
+                    Ok(()) => tracing::warn!(
+                        project = %project,
+                        files = doomed.len(),
+                        "quarantined files deleted for a pending deletion"
+                    ),
+                    Err(_) => {
+                        report.failed += 1;
+                        tracing::warn!(project = %project, "retiring quarantined files failed");
+                    }
+                }
+            }
         }
 
         // 4. Claim: a file a running job holds is left for a later pass.
@@ -206,6 +238,7 @@ impl Compactor {
                 flushed_seq: None,
                 sources: Vec::new(),
                 raise,
+                quarantine: Vec::new(),
             };
             let published = Arc::clone(&self.published);
             match self
@@ -314,7 +347,18 @@ async fn check_and_rewrite(
             applied: file.deletions_applied_seq,
         });
     };
-    if !holds_covered(&compactor.merge, file, &schema, &covered, &deletions).await? {
+    let holds = match holds_covered(&compactor.merge, file, &schema, &covered, &deletions).await {
+        Ok(holds) => holds,
+        Err(error) => {
+            if let CompactionError::Read { source } = &error
+                && may_be_corrupt(source)
+            {
+                compactor.verify.suspect([file.id], now_ns());
+            }
+            return Err(error);
+        }
+    };
+    if !holds {
         return Ok(Checked::Clean {
             id: file.id,
             applied: file.deletions_applied_seq,

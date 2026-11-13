@@ -70,11 +70,15 @@ pub(crate) enum HookPoint {
     MediaAfterPut,
     /// Before GC deletes an unreferenced media blob's object.
     MediaBeforeDelete,
+    /// After the verify pass found a file corrupt, before its quarantine commit.
+    ///
+    /// `fail` leaves the file active and queues it again.
+    QuarantineBeforeCommit,
 }
 
 #[cfg(test)]
 impl HookPoint {
-    const COUNT: usize = 23;
+    const COUNT: usize = 24;
 
     const fn index(self) -> usize {
         match self {
@@ -101,6 +105,7 @@ impl HookPoint {
             Self::CompactionAfterCommit => 20,
             Self::MediaAfterPut => 21,
             Self::MediaBeforeDelete => 22,
+            Self::QuarantineBeforeCommit => 23,
         }
     }
 }

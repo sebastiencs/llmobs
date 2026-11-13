@@ -65,6 +65,7 @@ mod query_error;
 mod query_text;
 mod reads;
 mod sql;
+pub(crate) mod verify;
 mod views;
 
 pub use crate::compaction::job::CompactionReport;
@@ -101,6 +102,8 @@ mod crash_tests;
 mod deletion_tests;
 #[cfg(test)]
 mod drop_tests;
+#[cfg(test)]
+mod quarantine_tests;
 #[cfg(test)]
 mod retention;
 #[cfg(test)]
@@ -174,6 +177,9 @@ pub struct Storage {
     /// Shared by the background task and [`Self::compact`].
     compactor: Arc<compaction::job::Compactor>,
     compaction: compaction::task::CompactionHandle,
+    /// Suspect files (spec 03 §10), shared with the compactor and the anchor rebuild.
+    #[cfg_attr(not(test), allow(dead_code))]
+    verify: Arc<verify::VerifyQueue>,
     /// Shared with the flush tasks and staged-object collection.
     #[cfg_attr(not(test), allow(dead_code))]
     objects: Arc<Objects>,
@@ -335,8 +341,9 @@ impl Storage {
         let catalog = committer.catalog().await;
         let tombstones = committer.tombstones().await;
         let projects = Arc::new(committer.project_states().await?);
+        let verify = Arc::new(verify::VerifyQueue::default());
         let mut anchors = anchor::Anchors::new(window_ns);
-        anchors.rebuild(&catalog, &objects).await?;
+        anchors.rebuild(&catalog, &objects, &verify).await?;
         let anchors = Arc::new(Mutex::new(anchors));
         let published = Arc::new(Published::new(ReadState {
             spans: recovered.spans.memtable.snapshot(),
@@ -363,6 +370,7 @@ impl Storage {
                 Arc::clone(&committer),
                 Arc::clone(&objects),
                 Arc::clone(&disk),
+                Arc::clone(&verify),
                 Arc::clone(&published),
                 compaction::merge::MergeContext {
                     runtime,
@@ -482,6 +490,7 @@ impl Storage {
             media,
             compactor,
             compaction,
+            verify,
             objects,
             committer,
             runtime,
@@ -817,6 +826,18 @@ impl Storage {
     #[cfg(test)]
     pub(crate) fn compaction_claims(&self) -> usize {
         self.compactor.claimed()
+    }
+
+    /// The suspect files waiting for the verify pass.
+    #[cfg(test)]
+    pub(crate) fn verify_queue(&self) -> &verify::VerifyQueue {
+        &self.verify
+    }
+
+    /// One verify pass at the wall clock, run to completion.
+    #[cfg(test)]
+    pub(crate) async fn verify_pass(&self) -> compaction::verify_pass::VerifyReport {
+        self.compactor.verify_pass(catalog::now_ns()).await
     }
 
     /// Commits `edit` and publishes the catalog, for tests that race a job.

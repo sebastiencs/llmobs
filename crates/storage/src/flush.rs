@@ -354,6 +354,7 @@ async fn flush_once(params: &FlushParams) -> Result<Option<u64>, FlushError> {
         flushed_seq: Some((params.table, max_seq)),
         sources,
         raise: Vec::new(),
+        quarantine: Vec::new(),
     };
     let published = Arc::clone(&params.published);
     let shared = Arc::clone(&params.shared);

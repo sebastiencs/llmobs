@@ -692,6 +692,8 @@ mod fault_store {
         fault: Arc<Mutex<VecDeque<FaultKind>>>,
         /// When set, every upload fails before writing and the queue is left alone.
         hold: Arc<AtomicBool>,
+        /// When set, every read (`get_opts`, and so `head` and range reads) fails.
+        fail_reads: Arc<AtomicBool>,
     }
 
     impl FaultStore {
@@ -700,7 +702,13 @@ mod fault_store {
                 inner,
                 fault: Arc::new(Mutex::new(VecDeque::new())),
                 hold: Arc::new(AtomicBool::new(false)),
+                fail_reads: Arc::new(AtomicBool::new(false)),
             }
+        }
+
+        /// Makes every read fail while `on` is set.
+        pub(crate) fn fail_reads(&self, on: bool) {
+            self.fail_reads.store(on, Ordering::SeqCst);
         }
 
         /// Replaces the queue with one fault. A later upload consumes it.
@@ -830,6 +838,9 @@ mod fault_store {
         }
 
         async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+            if self.fail_reads.load(Ordering::SeqCst) {
+                return Err(injected());
+            }
             self.inner.get_opts(location, options).await
         }
 

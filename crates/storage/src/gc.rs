@@ -503,6 +503,7 @@ mod tests {
             flushed_seq: None,
             sources: vec![(traces_id, spans_id)],
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         f.committer
             .stage(&[spans_path.clone(), traces_path.clone()])
@@ -532,6 +533,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         f.committer.commit(&remove, |_| {}).await.unwrap();
     }
@@ -552,6 +554,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         f.committer
             .stage(std::slice::from_ref(&path))
@@ -570,6 +573,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         f.committer.commit(&remove, |_| {}).await.unwrap();
         (id, path)

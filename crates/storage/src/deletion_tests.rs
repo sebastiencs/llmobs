@@ -356,6 +356,7 @@ async fn a_raised_file_escapes_the_tombstone_filter() {
             flushed_seq: None,
             sources: Vec::new(),
             raise: vec![(file, 1)],
+            quarantine: Vec::new(),
         })
         .await
         .unwrap();
@@ -421,6 +422,7 @@ async fn a_limit_over_clean_and_gated_sides_sits_above_the_union() {
             flushed_seq: None,
             sources: Vec::new(),
             raise: vec![(clean.id, 1)],
+            quarantine: Vec::new(),
         })
         .await
         .unwrap();

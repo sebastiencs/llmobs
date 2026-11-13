@@ -85,7 +85,7 @@ pub(crate) fn classify(error: DataFusionError) -> RunError {
 }
 
 /// The error under every `Context`, `Shared` and `Diagnostic` wrapper.
-fn root(error: &DataFusionError) -> &DataFusionError {
+pub(crate) fn root(error: &DataFusionError) -> &DataFusionError {
     let mut current = error;
     loop {
         current = match current {

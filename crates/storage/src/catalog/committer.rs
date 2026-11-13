@@ -32,7 +32,7 @@ use crate::projects::ProjectStates;
 use crate::wal::Table;
 
 /// One catalog change. Paths in `add` must already be staged.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct CatalogEdit {
     /// New active files.
     pub add: Vec<FileMeta>,
@@ -49,6 +49,9 @@ pub(crate) struct CatalogEdit {
     /// checked them and found no covered row. Each must be active and its stored
     /// value lower than the new one.
     pub raise: Vec<(FileId, u64)>,
+    /// Active files to mark `quarantined` (spec 03 §10). A `spans` file must
+    /// come with its active `traces` file, like a removal.
+    pub quarantine: Vec<FileId>,
 }
 
 /// What a commit writes besides the file edit, inside the same transaction.
@@ -742,6 +745,88 @@ impl Committer {
         Ok(pairs.into_iter().collect())
     }
 
+    /// The `spans` sources of an active `traces` file, in id order.
+    pub(crate) async fn traces_sources(&self, traces: FileId) -> Result<Vec<FileId>, CommitError> {
+        let mut inner = self.inner.lock().await;
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT fs.spans_file_id FROM file_sources AS fs
+             JOIN data_files AS t ON t.id = fs.traces_file_id
+             JOIN data_files AS s ON s.id = fs.spans_file_id
+             WHERE fs.traces_file_id = ? AND t.state = 'active' AND s.state = 'active'
+             ORDER BY fs.spans_file_id",
+        )
+        .bind(traces.to_string())
+        .fetch_all(&mut inner.connection)
+        .await
+        .map_err(CommitError::db)?;
+        rows.iter()
+            .map(|id| parse_file_id(id).map_err(|_| CommitError::conflict("invalid file id")))
+            .collect()
+    }
+
+    /// Quarantined `spans` and `scores` files of `project`, with what the
+    /// deletion rule needs: `(id, table, min_ingest_time, deletions_applied_seq)`.
+    pub(crate) async fn quarantined(
+        &self,
+        project: ProjectId,
+    ) -> Result<Vec<(FileId, FileTable, i64, u64)>, CatalogError> {
+        let mut inner = self.inner.lock().await;
+        let rows: Vec<(String, String, i64, i64)> = sqlx::query_as(
+            "SELECT id, table_name, min_ingest_time, deletions_applied_seq FROM data_files
+             WHERE state = 'quarantined' AND project_id = ? AND table_name IN ('spans', 'scores')
+             ORDER BY id",
+        )
+        .bind(project.to_string())
+        .fetch_all(&mut inner.connection)
+        .await
+        .map_err(CatalogError::db)?;
+        let mut files = Vec::with_capacity(rows.len());
+        for (id, table, min_ingest_time, applied) in rows {
+            let table = match table.as_str() {
+                "spans" => FileTable::Spans,
+                "scores" => FileTable::Scores,
+                _ => return Err(CatalogError::corrupt("quarantined file of another table")),
+            };
+            let applied = u64::try_from(applied)
+                .map_err(|_| CatalogError::corrupt("negative deletion sequence"))?;
+            files.push((parse_file_id(&id)?, table, min_ingest_time, applied));
+        }
+        Ok(files)
+    }
+
+    /// Marks the quarantined files `ids` `obsolete` (GC deletes them), and the
+    /// quarantined `traces` files whose sources are among them, in one
+    /// transaction. Quarantined files are not in the in-memory catalog, so
+    /// the catalog is not touched.
+    pub(crate) async fn retire_quarantined(&self, ids: &[FileId]) -> Result<(), CatalogError> {
+        let mut inner = self.inner.lock().await;
+        let now = now_ns();
+        let mut transaction = inner.connection.begin().await.map_err(CatalogError::db)?;
+        for id in ids {
+            sqlx::query(
+                "UPDATE data_files SET state = 'obsolete', obsoleted_at = ?
+                 WHERE id = ? AND state = 'quarantined'",
+            )
+            .bind(now)
+            .bind(id.to_string())
+            .execute(transaction.as_mut())
+            .await
+            .map_err(CatalogError::db)?;
+            sqlx::query(
+                "UPDATE data_files SET state = 'obsolete', obsoleted_at = ?
+                 WHERE state = 'quarantined' AND table_name = 'traces' AND id IN (
+                   SELECT traces_file_id FROM file_sources WHERE spans_file_id = ?)",
+            )
+            .bind(now)
+            .bind(id.to_string())
+            .execute(transaction.as_mut())
+            .await
+            .map_err(CatalogError::db)?;
+        }
+        transaction.commit().await.map_err(CatalogError::db)?;
+        Ok(())
+    }
+
     /// Record `paths` in `staged_objects`. No precondition.
     pub(crate) async fn stage(&self, paths: &[String]) -> Result<(), CatalogError> {
         self.insert_staged(paths, now_ns()).await
@@ -861,6 +946,7 @@ impl Committer {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         let next = commit_inner(
             &mut inner,
@@ -923,6 +1009,7 @@ impl Committer {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         let next = commit_inner(&mut inner, &edit, &Extra::Drop { project, now }).await?;
         inner.tombstones = Arc::new(inner.tombstones.without_project(project));
@@ -1255,6 +1342,17 @@ async fn write_extra(connection: &mut SqliteConnection, extra: &Extra) -> Result
             .execute(&mut *connection)
             .await
             .map_err(CommitError::db)?;
+            // A quarantined file of a dropped day leaves for good (spec 03 §10).
+            sqlx::query(
+                "UPDATE data_files SET state = 'obsolete', obsoleted_at = ?
+                 WHERE state = 'quarantined' AND project_id = ? AND day < ?",
+            )
+            .bind(now_ns())
+            .bind(project.to_string())
+            .bind(keep_from.format("%Y-%m-%d").to_string())
+            .execute(&mut *connection)
+            .await
+            .map_err(CommitError::db)?;
             Ok(())
         }
         Extra::Drop { project, now } => {
@@ -1272,6 +1370,16 @@ async fn write_extra(connection: &mut SqliteConnection, extra: &Extra) -> Result
                 .execute(&mut *connection)
                 .await
                 .map_err(CommitError::db)?;
+            // A quarantined file of a dropped project leaves for good (spec 03 §10).
+            sqlx::query(
+                "UPDATE data_files SET state = 'obsolete', obsoleted_at = ?
+                 WHERE state = 'quarantined' AND project_id = ?",
+            )
+            .bind(now_ns())
+            .bind(project.to_string())
+            .execute(&mut *connection)
+            .await
+            .map_err(CommitError::db)?;
             sqlx::query(
                 "UPDATE deletions SET status = 'applied', applied_at = ?
                  WHERE project_id = ? AND status = 'pending'",
@@ -1366,6 +1474,24 @@ async fn write_edit(
             return Err(CommitError::conflict("raised file is also removed"));
         }
     }
+    for id in &edit.quarantine {
+        let state: Option<String> = sqlx::query_scalar("SELECT state FROM data_files WHERE id = ?")
+            .bind(id.to_string())
+            .fetch_optional(&mut *connection)
+            .await
+            .map_err(CommitError::db)?;
+        if state.as_deref() != Some("active") {
+            return Err(CommitError::conflict("quarantined file is not active"));
+        }
+    }
+    let raised_ids: HashSet<&FileId> = edit.raise.iter().map(|(id, _)| id).collect();
+    for id in &edit.quarantine {
+        if removed_ids.contains(id) || raised_ids.contains(id) {
+            return Err(CommitError::conflict(
+                "quarantined file is also removed or raised",
+            ));
+        }
+    }
     for (id, sequence) in &edit.raise {
         let current: Option<(String, i64)> =
             sqlx::query_as("SELECT state, deletions_applied_seq FROM data_files WHERE id = ?")
@@ -1450,8 +1576,14 @@ async fn write_edit(
     // A removed file leaves with its dependants (spec 03 §5): a `spans` file
     // with the active `traces` files derived from it, a `traces` file with all
     // of its sources.
-    let removed: HashSet<String> = edit.remove.iter().map(|(id, _)| id.to_string()).collect();
-    for (id, _) in &edit.remove {
+    let dropping: Vec<FileId> = edit
+        .remove
+        .iter()
+        .map(|(id, _)| *id)
+        .chain(edit.quarantine.iter().copied())
+        .collect();
+    let removed: HashSet<String> = dropping.iter().map(FileId::to_string).collect();
+    for id in &dropping {
         let table: Option<String> =
             sqlx::query_scalar("SELECT table_name FROM data_files WHERE id = ?")
                 .bind(id.to_string())
@@ -1513,6 +1645,13 @@ async fn write_edit(
     for (id, _) in &edit.remove {
         sqlx::query("UPDATE data_files SET state = 'obsolete', obsoleted_at = ? WHERE id = ?")
             .bind(created_at)
+            .bind(id.to_string())
+            .execute(&mut *connection)
+            .await
+            .map_err(CommitError::db)?;
+    }
+    for id in &edit.quarantine {
+        sqlx::query("UPDATE data_files SET state = 'quarantined' WHERE id = ?")
             .bind(id.to_string())
             .execute(&mut *connection)
             .await
@@ -1735,6 +1874,7 @@ mod tests {
             flushed_seq: Some((Table::Spans, 4)),
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         committer
             .stage(
@@ -1781,6 +1921,7 @@ mod tests {
                 flushed_seq: None,
                 sources: Vec::new(),
                 raise: Vec::new(),
+                quarantine: Vec::new(),
             },
             CatalogEdit {
                 add: vec![second],
@@ -1788,6 +1929,7 @@ mod tests {
                 flushed_seq: None,
                 sources: Vec::new(),
                 raise: Vec::new(),
+                quarantine: Vec::new(),
             },
         ] {
             committer.stage(&[edit.add[0].path.clone()]).await.unwrap();
@@ -1802,6 +1944,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         committer.stage(&["right-again".to_owned()]).await.unwrap();
         let after = committer.commit(&edit, |_| {}).await.unwrap();
@@ -1820,6 +1963,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         committer.stage(&["doomed".to_owned()]).await.unwrap();
         committer.commit(&edit, |_| {}).await.unwrap();
@@ -1829,6 +1973,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         let published = committer.commit(&remove, |_| {}).await.unwrap();
         assert!(
@@ -1865,6 +2010,7 @@ mod tests {
             flushed_seq: Some((Table::Spans, 3)),
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         committer.commit(&added, |_| {}).await.unwrap();
         let before = committer.catalog().await;
@@ -1875,6 +2021,7 @@ mod tests {
             flushed_seq: Some((Table::Spans, 4)),
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         let error = committer.commit(&missing, |_| {}).await.unwrap_err();
         assert!(matches!(
@@ -1890,6 +2037,7 @@ mod tests {
             flushed_seq: Some((Table::Spans, 4)),
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         let error = committer.commit(&wrong, |_| {}).await.unwrap_err();
         assert!(matches!(
@@ -1906,6 +2054,7 @@ mod tests {
             flushed_seq: Some((Table::Spans, 3)),
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         let error = committer.commit(&behind, |_| {}).await.unwrap_err();
         assert!(matches!(
@@ -1948,6 +2097,7 @@ mod tests {
             flushed_seq: Some((Table::Spans, 1)),
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         let before = committer.catalog().await;
         let error = committer.commit(&edit, |_| {}).await.unwrap_err();
@@ -2042,6 +2192,7 @@ mod tests {
                     flushed_seq: None,
                     sources: Vec::new(),
                     raise: Vec::new(),
+                    quarantine: Vec::new(),
                 };
                 committer
                     .commit(&edit, {
@@ -2104,6 +2255,7 @@ mod tests {
             flushed_seq: None,
             sources: vec![(traces_id, spans_id)],
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         committer
             .stage(&["spans/sourced".to_owned(), "traces/sourced".to_owned()])
@@ -2130,6 +2282,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         committer.stage(&["spans/active".to_owned()]).await.unwrap();
         committer.commit(&first, |_| {}).await.unwrap();
@@ -2142,6 +2295,7 @@ mod tests {
             flushed_seq: None,
             sources: vec![(traces_id, spans_id)],
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         committer
             .stage(&["traces/derived".to_owned()])
@@ -2197,6 +2351,7 @@ mod tests {
                     flushed_seq: None,
                     sources,
                     raise: Vec::new(),
+                    quarantine: Vec::new(),
                 },
                 |_| {},
             )
@@ -2223,6 +2378,7 @@ mod tests {
             flushed_seq: None,
             sources: vec![(traces_id, spans_id)],
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         committer.commit(&edit, |_| {}).await.unwrap();
 
@@ -2264,6 +2420,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         let error = committer.commit(&edit, |_| {}).await.unwrap_err();
         assert!(
@@ -2301,6 +2458,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         let error = committer.commit(&edit, |_| {}).await.unwrap_err();
         assert!(
@@ -2335,6 +2493,7 @@ mod tests {
                 flushed_seq: None,
                 sources: vec![(traces_id, unknown)],
                 raise: Vec::new(),
+                quarantine: Vec::new(),
             };
             committer
                 .stage(&["traces/orphan".to_owned()])
@@ -2402,6 +2561,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         committer.commit(&edit, |_| {}).await.unwrap();
 
@@ -2426,6 +2586,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         committer
             .stage(&["spans/raised".to_owned(), "spans/other".to_owned()])
@@ -2442,6 +2603,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: vec![(raised_id, 3)],
+            quarantine: Vec::new(),
         };
         let published = committer.commit(&raise, |_| {}).await.unwrap();
         let raised_after = file_arc(&published, raised_id);
@@ -2478,6 +2640,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         committer
             .stage(&["spans/raised".to_owned(), "spans/doomed".to_owned()])
@@ -2490,6 +2653,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         committer.commit(&remove, |_| {}).await.unwrap();
         let before = committer.catalog().await;
@@ -2501,6 +2665,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: vec![(raised_id, 0)],
+            quarantine: Vec::new(),
         };
         let error = committer.commit(&not_greater, |_| {}).await.unwrap_err();
         assert!(
@@ -2519,6 +2684,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: vec![(doomed_id, 5)],
+            quarantine: Vec::new(),
         };
         let error = committer.commit(&obsolete, |_| {}).await.unwrap_err();
         assert!(
@@ -2537,6 +2703,7 @@ mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: vec![(raised_id, 5)],
+            quarantine: Vec::new(),
         };
         let error = committer.commit(&also_removed, |_| {}).await.unwrap_err();
         assert!(

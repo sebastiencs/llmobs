@@ -12,7 +12,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-use crate::catalog::{CatalogEdit, Committer, FileId, FileMeta, FileState, FileTable};
+use crate::catalog::{CatalogEdit, Committer, FileId, FileMeta, FileState, FileTable, now_ns};
 use crate::compaction::merge::{MergeContext, merge_slice};
 use crate::compaction::plan::{Job, JobKind, Policy, plan};
 use crate::compaction::slice::{slice_count, slices, time_values};
@@ -23,6 +23,7 @@ use crate::hooks::{HookPoint, Hooks};
 use crate::objects::Objects;
 use crate::parquet::{FileWriter, footer_size_from_tail, time_column, write_file};
 use crate::read_state::{Published, publish_catalog};
+use crate::verify::{VerifyQueue, may_be_corrupt};
 
 /// Shared by every job: built once in `Storage::open`.
 pub(crate) struct Compactor {
@@ -30,6 +31,8 @@ pub(crate) struct Compactor {
     pub(super) objects: Arc<Objects>,
     /// Free disk: every job reserves its inputs' size before it reads anything.
     pub(super) disk: Arc<Disk>,
+    /// Suspect files, read whole by the verify pass (spec 03 §10).
+    pub(super) verify: Arc<VerifyQueue>,
     pub(super) published: Arc<Published>,
     pub(super) merge: MergeContext,
     /// Read at the start of each pass. Tests replace it ([`Storage::set_policy`]).
@@ -144,6 +147,7 @@ impl Compactor {
         committer: Arc<Committer>,
         objects: Arc<Objects>,
         disk: Arc<Disk>,
+        verify: Arc<VerifyQueue>,
         published: Arc<Published>,
         merge: MergeContext,
         policy: Policy,
@@ -154,6 +158,7 @@ impl Compactor {
             committer,
             objects,
             disk,
+            verify,
             published,
             merge,
             policy: Mutex::new(policy),
@@ -286,8 +291,24 @@ impl Compactor {
             .len()
     }
 
-    /// Runs one job to its commit.
+    /// Runs one job to its commit. A read that may be a corrupt input makes
+    /// every input a suspect (spec 03 §10).
     pub(super) async fn run(
+        self: &Arc<Self>,
+        job: Job,
+        policy: Policy,
+    ) -> Result<CompactionReport, CompactionError> {
+        let inputs: Vec<FileId> = job.inputs.iter().map(|file| file.id).collect();
+        let outcome = self.run_job(job, policy).await;
+        if let Err(CompactionError::Read { source }) = &outcome
+            && may_be_corrupt(source)
+        {
+            self.verify.suspect(inputs, now_ns());
+        }
+        outcome
+    }
+
+    async fn run_job(
         self: &Arc<Self>,
         job: Job,
         policy: Policy,
@@ -564,6 +585,7 @@ impl Compactor {
             flushed_seq: None,
             sources,
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         let published = Arc::clone(&self.published);
         self.committer
@@ -1266,6 +1288,7 @@ pub(crate) mod tests {
             flushed_seq: None,
             sources: Vec::new(),
             raise: Vec::new(),
+            quarantine: Vec::new(),
         };
         storage.commit_test_edit(&edit).await.unwrap();
 
