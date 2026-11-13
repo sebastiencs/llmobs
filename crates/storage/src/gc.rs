@@ -156,6 +156,10 @@ pub(crate) async fn collect_once(
                 tracing::error!("staged object is also a catalog file; left in place");
                 tracing::debug!(path, "staged path is present in data_files");
             }
+            StagedRemoval::MediaStored => {
+                // No fields: the path holds the blob's hash (spec 03 §9).
+                tracing::debug!("stale staged row of a stored media blob removed");
+            }
             StagedRemoval::Gone => {}
         }
     }

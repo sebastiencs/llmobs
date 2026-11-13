@@ -126,13 +126,28 @@ impl MediaGc {
         Ok(report)
     }
 
-    /// Every project with media rows, summed.
+    /// Every project with media rows, summed. A project whose collection fails
+    /// is logged (`error = error.label()`) and skipped, and retried on the next
+    /// run; the others are still collected. Only reading the project list can
+    /// fail the whole call.
     pub(crate) async fn collect_all(&self, now: i64) -> Result<MediaReport, MediaError> {
         let mut report = MediaReport::default();
         for project in self.committer.media_projects().await? {
-            let one = self.collect(project, now).await?;
-            report.deleted += one.deleted;
-            report.bytes = report.bytes.saturating_add(one.bytes);
+            match self.collect(project, now).await {
+                Ok(one) => {
+                    report.deleted += one.deleted;
+                    report.bytes = report.bytes.saturating_add(one.bytes);
+                }
+                Err(error) => {
+                    // The label only: the error names an object path, which
+                    // holds the blob's hash (spec 03 §9).
+                    tracing::warn!(
+                        project = %project,
+                        error = error.label(),
+                        "media collection failed"
+                    );
+                }
+            }
         }
         Ok(report)
     }
@@ -224,6 +239,11 @@ mod tests {
 
     /// One hour, the media grace, in ns.
     const HOUR_NS: i64 = 3_600_000_000_000;
+
+    /// The second fixed test project, after `project()` in id order.
+    fn other_project() -> ProjectId {
+        "018f6b4e-7c1a-7c1a-8c1a-000000000002".parse().unwrap()
+    }
 
     fn sha256_of(bytes: &Bytes) -> [u8; 32] {
         Sha256::digest(bytes.as_ref()).into()
@@ -603,6 +623,51 @@ mod tests {
         assert_eq!(report, MediaReport::default());
         assert!(object_file(dir.path(), project(), &sha).is_file());
         assert_eq!(media_rows(dir.path()).await, 1);
+        storage.shutdown().await.unwrap();
+    }
+
+    // 9e. A project whose collection fails does not block the others: the
+    //     error is logged and its blobs retried on the next run. The one-shot
+    //     `MediaBeforeDelete` fault hits the first project in id order; it
+    //     fires after the row delete committed, so the leftover is a staged
+    //     row with the object, which staged-object GC removes (spec 03 §9).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_failing_project_does_not_block_the_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(config_in(dir.path())).await.unwrap();
+        let other = other_project();
+        let mine = blob_of(b"failed-project-media", "image/png");
+        let theirs = blob_of(b"kept-project-media", "image/png");
+        let mine_sha = mine.sha256;
+        let theirs_sha = theirs.sha256;
+        storage.put_media(project(), mine).await.unwrap();
+        storage.put_media(other, theirs).await.unwrap();
+        storage.hooks().arm_fail(HookPoint::MediaBeforeDelete);
+
+        let now = now_ns() + 2 * HOUR_NS;
+        let report = storage.collect_media(now).await.unwrap();
+        assert_eq!(report.deleted, 1, "the other project was not collected");
+        assert_eq!(
+            report.bytes,
+            u64::try_from(b"kept-project-media".len()).unwrap()
+        );
+        assert!(!object_file(dir.path(), other, &theirs_sha).exists());
+        assert!(object_file(dir.path(), project(), &mine_sha).is_file());
+        // The fault fired after the failing project's row delete: only a
+        // staged row remains of it.
+        assert_eq!(media_rows(dir.path()).await, 0);
+        let staged = storage.staged_paths().await.unwrap();
+        assert_eq!(staged.len(), 1, "{staged:?}");
+
+        // The leftover is collected by staged-object GC, and a later media
+        // collection has nothing left to do.
+        storage.collect_staged(Duration::ZERO).await.unwrap();
+        assert!(!object_file(dir.path(), project(), &mine_sha).exists());
+        assert!(storage.staged_paths().await.unwrap().is_empty());
+        assert_eq!(
+            storage.collect_media(now).await.unwrap(),
+            MediaReport::default()
+        );
         storage.shutdown().await.unwrap();
     }
 

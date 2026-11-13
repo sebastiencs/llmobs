@@ -799,7 +799,7 @@ impl Committer {
                     .execute(&mut inner.connection)
                     .await
                     .map_err(CatalogError::db)?;
-                return Ok(StagedRemoval::Published);
+                return Ok(StagedRemoval::MediaStored);
             }
         }
         let staged: Option<i64> =
@@ -972,6 +972,8 @@ pub(crate) enum StagedRemoval {
     Published,
     /// The staged row was gone. Nothing was deleted.
     Gone,
+    /// A staged media path whose blob is stored; only the staged row was removed.
+    MediaStored,
 }
 
 fn flushed_of(state: TableState) -> [u64; 2] {
