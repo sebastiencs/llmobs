@@ -354,6 +354,7 @@ async fn flush_once(params: &FlushParams) -> Result<Option<u64>, FlushError> {
         flushed_seq: Some((params.table, max_seq)),
         sources,
         raise: Vec::new(),
+        quarantine: Vec::new(),
     };
     let published = Arc::clone(&params.published);
     let shared = Arc::clone(&params.shared);
@@ -697,6 +698,7 @@ fn log_truncate(table: Table, error: &std::io::Error) {
 
 #[cfg(test)]
 mod tests {
+    use bytesize::ByteSize;
     use std::path::Path;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -766,6 +768,7 @@ mod tests {
     fn anchor_config(dir: &Path) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            min_free_bytes: ByteSize::b(0),
             object_store: None,
             s3: S3Config::default(),
             wal: WalConfig::default(),
@@ -787,6 +790,7 @@ mod tests {
     fn config_in(dir: &Path) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            min_free_bytes: ByteSize::b(0),
             object_store: None,
             s3: S3Config::default(),
             wal: WalConfig::default(),
@@ -1113,7 +1117,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         // The tombstones still hide the row: the file is gated at query time.
-        let query = storage.query(project(), Default::default()).unwrap();
+        let query = storage.query(project(), Default::default()).await.unwrap();
         let ctx = datafusion::execution::context::SessionContext::new_with_config_rt(
             datafusion::execution::context::SessionConfig::new(),
             Arc::clone(&query.runtime),

@@ -55,6 +55,7 @@ fn project() -> ProjectId {
 fn config(dir: &std::path::Path, bucket: &str, prefix: &str, endpoint: &str) -> StorageConfig {
     StorageConfig {
         data_dir: dir.to_path_buf(),
+        min_free_bytes: ByteSize::b(0),
         object_store: Some(ObjectStoreUrl::S3 {
             bucket: bucket.to_owned(),
             prefix: prefix.to_owned(),
@@ -271,6 +272,7 @@ async fn round_trip(config: &StorageConfig) -> Result<(), String> {
     let count = span_count(
         &storage
             .query(project(), Default::default())
+            .await
             .map_err(|error| error.to_string())?,
     )
     .await;
@@ -285,6 +287,7 @@ async fn round_trip(config: &StorageConfig) -> Result<(), String> {
     let count = span_count(
         &storage
             .query(project(), Default::default())
+            .await
             .map_err(|error| error.to_string())?,
     )
     .await;
@@ -303,6 +306,7 @@ async fn round_trip(config: &StorageConfig) -> Result<(), String> {
     let count = span_count(
         &storage
             .query(project(), Default::default())
+            .await
             .map_err(|error| error.to_string())?,
     )
     .await;

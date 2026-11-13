@@ -303,7 +303,7 @@ No validation rule (0 disables the check). Every `StorageConfig` literal gets `m
 Dependency, root `Cargo.toml`, with a comment `# Free disk for the disk-full check (spec 03 §10).`:
 
 ```toml
-rustix = { version = "1.1.5", default-features = false, features = ["std", "fs"] }
+rustix = { version = "1.1.6", default-features = false, features = ["std", "fs"] }
 ```
 
 `crates/storage/Cargo.toml`: `rustix = { workspace = true }`. `rustix::fs` is Unix-only; the project builds for Linux and macOS only (spec 12), so no `cfg` is needed.

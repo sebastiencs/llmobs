@@ -11,6 +11,12 @@
 //! `LLMOBS_TRACE_BENCH_DIR` is generated once (if it holds no `catalog.db`)
 //! and reused afterwards. `LLMOBS_TRACE_BENCH_TRACES` overrides the trace
 //! count (default 5,000,000). The data directory is never committed.
+//!
+//! With `LLMOBS_TEST_S3_ENDPOINT` (and `LLMOBS_TEST_S3_BUCKET`, `AWS_*`) the
+//! data files go to `s3://<bucket>/trace-bench` and the catalog stays in the
+//! directory. `LLMOBS_TRACE_BENCH_CACHE` is `cold` (default), `warm` or `off`:
+//! `cold` empties `<dir>/cache` before the open, `warm` runs the whole query
+//! set once untimed first, `off` sets `query.read_cache_bytes = 0`.
 
 #![allow(
     clippy::unwrap_used,
@@ -31,19 +37,22 @@ use arrow::array::{Array, Float64Array, RecordBatch, StringArray};
 use bytesize::ByteSize;
 use chrono::{TimeZone, Utc};
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
+use futures::TryStreamExt;
 use llmobs_core::batch::spans_to_record_batch;
 use llmobs_core::enums::{SpanKind, SpanStatus};
 use llmobs_core::ids::{ProjectId, SpanId, TraceId};
 use llmobs_core::span::Span;
 use llmobs_storage::config::{
-    AnchorConfig, FlushConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig, WalConfig,
-    WalSync,
+    AnchorConfig, FlushConfig, MemtableConfig, ObjectStoreUrl, QueryConfig, S3Config,
+    StorageConfig, WalConfig, WalSync,
 };
 use llmobs_storage::{
     Bucket, BucketWidth, ListScope, MetricsRequest, Page, ProjectQuery, QueryContext, QueryOptions,
     SortOrder, TimeWindow, TraceListRequest, TraceSort, metrics, trace_detail, trace_list,
     trace_list_plan,
 };
+use object_store::aws::AmazonS3Builder;
+use object_store::{ObjectStore, ObjectStoreExt};
 
 // ---------------------------------------------------------------- constants
 
@@ -472,11 +481,27 @@ fn build_spans(plan: &TracePlan, group: &GroupPlan) -> Vec<Span> {
 
 // ---------------------------------------------------------------- config
 
-fn config(dir: &Path, max_bytes: ByteSize) -> StorageConfig {
+fn config(backend: &Backend, max_bytes: ByteSize, read_cache: Option<ByteSize>) -> StorageConfig {
+    let (object_store, s3) = match &backend.s3 {
+        Some(t) => (
+            Some(ObjectStoreUrl::S3 {
+                bucket: t.bucket.clone(),
+                prefix: S3_PREFIX.to_owned(),
+            }),
+            S3Config {
+                region: Some("us-east-1".to_owned()),
+                endpoint: Some(t.endpoint.clone()),
+                force_path_style: true,
+                allow_http: t.endpoint.starts_with("http://"),
+            },
+        ),
+        None => (None, S3Config::default()),
+    };
     StorageConfig {
-        data_dir: dir.to_path_buf(),
-        object_store: None,
-        s3: S3Config::default(),
+        data_dir: backend.dir.clone(),
+        min_free_bytes: ByteSize::b(0),
+        object_store,
+        s3,
         wal: WalConfig {
             sync: WalSync::Interval(Duration::from_millis(100)),
             ..WalConfig::default()
@@ -489,6 +514,12 @@ fn config(dir: &Path, max_bytes: ByteSize) -> StorageConfig {
         memtable: MemtableConfig::default(),
         query: QueryConfig {
             target_partitions: PARTITIONS,
+            read_cache_bytes: read_cache,
+            // The range-mode reference query (`trace_list(&range, ...)`, used for
+            // `differing`) merges every trace in its window. It needs ~2.4 GB at
+            // 1M traces over 8 partitions, above the default 2 GiB per query.
+            max_memory: ByteSize::gib(8),
+            max_memory_total: Some(ByteSize::gib(16)),
             ..QueryConfig::default()
         },
         anchor: AnchorConfig::default(),
@@ -548,6 +579,177 @@ struct Manifest {
     max_bytes: u64,
     sample: Vec<(String, i64)>,
     late_1_3h: usize,
+    /// The S3 endpoint and bucket the data files were written to; absent for local mode.
+    #[serde(default)]
+    endpoint: Option<String>,
+    #[serde(default)]
+    bucket: Option<String>,
+}
+
+/// Where the dataset lives: the local directory, and an S3 prefix when
+/// `LLMOBS_TEST_S3_ENDPOINT` is set (D119).
+struct Backend {
+    dir: PathBuf,
+    s3: Option<S3Target>,
+}
+
+struct S3Target {
+    endpoint: String,
+    bucket: String,
+}
+
+/// The fixed S3 prefix, so the dataset is reused across runs.
+const S3_PREFIX: &str = "trace-bench";
+
+impl Backend {
+    fn from_env(dir: PathBuf) -> Self {
+        let s3 = std::env::var("LLMOBS_TEST_S3_ENDPOINT")
+            .ok()
+            .map(|endpoint| S3Target {
+                endpoint,
+                bucket: std::env::var("LLMOBS_TEST_S3_BUCKET").expect("LLMOBS_TEST_S3_BUCKET"),
+            });
+        Self { dir, s3 }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CacheMode {
+    Cold,
+    Warm,
+    Off,
+}
+
+impl CacheMode {
+    fn from_env() -> Self {
+        match std::env::var("LLMOBS_TRACE_BENCH_CACHE").as_deref() {
+            Ok("warm") => Self::Warm,
+            Ok("off") => Self::Off,
+            Ok("cold") | Err(_) => Self::Cold,
+            Ok(other) => panic!("LLMOBS_TRACE_BENCH_CACHE must be cold, warm or off, not {other}"),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Cold => "cold",
+            Self::Warm => "warm",
+            Self::Off => "off",
+        }
+    }
+}
+
+/// Copied from `tests/s3.rs`.
+async fn delete_prefix(endpoint: &str, bucket: &str, prefix: &str) -> Result<(), String> {
+    let http = endpoint.starts_with("http://");
+    let store = AmazonS3Builder::from_env()
+        .with_bucket_name(bucket)
+        .with_endpoint(endpoint)
+        .with_region("us-east-1")
+        .with_virtual_hosted_style_request(false)
+        .with_allow_http(http)
+        .build()
+        .map_err(|error| error.to_string())?;
+    let root = object_store::path::Path::from(prefix);
+    let locations: Vec<object_store::path::Path> = store
+        .list(Some(&root))
+        .map_ok(|meta| meta.location)
+        .try_collect()
+        .await
+        .map_err(|error| error.to_string())?;
+    for location in locations {
+        store
+            .delete(&location)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+/// Every object under the bench prefix.
+async fn s3_listing(s3: &S3Target) -> Result<Vec<object_store::ObjectMeta>, String> {
+    let http = s3.endpoint.starts_with("http://");
+    let store = AmazonS3Builder::from_env()
+        .with_bucket_name(&s3.bucket)
+        .with_endpoint(&s3.endpoint)
+        .with_region("us-east-1")
+        .with_virtual_hosted_style_request(false)
+        .with_allow_http(http)
+        .build()
+        .map_err(|error| error.to_string())?;
+    let root = object_store::path::Path::from(S3_PREFIX);
+    store
+        .list(Some(&root))
+        .try_collect()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Spans Parquet files and bytes of the dataset: the directory's for local
+/// mode, the listed objects' for S3.
+async fn dataset_files(backend: &Backend) -> (usize, u64) {
+    match &backend.s3 {
+        None => (count_spans_files(&backend.dir), dir_bytes(&backend.dir)),
+        Some(s3) => {
+            let metas = s3_listing(s3).await.unwrap();
+            let count = metas
+                .iter()
+                .filter(|meta| {
+                    let key = meta.location.to_string();
+                    key.contains("tables/spans") && key.ends_with(".parquet")
+                })
+                .count();
+            (count, metas.iter().map(|meta| meta.size).sum())
+        }
+    }
+}
+
+/// The dataset to query: the stored one when its manifest matches the target,
+/// otherwise a generated one. With S3 a missing or foreign manifest regenerates.
+async fn dataset(backend: &Backend, traces: usize) -> Manifest {
+    let has_catalog = backend.dir.join("catalog.db").is_file();
+    let stored = std::fs::read_to_string(manifest_path(&backend.dir))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Manifest>(&text).ok());
+    match (has_catalog, &backend.s3, stored) {
+        (true, Some(s3), Some(manifest))
+            if manifest.endpoint.as_deref() == Some(s3.endpoint.as_str())
+                && manifest.bucket.as_deref() == Some(s3.bucket.as_str()) =>
+        {
+            manifest
+        }
+        (true, Some(_), _) => generate_dataset(backend, traces).await,
+        (true, None, Some(manifest)) => manifest,
+        (true, None, None) => Manifest {
+            traces,
+            files: vec![count_spans_files(&backend.dir)],
+            gen_secs: 0.0,
+            max_bytes: ByteSize::mib(128).0,
+            sample: Vec::new(),
+            late_1_3h: 0,
+            endpoint: None,
+            bucket: None,
+        },
+        (false, _, _) => generate_dataset(backend, traces).await,
+    }
+}
+
+// The bench reports on stdout like the rest of the file.
+#[allow(clippy::print_stdout)]
+async fn generate_dataset(backend: &Backend, traces: usize) -> Manifest {
+    let max_bytes = ByteSize::mib(128);
+    let (count, _, generated) = generate(backend, traces, max_bytes).await;
+    if (900..=1100).contains(&count) {
+        return generated;
+    }
+    // `validate` requires `flush.max_bytes` in [1 MiB, hard_limit).
+    let scaled = ((max_bytes.0 as f64 * count as f64 / 1000.0).max(ByteSize::mib(1).0 as f64)
+        as u64)
+        .min(ByteSize::gib(1).0 - 1);
+    let max_bytes = ByteSize::b(scaled);
+    let (count2, _, generated2) = generate(backend, traces, max_bytes).await;
+    println!("regenerated once: spans files {count} → {count2}, max_bytes {max_bytes}");
+    generated2
 }
 
 fn manifest_path(dir: &Path) -> PathBuf {
@@ -583,12 +785,36 @@ fn q4_sample(plans: &[TracePlan]) -> Vec<(String, i64)> {
     sample
 }
 
+/// Appends a generated batch, waiting out `Backpressure` (the memtable is full
+/// until a flush makes room). Other errors fail the run.
+async fn append_retry(storage: &llmobs_storage::Storage, batch: RecordBatch) {
+    loop {
+        match storage.append_spans(project(), batch.clone()).await {
+            Ok(_) => return,
+            Err(llmobs_storage::error::AppendError::Backpressure) => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => panic!("append failed: {error}"),
+        }
+    }
+}
+
 /// Generate into `dir` (wiping it first) and return the file count and elapsed
 /// time. Appends in ingest-time order, batches of ~10,000 spans. The last two
 /// minutes of ingest time stay in the WAL: append everything else, shutdown,
 /// reopen, append the tail, drop without shutdown.
-async fn generate(dir: &Path, traces: usize, max_bytes: ByteSize) -> (usize, Duration, Manifest) {
+async fn generate(
+    backend: &Backend,
+    traces: usize,
+    max_bytes: ByteSize,
+) -> (usize, Duration, Manifest) {
     let begun = Instant::now();
+    let dir = backend.dir.as_path();
+    if let Some(s3) = &backend.s3 {
+        delete_prefix(&s3.endpoint, &s3.bucket, S3_PREFIX)
+            .await
+            .unwrap();
+    }
     if dir.exists() {
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -627,10 +853,12 @@ async fn generate(dir: &Path, traces: usize, max_bytes: ByteSize) -> (usize, Dur
         max_bytes: max_bytes.0,
         sample: q4_sample(&plans),
         late_1_3h,
+        endpoint: backend.s3.as_ref().map(|s3| s3.endpoint.clone()),
+        bucket: backend.s3.as_ref().map(|s3| s3.bucket.clone()),
     };
 
     let files = {
-        let storage = llmobs_storage::Storage::open(config(dir, max_bytes))
+        let storage = llmobs_storage::Storage::open(config(backend, max_bytes, None))
             .await
             .unwrap();
         let mut batch: Vec<Span> = Vec::with_capacity(BATCH_SPANS + SPANS_PER_TRACE);
@@ -641,20 +869,20 @@ async fn generate(dir: &Path, traces: usize, max_bytes: ByteSize) -> (usize, Dur
             ));
             if batch.len() >= BATCH_SPANS {
                 let rb = spans_to_record_batch(&batch).unwrap();
-                storage.append_spans(project(), rb).await.unwrap();
+                append_retry(&storage, rb).await;
                 batch.clear();
             }
         }
         if !batch.is_empty() {
             let rb = spans_to_record_batch(&batch).unwrap();
-            storage.append_spans(project(), rb).await.unwrap();
+            append_retry(&storage, rb).await;
             batch.clear();
         }
         storage.shutdown().await.unwrap();
         drop(storage);
-        let files = count_spans_files(dir);
+        let files = dataset_files(backend).await.0;
 
-        let storage = llmobs_storage::Storage::open(config(dir, max_bytes))
+        let storage = llmobs_storage::Storage::open(config(backend, max_bytes, None))
             .await
             .unwrap();
         for p in pending.iter().filter(|p| p.ingest >= tail_start) {
@@ -664,13 +892,13 @@ async fn generate(dir: &Path, traces: usize, max_bytes: ByteSize) -> (usize, Dur
             ));
             if batch.len() >= BATCH_SPANS {
                 let rb = spans_to_record_batch(&batch).unwrap();
-                storage.append_spans(project(), rb).await.unwrap();
+                append_retry(&storage, rb).await;
                 batch.clear();
             }
         }
         if !batch.is_empty() {
             let rb = spans_to_record_batch(&batch).unwrap();
-            storage.append_spans(project(), rb).await.unwrap();
+            append_retry(&storage, rb).await;
         }
         // Drop without shutdown: the tail stays in the WAL / memtable.
         drop(storage);
@@ -771,6 +999,24 @@ where
     }
 }
 
+/// `bench`, or one untimed run when `untimed` (the warm-up pass).
+async fn measure<F, Fut>(untimed: bool, mut op: F) -> Stats
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = ()>,
+{
+    if untimed {
+        op().await;
+        return Stats {
+            cold: 0.0,
+            p50: 0.0,
+            p95: 0.0,
+            max: 0.0,
+        };
+    }
+    bench(op).await
+}
+
 struct Row {
     name: String,
     mode: String,
@@ -833,6 +1079,7 @@ fn no_rule(query: &ProjectQuery) -> QueryContext {
         runtime: Arc::clone(&query.runtime),
         target_partitions: query.target_partitions,
         optimizer_rules: Vec::<Arc<dyn PhysicalOptimizerRule + Send + Sync>>::new(),
+        suspects: query.suspects.clone(),
     };
     QueryContext::new(source, None).unwrap()
 }
@@ -957,45 +1204,39 @@ async fn trace_benchmark() {
     let dir: PathBuf = std::env::var("LLMOBS_TRACE_BENCH_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| tmp.path().to_path_buf());
+    let backend = Backend::from_env(dir);
 
-    let mut max_bytes = ByteSize::mib(128);
-    let manifest = if dir.join("catalog.db").is_file() {
-        let text = std::fs::read_to_string(manifest_path(&dir)).unwrap_or_default();
-        serde_json::from_str::<Manifest>(&text).unwrap_or(Manifest {
-            traces,
-            files: vec![count_spans_files(&dir)],
-            gen_secs: 0.0,
-            max_bytes: max_bytes.0,
-            sample: Vec::new(),
-            late_1_3h: 0,
-        })
-    } else {
-        let (count, _, generated) = generate(&dir, traces, max_bytes).await;
-        if !(900..=1100).contains(&count) {
-            // `validate` requires `flush.max_bytes` in [1 MiB, hard_limit).
-            let scaled = ((max_bytes.0 as f64 * count as f64 / 1000.0)
-                .max(ByteSize::mib(1).0 as f64) as u64)
-                .min(ByteSize::gib(1).0 - 1);
-            max_bytes = ByteSize::b(scaled);
-            let (count2, _, generated2) = generate(&dir, traces, max_bytes).await;
-            println!("regenerated once: spans files {count} → {count2}, max_bytes {max_bytes}");
-            generated2
-        } else {
-            generated
-        }
-    };
-    max_bytes = ByteSize::b(manifest.max_bytes);
+    let manifest = dataset(&backend, traces).await;
+    let max_bytes = ByteSize::b(manifest.max_bytes);
+
+    // The read cache applies to S3 only; local runs keep the default.
+    let cache = backend.s3.as_ref().map(|_| CacheMode::from_env());
+    let cache_dir = backend.dir.join("cache");
+    if cache == Some(CacheMode::Cold) && cache_dir.exists() {
+        std::fs::remove_dir_all(&cache_dir).unwrap();
+    }
+    let read_cache = (cache == Some(CacheMode::Off)).then(|| ByteSize::b(0));
+    // Warm: the whole query set runs once untimed, then again measured.
+    let passes = if cache == Some(CacheMode::Warm) { 2 } else { 1 };
 
     // Open for queries: the WAL tail replays into the memtable.
-    let storage = llmobs_storage::Storage::open(config(&dir, max_bytes))
+    let storage = llmobs_storage::Storage::open(config(&backend, max_bytes, read_cache))
         .await
         .unwrap();
     let ctx = QueryContext::new(
-        storage.query(project(), QueryOptions::default()).unwrap(),
+        storage
+            .query(project(), QueryOptions::default())
+            .await
+            .unwrap(),
         None,
     )
     .unwrap();
-    let range = no_rule(&storage.query(project(), QueryOptions::default()).unwrap());
+    let range = no_rule(
+        &storage
+            .query(project(), QueryOptions::default())
+            .await
+            .unwrap(),
+    );
 
     // Confirm A2's real `trace_list` — the `traces` view plus its default
     // environment / experiment exclusions — is rewritten to list mode. The
@@ -1010,135 +1251,146 @@ async fn trace_benchmark() {
     );
 
     let mut rows: Vec<Row> = Vec::new();
+    for pass in 0..passes {
+        let untimed = pass + 1 < passes;
+        rows.clear();
 
-    macro_rules! list_query {
-        ($name:expr, $target:expr, $filter:expr, $window:expr) => {{
-            let filter: Option<&str> = $filter;
-            let window: Option<TimeWindow> = $window;
-            let (mode, sql) = plan_info(&ctx, filter, window).await;
-            let req = || request(filter, 50, window);
-            let stats = bench(|| async {
-                let page = trace_list(&ctx, req()).await.unwrap();
-                std::hint::black_box(
-                    page.batches
-                        .iter()
-                        .map(RecordBatch::num_rows)
-                        .sum::<usize>(),
-                );
-            })
-            .await;
-            let a = hex_ids(&trace_list(&ctx, req()).await.unwrap());
-            let b = hex_ids(&trace_list(&range, req()).await.unwrap());
-            rows.push(Row {
-                name: $name.to_owned(),
-                mode,
-                sql,
-                stats,
-                target: $target,
-                rows: a.len(),
-                differing: differing(&a, &b),
-            });
-        }};
-    }
-
-    list_query!("Q1", 200.0, None, None);
-    list_query!("Q2", 2000.0, Some("cost_total > 0.05"), None);
-    // Q2r thresholds come from untimed range-mode queries, as S1b did, so the
-    // 50th newest match is about 2 h / 15 h back — not from generator costs.
-    let t2 = format!("cost_total > {:.6}", cost_threshold(&range, 2 * HOUR).await);
-    let t15 = format!(
-        "cost_total > {:.6}",
-        cost_threshold(&range, 15 * HOUR).await
-    );
-    list_query!("Q2r-2h", 2000.0, Some(t2.as_str()), None);
-    list_query!("Q2r-15h", 2000.0, Some(t15.as_str()), None);
-    list_query!("Q3", 500.0, Some("environment = 'production'"), None);
-    let window = TimeWindow::new(range_start() + 3 * DAY, range_start() + 4 * DAY).unwrap();
-    list_query!("Q6", 200.0, None, Some(window));
-
-    // Q4 — 99 ids (half split). Q4a builds its own context per call, inside the
-    // timing, with `around` = the trace's start. Q4b uses one context.
-    for (label, use_around, target) in [("Q4a", true, 100.0), ("Q4b", false, 1000.0)] {
-        let mut samples = Vec::with_capacity(manifest.sample.len());
-        for (id, start) in &manifest.sample {
-            let one = Instant::now();
-            if use_around {
-                let q = storage
-                    .query(
-                        project(),
-                        QueryOptions {
-                            around: Some(*start),
-                        },
-                    )
-                    .unwrap();
-                let c = QueryContext::new(q, None).unwrap();
-                let found = trace_detail(&c, id, TIMEOUT).await.unwrap();
-                std::hint::black_box(found.is_some());
-            } else {
-                let found = trace_detail(&ctx, id, TIMEOUT).await.unwrap();
-                std::hint::black_box(found.is_some());
-            }
-            samples.push(one.elapsed().as_secs_f64() * 1000.0);
+        macro_rules! list_query {
+            ($name:expr, $target:expr, $filter:expr, $window:expr) => {{
+                let filter: Option<&str> = $filter;
+                let window: Option<TimeWindow> = $window;
+                let (mode, sql) = plan_info(&ctx, filter, window).await;
+                let req = || request(filter, 50, window);
+                let stats = measure(untimed, || async {
+                    let page = trace_list(&ctx, req()).await.unwrap();
+                    std::hint::black_box(
+                        page.batches
+                            .iter()
+                            .map(RecordBatch::num_rows)
+                            .sum::<usize>(),
+                    );
+                })
+                .await;
+                let a = hex_ids(&trace_list(&ctx, req()).await.unwrap());
+                let b = hex_ids(&trace_list(&range, req()).await.unwrap());
+                rows.push(Row {
+                    name: $name.to_owned(),
+                    mode,
+                    sql,
+                    stats,
+                    target: $target,
+                    rows: a.len(),
+                    differing: differing(&a, &b),
+                });
+            }};
         }
-        samples.sort_by(f64::total_cmp);
-        let pick = |p: f64| -> f64 {
-            if samples.is_empty() {
-                return 0.0;
-            }
-            let idx = ((p * samples.len() as f64).ceil() as usize)
-                .saturating_sub(1)
-                .min(samples.len() - 1);
-            samples[idx]
-        };
-        rows.push(Row {
-            name: label.to_owned(),
-            mode: "lookup".to_owned(),
-            sql: "SELECT * FROM traces WHERE trace_id = ''".to_owned(),
-            stats: Stats {
-                cold: samples.first().copied().unwrap_or(0.0),
-                p50: pick(0.50),
-                p95: pick(0.95),
-                max: samples.last().copied().unwrap_or(0.0),
-            },
-            target,
-            rows: manifest.sample.len(),
-            differing: 0,
-        });
-    }
 
-    // Q5 — SQL dashboard over the 7 days.
-    let stats = bench(|| async {
-        let batches = ctx
+        list_query!("Q1", 200.0, None, None);
+        list_query!("Q2", 2000.0, Some("cost_total > 0.05"), None);
+        // Q2r thresholds come from untimed range-mode queries, as S1b did, so the
+        // 50th newest match is about 2 h / 15 h back — not from generator costs.
+        let t2 = format!("cost_total > {:.6}", cost_threshold(&range, 2 * HOUR).await);
+        let t15 = format!(
+            "cost_total > {:.6}",
+            cost_threshold(&range, 15 * HOUR).await
+        );
+        list_query!("Q2r-2h", 2000.0, Some(t2.as_str()), None);
+        list_query!("Q2r-15h", 2000.0, Some(t15.as_str()), None);
+        list_query!("Q3", 500.0, Some("environment = 'production'"), None);
+        let window = TimeWindow::new(range_start() + 3 * DAY, range_start() + 4 * DAY).unwrap();
+        list_query!("Q6", 200.0, None, Some(window));
+
+        // Q4 — 99 ids (half split). Q4a builds its own context per call, inside the
+        // timing, with `around` = the trace's start. Q4b uses one context.
+        for (label, use_around, target) in [("Q4a", true, 100.0), ("Q4b", false, 1000.0)] {
+            let mut samples = Vec::with_capacity(manifest.sample.len());
+            for (id, start) in &manifest.sample {
+                let one = Instant::now();
+                if use_around {
+                    let q = storage
+                        .query(
+                            project(),
+                            QueryOptions {
+                                around: Some(*start),
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    let c = QueryContext::new(q, None).unwrap();
+                    let found = trace_detail(&c, id, TIMEOUT).await.unwrap();
+                    std::hint::black_box(found.is_some());
+                } else {
+                    let found = trace_detail(&ctx, id, TIMEOUT).await.unwrap();
+                    std::hint::black_box(found.is_some());
+                }
+                samples.push(one.elapsed().as_secs_f64() * 1000.0);
+            }
+            samples.sort_by(f64::total_cmp);
+            let pick = |p: f64| -> f64 {
+                if samples.is_empty() {
+                    return 0.0;
+                }
+                let idx = ((p * samples.len() as f64).ceil() as usize)
+                    .saturating_sub(1)
+                    .min(samples.len() - 1);
+                samples[idx]
+            };
+            rows.push(Row {
+                name: label.to_owned(),
+                mode: "lookup".to_owned(),
+                sql: "SELECT * FROM traces WHERE trace_id = ''".to_owned(),
+                stats: Stats {
+                    cold: samples.first().copied().unwrap_or(0.0),
+                    p50: pick(0.50),
+                    p95: pick(0.95),
+                    max: samples.last().copied().unwrap_or(0.0),
+                },
+                target,
+                rows: manifest.sample.len(),
+                differing: 0,
+            });
+        }
+
+        // Q5 — SQL dashboard over the 7 days.
+        let stats = measure(untimed, || async {
+            let batches = ctx
+                .session()
+                .sql(Q5_SQL)
+                .await
+                .unwrap()
+                .collect()
+                .await
+                .unwrap();
+            std::hint::black_box(batches.iter().map(RecordBatch::num_rows).sum::<usize>());
+        })
+        .await;
+        let q5_rows: usize = ctx
             .session()
             .sql(Q5_SQL)
             .await
             .unwrap()
             .collect()
             .await
-            .unwrap();
-        std::hint::black_box(batches.iter().map(RecordBatch::num_rows).sum::<usize>());
-    })
-    .await;
-    let q5_rows: usize = ctx
-        .session()
-        .sql(Q5_SQL)
-        .await
-        .unwrap()
-        .collect()
-        .await
-        .unwrap()
-        .iter()
-        .map(RecordBatch::num_rows)
-        .sum();
-    rows.push(Row {
-        name: "Q5".to_owned(),
-        mode: "sql".to_owned(),
-        sql: Q5_SQL.to_owned(),
-        stats,
-        target: 2000.0,
-        rows: q5_rows,
-        differing: 0,
-    });
+            .unwrap()
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum();
+        rows.push(Row {
+            name: "Q5".to_owned(),
+            mode: "sql".to_owned(),
+            sql: Q5_SQL.to_owned(),
+            stats,
+            target: 2000.0,
+            rows: q5_rows,
+            differing: 0,
+        });
+
+        println!(
+            "read cache after pass {pass} ({}): {:?}",
+            if untimed { "untimed" } else { "measured" },
+            storage.read_cache_stats()
+        );
+    }
 
     // Informational: A2's metrics over the 7 days, no target.
     let window = TimeWindow::new(range_start(), range_end()).unwrap();
@@ -1166,7 +1418,18 @@ async fn trace_benchmark() {
     );
 
     // Markdown table.
+    let (_, dataset_bytes) = dataset_files(&backend).await;
+    let store = match (&backend.s3, cache) {
+        (Some(s3), Some(mode)) => format!(
+            "S3 s3://{}/{S3_PREFIX} at {}, read cache {}",
+            s3.bucket,
+            s3.endpoint,
+            mode.name()
+        ),
+        _ => "local disk".to_owned(),
+    };
     println!("\n## M3 implementation\n");
+    println!("Store: {store}");
     println!("Machine: {}", machine());
     println!(
         "Dataset: {} traces, {} spans files ({}), {} bytes, generated in {:.1} s, target_partitions {PARTITIONS}, {} traces with a 1–3 h late group",
@@ -1178,7 +1441,7 @@ async fn trace_benchmark() {
             .map(usize::to_string)
             .collect::<Vec<_>>()
             .join(" → "),
-        dir_bytes(&dir),
+        dataset_bytes,
         manifest.gen_secs,
         manifest.late_1_3h,
     );

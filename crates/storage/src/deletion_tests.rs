@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow::array::{Array, RecordBatch};
+use bytesize::ByteSize;
 use llmobs_core::ids::ProjectId;
 use llmobs_core::score::ScoreTarget;
 use uuid::Uuid;
@@ -23,6 +24,7 @@ fn project() -> ProjectId {
 fn config_in(dir: &Path) -> StorageConfig {
     StorageConfig {
         data_dir: dir.to_path_buf(),
+        min_free_bytes: ByteSize::b(0),
         object_store: None,
         s3: S3Config::default(),
         wal: WalConfig::default(),
@@ -53,7 +55,10 @@ fn traces_deletion(traces: &[u16], cutoff: i64) -> Deletion {
 /// One fresh session over the latest published state.
 async fn context(storage: &crate::Storage) -> QueryContext {
     QueryContext::new(
-        storage.query(project(), QueryOptions::default()).unwrap(),
+        storage
+            .query(project(), QueryOptions::default())
+            .await
+            .unwrap(),
         None,
     )
     .unwrap()
@@ -121,8 +126,11 @@ async fn trace_count(storage: &crate::Storage, trace: u16) -> i64 {
 }
 
 /// The single flushed spans file of the project.
-fn spans_file(storage: &crate::Storage) -> crate::catalog::FileMeta {
-    let query = storage.query(project(), QueryOptions::default()).unwrap();
+async fn spans_file(storage: &crate::Storage) -> crate::catalog::FileMeta {
+    let query = storage
+        .query(project(), QueryOptions::default())
+        .await
+        .unwrap();
     let files = query
         .spans
         .downcast_ref::<crate::query::SpansProvider>()
@@ -229,7 +237,7 @@ async fn a_traces_deletion_hides_flushed_rows_and_keeps_a_session_score() {
         .await
         .unwrap();
 
-    let stored = spans_trace_ids(dir.path(), &spans_file(&storage));
+    let stored = spans_trace_ids(dir.path(), &spans_file(&storage).await);
     let trace_one = *span_row(1, 0, 0, 0).trace_id.as_bytes();
     assert!(stored.contains(&trace_one), "the file still holds trace 1");
 
@@ -340,7 +348,7 @@ async fn a_raised_file_escapes_the_tombstone_filter() {
 
     // The rewriter's bookkeeping (M5.4) raised to the known sequence; the test
     // forces it to observe the plan change.
-    let file = spans_file(&storage).id;
+    let file = spans_file(&storage).await.id;
     storage
         .commit_test_edit(&crate::catalog::CatalogEdit {
             add: Vec::new(),
@@ -348,6 +356,7 @@ async fn a_raised_file_escapes_the_tombstone_filter() {
             flushed_seq: None,
             sources: Vec::new(),
             raise: vec![(file, 1)],
+            quarantine: Vec::new(),
         })
         .await
         .unwrap();
@@ -391,7 +400,10 @@ async fn a_limit_over_clean_and_gated_sides_sits_above_the_union() {
         .unwrap();
 
     // Raise the file with no covered row: it becomes the clean side.
-    let query = storage.query(project(), QueryOptions::default()).unwrap();
+    let query = storage
+        .query(project(), QueryOptions::default())
+        .await
+        .unwrap();
     let files = query
         .spans
         .downcast_ref::<crate::query::SpansProvider>()
@@ -410,6 +422,7 @@ async fn a_limit_over_clean_and_gated_sides_sits_above_the_union() {
             flushed_seq: None,
             sources: Vec::new(),
             raise: vec![(clean.id, 1)],
+            quarantine: Vec::new(),
         })
         .await
         .unwrap();

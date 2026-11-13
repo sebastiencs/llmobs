@@ -181,7 +181,7 @@ pub async fn trace_list(
 ) -> Result<Page, RunError> {
     run_timed(request.limit, request.timeout, async {
         let frame = trace_frame(ctx, &request).await?;
-        finish(frame, &ListPlan::traces(&request)).await
+        finish(ctx, frame, &ListPlan::traces(&request)).await
     })
     .await
 }
@@ -305,7 +305,7 @@ async fn run_list(
 ) -> Result<Page, RunError> {
     run_timed(plan.limit, timeout, async {
         let frame = list_frame(ctx, &plan).await?;
-        finish(frame, &plan).await
+        finish(ctx, frame, &plan).await
     })
     .await
 }
@@ -325,8 +325,12 @@ where
     }
 }
 
-async fn finish(frame: DataFrame, plan: &ListPlan<'_>) -> Result<Page, RunError> {
-    let batches = frame.collect().await.map_err(classify)?;
+async fn finish(
+    ctx: &QueryContext,
+    frame: DataFrame,
+    plan: &ListPlan<'_>,
+) -> Result<Page, RunError> {
+    let batches = frame.collect().await.map_err(|error| ctx.fail(error))?;
     assemble(
         batches, plan.limit, plan.list, plan.sort, plan.order, plan.ties,
     )
@@ -431,7 +435,7 @@ async fn load_trace(
         .map_err(classify)?
         .filter(col(traces::TRACE_ID).eq(lit(trace_id)))
         .map_err(classify)?;
-    let trace = trace.collect().await.map_err(classify)?;
+    let trace = trace.collect().await.map_err(|error| ctx.fail(error))?;
     let Some(trace) = single_row(&trace)? else {
         return Ok(None);
     };
@@ -452,7 +456,7 @@ async fn load_trace(
         .map_err(classify)?
         .limit(0, Some(cap + 1))
         .map_err(classify)?;
-    let (spans, truncated) = cap_rows(spans.collect().await.map_err(classify)?, cap);
+    let (spans, truncated) = cap_rows(spans.collect().await.map_err(|error| ctx.fail(error))?, cap);
     Ok(Some(TraceDetailData {
         trace,
         spans,
@@ -480,7 +484,7 @@ async fn load_span(
         .map_err(classify)?
         .limit(0, Some(1))
         .map_err(classify)?;
-    let batches = frame.collect().await.map_err(classify)?;
+    let batches = frame.collect().await.map_err(|error| ctx.fail(error))?;
     single_row(&batches)
 }
 
@@ -1028,6 +1032,8 @@ mod tests {
                 runtime: Arc::new(RuntimeEnv::default()),
                 target_partitions: NonZeroUsize::new(1).expect("one partition"),
                 optimizer_rules: Vec::new(),
+
+                suspects: crate::verify::Suspects::detached(),
             },
             None,
         )

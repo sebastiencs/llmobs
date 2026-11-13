@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arrow::array::AsArray;
+use bytesize::ByteSize;
 use chrono::{Datelike, Days, NaiveDate};
 use datafusion::execution::context::{SessionConfig, SessionContext};
 use llmobs_core::ids::TraceId;
@@ -75,6 +76,7 @@ fn project() -> llmobs_core::ids::ProjectId {
 fn config_in(dir: &std::path::Path) -> StorageConfig {
     StorageConfig {
         data_dir: dir.to_path_buf(),
+        min_free_bytes: ByteSize::b(0),
         object_store: None,
         s3: S3Config::default(),
         wal: WalConfig::default(),
@@ -94,7 +96,7 @@ fn config_in(dir: &std::path::Path) -> StorageConfig {
 
 /// `(trace_id, span_id, ingest_time)` of every stored spans row.
 async fn stored_spans(storage: &Storage) -> Vec<(Vec<u8>, Vec<u8>, i64)> {
-    let query = storage.query(project(), Default::default()).unwrap();
+    let query = storage.query(project(), Default::default()).await.unwrap();
     let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), Arc::clone(&query.runtime));
     ctx.register_table("spans_t", Arc::clone(&query.spans))
         .unwrap();
@@ -125,7 +127,7 @@ async fn stored_spans(storage: &Storage) -> Vec<(Vec<u8>, Vec<u8>, i64)> {
 
 /// `(trace_id, span_count, partial_count)` of every stored traces partial.
 async fn stored_partials(storage: &Storage) -> Vec<(Vec<u8>, i64, i32)> {
-    let query = storage.query(project(), Default::default()).unwrap();
+    let query = storage.query(project(), Default::default()).await.unwrap();
     let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), Arc::clone(&query.runtime));
     ctx.register_table("traces_t", Arc::clone(&query.traces))
         .unwrap();

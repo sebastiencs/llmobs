@@ -9,3 +9,4 @@ pub(crate) mod plan;
 pub(crate) mod rewrite;
 pub(crate) mod slice;
 pub(crate) mod task;
+pub(crate) mod verify_pass;

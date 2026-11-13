@@ -6,8 +6,7 @@
 //!
 //! # What this crate does not do yet
 //!
-//! - the query runtime uses DataFusion's default memory pool.
-//!   Parquet footers and page indexes use DataFusion's built-in metadata cache.
+//! - Parquet footers and page indexes use DataFusion's built-in metadata cache.
 
 #![warn(missing_docs)]
 
@@ -27,8 +26,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::catalog::{Catalog, Committer, Registered};
-use crate::config::StorageConfig;
-use crate::config::WalSync;
+use crate::config::{QueryConfig, StorageConfig, WalSync};
 use crate::deletion::PendingDeletion;
 use crate::error::{
     AppendError, DeletionError, MediaError, MemtableError, OpenError, QueryError, StorageError,
@@ -40,6 +38,7 @@ use crate::media::MediaGc;
 use crate::memtable::{MemSnapshot, Memtable};
 use crate::objects::Objects;
 use crate::read_state::{Published, ReadState};
+use crate::verify::{Suspects, VerifyQueue};
 use crate::wal::Table;
 use crate::wal::sync_dir;
 use crate::wal::writer::{WalWriterHandle, WriterExit, WriterParams, spawn};
@@ -51,11 +50,13 @@ mod compaction;
 pub mod config;
 pub(crate) mod dedup;
 pub(crate) mod deletion;
+pub(crate) mod disk;
 pub mod error;
 mod filter;
 pub(crate) mod flush;
 pub(crate) mod gc;
 pub(crate) mod media;
+pub(crate) mod memory;
 pub(crate) mod objects;
 pub(crate) mod parquet;
 pub(crate) mod partials;
@@ -63,8 +64,10 @@ pub(crate) mod projects;
 pub mod query;
 mod query_error;
 mod query_text;
+pub(crate) mod read_cache;
 mod reads;
 mod sql;
+pub(crate) mod verify;
 mod views;
 
 pub use crate::compaction::job::CompactionReport;
@@ -73,6 +76,7 @@ pub use crate::deletion::{Deletion, DeletionScope, DeletionStatus};
 pub use crate::error::CompactionError;
 pub use crate::gc::ObsoleteReport;
 pub use crate::media::{MediaBlob, MediaRead, MediaReport};
+pub use crate::read_cache::ReadCacheStats;
 pub use query_error::{InvalidQuery, Position, RunError};
 pub use reads::{
     Bucket, BucketWidth, Kpi, KpiName, LATEST_SCORE_COLUMNS, ListScope, MAX_PAGE,
@@ -101,6 +105,8 @@ mod crash_tests;
 mod deletion_tests;
 #[cfg(test)]
 mod drop_tests;
+#[cfg(test)]
+mod quarantine_tests;
 #[cfg(test)]
 mod retention;
 #[cfg(test)]
@@ -166,11 +172,17 @@ pub struct Storage {
     spans_flush: FlushHandle,
     scores_flush: FlushHandle,
     gc: gc::GcHandle,
+    /// Free disk and compaction reservations (spec 03 §10).
+    disk: Arc<disk::Disk>,
+    disk_monitor: disk::DiskHandle,
     /// Media collection, cloned into the GC and compaction tasks.
     media: MediaGc,
     /// Shared by the background task and [`Self::compact`].
     compactor: Arc<compaction::job::Compactor>,
     compaction: compaction::task::CompactionHandle,
+    /// Suspect files (spec 03 §10), shared with the compactor and the anchor rebuild.
+    #[cfg_attr(not(test), allow(dead_code))]
+    verify: Arc<VerifyQueue>,
     /// Shared with the flush tasks and staged-object collection.
     #[cfg_attr(not(test), allow(dead_code))]
     objects: Arc<Objects>,
@@ -178,12 +190,27 @@ pub struct Storage {
     #[cfg_attr(not(test), allow(dead_code))]
     committer: Arc<Committer>,
     runtime: Arc<RuntimeEnv>,
+    /// Process-wide query memory (spec 03 §6). Each query's pool takes from it.
+    memory: Arc<memory::SharedPool>,
+    /// What [`Self::query`] admits each query with.
+    query_memory: QueryMemory,
     /// Records replayed into the memtable at open. A flushed record is not counted.
     #[cfg_attr(not(test), allow(dead_code))]
     replayed: [u64; 2],
     /// Shared with the writers and the flush tasks. Tests arm faults here.
     #[allow(dead_code)]
     hooks: Hooks,
+}
+
+/// What [`Storage::query`] needs to admit a query (spec 03 §6).
+#[derive(Debug, Clone, Copy)]
+struct QueryMemory {
+    /// Bytes a query takes from the shared pool before it starts.
+    initial: usize,
+    /// Most memory one query may hold.
+    cap: usize,
+    /// How long a query waits for its initial bytes.
+    wait: std::time::Duration,
 }
 
 /// Optional hints for one [`Storage::query`] call.
@@ -253,7 +280,32 @@ impl Storage {
                 )
             })??;
         let committer = Arc::new(Committer::open(&data_dir, share_hooks(&hooks)).await?);
-        let objects = open_objects(&config, &hooks, remote).await?;
+        let mut objects = open_objects(&config, &hooks, remote).await?;
+        let mut disk_paths = vec![data_dir.clone()];
+        disk_paths.extend(objects.local_root().map(Path::to_path_buf));
+        let disk = Arc::new(disk::Disk::open(disk_paths, config.min_free_bytes.0)?);
+        // The read cache is for remote stores only: local files are on disk already.
+        if objects.local_root().is_none() {
+            let capacity = read_cache_capacity(&config.query, &data_dir)?;
+            if capacity > 0 {
+                let cache_dir = data_dir.join("cache");
+                let cache_disk = Arc::clone(&disk);
+                let min_free = config.min_free_bytes.0;
+                let cache = tokio::task::spawn_blocking(move || {
+                    read_cache::ReadCache::open(cache_dir, capacity, cache_disk, min_free)
+                })
+                .await
+                .map_err(|_| {
+                    open_io(
+                        "opening read cache",
+                        &data_dir,
+                        io::Error::other("open task panicked"),
+                    )
+                })??;
+                objects = objects.with_read_cache(Arc::new(cache));
+            }
+        }
+        let objects = Arc::new(objects);
         let objects_for_cleanup = Arc::clone(&objects);
         let removed = tokio::task::spawn_blocking(move || objects_for_cleanup.remove_temp_files())
             .await
@@ -267,8 +319,26 @@ impl Storage {
         if removed > 0 {
             tracing::info!(removed, "removed leftover object temp files");
         }
-        let runtime = build_runtime(config.query.metadata_cache_bytes.0)?;
+        // Spill directories of a crashed process. `LOCK` is held (taken by
+        // `prepare_layout`), so no live storage uses them.
+        let spill_dir = data_dir.join("tmp").join("query");
+        let spill_for_cleanup = spill_dir.clone();
+        let removed = tokio::task::spawn_blocking(move || remove_spill_files(&spill_for_cleanup))
+            .await
+            .map_err(|_| {
+                open_io(
+                    "removing query spill files",
+                    &spill_dir,
+                    io::Error::other("cleanup task panicked"),
+                )
+            })??;
+        if removed > 0 {
+            tracing::info!(removed, "removed leftover query spill files");
+        }
+        let runtime = build_runtime(config.query.metadata_cache_bytes.0, &spill_dir)?;
         objects.register(&runtime);
+        let (query_memory, total_memory) = resolve_query_memory(&config.query);
+        let memory = Arc::new(memory::SharedPool::new(total_memory));
         let spans_flushed = committer.flushed_seq(Table::Spans).await;
         let scores_flushed = committer.flushed_seq(Table::Scores).await;
         let replay_dir = data_dir.clone();
@@ -296,8 +366,9 @@ impl Storage {
         let catalog = committer.catalog().await;
         let tombstones = committer.tombstones().await;
         let projects = Arc::new(committer.project_states().await?);
+        let verify = Arc::new(VerifyQueue::default());
         let mut anchors = anchor::Anchors::new(window_ns);
-        anchors.rebuild(&catalog, &objects).await?;
+        anchors.rebuild(&catalog, &objects, &verify).await?;
         let anchors = Arc::new(Mutex::new(anchors));
         let published = Arc::new(Published::new(ReadState {
             spans: recovered.spans.memtable.snapshot(),
@@ -323,6 +394,8 @@ impl Storage {
             Arc::new(compaction::job::Compactor::new(
                 Arc::clone(&committer),
                 Arc::clone(&objects),
+                Arc::clone(&disk),
+                Arc::clone(&verify),
                 Arc::clone(&published),
                 compaction::merge::MergeContext {
                     runtime,
@@ -407,6 +480,7 @@ impl Storage {
             target_partitions,
             lookback,
             hooks: share_hooks(&hooks),
+            verify: Arc::clone(&verify),
         };
         // Finish drops interrupted by a crash or a failed media step, after
         // the first obsolete-file collection (spec 03 §7).
@@ -418,6 +492,7 @@ impl Storage {
             grace: config.gc.grace,
             media: MediaGc::clone(&media),
         });
+        let disk_monitor = disk::spawn(Arc::clone(&disk), objects.read_cache().map(Arc::clone));
         let compaction = compaction::task::spawn(
             Arc::clone(&compactor),
             MediaGc::clone(&media),
@@ -436,12 +511,17 @@ impl Storage {
             spans_flush,
             scores_flush,
             gc,
+            disk,
+            disk_monitor,
             media,
             compactor,
             compaction,
+            verify,
             objects,
             committer,
             runtime,
+            memory,
+            query_memory,
             replayed: [recovered.spans_records, recovered.scores_records],
             hooks,
         })
@@ -466,12 +546,16 @@ impl Storage {
         self.append(Table::Scores, project, batch).await
     }
 
-    /// Providers for `project`, both bound to one published snapshot.
+    /// Admits a query, then returns providers for `project` over one published
+    /// snapshot, with a runtime of the query's own: its memory pool takes from
+    /// the process-wide pool, up to `query.max_memory` (spec 03 §6).
+    ///
+    /// Waits up to `query.admission_wait` for `query.initial_memory`; then fails
+    /// with [`QueryError::Busy`]. The snapshot is loaded after admission, so a
+    /// query that waited sees the newest data.
     ///
     /// No DataFusion session is built. The query layer builds one from
     /// [`ProjectQuery::runtime`] and [`ProjectQuery::target_partitions`].
-    /// The runtime is the one built at open. Its memory pool stays the default
-    /// until a later milestone installs one.
     ///
     /// The snapshot's pending deletions hide their rows from every provider
     /// (spec 03 §7): the memtable snapshots are filtered copies, and the
@@ -479,18 +563,30 @@ impl Storage {
     /// of a day before the project's retention watermark is left out of the
     /// copies the same way (spec 03 §8); the files were removed from the
     /// catalog by the retention commit itself.
-    pub fn query(
+    pub async fn query(
         &self,
         project: ProjectId,
         options: QueryOptions,
     ) -> Result<ProjectQuery, QueryError> {
+        let deadline = tokio::time::Instant::now() + self.query_memory.wait;
+        let pool = self
+            .memory
+            .admit(self.query_memory.initial, self.query_memory.cap, deadline)
+            .await
+            .ok_or(QueryError::Busy)?;
+        // Shares the metadata cache, the object stores and the spill directory
+        // with the base runtime, and swaps only the memory pool.
+        let runtime = RuntimeEnvBuilder::from_runtime_env(&self.runtime)
+            .with_memory_pool(pool)
+            .build_arc()?;
         project_query(
             &self.published.load(),
             project,
             options,
-            &self.runtime,
+            &runtime,
             self.target_partitions,
             self.lookback,
+            &self.verify,
         )
     }
 
@@ -595,6 +691,9 @@ impl Storage {
         if self.published.load().projects.is_dropped(project) {
             return Err(MediaError::ProjectDropped);
         }
+        if self.disk.low() {
+            return Err(MediaError::DiskFull);
+        }
         let now = catalog::now_ns();
         if blob.mime_type.is_empty() || blob.mime_type.len() > 255 || !blob.mime_type.is_ascii() {
             return Err(MediaError::Invalid {
@@ -662,6 +761,13 @@ impl Storage {
             size,
             bytes,
         })
+    }
+
+    /// Read-cache counters, `None` without a read cache (spec 03 §6). Used by
+    /// the benchmarks.
+    #[doc(hidden)]
+    pub fn read_cache_stats(&self) -> Option<ReadCacheStats> {
+        self.objects.read_cache().map(|cache| cache.stats())
     }
 
     /// Writer flags and memtable accounting. Does not touch the disk.
@@ -756,6 +862,18 @@ impl Storage {
         self.compactor.claimed()
     }
 
+    /// The suspect files waiting for the verify pass.
+    #[cfg(test)]
+    pub(crate) fn verify_queue(&self) -> &VerifyQueue {
+        &self.verify
+    }
+
+    /// One verify pass at the wall clock, run to completion.
+    #[cfg(test)]
+    pub(crate) async fn verify_pass(&self) -> compaction::verify_pass::VerifyReport {
+        self.compactor.verify_pass(catalog::now_ns()).await
+    }
+
     /// Commits `edit` and publishes the catalog, for tests that race a job.
     #[cfg(test)]
     pub(crate) async fn commit_test_edit(
@@ -774,6 +892,8 @@ impl Storage {
     ///
     /// Other tasks may still hold this value and be inside `append`. An append
     /// that has not been acknowledged returns [`AppendError::ShuttingDown`].
+    /// A query must not run after this returns: the lock, and with it the
+    /// spill directory, belongs to the next [`Self::open`].
     /// A second call reports the same writer failure as the first, or `Ok`
     /// when the writers already stopped cleanly.
     ///
@@ -791,6 +911,7 @@ impl Storage {
             .stop_and_wait(std::time::Duration::from_secs(30))
             .await;
         self.gc.abort();
+        self.disk_monitor.abort();
         let spans = self.spans.shutdown().await;
         let scores = self.scores.shutdown().await;
         self.finish_flushes().await;
@@ -858,6 +979,9 @@ impl Storage {
         if self.published.load().projects.is_dropped(project) {
             return Err(AppendError::ProjectDropped);
         }
+        if self.disk.low() {
+            return Err(AppendError::DiskFull);
+        }
         validate_batch(table, &project, &batch)?;
         let bytes = batch.get_array_memory_size();
         let adding = u64::try_from(bytes).unwrap_or(u64::MAX);
@@ -872,6 +996,12 @@ impl Storage {
             Table::Spans => &self.spans,
             Table::Scores => &self.scores,
         }
+    }
+
+    /// Free disk and the reservations of the compaction jobs.
+    #[cfg(test)]
+    pub(crate) fn disk(&self) -> &disk::Disk {
+        &self.disk
     }
 
     /// Pause and fault points shared with the writers. A no-op outside tests.
@@ -951,6 +1081,7 @@ impl Drop for Storage {
         self.compactor.stop();
         self.compaction.abort();
         self.gc.abort();
+        self.disk_monitor.abort();
     }
 }
 
@@ -963,8 +1094,10 @@ pub(crate) fn project_query(
     runtime: &Arc<RuntimeEnv>,
     target_partitions: NonZeroUsize,
     lookback: i64,
+    verify: &Arc<VerifyQueue>,
 ) -> Result<ProjectQuery, QueryError> {
     let partitions = target_partitions.get();
+    let suspects = Suspects::new(Arc::clone(verify));
     // A dropped project gets empty tables (spec 03 §7): the drop commit
     // removed its files from the catalog, its memtable partitions are dropped
     // at flush, and no file of it can be committed again, so nothing of it is
@@ -982,6 +1115,7 @@ pub(crate) fn project_query(
                 partitions,
                 options.around,
                 Arc::clone(&no_deletions),
+                suspects.clone(),
             )),
             traces: Arc::new(query::TracesProvider::new(
                 project,
@@ -991,6 +1125,7 @@ pub(crate) fn project_query(
                 lookback,
                 partitions,
                 Arc::clone(&no_deletions),
+                suspects.clone(),
             )),
             scores: Arc::new(query::ScoresProvider::new(
                 project,
@@ -998,10 +1133,12 @@ pub(crate) fn project_query(
                 catalog,
                 partitions,
                 no_deletions,
+                suspects.clone(),
             )),
             runtime: Arc::clone(runtime),
             target_partitions,
             optimizer_rules: vec![Arc::new(query::TraceListRule)],
+            suspects,
         });
     }
     let deletions = state.tombstones.for_project(project);
@@ -1038,6 +1175,7 @@ pub(crate) fn project_query(
         partitions,
         options.around,
         Arc::clone(&deletions),
+        suspects.clone(),
     ));
     let scores = Arc::new(query::ScoresProvider::new(
         project,
@@ -1045,6 +1183,7 @@ pub(crate) fn project_query(
         Arc::clone(&state.catalog),
         partitions,
         Arc::clone(&deletions),
+        suspects.clone(),
     ));
     // The traces provider reads the filtered spans snapshot too, so its
     // memtable partials are computed from the rows that remain.
@@ -1056,6 +1195,7 @@ pub(crate) fn project_query(
         lookback,
         partitions,
         deletions,
+        suspects.clone(),
     ));
     Ok(ProjectQuery {
         spans,
@@ -1064,6 +1204,7 @@ pub(crate) fn project_query(
         runtime: Arc::clone(runtime),
         target_partitions,
         optimizer_rules: vec![Arc::new(query::TraceListRule)],
+        suspects,
     })
 }
 
@@ -1086,7 +1227,65 @@ fn prepare_layout(data_dir: &Path) -> Result<File, OpenError> {
     ensure_dir(&wal)?;
     ensure_dir(&wal.join(Table::Spans.name()))?;
     ensure_dir(&wal.join(Table::Scores.name()))?;
+    let tmp = data_dir.join("tmp");
+    ensure_dir(&tmp)?;
+    ensure_dir(&tmp.join("query"))?;
     lock_dir(data_dir)
+}
+
+/// Removes every entry of `spill_dir`: the spill directories of a process that
+/// crashed. DataFusion removes its own on a clean drop. Returns how many were
+/// removed; a missing entry is not an error.
+fn remove_spill_files(spill_dir: &Path) -> Result<usize, OpenError> {
+    let entries = std::fs::read_dir(spill_dir)
+        .map_err(|source| open_io("removing query spill files", spill_dir, source))?;
+    let mut removed = 0;
+    for entry in entries {
+        let entry =
+            entry.map_err(|source| open_io("removing query spill files", spill_dir, source))?;
+        let path = entry.path();
+        let is_dir = entry
+            .file_type()
+            .map_err(|source| open_io("removing query spill files", &path, source))?
+            .is_dir();
+        let result = if is_dir {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        match result {
+            Ok(()) => removed += 1,
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => return Err(open_io("removing query spill files", &path, source)),
+        }
+    }
+    Ok(removed)
+}
+
+/// The query memory limits (spec 03 §6): the shared pool's size and each
+/// query's admission. The shared size is `query.max_memory_total`, or the
+/// machine's default when absent. On a machine smaller than `max_memory`, it
+/// and the per-query cap shrink to the machine's memory, but never below the
+/// initial bytes.
+fn resolve_query_memory(query: &QueryConfig) -> (QueryMemory, usize) {
+    let mut total = query
+        .max_memory_total
+        .map_or_else(memory::default_total_memory, |total| total.0);
+    let mut cap = query.max_memory.0;
+    if total < cap {
+        cap = total.max(query.initial_memory.0);
+        total = cap;
+        tracing::info!(total, cap, "query memory reduced to the machine's memory");
+    }
+    let to_usize = |bytes: u64| usize::try_from(bytes).unwrap_or(usize::MAX);
+    (
+        QueryMemory {
+            initial: to_usize(query.initial_memory.0),
+            cap: to_usize(cap),
+            wait: query.admission_wait,
+        },
+        to_usize(total),
+    )
 }
 
 fn recover_tables(
@@ -1170,24 +1369,41 @@ async fn open_objects(
     config: &StorageConfig,
     hooks: &Hooks,
     remote: Option<Arc<dyn object_store::ObjectStore>>,
-) -> Result<Arc<Objects>, OpenError> {
+) -> Result<Objects, OpenError> {
     #[cfg(test)]
     if let Some(store) = remote {
-        return Ok(Arc::new(Objects::remote_for_test(
+        return Ok(Objects::remote_for_test(
             store,
             &config.data_dir,
             share_hooks(hooks),
-        )?));
+        )?);
     }
     #[cfg(not(test))]
     let _ = remote;
-    Ok(Arc::new(Objects::new(config, share_hooks(hooks)).await?))
+    Ok(Objects::new(config, share_hooks(hooks)).await?)
 }
 
-fn build_runtime(metadata_cache_bytes: u64) -> Result<Arc<RuntimeEnv>, OpenError> {
+/// Capacity of the S3 read cache (spec 03 §6): `query.read_cache_bytes`, or
+/// the default for the file system holding `data_dir`.
+fn read_cache_capacity(query: &QueryConfig, data_dir: &Path) -> Result<u64, OpenError> {
+    match query.read_cache_bytes {
+        Some(bytes) => Ok(bytes.0),
+        None => Ok(read_cache::default_capacity(disk::total_bytes(data_dir)?)),
+    }
+}
+
+/// The base runtime: the metadata cache, the object stores (registered by the
+/// caller) and the spill directory. Its memory pool is DataFusion's default
+/// (unbounded): it runs the media collection, and each query's runtime shares
+/// its spill directory and caches (spec 03 §6).
+fn build_runtime(
+    metadata_cache_bytes: u64,
+    spill_dir: &Path,
+) -> Result<Arc<RuntimeEnv>, OpenError> {
     let limit = usize::try_from(metadata_cache_bytes).unwrap_or(usize::MAX);
     let runtime = RuntimeEnvBuilder::new()
         .with_metadata_cache_limit(limit)
+        .with_temp_file_path(spill_dir)
         .build()
         .map_err(|error| {
             tracing::error!(%error, "building the query runtime");
@@ -1396,10 +1612,14 @@ mod tests {
 
     use super::*;
     use crate::catalog::FileTable;
+    use crate::compaction::job::tests as jobs;
     use crate::config::{FlushConfig, MemtableConfig, QueryConfig, S3Config, WalConfig};
     use crate::error::StorageError;
     use crate::hooks::HookPoint;
+    use crate::media::MediaBlob;
     use crate::partials::partials_from_spans;
+    use crate::test_support::{span_row, span_rows};
+    use crate::views::QueryContext;
     use crate::wal::{parse_segment_name, spans_at, spans_keyed, spans_named};
 
     fn project() -> ProjectId {
@@ -1413,6 +1633,7 @@ mod tests {
     fn config_in(dir: &Path) -> StorageConfig {
         StorageConfig {
             data_dir: dir.to_path_buf(),
+            min_free_bytes: ByteSize::b(0),
             object_store: None,
             s3: S3Config::default(),
             wal: WalConfig::default(),
@@ -1827,13 +2048,176 @@ mod tests {
             );
             tokio::task::yield_now().await;
         }
-        let during = storage.query(project(), Default::default()).unwrap();
+        let during = storage.query(project(), Default::default()).await.unwrap();
         assert!(span_names(Arc::clone(&during.spans)).await.is_empty());
         storage.hooks().release(HookPoint::AfterWalSync);
         append.await.unwrap().unwrap();
-        let after = storage.query(project(), Default::default()).unwrap();
+        let after = storage.query(project(), Default::default()).await.unwrap();
         assert_eq!(span_names(after.spans).await.len(), 1);
         assert!(span_names(during.spans).await.is_empty());
+        storage.shutdown().await.unwrap();
+    }
+
+    /// Config whose query memory is `mib` MiB for the shared pool, the per-query
+    /// cap and the initial bytes, with a short admission wait.
+    fn config_with_query_memory(dir: &Path, mib: u64) -> StorageConfig {
+        let mut config = config_in(dir);
+        config.query.max_memory_total = Some(ByteSize::mib(mib));
+        config.query.max_memory = ByteSize::mib(mib);
+        config.query.initial_memory = ByteSize::mib(mib);
+        config.query.admission_wait = Duration::from_millis(100);
+        config
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn appends_fail_while_the_disk_is_low() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_in(dir.path());
+        config.min_free_bytes = ByteSize::b(1000);
+        let storage = Storage::open(config).await.unwrap();
+        let bytes = bytes::Bytes::from_static(b"media bytes");
+        let blob = MediaBlob {
+            sha256: Sha256::digest(&bytes).into(),
+            mime_type: "text/plain".to_owned(),
+            bytes,
+        };
+
+        storage.disk().set_free_for_test(Some(10));
+        assert_eq!(
+            storage
+                .append_spans(project(), spans_at(&[1]))
+                .await
+                .unwrap_err(),
+            AppendError::DiskFull
+        );
+        assert_eq!(
+            storage
+                .append_scores(project(), score_batch("accuracy"))
+                .await
+                .unwrap_err(),
+            AppendError::DiskFull
+        );
+        assert!(matches!(
+            storage.put_media(project(), blob.clone()).await,
+            Err(MediaError::DiskFull)
+        ));
+
+        storage.disk().set_free_for_test(Some(10_000));
+        storage
+            .append_spans(project(), spans_at(&[1]))
+            .await
+            .unwrap();
+        storage
+            .append_scores(project(), score_batch("accuracy"))
+            .await
+            .unwrap();
+        storage.put_media(project(), blob).await.unwrap();
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_compaction_job_that_does_not_fit_is_deferred() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = jobs::config_in(
+            dir.path(),
+            jobs::quiet_compaction(2),
+            Duration::from_secs(3_600),
+        );
+        let mut storage = Storage::open(config.clone()).await.unwrap();
+        for index in 0..2_u8 {
+            let base = jobs::at(10, 0, 0) + i64::from(index) * 60 * 1_000_000_000;
+            let batch = span_rows(&[span_row(0, 10 + index, base, base + 1_000_000_000)]);
+            storage = jobs::flush_cycle(&config, storage, batch).await;
+        }
+        let before = storage.catalog_paths(FileTable::Spans);
+        assert_eq!(before.len(), 2);
+
+        storage.disk().set_free_for_test(Some(0));
+        let report = storage.compact(jobs::at(11, 0, 0)).await.unwrap();
+        assert_eq!((report.jobs, report.failed), (0, 1), "{report:?}");
+        assert_eq!(storage.catalog_paths(FileTable::Spans), before);
+
+        storage.disk().set_free_for_test(None);
+        let report = storage.compact(jobs::at(11, 0, 0)).await.unwrap();
+        assert_eq!((report.jobs, report.failed), (1, 0), "{report:?}");
+        assert_eq!(storage.catalog_files(Table::Spans).len(), 1);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_query_waits_then_fails_as_busy() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(config_with_query_memory(dir.path(), 2))
+            .await
+            .unwrap();
+        let held = storage.query(project(), Default::default()).await.unwrap();
+        let busy = storage.query(project(), Default::default()).await;
+        assert!(matches!(busy, Err(QueryError::Busy)), "a second query fits");
+        drop(held);
+        storage.query(project(), Default::default()).await.unwrap();
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_query_that_cannot_spill_fails_as_too_large() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_with_query_memory(dir.path(), 1);
+        let storage = Storage::open(config.clone()).await.unwrap();
+        // One trace of many spans with long names: the join's build side holds
+        // all of them, and a hash join does not spill.
+        let spans: Vec<_> = (1..=20_000_u64)
+            .map(|index| {
+                let mut span = span_row(1, 0, i64::try_from(index).unwrap(), 1);
+                span.span_id = llmobs_core::ids::SpanId::from_bytes(index.to_be_bytes()).unwrap();
+                span.name = "n".repeat(200);
+                span
+            })
+            .collect();
+        storage
+            .append_spans(project(), span_rows(&spans))
+            .await
+            .unwrap();
+        // Shutdown flushes the memtable to a Parquet file.
+        storage.shutdown().await.unwrap();
+
+        let storage = Storage::open(config).await.unwrap();
+        let ctx = QueryContext::new(
+            storage.query(project(), Default::default()).await.unwrap(),
+            None,
+        )
+        .unwrap();
+        let params = serde_json::Map::new();
+        let result = ctx
+            .sql_json(SqlRequest {
+                query: "SELECT a.name AS a_name, b.name AS b_name FROM spans a JOIN spans b ON a.trace_id = b.trace_id LIMIT 1",
+                params: &params,
+                limit: 1,
+                timeout: Duration::from_secs(30),
+            })
+            .await;
+        match result {
+            Err(RunError::TooLarge) => {}
+            Err(other) => panic!("expected too large, got {other:?}"),
+            Ok(_) => panic!("the join fit in one megabyte"),
+        }
+        drop(ctx);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn open_removes_leftover_spill_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir.path().join("tmp").join("query").join("datafusion-old");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("x"), b"spill").unwrap();
+        let storage = Storage::open(config_in(dir.path())).await.unwrap();
+        assert!(!stale.exists(), "the leftover spill directory is removed");
+        let entries: Vec<String> = std::fs::read_dir(dir.path().join("tmp").join("query"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert!(entries[0].starts_with("datafusion-"), "{entries:?}");
         storage.shutdown().await.unwrap();
     }
 
@@ -1855,13 +2239,26 @@ mod tests {
             })
         };
         while !append.is_finished() {
-            let names =
-                span_names(storage.query(project(), Default::default()).unwrap().spans).await;
+            let names = span_names(
+                storage
+                    .query(project(), Default::default())
+                    .await
+                    .unwrap()
+                    .spans,
+            )
+            .await;
             assert!(!names.iter().any(|name| name == "lost"));
             tokio::task::yield_now().await;
         }
         assert_eq!(append.await.unwrap().unwrap_err(), AppendError::WalFailed);
-        let names = span_names(storage.query(project(), Default::default()).unwrap().spans).await;
+        let names = span_names(
+            storage
+                .query(project(), Default::default())
+                .await
+                .unwrap()
+                .spans,
+        )
+        .await;
         assert_eq!(names, vec!["kept".to_owned()]);
         let shutdown = storage.shutdown().await.unwrap_err();
         assert!(matches!(
@@ -1926,9 +2323,10 @@ mod tests {
         let mut config = config_in(dir.path());
         config.flush.max_age = Duration::from_millis(100);
         let storage = Storage::open(config.clone()).await.unwrap();
-        let first = storage.query(project(), Default::default()).unwrap();
-        let second = storage.query(project(), Default::default()).unwrap();
-        assert!(Arc::ptr_eq(&first.runtime, &second.runtime));
+        let first = storage.query(project(), Default::default()).await.unwrap();
+        let second = storage.query(project(), Default::default()).await.unwrap();
+        // Each query has a runtime of its own (spec 03 §6).
+        assert!(!Arc::ptr_eq(&first.runtime, &second.runtime));
         let receipt = storage
             .append_spans(project(), spans_at(&[1]))
             .await
@@ -2242,5 +2640,91 @@ mod tests {
             }
         }
         paths
+    }
+
+    /// A remote store with the read cache on, the flush cadence of the
+    /// flush tests, and a cache of 64 MiB.
+    fn cached_config(dir: &Path) -> StorageConfig {
+        let mut config = config_in(dir);
+        config.flush.max_age = Duration::from_millis(100);
+        config.query.read_cache_bytes = Some(ByteSize::mib(64));
+        config
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_flushed_file_is_cached_on_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let inner = Arc::new(object_store::memory::InMemory::new());
+        let storage = Storage::open_with_store(cached_config(dir.path()), inner)
+            .await
+            .unwrap();
+        storage
+            .append_spans(project(), spans_at(&[1]))
+            .await
+            .unwrap();
+        wait_for_catalog(&storage, Table::Spans, 1).await;
+        assert!(storage.read_cache_stats().unwrap().blocks > 0);
+
+        // The file is read through the query's runtime, which has the store.
+        let query = storage.query(project(), Default::default()).await.unwrap();
+        let ctx = datafusion::execution::context::SessionContext::new_with_config_rt(
+            datafusion::prelude::SessionConfig::new(),
+            Arc::clone(&query.runtime),
+        );
+        ctx.register_table("spans_t", query.spans).unwrap();
+        let rows: usize = ctx
+            .sql("SELECT name FROM spans_t")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap()
+            .iter()
+            .map(|batch| batch.num_rows())
+            .sum();
+        assert_eq!(rows, 1);
+        let stats = storage.read_cache_stats().unwrap();
+        assert_eq!(stats.misses, 0, "the query fetched from S3: {stats:?}");
+        assert!(stats.hits > 0);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn verification_reads_the_store_not_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let inner = Arc::new(object_store::memory::InMemory::new());
+        let storage = Storage::open_with_store(cached_config(dir.path()), inner)
+            .await
+            .unwrap();
+        storage
+            .append_spans(project(), spans_at(&[1]))
+            .await
+            .unwrap();
+        wait_for_catalog(&storage, Table::Spans, 1).await;
+        let file = storage.catalog_files(FileTable::Spans)[0].clone();
+
+        // Replace block 0 of the cached copy with altered bytes and a CRC that
+        // matches them, so the cache alone would accept it.
+        let name = Path::new(&file.path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let block = dir.path().join("cache").join(&name).join("0");
+        let mut bytes = std::fs::read(&block).unwrap();
+        bytes[0] ^= 0xFF;
+        let data_len = bytes.len() - 4;
+        let crc = crc32c::crc32c(&bytes[..data_len]);
+        bytes[data_len..].copy_from_slice(&crc.to_le_bytes());
+        std::fs::write(&block, &bytes).unwrap();
+
+        assert_eq!(
+            storage.verify_queue().suspect([file.id], catalog::now_ns()),
+            1
+        );
+        let report = storage.verify_pass().await;
+        assert_eq!(report.healthy, 1, "{report:?}");
+        assert_eq!(report.quarantined, 0);
+        storage.shutdown().await.unwrap();
     }
 }
