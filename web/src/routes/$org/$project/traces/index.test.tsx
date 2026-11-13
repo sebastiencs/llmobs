@@ -4,6 +4,8 @@ import { beforeAll, expect, it, vi } from "vitest";
 import type { Schema } from "@/api/types";
 import { columnChoiceKey } from "@/components/data-table/column-layout";
 import { ROW_HEIGHT } from "@/components/data-table/data-table";
+import { LIVE_BUFFER_MAX, LIVE_PAGE_MAX } from "@/components/data-table/live-list";
+import { setLiveLimits } from "@/components/data-table/use-live-traces";
 import { ONBOARDING_POLL_MS, setOnboardingPollMs } from "@/components/onboarding/poll";
 import { otelSnippet } from "@/components/onboarding/snippets";
 import { defaultCollapsed } from "@/lib/tree";
@@ -689,6 +691,57 @@ it("re-anchors the range when live is turned on", async () => {
     }
   } finally {
     server.events.removeListener("request:start", onStart);
+  }
+});
+
+it("caps the paused buffer and refetches the first page on reveal", async () => {
+  setLiveLimits({ buffer: 2, page: LIVE_PAGE_MAX });
+  const urls: URL[] = [];
+  const onStart = ({ request }: { request: Request }) => {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/traces")) urls.push(url);
+  };
+  server.events.on("request:start", onStart);
+  try {
+    const { emit } = await openLive("/acme/support-bot/traces?live=1");
+    const scroller = tracesScroller();
+    scroller.scrollTop = 400;
+    fireEvent.scroll(scroller);
+    emit.trace(liveTrace("c1000000000000000000000000000011", "first over", LATER));
+    emit.trace(liveTrace("c1000000000000000000000000000012", "second over", LATER));
+    emit.trace(liveTrace("c1000000000000000000000000000013", "third over", LATER_STILL));
+    const pill = await screen.findByRole("button", { name: "2+ new traces ↑" });
+    const before = urls.length;
+    fireEvent.click(pill);
+    await waitFor(() => expect(urls.length).toBeGreaterThan(before));
+    expect(scroller.scrollTop).toBe(0);
+    expect(screen.queryByRole("button", { name: /new traces/ })).not.toBeInTheDocument();
+    expect(await screen.findByText("5 loaded")).toBeInTheDocument();
+  } finally {
+    server.events.removeListener("request:start", onStart);
+    setLiveLimits({ buffer: LIVE_BUFFER_MAX, page: LIVE_PAGE_MAX });
+  }
+});
+
+it("refetches the first page instead of growing it past the cap", async () => {
+  setLiveLimits({ buffer: LIVE_BUFFER_MAX, page: 5 });
+  const urls: URL[] = [];
+  const onStart = ({ request }: { request: Request }) => {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/traces")) urls.push(url);
+  };
+  server.events.on("request:start", onStart);
+  try {
+    const { emit } = await openLive("/acme/support-bot/traces?live=1");
+    expect(screen.getByText("5 loaded")).toBeInTheDocument();
+    const before = urls.length;
+    emit.trace(liveTrace("c1000000000000000000000000000014", "over the cap", LATER));
+    await waitFor(() => expect(urls.length).toBeGreaterThan(before));
+    await waitFor(() => expect(screen.getByText("5 loaded")).toBeInTheDocument());
+    expect(screen.queryByText("6 loaded")).not.toBeInTheDocument();
+  } finally {
+    server.events.removeListener("request:start", onStart);
+    setLiveLimits({ buffer: LIVE_BUFFER_MAX, page: LIVE_PAGE_MAX });
   }
 });
 

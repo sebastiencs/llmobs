@@ -368,7 +368,7 @@ function TracesPage() {
                     notice={
                       live.pending > 0 ? (
                         <Button type="button" size="xs" variant="secondary" onClick={live.reveal}>
-                          {live.pending} new traces ↑
+                          {live.overflowed ? `${live.pending}+` : live.pending} new traces ↑
                         </Button>
                       ) : null
                     }
