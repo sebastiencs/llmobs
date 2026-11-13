@@ -314,7 +314,7 @@ Decisions of track G (`docs/plans/g-spine/00-design.md`), numbered `D-G-<n>` (`d
 | D-G-19 | Login page | **G builds a minimal `/login` page** and the API client's `401` redirect, so the UI runs on the real API before track L, which restyles it and adds setup, signup and reset (spec 11). |
 | D-G-20 | End-to-end test | **A Rust test in `just check`** starts the real server, sends the SDK conformance fixtures over OTLP/HTTP (protobuf and JSON) and gRPC, signs in and reads them back through the UI API. **`just e2e`** runs the real Python and TypeScript SDKs against `llmobs serve` in its own CI job (spec 10 § Testing). |
 | D-G-21 | Ports | **`/v1/traces` is served on `http_addr` and on `otlp_http_addr`** (that route only); gRPC on `grpc_addr` with `tonic`. An empty `otlp_http_addr` or `grpc_addr` disables that listener (spec 09, 12). |
-| D-G-22 | Stream validation | **`/traces/stream` takes `search`** besides `filter`, `include_eval` and `include_experiments`, and validates both when it opens: an invalid filter is a `400 invalid_filter` problem, not a stream, so `EventSource` stops instead of retrying. A later failed re-read sends `resync` (spec 09 § SSE; C review U27). |
+| D-G-22 | Stream validation | **`/traces/stream` validates `filter` and `search` (D-C-5) when it opens: an invalid filter is a `400 invalid_filter` problem, not a stream, so `EventSource` stops instead of retrying. A later failed re-read sends `resync` (spec 09 § SSE; C review U27). |
 
 ## Open
 
