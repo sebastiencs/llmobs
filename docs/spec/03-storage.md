@@ -16,7 +16,7 @@ Configuration keys named in this spec (`wal.sync`, `flush.max_bytes`, …) live 
   wal/
     spans/00000000000000000042.wal
     scores/00000000000000000007.wal
-  tmp/                    query spill files
+  tmp/                    query spill files; tmp/compaction/ holds S3-mode compaction outputs being written
   cache/                  S3 read cache (§6), only with an S3 object store
   objects/                only when object store = local
     tables/<table>/project=<project_id>/day=<YYYY-MM-DD>/<level>-<uuidv7>.parquet
@@ -99,7 +99,7 @@ Per table: `active` (accepting inserts) and at most one `frozen` (being flushed)
 
 1. **Freeze.** Under the table-state write lock: move `active` → `frozen`, create a new empty `active`, record `frozen_max_seq`.
 2. **Prepare, outside the lock.** For `spans`, first regroup each project's frozen rows by trace and assign every trace's rows to its anchor day (§ Trace anchor): the memtable partitions by each row's own day, files by the anchor day. Then, per output partition:
-   - drop rows hidden by tombstones (§7) and rows older than the project's retention watermark (§8);
+   - drop the partitions of dropped projects (§7) and those older than the project's retention watermark (§8), then the rows covered by pending deletions (§7). The tombstones and project states are read once per attempt; every output records the highest `deletion_seq` known then. A partition left with no row writes no file, and a flush left with no file commits only `flushed_seq`;
    - drop duplicate `(trace_id, span_id)` rows, keeping the greatest `ingest_time` (spans);
    - sort (spans: `trace_id, start_time`; scores: `created_at`);
    - for `spans`, also compute the **trace partials** of exactly the rows of that spans file, one per trace, with the merge operator (spec 01 merge rules, D152), for a `traces` file derived from it (§3).
@@ -183,15 +183,17 @@ CREATE TABLE staged_objects (path TEXT PRIMARY KEY, created_at INTEGER NOT NULL)
 
 CREATE TABLE table_state (table_name TEXT PRIMARY KEY, flushed_seq INTEGER NOT NULL);
 
-CREATE TABLE projects (                -- only projects with a storage-side state
+CREATE TABLE projects (                -- only dropped projects (§7)
   project_id TEXT PRIMARY KEY,
-  state TEXT NOT NULL                 -- 'dropping'
+  state TEXT NOT NULL,                -- 'dropping' (media not yet deleted) | 'dropped'
+  dropped_at INTEGER NOT NULL
 );
 CREATE TABLE retention_watermarks (project_id TEXT PRIMARY KEY, keep_from TEXT NOT NULL);  -- §8
 
 CREATE TABLE media (                   -- §9
-  project_id TEXT NOT NULL, sha256 TEXT NOT NULL,
-  mime_type TEXT NOT NULL, size_bytes INTEGER NOT NULL, first_seen_at INTEGER NOT NULL,
+  project_id TEXT NOT NULL, sha256 TEXT NOT NULL,   -- 64 lowercase hex
+  mime_type TEXT NOT NULL, size_bytes INTEGER NOT NULL,
+  first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL,
   PRIMARY KEY (project_id, sha256)
 );
 
@@ -220,13 +222,15 @@ FileMeta { id, path, level, size, footer_size, rows, min_time, max_time,
            min_ingest_time, max_ingest_time, fully_merged, deletions_applied_seq }
 ```
 
-**Read state.** Readers load one `ReadState` (an `Arc` behind a `std::sync::RwLock`, held only to clone the `Arc`): the in-memory catalog, the memtable batches (`active` and `frozen` of both tables, as `Arc<RecordBatch>` lists) and the tombstone sets (§7), all from the same publish. A row is therefore seen exactly once, in a memtable or in a file.
+**Read state.** Readers load one `ReadState` (an `Arc` behind a `std::sync::RwLock`, held only to clone the `Arc`): the in-memory catalog, the memtable batches (`active` and `frozen` of both tables, as `Arc<RecordBatch>` lists), the tombstone sets (§7) and the project states (retention watermarks §8, dropped projects §7), all from the same publish. A row is therefore seen exactly once, in a memtable or in a file.
 
 **Committer.** Every change to the set of files is a catalog edit applied by one committer, which runs the SQLite transaction and publishes the new `ReadState` under one mutex, so commits and snapshots are totally ordered. This covers flush, compaction, deletion rewrite, retention, project drop and GC. An edit has:
 - the files to add, whose paths must be in `staged_objects`;
 - the files to remove, with their expected state (normally `active`);
 - optionally a new `flushed_seq` (compare-and-set: it must be greater);
-- optionally deletion progress (§7).
+- optionally files whose `deletions_applied_seq` rises without a rewrite (§7); each must be active and the new value greater.
+
+An added file is refused when its project is dropped (§7) or its day is before the project's retention watermark (§8), so a flush or compaction prepared before a drop or a retention cannot bring the data back. Retention and project drop commit through the same path, with their own rows (`retention_watermarks`, `projects`, `deletions`) written in the same transaction.
 
 If a precondition fails, the transaction rolls back and the job gets a conflict: its outputs stay staged and are collected by GC, and the job retries later.
 
@@ -236,25 +240,36 @@ If a precondition fails, the transaction rolls back and the job gets a conflict:
 
 ## 5. Compaction
 
-Runs in a background task with bounded parallelism (`compaction.threads`, default `cores / 4`).
+A background task runs a **compaction pass** every `compaction.interval` (default 30 s). A pass looks at every `(table, project, day)` partition of `spans` and `scores` in the current catalog, picks at most one job per partition, and runs the jobs with at most `compaction.threads` (default `max(1, cores / 4)`) at a time. `traces` files are never compacted on their own: they follow their `spans` files (below).
 
-**Policy, per `(table, project, day)` partition:**
-- *L0 merge*: when the partition has ≥ 8 L0 files, or ≥ 512 MiB of L0, or its newest L0 file is older than 10 min. Inputs are all L0 files of the partition, plus an L1 file only if the merged output would be at least `compaction.size_ratio` (default 4) times that L1 file. A partition with one big L1 file and a trickle of L0 files therefore gets a second L1 file instead of rewriting the big one every few minutes. Inputs are merged in time order and the output is cut into L1 files of about `compaction.target_file_size` (default 512 MiB), each covering a contiguous time slice that does not overlap its neighbours; rows inside each output file are sorted by the table's sort order. (For `spans`, slice boundaries come from the input files' time ranges and a `start_time` histogram; each slice is then a k-way merge of the inputs' sorted runs by `trace_id, start_time`. A trace crossing a slice boundary is split across two files, which is fine.)
-- *Day close*: once the day has ended plus `compaction.close_delay` (default 2 h), the partition is rewritten into a minimal set. `spans` are fully merged when their total is at most `compaction.target_file_size`, otherwise only the L0 files are merged. `traces` are rebuilt from all of the partition's `spans` files, one partial per trace, `fully_merged = true`. `scores` are fully merged. A new L0 file in a closed day (late data) triggers another day close after `compaction.close_delay`.
+Times below are wall-clock nanoseconds (`now`). A file's age is `now` minus its `max_ingest_time`.
+
+**Policy, per partition.** A partition with any file claimed by a running job gets no job.
+- *Day close* is due when `now ≥ end of the partition day + compaction.close_delay` (default 2 h), the partition is not closed, and its newest L0 file, if any, is at least `compaction.close_delay` old. A partition is **closed** when:
+  - `spans`: it has no L0 file, and either it has at most one file or its files total more than `compaction.target_file_size` (default 512 MiB);
+  - `scores`: every file has `fully_merged = true`.
+
+  The day close job takes every file of the partition when their total is at most `compaction.target_file_size`, and for `scores` always. Otherwise (`spans` only) it takes only the L0 files. The outputs of a `spans` job that took every file of the partition, and of a `scores` day close, have `fully_merged = true`. A `scores` L0 merge never does, since it keeps deleted versions. A new L0 file in a closed day (late data) makes it not closed, so another day close runs after `compaction.close_delay`.
+- *L0 merge*, when no day close is due: when the partition has at least `compaction.l0_files` (default 8) L0 files, or at least `compaction.l0_bytes` (default 512 MiB) of L0, or at least two L0 files and the newest is at least `compaction.l0_age` (default 10 min) old. Inputs are all L0 files of the partition plus L1 files chosen by the **size ratio**: take the L1 files in increasing size order, and add each one while the output so far (the summed size of the inputs chosen) is at least `compaction.size_ratio` (default 4) times its size; stop at the first that fails. A partition with one big L1 file and a trickle of L0 files therefore gets a second L1 file instead of rewriting the big one every few minutes. A job needs at least two input files.
+
+**Slicing.** A job's output is cut into `n = max(1, ceil(input bytes / compaction.target_file_size))` L1 files, each holding one contiguous range of the table's time column (`start_time` for `spans`, `created_at` for `scores`). The boundaries are the time values at ranks `⌊len × i / n⌋` (i = 1 … n − 1) of the sorted time values of all input rows; equal boundaries collapse into one. A slice holds the rows with `lower ≤ time < upper`; the first slice has no lower bound and the last no upper bound. Each slice is a streaming k-way merge of the inputs' sorted runs (`spans`: `trace_id, start_time`; `scores`: `created_at`), filtered to the slice. A trace crossing a slice boundary is split across two files, which is fine.
 
 **During a merge:**
-- `spans`: duplicate `(trace_id, span_id)` rows are collapsed, keeping the greatest `ingest_time`.
-- `traces`: never merged on their own. The `traces` files derived from the `spans` inputs (§3) are replaced in the same commit by partials recomputed from the `spans` outputs. A trace whose spans end up in one file has `partial_count = 1`.
-- `scores`: last-writer-wins on `score_id` by `updated_at`. Rows with `deleted = true` are dropped **only during a day-close rewrite**, since that is the only time every version of the score is guaranteed to be among the inputs.
-- Tombstones (§7) are applied to every table. Outputs record the highest `deletion_seq` known when the job started.
+- `spans`: duplicate `(trace_id, span_id)` rows within a slice are collapsed, keeping the greatest `ingest_time` (the later row on a tie), as at flush. Two copies of a span whose `start_time`s fall in different slices both stay.
+- `traces`: each `spans` output gets its own `traces` output, computed from exactly its rows by the merge operator (one partial per trace, D152), at the same level and with the same `fully_merged`. The `traces` files derived from the `spans` inputs (§3) are removed in the same commit. A day that fully merges therefore ends with one `traces` file and `partial_count = 1` for every trace; a bigger day has one partial per trace and `spans` file the trace reaches (D-A1-1).
+- `scores`: last-writer-wins on `score_id`, keeping the greatest `(updated_at, ingest_time)` (the later row on a tie), as the `scores` view does. Rows with `deleted = true` are dropped **only by a day close**, which always takes every file of the partition: every version of a score shares its `created_at`, so they are all among the inputs.
+- Tombstones (§7): the deletions pending when the job starts are applied to `spans` and `scores` rows before the dedup, and every output (`traces` included) records the highest `deletion_seq` known when the job started. A slice left with no row produces no output.
 
 **Resources:**
-- A merge streams its inputs (one batch per input at a time) instead of sorting a whole slice in memory. Merge memory across running merges is capped by `compaction.max_memory` (default 1 GiB).
-- In local mode a merge first reserves its estimated output size (the sum of its input sizes) against free disk, and waits if it doesn't fit. Flushes don't reserve.
+- A merge streams its inputs (one batch per input at a time) instead of sorting a whole slice in memory. Merge memory across running jobs is capped by `compaction.max_memory` (default 1 GiB), a DataFusion memory pool of its own.
+- Each `spans` and `scores` output is written while it is merged, into a temp file, then published durably. On local disk the temp file sits in the target directory and is synced and renamed like any object write. With S3 it is `<data_dir>/tmp/compaction/<uuidv7>.parquet`, uploaded, then removed. `traces` outputs are small and are built in memory (D-A1-2).
+- Reserving disk before a merge is part of the disk-full handling of §10, not of compaction (D-A1-2).
 
-**Commit:** one catalog edit (§4) adds the outputs and marks the inputs `obsolete` with `obsoleted_at = now`. GC physically deletes an obsolete object once no `ReadState` still references it (reference counts on `FileMeta`) **and** `gc.grace` (default 5 min, at least the longest query timeout) has passed, which also covers restarts, when the counts are lost.
+**Commit:** one catalog edit (§4) adds the outputs (`spans` with their `traces`, or `scores`) and the `file_sources` rows of the new pairs, and marks the inputs and the `traces` files derived from them `obsolete` with `obsoleted_at` = the committer's wall clock at commit. Shutdown stops compaction between slices or before a commit, never inside one. The committer refuses an edit that removes a `spans` file without its active `traces` file, or a `traces` file without every one of its sources.
 
-**Crash safety:** an output written but never committed is still in `staged_objects`. GC deletes staged objects older than 1 h and their rows, so the bucket is never listed. In local mode, startup also removes leftover temp files.
+**GC of obsolete files.** Every 10 min, GC deletes an obsolete object and then its `data_files` row (its `file_sources` rows go with it), once `obsoleted_at + gc.grace ≤ now` (`gc.grace`, default 5 min, at least the longest query timeout) **and** no `ReadState` of this process still references the file (reference counts on `FileMeta`). After a restart the counts are gone and the grace alone decides.
+
+**Crash safety:** an output written but never committed is still in `staged_objects`. GC deletes staged objects older than 1 h and their rows, so the bucket is never listed. Startup removes leftover temp files: in the object directories in local mode, and in `<data_dir>/tmp/compaction/` in S3 mode. A job interrupted by a crash or a conflict is redone by a later pass.
 
 ## 6. Query path
 
@@ -269,7 +284,7 @@ For each request, `Storage::query` returns a `ProjectQuery`: the project's `Tabl
    Prune file partitions by `day`, widened by one day on each side (§ Trace anchor), and files by `min_time`/`max_time`. A `trace_id` lookup (equality or `IN` with 16-byte literals) without a time range, with `QueryOptions::around` set, reads only the `spans` and `traces` files that overlap `around ± 1 day` (D154); `scores` files are never pruned by `around`.
 2. Build a `ParquetExec` (DataFusion's Parquet scan) over the remaining files, with filter pushdown on, page-index pruning, bloom-filter pruning (equality on `trace_id`, `session_id`, `user_id`) and the metadata cache.
 3. Build a `MemoryExec` (in-memory scan) over the `active` and `frozen` batches of the same partitions. Same filters, applied in-memory.
-4. Combine both with a `UnionExec`, then wrap in the **tombstone filter** (§7) when there are pending tombstones whose `created_at` is at or after the file's or batch's `min_ingest_time`.
+4. Combine both with a `UnionExec`. Files and batches that a pending deletion may cover go through the **tombstone filter** (§7) first.
 
 ### `TracesProvider` (exposed as the logical view `traces`)
 
@@ -323,25 +338,41 @@ A request is created by the server in `meta.db` (04), with its cascades, and han
 
 | Kind | Scope stored | Rows deleted |
 |---|---|---|
-| `traces` | `deletion_traces(trace_id…)`. A filter-based request is resolved to trace IDs when it is created. The set is extended with the **evaluation traces** whose `metadata['llmobs.eval.target_trace_id']` is in it (they contain copies of the evaluated data). | rows of those traces with `ingest_time ≤ cut-off` |
-| `user` | `user_id`, plus the trace IDs and session IDs resolved at creation, plus their evaluation traces | spans/traces of the user (by `user_id` and by resolved trace), scores on those traces and sessions, judge traces about them |
+| `traces` | `deletion_traces(trace_id…)`. A filter-based request is resolved to trace IDs when it is created. The set is extended with the **evaluation traces** whose `metadata['llmobs.eval.target_trace_id']` is in it (they contain copies of the evaluated data). | `spans` and `scores` rows of those traces with `ingest_time ≤ cut-off` |
+| `user` | `user_id`, plus the trace IDs and session IDs resolved at creation, plus their evaluation traces | with `ingest_time ≤ cut-off`: `spans` rows of those traces or with that `user_id`; `scores` rows of those traces, with that `user_id`, or with one of those `session_id`s (D-A1-4) |
 | `project` | `project_id` | everything in the project (`drop_project`) |
 | `org` | `org_id` | every project of the org (`drop_project` for each), plus org-level metadata in `meta.db` |
 
+Session IDs match `scores` only: a session shared with another user keeps that user's spans, and the user's own spans in it are already covered by the user's trace IDs and `user_id` (D-A1-4). `traces` rows follow from the `spans` rows (below).
+
 The cut-off makes the result deterministic: data ingested after the request is new data, not covered by the deletion.
 
-**Handoff.** `register_deletion` is idempotent by deletion id. It stores the request and its resolved scope in `catalog.db` with the next **`deletion_seq`**, then publishes the tombstones in a new read state, and returns only after both. The server:
+**Handoff.** `register_deletion` is idempotent by deletion id. It stores the request and its resolved scope in `catalog.db` with the next **`deletion_seq`** (1, 2, … across all projects), then publishes the tombstones in a new read state, and returns only after both. A request for a dropped project is stored as already applied, without its scope, and publishes nothing. The server:
 1. creates the request in `meta.db`;
 2. calls `register_deletion`;
 3. sets `handed_over_at`.
 
-At startup it re-registers every request not yet handed over, and storage ignores ids it already knows. The server polls `deletion_status` to mark its own row `applied`.
+At startup it re-registers every request not yet handed over, and storage ignores ids it already knows. The server polls `deletion_status` (`pending` or `applied`) to mark its own row `applied`.
 
 ### Making data invisible immediately
 
-Pending `traces` and `user` deletions are kept in memory per project as a **tombstone set**: `trace_ids: HashSet<[u8;16]>`, `users: HashMap<user_id, cutoff>`, `sessions: HashMap<session_id, cutoff>`. Each set has a cut-off per entry. The query path applies a physical filter (`TombstoneFilterExec`) that drops matching rows. It runs only on files and batches whose ingest-time range overlaps at least one cut-off.
+Pending `traces` and `user` deletions are kept in memory per project as the **tombstone set**: each deletion's `deletion_seq`, cut-off, trace IDs, user and sessions. One function turns a set of deletions into a DataFusion physical predicate "this row is covered" (D-A1-3); queries, flush and compaction all use it, so the rule exists once:
+- `spans`: `ingest_time ≤ cut-off AND (trace_id IN … OR user_id IN …)`;
+- `scores`: the same, `OR session_id IN …`;
+- `traces` partials: `trace_id IN …` only. A partial carries no per-row ingest time, so a query hides a covered trace's partials whole; the files rewritten by the rewriter recompute their partials from the remaining spans.
 
-`project` and `org` deletions are immediate: `drop_project` marks the project `dropping` in `catalog.db` and removes it from every new read state in the same commit; the server returns 404 for it.
+Every `IN` term is guarded by `IS NOT NULL` (`scores.trace_id`, `user_id` and `session_id` are nullable), so the predicate is never null: a row with no `user_id`, or a session score with no `trace_id`, is never covered by a term on that column.
+
+Known limits:
+- `EXPLAIN` in the SQL console prints the predicate, so project members can see the IDs of a pending deletion until it is applied (accepted, D-A1-3).
+- For a `user` deletion, the `traces` view hides partials by the resolved trace IDs only; the server resolves every trace with a span of the user ingested up to the cut-off.
+- A row stamped with `ingest_time ≤ cut-off` but appended after its deletion is applied is neither dropped nor hidden. The server stamps `ingest_time` at receipt, so this needs a request in flight for longer than the deletion takes to apply.
+
+A deletion may cover rows of a `spans` or `scores` file only when its `deletion_seq` is above the file's `deletions_applied_seq` and its cut-off is at or after the file's `min_ingest_time`; of a `traces` file, only when its `deletion_seq` is above the file's `deletions_applied_seq` (a `traces` file's `min_ingest_time` is the smallest per-trace *latest* ingest time, so it can't bound a cut-off); of a memtable batch, only when its cut-off is at or after the batch's `min_ingest_time`. The query path filters only those files and batches:
+- memtable batches are filtered in memory when the read is planned (with fresh `traces` partials computed from what remains);
+- files are scanned with the predicate's columns added to the projection, then a `FilterExec` keeps the rows not covered, then a projection restores the requested columns. Other files are scanned as usual.
+
+`project` and `org` deletions are immediate: `drop_project` marks the project dropped in `catalog.db` and removes it from every new read state in the same commit; the server returns 404 for it.
 
 ### Cascades, inside the server's request transaction (`meta.db`)
 
@@ -352,45 +383,58 @@ Pending `traces` and `user` deletions are kept in memory per project as a **tomb
 ### Physical erasure: the deletion rewriter
 
 Every file records `deletions_applied_seq`: no row in scope of any deletion with `deletion_seq` up to that number remains in it.
-- A flush sets it to the highest `deletion_seq` whose tombstones it applied.
-- Compaction and the rewriter set it to the highest `deletion_seq` known when the job started, since they apply all of those.
+- A flush sets it to the highest `deletion_seq` known when it started, since it drops every row the pending deletions cover (§2). A flush left with no row commits only its `flushed_seq`.
+- Compaction and the rewriter set it to the highest `deletion_seq` known when the job started, since they apply all of those. A `traces` output gets the value of its `spans` output.
 
-A background task processes pending deletions oldest first:
+After each compaction pass, the compaction task runs a **deletion pass** (D-A1-5):
 
-1. Candidate files: the project's `spans` and `scores` files with `min_ingest_time ≤ cut-off` and `deletions_applied_seq < deletion_seq`. These are narrowed with the bloom filters (`trace_id`, `user_id`, `session_id`) and column statistics, then confirmed by a scan that projects only the key columns. A candidate without matching rows only gets its `deletions_applied_seq` raised.
-2. Each affected file is rewritten without the matching rows. The output keeps the same level, the `traces` files derived from the rewritten `spans` files are recomputed (§3), and the commit works like a compaction commit (§4).
-3. Any frozen memtable flushed after the request drops the matching rows at flush time (§2 step 2).
-4. The deletion is **applied** once two conditions hold:
+1. **Candidates:** the active `spans` and `scores` files that a pending deletion may cover (rule above), skipping files claimed by a running job. The pass claims them.
+2. **Check:** a scan of the file's key columns with the predicate pushed down (statistics, and the bloom filters on `trace_id`, plus `user_id` and `session_id` for `spans`, skip row groups) and `LIMIT 1`.
+   - A covered row: the file is **rewritten** without its covered rows by a compaction job of kind `rewrite`: same level, same `fully_merged`, the `traces` file derived from it recomputed (§3), committed like a compaction (§4). A file left with no row is removed with its `traces` file and nothing replaces it.
+   - No covered row: its `deletions_applied_seq` is raised to the known sequence in one catalog edit, without a rewrite.
+3. **Applied:** a deletion is applied once:
    - every active `spans` and `scores` file of the project with `min_ingest_time ≤ cut-off` has `deletions_applied_seq ≥` its `deletion_seq` (`traces` files follow their source `spans` files, §3);
-   - no memtable batch older than the cut-off remains.
+   - no memtable batch of the project has `min_ingest_time ≤ cut-off`. A batch that held covered rows is dropped by the next flush, which writes none of them.
 
-   Then `status = 'applied'`, `applied_at` is set, and its tombstone entries are removed.
+   Both are read from one published read state, so a flush committing in between cannot make a deletion look applied. Then `status = 'applied'`, `applied_at` is set, its scope rows (`deletion_traces`, `deletion_users`, `deletion_sessions`) are deleted, its tombstone entries are removed, and media GC runs for the project (§9). An applied request keeps only its id, project, kind, cut-off, sequence and dates; the audit record is the server's `meta.db` row.
 
 Compaction and the rewriter never run on the same file (claims, §4), and a compaction that started before a deletion records an older `deletions_applied_seq`, so its outputs remain candidates. Deleted rows cannot come back through a merge.
 
-For `project` and `org` deletions: the catalog rows are removed, the objects under the `project=` prefixes and `media/<project_id>/` are deleted, and then the storage rows.
+**Guarantee:** the bytes are gone from Parquet files within `deletion.max_delay` (default 24 h). A pending deletion older than that is logged once as a warning. The WAL holds data only until the next flush checkpoint (minutes), so it ages out by itself. The meaning of GDPR deletion for backups is covered in 12 §Backups.
 
-**Guarantee:** the bytes are gone from Parquet files within `deletion.max_delay` (default 24 h; the rewriter alerts in its logs if it is falling behind). The WAL holds data only until the next flush checkpoint (minutes), so it ages out by itself. The meaning of GDPR deletion for backups is covered in 12 §Backups.
+### Project drop
+
+`drop_project(project)` (D-A1-7):
+1. waits for appends in flight, and holds new ones, while it commits;
+2. commits one edit that obsoletes every file of the project in all three tables, records the project as `dropping` in `projects`, removes its retention watermark, and marks its pending deletions applied;
+3. publishes the read state without the project: its queries return empty tables, and `append_*` for it fail with `ProjectDropped`;
+4. deletes its media objects and `media` rows, then sets the project `dropped`.
+
+GC removes the obsolete files like any others (§5), so no listing of the `project=` prefixes is needed. If step 4 fails or the process stops, the GC task finishes it. Rows of the project still in the WAL or memtable are dropped by the next flush, and the committer refuses any file of a dropped project (§4). A `project_id` is never reused, so a dropped project is never re-created.
 
 ## 8. Retention
 
 Each project has `retention_days` in `meta.db` (null means keep forever). The server calls `apply_retention(project, keep_from = today − retention_days)` hourly. Storage then:
-- commits one catalog edit that obsoletes every file of the project in days before `keep_from`, across `spans`, `traces` and `scores` (no file is rewritten, because partitions are per day);
-- records `keep_from` in `retention_watermarks`.
+- commits one catalog edit that obsoletes every file of the project in days before the watermark, across `spans`, `traces` and `scores` (no file is rewritten, because partitions are per day);
+- records the watermark in `retention_watermarks`, in the same transaction. The watermark is the later of the stored one and `keep_from`: it never moves back.
 
-From then on, a flush drops rows of that project older than the watermark, so late rows cannot recreate a dropped day. Retention is day-granular. Since a trace lives in one anchor day (§ Trace anchor), it is dropped as a whole.
+From then on, a flush drops rows of that project older than the watermark, queries don't show memtable rows older than it, and the committer refuses a file older than it (§4), so late rows cannot recreate a dropped day. Memtable `spans` are keyed by each row's own day and files by the anchor day, so a span next to midnight at the watermark can be hidden in the memtable and kept by the flush, or the reverse; the file is what counts. Retention is day-granular. Since a trace lives in one anchor day (§ Trace anchor), it is dropped as a whole.
 
 ## 9. Media
 
-Media blobs live under `media/<project_id>/<sha256>` in the object store; their index is the `media` table of `catalog.db`. Storage writes a blob durably (local: temp file, `sync_all`, rename, directory fsync; S3: `PutObject` with `If-None-Match: *`) and records its row; writing an existing hash is a no-op.
+Media blobs live under `media/<project_id>/<sha256>` (64 lowercase hex) in the object store; their index is the `media` table of `catalog.db`.
 
-**GC** runs daily. For each project, it reads only the `media_refs` column of `spans` (a cheap projection) to build the set of live hashes. It then deletes the objects and `media` rows that are both absent from the set and older than 24 h; the age guard avoids racing with spans that are still being ingested.
+`put_media` checks that the SHA-256 of the bytes matches the given hash, and fails otherwise (D-A1-6). For a hash already stored it only refreshes `last_seen_at`. Otherwise it records the path in `staged_objects`, writes the blob durably (local: temp file, `sync_all`, rename, directory fsync; S3: a plain `PutObject`, since the name is the content's hash and an overwrite writes the same bytes), then inserts the `media` row and removes the staged row in one transaction. Staged-object GC deletes an object left without a row, and leaves alone a staged path whose `media` row exists. `get_media` reads a blob, whole or a byte range.
+
+**GC** runs daily, and for one project right after one of its deletions is applied (§7). For each project, it reads only the `media_refs` column of `spans` (a cheap projection, through the same read path as queries, so rows hidden by tombstones don't count) to build the set of live hashes. It then deletes the objects and `media` rows that are absent from the set and whose `last_seen_at` is more than 1 h old. The age guard covers a span appended just after its blob; since every `put_media` refreshes `last_seen_at`, a blob reused by new spans is never collected under them (D-A1-6).
+
+A dropped project's media is deleted by `drop_project` (§7).
 
 ## 10. Failure handling
 
 | Situation | Behaviour |
 |---|---|
-| Free disk under `storage.min_free_bytes` (default 2 GiB) | ingestion answers 503; compaction keeps running (it reclaims space) within its disk reservation (§5) |
+| Free disk under `storage.min_free_bytes` (default 2 GiB) | ingestion answers 503; compaction keeps running (it reclaims space). In local mode a compaction job first reserves its estimated output size (the sum of its input sizes) against free disk, and waits while it doesn't fit; flushes don't reserve (§5, D-A1-2, implemented with the rest of this row in M6) |
 | WAL write or fsync error | pending and new appends fail with `WalFailed` (503), health reports it, restart required (§1) |
 | Object store errors during flush | retry after 1 s, doubling up to 60 s (§2), while the memtable keeps the data and backpressure applies past the hard limit |
 | Ambiguous upload (error reported, object may exist) | retried under a new name; the old one is collected from `staged_objects` (§2) |

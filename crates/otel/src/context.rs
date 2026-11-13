@@ -27,6 +27,7 @@ const REQUEST_MODEL: &[Source] = &[
 const RESPONSE_MODEL: &[Source] = &[
     span("gen_ai.response.model", Convention::Genai),
     span("ai.response.model", Convention::Vercel),
+    span("llm.response.model_name", Convention::Openinference),
 ];
 
 const PROVIDER: &[Source] = &[
@@ -36,6 +37,12 @@ const PROVIDER: &[Source] = &[
     span("llm.system", Convention::Openinference),
     span("ai.model.provider", Convention::Vercel),
 ];
+
+/// Vercel v7 `context` call option, recorded under `ai.settings.`.
+const VERCEL_CONTEXT: &str = "ai.settings.context.";
+
+/// Google ADK sets `gen_ai.system` to its own framework name, not a provider.
+const ADK_FRAMEWORK: &str = "gcp.vertex.agent";
 
 const OPERATION: &[Source] = &[span("gen_ai.operation.name", Convention::Genai)];
 
@@ -48,11 +55,13 @@ const SESSION_ID: &[Source] = &[
         Convention::Openllmetry,
     ),
     span("ai.telemetry.metadata.sessionId", Convention::Vercel),
+    span("ai.settings.context.sessionId", Convention::Vercel),
     span("langfuse.session.id", Convention::Langfuse),
     span(
         "lmnr.association.properties.session_id",
         Convention::Laminar,
     ),
+    span("gcp.vertex.agent.session_id", Convention::GoogleAdk),
 ];
 
 const USER_ID: &[Source] = &[
@@ -64,6 +73,7 @@ const USER_ID: &[Source] = &[
         Convention::Openllmetry,
     ),
     span("ai.telemetry.metadata.userId", Convention::Vercel),
+    span("ai.settings.context.userId", Convention::Vercel),
     span("langfuse.user.id", Convention::Langfuse),
     span("lmnr.association.properties.user_id", Convention::Laminar),
 ];
@@ -116,6 +126,8 @@ fn is_metadata_context_key(key: &str) -> bool {
         "ai.telemetry.metadata.sessionId"
             | "ai.telemetry.metadata.userId"
             | "ai.telemetry.metadata.tags"
+            | "ai.settings.context.sessionId"
+            | "ai.settings.context.userId"
             | "traceloop.association.properties.session_id"
             | "traceloop.association.properties.user_id"
     )
@@ -156,9 +168,7 @@ pub(crate) fn fill(
 ) -> ContextFields {
     let request_model = string_field(bag, resource, REQUEST_MODEL);
     let response_model = string_field(bag, resource, RESPONSE_MODEL);
-    let provider = first_string(bag, resource, PROVIDER).map(|resolved| {
-        canonical_provider(&resolved.value, resolved.source.key == "ai.model.provider")
-    });
+    let provider = provider(bag, resource);
     let operation = string_field(bag, resource, OPERATION);
     let request_params = request_params(bag, warnings);
     let session_id = string_field(bag, resource, SESSION_ID);
@@ -180,6 +190,23 @@ pub(crate) fn fill(
         tags,
         metadata,
     }
+}
+
+/// Rule 12 over [`PROVIDER`]. ADK's `gen_ai.system = gcp.vertex.agent` is
+/// skipped and left unread, so the next source or the price table decides
+/// (D-B1-8).
+fn provider(bag: &mut AttrBag<'_>, resource: &ResourceView<'_>) -> Option<String> {
+    let sources: Vec<Source> = PROVIDER
+        .iter()
+        .copied()
+        .filter(|source| {
+            source.key != "gen_ai.system"
+                || bag.get(source.key).and_then(as_str) != Some(ADK_FRAMEWORK)
+        })
+        .collect();
+    first_string(bag, resource, &sources).map(|resolved| {
+        canonical_provider(&resolved.value, resolved.source.key == "ai.model.provider")
+    })
 }
 
 fn string_field(
@@ -251,6 +278,10 @@ fn request_params(bag: &mut AttrBag<'_>, warnings: &mut Warnings) -> Option<Stri
     }
     expand_param_object(bag, "llm.invocation_parameters", &mut params);
     for key in prefixed(bag, "ai.settings.") {
+        // v7 runtime context is session, user, and metadata (D-B1-5).
+        if key.starts_with(VERCEL_CONTEXT) {
+            continue;
+        }
         let Some(name) = key.strip_prefix("ai.settings.") else {
             continue;
         };
@@ -333,6 +364,7 @@ fn metadata(bag: &mut AttrBag<'_>, warnings: &mut Warnings) -> BTreeMap<String, 
     sweep_prefix(bag, attr::METADATA_PREFIX, &mut metadata, warnings);
     expand_metadata_object(bag, "metadata", &mut metadata);
     sweep_prefix(bag, "ai.telemetry.metadata.", &mut metadata, warnings);
+    sweep_prefix(bag, VERCEL_CONTEXT, &mut metadata, warnings);
     function_id(bag, &mut metadata, warnings);
     sweep_prefix(
         bag,

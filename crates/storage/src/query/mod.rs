@@ -581,7 +581,9 @@ fn file_plan(
     let url = ObjectStoreUrl::parse(OBJECT_STORE_URL)
         .map_err(|error| datafusion::error::DataFusionError::Internal(error.to_string()))?;
     let mut builder = FileScanConfigBuilder::new(url, Arc::new(source))
-        .with_file_groups(file_groups(files, scan.target_partitions));
+        .with_file_groups(file_groups(files, scan.target_partitions))
+        // No work stealing: each partition reads only its own files.
+        .with_preserve_order(true);
     if scan.filters.is_empty() {
         builder = builder.with_limit(limit);
     }
@@ -1108,6 +1110,7 @@ mod tests {
                 sources: Vec::new(),
             })
             .unwrap()
+            .0
     }
 
     #[test]

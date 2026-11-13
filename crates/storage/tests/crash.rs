@@ -25,7 +25,8 @@ use llmobs_core::enums::{SpanKind, SpanStatus};
 use llmobs_core::ids::{ProjectId, SpanId, TraceId};
 use llmobs_core::span::Span;
 use llmobs_storage::config::{
-    FlushConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig, WalConfig, WalSync,
+    CompactionConfig, FlushConfig, GcConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig,
+    WalConfig, WalSync,
 };
 use llmobs_storage::{ProjectQuery, Storage};
 use parquet::arrow::ProjectionMask;
@@ -59,7 +60,32 @@ fn child_config(dir: &Path) -> StorageConfig {
         },
         query: QueryConfig::default(),
         anchor: Default::default(),
+        // With `gc.grace = 1s`, an aborted GC can leave an obsolete pair with
+        // no object behind; `check_dir` allows that.
+        gc: GcConfig {
+            grace: Duration::from_secs(1),
+        },
+        // Compaction runs throughout the run: the stream's times are in March
+        // 2026, long past, so day closes are due at once. Day closes cut
+        // slices at `target_file_size`.
+        compaction: CompactionConfig {
+            interval: Duration::from_millis(200),
+            l0_files: 2,
+            l0_age: Duration::from_secs(1),
+            close_delay: Duration::from_secs(1),
+            target_file_size: ByteSize::mib(1),
+            ..CompactionConfig::default()
+        },
     }
+}
+
+/// `child_config` with the background compaction task idle, for the parent's
+/// final steps: an explicit `compact` must not race the task's claims, and a
+/// job stopped by shutdown leaves staged outputs behind.
+fn quiet_child_config(dir: &Path) -> StorageConfig {
+    let mut config = child_config(dir);
+    config.compaction.interval = Duration::from_secs(3_600);
+    config
 }
 
 /// 2026-03-05 23:30 UTC, in nanoseconds. The stream spreads over the hour
@@ -244,7 +270,7 @@ fn crash_recovery() {
             status.code().is_none(),
             "crash child exited {status} at iteration {run}, seed {seed}"
         );
-        let check = runtime.block_on(check_dir(dir.path(), &before, flushed));
+        let check = runtime.block_on(check_dir(dir.path(), &before, flushed, false));
         match check {
             Ok(next) => flushed = next,
             Err(error) => panic!("crash harness failed at iteration {run}, seed {seed}: {error}"),
@@ -253,6 +279,9 @@ fn crash_recovery() {
     runtime
         .block_on(collect_crash_orphans(dir.path()))
         .unwrap_or_else(|error| panic!("staged collection after the crash run: {error}"));
+    runtime
+        .block_on(finish_compaction(dir.path(), flushed))
+        .unwrap_or_else(|error| panic!("final compaction after the crash run: {error}"));
 }
 
 fn xorshift(state: &mut u64) -> u64 {
@@ -317,8 +346,20 @@ fn complete_acks(path: &Path) -> Vec<Ack> {
         .collect()
 }
 
-async fn check_dir(dir: &Path, before: &[Ack], previous: (u64, u64)) -> Result<(u64, u64), String> {
-    let storage = Storage::open(child_config(dir))
+/// `quiet` opens with `quiet_child_config`, for checks over an already
+/// quiesced directory where the background compaction task must stay idle.
+async fn check_dir(
+    dir: &Path,
+    before: &[Ack],
+    previous: (u64, u64),
+    quiet: bool,
+) -> Result<(u64, u64), String> {
+    let config = if quiet {
+        quiet_child_config(dir)
+    } else {
+        child_config(dir)
+    };
+    let storage = Storage::open(config)
         .await
         .map_err(|error| error.to_string())?;
     let stored = stored_rows(
@@ -337,14 +378,25 @@ async fn check_dir(dir: &Path, before: &[Ack], previous: (u64, u64)) -> Result<(
         check_source_pair(dir, spans_path, traces_path)?;
     }
     anchor_days_are_singular(dir, &catalog)?;
-    for (path, size) in &catalog.files {
+    // An active row must have its object with a matching size; an obsolete
+    // row's object is either absent or of matching size (spec 03 §5).
+    for (path, size, state) in &catalog.files {
         let file = dir.join("objects").join(path);
-        let meta = std::fs::metadata(&file).map_err(|error| format!("{path}: {error}"))?;
-        if meta.len() != *size {
-            return Err(format!(
-                "{path} is {} bytes, catalog says {size}",
-                meta.len()
-            ));
+        match std::fs::metadata(&file) {
+            Ok(meta) => {
+                if meta.len() != *size {
+                    return Err(format!(
+                        "{path} is {} bytes, catalog says {size}",
+                        meta.len()
+                    ));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if state != "obsolete" {
+                    return Err(format!("{path}: object missing for a {state} row"));
+                }
+            }
+            Err(error) => return Err(format!("{path}: {error}")),
         }
     }
     if catalog.spans_seq < previous.0 || catalog.scores_seq < previous.1 {
@@ -411,7 +463,8 @@ async fn check_dir(dir: &Path, before: &[Ack], previous: (u64, u64)) -> Result<(
 }
 
 struct CatalogView {
-    files: Vec<(String, u64)>,
+    /// `(path, size, state)` of every `data_files` row.
+    files: Vec<(String, u64, String)>,
     spans_seq: u64,
     scores_seq: u64,
     staged_at: Vec<i64>,
@@ -430,7 +483,7 @@ async fn read_catalog(dir: &Path) -> Result<CatalogView, String> {
         .connect()
         .await
         .map_err(|error| error.to_string())?;
-    let file_rows = sqlx::query("SELECT path, size_bytes FROM data_files")
+    let file_rows = sqlx::query("SELECT path, size_bytes, state FROM data_files")
         .fetch_all(&mut connection)
         .await
         .map_err(|error| error.to_string())?;
@@ -439,8 +492,9 @@ async fn read_catalog(dir: &Path) -> Result<CatalogView, String> {
         let path: String = sqlx::Row::try_get(&row, "path").map_err(|error| error.to_string())?;
         let size: i64 =
             sqlx::Row::try_get(&row, "size_bytes").map_err(|error| error.to_string())?;
+        let state: String = sqlx::Row::try_get(&row, "state").map_err(|error| error.to_string())?;
         let size = u64::try_from(size).map_err(|_| format!("{path} has a negative size"))?;
-        files.push((path, size));
+        files.push((path, size, state));
     }
     let seq_rows = sqlx::query("SELECT table_name, flushed_seq FROM table_state")
         .fetch_all(&mut connection)
@@ -464,11 +518,14 @@ async fn read_catalog(dir: &Path) -> Result<CatalogView, String> {
         .fetch_all(&mut connection)
         .await
         .map_err(|error| error.to_string())?;
+    // Active pairs only: an aborted GC can leave an obsolete pair whose
+    // object is already gone, which is fine.
     let source_rows = sqlx::query(
         "SELECT s.path AS spans_path, t.path AS traces_path
          FROM file_sources fs
          JOIN data_files s ON s.id = fs.spans_file_id
-         JOIN data_files t ON t.id = fs.traces_file_id",
+         JOIN data_files t ON t.id = fs.traces_file_id
+         WHERE s.state = 'active' AND t.state = 'active'",
     )
     .fetch_all(&mut connection)
     .await
@@ -625,7 +682,7 @@ fn now_ns() -> i64 {
 /// collects every staged row written before this call.
 async fn collect_crash_orphans(dir: &Path) -> Result<(), String> {
     let started = now_ns();
-    let storage = Storage::open(child_config(dir))
+    let storage = Storage::open(quiet_child_config(dir))
         .await
         .map_err(|error| error.to_string())?;
     storage
@@ -644,6 +701,78 @@ async fn collect_crash_orphans(dir: &Path) -> Result<(), String> {
                 "staged row from before the final open survived collection ({created_at})"
             ));
         }
+    }
+    let temps = temp_files(&dir.join("objects"));
+    if !temps.is_empty() {
+        return Err(format!(
+            "{} temp file(s) remain under objects/",
+            temps.len()
+        ));
+    }
+    Ok(())
+}
+
+/// The last step: quiesce compaction, then check the fully merged result.
+async fn finish_compaction(dir: &Path, flushed: (u64, u64)) -> Result<(), String> {
+    let storage = Storage::open(quiet_child_config(dir))
+        .await
+        .map_err(|error| error.to_string())?;
+    for _ in 0..20 {
+        let report = storage
+            .compact(now_ns())
+            .await
+            .map_err(|error| error.to_string())?;
+        if report.failed > 0 {
+            return Err(format!("{} compaction job(s) failed", report.failed));
+        }
+        if report.jobs == 0 {
+            break;
+        }
+    }
+    storage
+        .collect_obsolete(Duration::ZERO)
+        .await
+        .map_err(|error| error.to_string())?;
+    storage
+        .collect_staged(Duration::ZERO)
+        .await
+        .map_err(|error| error.to_string())?;
+    // Stop the tasks cleanly, then release the directory before `check_dir`
+    // opens it again.
+    storage
+        .shutdown()
+        .await
+        .map_err(|error| error.to_string())?;
+    drop(storage);
+    // `check_dir` re-runs every invariant over the quiesced directory,
+    // `check_source_pair` included. The quiet config keeps the background
+    // compaction task idle during the checks.
+    check_dir(dir, &[], flushed, true).await?;
+
+    let mut connection = SqliteConnectOptions::new()
+        .filename(dir.join("catalog.db"))
+        .read_only(true)
+        .busy_timeout(Duration::from_secs(5))
+        .connect()
+        .await
+        .map_err(|error| error.to_string())?;
+    let level0: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM data_files
+         WHERE table_name = 'spans' AND state = 'active' AND level = 0",
+    )
+    .fetch_one(&mut connection)
+    .await
+    .map_err(|error| error.to_string())?;
+    if level0 != 0 {
+        return Err(format!("{level0} active spans file(s) are still level 0"));
+    }
+    let obsolete: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM data_files WHERE state = 'obsolete'")
+            .fetch_one(&mut connection)
+            .await
+            .map_err(|error| error.to_string())?;
+    if obsolete != 0 {
+        return Err(format!("{obsolete} obsolete row(s) remain"));
     }
     let temps = temp_files(&dir.join("objects"));
     if !temps.is_empty() {

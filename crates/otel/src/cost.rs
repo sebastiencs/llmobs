@@ -191,12 +191,19 @@ pub(crate) fn apply(
     let Some(matched) = lookup(prices, model, charge.provider, charge.start_time) else {
         return none();
     };
-    let units = unit_prices(matched, charge.usage.input_tokens);
-    let (input, output, total) = formula(charge.kind, charge.usage, &units);
     let inferred = match charge.provider {
         None => matched.provider.clone(),
         Some(_) => None,
     };
+    // No token count at all is unknown usage, not a free call (D-B1-7).
+    if charge.usage.input_tokens.is_none() && charge.usage.output_tokens.is_none() {
+        return Priced {
+            provider: inferred,
+            ..none()
+        };
+    }
+    let units = unit_prices(matched, charge.usage.input_tokens);
+    let (input, output, total) = formula(charge.kind, charge.usage, &units);
     Priced {
         input,
         output,
@@ -586,6 +593,34 @@ mod tests {
         let priced = priced_of(&prices, "bare", 10);
         assert_eq!(priced.input, None);
         assert_eq!(priced.source, Some(CostSource::Computed));
+        assert_eq!(priced.provider.as_deref(), Some("openai"));
+    }
+
+    #[test]
+    fn a_span_without_token_counts_has_no_cost_but_gets_the_provider() {
+        let prices = table(vec![row(
+            "known",
+            PriceScope::Builtin,
+            Some("openai"),
+            0,
+            1.0,
+        )]);
+        let mut warnings = Warnings::default();
+        let mut bag = AttrBag::new(&[], &mut warnings);
+        let priced = apply(
+            &mut bag,
+            &Charge {
+                kind: SpanKind::Llm,
+                provider: None,
+                model: Some("known"),
+                start_time: 0,
+                usage: &Usage::default(),
+            },
+            &prices,
+            &mut warnings,
+        );
+        assert_eq!(priced.total, None);
+        assert_eq!(priced.source, Some(CostSource::None));
         assert_eq!(priced.provider.as_deref(), Some("openai"));
     }
 

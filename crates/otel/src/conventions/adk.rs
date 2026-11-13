@@ -206,7 +206,11 @@ fn function_tool(value: &Json) -> Json {
             Json::String(description.to_owned()),
         );
     }
-    if let Some(parameters) = map.get("parameters") {
+    // google-genai ≥ 1.x writes the JSON Schema form as `parameters_json_schema`.
+    if let Some(parameters) = map
+        .get("parameters")
+        .or_else(|| map.get("parameters_json_schema"))
+    {
         tool.insert(
             "parameters".to_owned(),
             parse_tool_arguments(parameters.clone()),

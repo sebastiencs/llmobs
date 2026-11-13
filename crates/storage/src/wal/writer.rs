@@ -1107,9 +1107,9 @@ mod tests {
         );
         running.hooks.arm_fail(HookPoint::WalSync);
         append_at(&running.handle, 1).await.unwrap();
-        let hooks = running.hooks.clone();
-        wait_for(|| hooks.hits(HookPoint::WalSync) >= 1).await;
-        assert!(running.handle.shared().failed());
+        // The hook counts a sync before the writer records its failure, so wait for the flag.
+        let shared = Arc::clone(running.handle.shared());
+        wait_for(|| shared.failed()).await;
         assert_eq!(replay_seqs(running.dir.path()), vec![1]);
         assert_eq!(
             append_at(&running.handle, 2).await,

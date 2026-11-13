@@ -6,23 +6,21 @@
 //! new file names. Truncation failure is remembered and retried without
 //! writing the files again.
 
-use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use arrow::array::{Array, AsArray, RecordBatch, UInt32Array};
+use arrow::array::RecordBatch;
 #[cfg(test)]
 use arrow::compute::concat_batches;
-use arrow::compute::take_record_batch;
-use arrow::datatypes::TimestampNanosecondType;
 use bytes::Bytes;
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
 
 use crate::anchor::{AnchorPlan, Anchors};
 use crate::catalog::{Catalog, CatalogEdit, Committer, FileId, FileMeta, FileTable};
+use crate::dedup;
 use crate::error::FlushError;
 use crate::hooks::{HookPoint, Hooks};
 #[cfg(test)]
@@ -434,7 +432,8 @@ fn prepare(
                 .partition(view)?;
             anchor_plan = Some(plan);
             for partition in partitions {
-                let batch = dedup_batch(&partition.batch)?;
+                let batch = dedup::latest_spans(&partition.batch)
+                    .map_err(|error| FlushError::dedup(error.reason()))?;
                 push_spans_files(&mut files, &mut sources, &partition.key, batch)?;
             }
         }
@@ -536,48 +535,7 @@ fn dedup_spans(batches: &[MemBatch]) -> Result<RecordBatch, FlushError> {
     let refs: Vec<&RecordBatch> = batches.iter().map(|batch| batch.batch.as_ref()).collect();
     let combined = concat_batches(&schema, refs)
         .map_err(|source| FlushError::prepare(crate::error::ParquetWriteError::arrow(source)))?;
-    dedup_batch(&combined)
-}
-
-/// Keeps the greatest `ingest_time` for each `(trace_id, span_id)` of one batch.
-fn dedup_batch(combined: &RecordBatch) -> Result<RecordBatch, FlushError> {
-    let trace = fixed(combined, llmobs_core::schema::spans::TRACE_ID)?;
-    let span = fixed(combined, llmobs_core::schema::spans::SPAN_ID)?;
-    let ingest = combined
-        .column_by_name(llmobs_core::schema::spans::INGEST_TIME)
-        .and_then(|column| column.as_primitive_opt::<TimestampNanosecondType>())
-        .ok_or_else(|| FlushError::dedup("missing identity column"))?;
-    let mut best: HashMap<(Vec<u8>, Vec<u8>), (i64, usize)> = HashMap::new();
-    for row in 0..combined.num_rows() {
-        if trace.is_null(row) || span.is_null(row) || ingest.is_null(row) {
-            return Err(FlushError::dedup("null span identity"));
-        }
-        let key = (trace.value(row).to_vec(), span.value(row).to_vec());
-        let time = ingest.value(row);
-        match best.get(&key) {
-            Some((kept, _)) if *kept > time => {}
-            _ => {
-                best.insert(key, (time, row));
-            }
-        }
-    }
-    let mut rows = Vec::with_capacity(best.len());
-    for (_, row) in best.into_values() {
-        rows.push(u32::try_from(row).map_err(|_| FlushError::dedup("row index"))?);
-    }
-    rows.sort_unstable();
-    take_record_batch(combined, &UInt32Array::from(rows))
-        .map_err(|source| FlushError::prepare(crate::error::ParquetWriteError::arrow(source)))
-}
-
-fn fixed<'a>(
-    batch: &'a RecordBatch,
-    name: &str,
-) -> Result<&'a arrow::array::FixedSizeBinaryArray, FlushError> {
-    batch
-        .column_by_name(name)
-        .and_then(|column| column.as_fixed_size_binary_opt())
-        .ok_or_else(|| FlushError::dedup("missing identity column"))
+    dedup::latest_spans(&combined).map_err(|error| FlushError::dedup(error.reason()))
 }
 
 async fn put_all(
@@ -724,6 +682,8 @@ mod tests {
             memtable: MemtableConfig::default(),
             query: QueryConfig::default(),
             anchor: Default::default(),
+            gc: Default::default(),
+            compaction: Default::default(),
         }
     }
 

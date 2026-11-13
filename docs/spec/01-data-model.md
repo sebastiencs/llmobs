@@ -212,7 +212,7 @@ Score **definitions** (name, type, allowed categories, numeric range, descriptio
 
 ## Media blob
 
-Object `media/<project_id>/<sha256>` in the object store; metadata row in the storage catalog's `media` table (03 §9: content type, size, first_seen). Referenced from payloads as `media://<sha256>`; served at `GET /api/v1/projects/{p}/media/{sha256}` (auth required, `Cache-Control: private, immutable`).
+Object `media/<project_id>/<sha256>` in the object store; metadata row in the storage catalog's `media` table (03 §9: content type, size, first and last seen). Referenced from payloads as `media://<sha256>`; served at `GET /api/v1/projects/{p}/media/{sha256}` (auth required, `Cache-Control: private, immutable`).
 
 ## Normalization version
 

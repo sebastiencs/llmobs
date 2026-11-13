@@ -23,10 +23,11 @@ Read these before writing code, and follow them:
 |---|---|
 | `docs/mvp-decisions.md` | Every product/technical decision (D1, D2, …) and the MVP scope summary |
 | `docs/spec/README.md` → `docs/spec/01…12-*.md` | The technical specification: data model, ingestion, storage, metadata DB, query, evaluation, alerts, auth, API, SDK, UI, operations |
+| `docs/roadmap.md` | Phases, waves and tracks: each track's plan, status, PRs and decision IDs |
 | `docs/plans/` | Step-by-step implementation plans; do the sub-phase you were given, nothing more |
 | `docs/research/competitors.md` | Why the decisions were made (competitor features and code-level findings) |
 
-If the code has to deviate from the spec, update the spec **in the same change**, and add a decision to `docs/mvp-decisions.md` if the change is not a detail. If the spec is ambiguous or contradicts itself, stop and ask instead of guessing.
+If the code has to deviate from the spec, update the spec **in the same change**, and add a decision to `docs/mvp-decisions.md` if the change is not a detail. A track's decisions are named `D-<track>-<n>` (e.g. `D-G-1`) and go in that track's section; only the coordinating session adds plain-numbered decisions (`docs/roadmap.md` § Decision IDs). If the spec is ambiguous or contradicts itself, stop and ask instead of guessing.
 
 ## Rules
 
@@ -112,6 +113,7 @@ Several sessions may work at the same time, each in its own git worktree and bra
 - **`llmobs-core` is a shared contract.** Don't change its public types unless your brief allows it. Request the change, and the coordinating session makes it.
 - The same goes for the root `Cargo.toml`: add a dependency only when your work needs it. Never change existing pins unless your brief says so.
 - Keep changes on your own branch; don't merge other branches into it.
+- A PR that changes a track's status updates its row in `docs/roadmap.md`.
 
 ## Commands
 

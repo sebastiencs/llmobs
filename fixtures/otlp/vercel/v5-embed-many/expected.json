@@ -1,0 +1,94 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "02c992eebd615b1888eb88e7860f4c5a",
+      "span_id": "fc7add3f1986bae8",
+      "name": "ai.embedMany",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.070000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "metadata": {
+        "functionId": "v5-embed-many"
+      },
+      "provider": "openai",
+      "request_model": "text-embedding-3-small",
+      "request_params": "{\"maxRetries\":0}",
+      "attributes": {
+        "ai.embeddings": "[\"[-0.5,-0.4000000059604645,-0.30000001192092896,-0.19999998807907104,-0.09999999403953552,0,0.10000002384185791,0.19999998807907104]\",\"[0.19999998807907104,0.30000001192092896,0.3999999761581421,0.5,-0.5,-0.4000000059604645,-0.30000001192092896,-0.19999998807907104]\"]",
+        "ai.model.id": "text-embedding-3-small",
+        "ai.model.provider": "openai.embedding",
+        "ai.operationId": "ai.embedMany",
+        "ai.request.headers.user-agent": "ai/5.0.285",
+        "ai.settings.maxRetries": "0",
+        "ai.telemetry.functionId": "v5-embed-many",
+        "ai.usage.tokens": "6",
+        "ai.values": "[\"\\\"alpha\\\"\",\"\\\"beta\\\"\"]",
+        "operation.name": "ai.embedMany v5-embed-many",
+        "resource.name": "v5-embed-many"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "nodejs",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "2.12.0"
+      },
+      "scope_name": "ai",
+      "conventions": [
+        "vercel"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "02c992eebd615b1888eb88e7860f4c5a",
+      "span_id": "bd2e639dd6b13d7a",
+      "parent_span_id": "fc7add3f1986bae8",
+      "name": "ai.embedMany.doEmbed",
+      "span_kind": "embedding",
+      "start_time": "2025-12-31T23:59:50.002000000Z",
+      "end_time": "2025-12-31T23:59:50.067000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "metadata": {
+        "functionId": "v5-embed-many"
+      },
+      "provider": "openai",
+      "request_model": "text-embedding-3-small",
+      "input_tokens": 6,
+      "total_tokens": 6,
+      "cost_input": 1.2e-7,
+      "cost_total": 1.2e-7,
+      "cost_source": "computed",
+      "request_params": "{\"maxRetries\":0}",
+      "attributes": {
+        "ai.embeddings": "[\"[-0.5,-0.4000000059604645,-0.30000001192092896,-0.19999998807907104,-0.09999999403953552,0,0.10000002384185791,0.19999998807907104]\",\"[0.19999998807907104,0.30000001192092896,0.3999999761581421,0.5,-0.5,-0.4000000059604645,-0.30000001192092896,-0.19999998807907104]\"]",
+        "ai.model.id": "text-embedding-3-small",
+        "ai.model.provider": "openai.embedding",
+        "ai.operationId": "ai.embedMany.doEmbed",
+        "ai.request.headers.user-agent": "ai/5.0.285",
+        "ai.settings.maxRetries": "0",
+        "ai.telemetry.functionId": "v5-embed-many",
+        "ai.usage.tokens": "6",
+        "ai.values": "[\"\\\"alpha\\\"\",\"\\\"beta\\\"\"]",
+        "operation.name": "ai.embedMany.doEmbed v5-embed-many",
+        "resource.name": "v5-embed-many"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "nodejs",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "2.12.0"
+      },
+      "scope_name": "ai",
+      "conventions": [
+        "vercel"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

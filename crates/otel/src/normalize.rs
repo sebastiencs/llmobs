@@ -233,7 +233,7 @@ fn accept_span(
         fields.provider.as_deref(),
         &mut warnings,
     );
-    let ttft_ns = ttft(&mut bag, start_time, &mut warnings);
+    let ttft_ns = ttft(&mut bag, &span.events, start_time, &mut warnings);
     let priced = crate::cost::apply(
         &mut bag,
         &crate::cost::Charge {

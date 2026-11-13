@@ -28,7 +28,15 @@ pub(crate) fn flattened_messages(bag: &AttrBag<'_>, prefix: &str) -> Option<Vec<
 fn message(bag: &AttrBag<'_>, prefix: &str, index: usize) -> Json {
     let base = format!("{prefix}{index}.message.");
     let mut message = Map::new();
-    insert_string(&mut message, "role", string_at(bag, &format!("{base}role")));
+    // Gemini's `model` role reaches OpenInference unchanged; it is the assistant.
+    let role = string_at(bag, &format!("{base}role")).map(|role| {
+        if role == "model" {
+            "assistant".to_owned()
+        } else {
+            role
+        }
+    });
+    insert_string(&mut message, "role", role);
     insert_string(&mut message, "name", string_at(bag, &format!("{base}name")));
     insert_string(
         &mut message,
@@ -40,6 +48,12 @@ fn message(bag: &AttrBag<'_>, prefix: &str, index: usize) -> Json {
         "finish_reason",
         string_at(bag, &format!("{base}finish_reason")),
     );
+    let calls_prefix = format!("{base}tool_calls.");
+    let mut calls: Vec<Json> = bag
+        .indexed(&calls_prefix)
+        .into_keys()
+        .map(|call| tool_call(bag, &format!("{calls_prefix}{call}.tool_call.")))
+        .collect();
     let contents_prefix = format!("{base}contents.");
     let content_indexes: Vec<usize> = bag.indexed(&contents_prefix).into_keys().collect();
     if content_indexes.is_empty() {
@@ -49,22 +63,34 @@ fn message(bag: &AttrBag<'_>, prefix: &str, index: usize) -> Json {
             string_at(bag, &format!("{base}content")),
         );
     } else {
-        let parts: Vec<Json> = content_indexes
-            .into_iter()
-            .map(|part| content_part(bag, &contents_prefix, part))
-            .collect();
+        let mut parts = Vec::new();
+        for index in content_indexes {
+            // The Anthropic instrumentation also lists each tool call as a
+            // content (`contents.N.tool_call.*`), usually repeating `tool_calls`.
+            let call_base = format!("{contents_prefix}{index}.tool_call.");
+            if bag.keys_with_prefix(&call_base).next().is_some() {
+                let call = tool_call(bag, &call_base);
+                if !calls.iter().any(|known| same_call(known, &call)) {
+                    calls.push(call);
+                }
+            } else {
+                parts.push(content_part(bag, &contents_prefix, index));
+            }
+        }
         message.insert("content".to_owned(), Json::Array(parts));
     }
-    let calls_prefix = format!("{base}tool_calls.");
-    let call_indexes: Vec<usize> = bag.indexed(&calls_prefix).into_keys().collect();
-    if !call_indexes.is_empty() {
-        let calls: Vec<Json> = call_indexes
-            .into_iter()
-            .map(|call| tool_call(bag, &calls_prefix, call))
-            .collect();
+    if !calls.is_empty() {
         message.insert("tool_calls".to_owned(), Json::Array(calls));
     }
     Json::Object(message)
+}
+
+/// Two tool calls with the same id are one call; without ids, equal values are.
+fn same_call(known: &Json, call: &Json) -> bool {
+    match (known.get("id"), call.get("id")) {
+        (Some(left), Some(right)) => left == right,
+        _ => known == call,
+    }
 }
 
 fn content_part(bag: &AttrBag<'_>, prefix: &str, index: usize) -> Json {
@@ -92,8 +118,8 @@ fn content_part(bag: &AttrBag<'_>, prefix: &str, index: usize) -> Json {
     Json::Object(part)
 }
 
-fn tool_call(bag: &AttrBag<'_>, prefix: &str, index: usize) -> Json {
-    let base = format!("{prefix}{index}.tool_call.");
+/// One OpenAI tool call from the keys under `base` (`….tool_call.`).
+fn tool_call(bag: &AttrBag<'_>, base: &str) -> Json {
     let mut function = Map::new();
     insert_string(
         &mut function,
@@ -223,6 +249,66 @@ mod tests {
                 r#"{"type":"text","content":"second"},"#,
                 r#"{"type":"tool_call","id":"call_9","name":"get_weather","arguments":{"city":"Paris"}}"#,
                 r#"],"finish_reason":"stop"}]"#
+            )
+        );
+    }
+    #[test]
+    fn a_content_tool_call_is_kept_once_and_model_is_the_assistant() {
+        let attrs = [
+            string_attr("llm.output_messages.0.message.role", "model"),
+            string_attr(
+                "llm.output_messages.0.message.contents.0.message_content.type",
+                "reasoning",
+            ),
+            string_attr(
+                "llm.output_messages.0.message.contents.0.message_content.text",
+                "think",
+            ),
+            string_attr(
+                "llm.output_messages.0.message.contents.1.message_content.type",
+                "tool_use",
+            ),
+            string_attr(
+                "llm.output_messages.0.message.contents.1.tool_call.id",
+                "call_1",
+            ),
+            string_attr(
+                "llm.output_messages.0.message.contents.1.tool_call.function.name",
+                "get_weather",
+            ),
+            string_attr(
+                "llm.output_messages.0.message.contents.2.message_content.type",
+                "tool_use",
+            ),
+            string_attr(
+                "llm.output_messages.0.message.contents.2.tool_call.id",
+                "call_2",
+            ),
+            string_attr(
+                "llm.output_messages.0.message.contents.2.tool_call.function.name",
+                "get_time",
+            ),
+            string_attr(
+                "llm.output_messages.0.message.tool_calls.0.tool_call.id",
+                "call_1",
+            ),
+            string_attr(
+                "llm.output_messages.0.message.tool_calls.0.tool_call.function.name",
+                "get_weather",
+            ),
+        ];
+        let mut warnings = Warnings::default();
+        let bag = AttrBag::new(&attrs, &mut warnings);
+        let raw = flattened_messages(&bag, "llm.output_messages.").expect("messages");
+        let messages = openai_messages(&serde_json::Value::Array(raw)).expect("converted");
+        assert_eq!(
+            messages_to_json(&messages),
+            concat!(
+                r#"[{"role":"assistant","parts":["#,
+                r#"{"type":"reasoning","content":"think"},"#,
+                r#"{"type":"tool_call","id":"call_1","name":"get_weather"},"#,
+                r#"{"type":"tool_call","id":"call_2","name":"get_time"}"#,
+                r#"]}]"#
             )
         );
     }

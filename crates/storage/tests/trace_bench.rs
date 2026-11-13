@@ -492,6 +492,8 @@ fn config(dir: &Path, max_bytes: ByteSize) -> StorageConfig {
             ..QueryConfig::default()
         },
         anchor: AnchorConfig::default(),
+        gc: Default::default(),
+        compaction: Default::default(),
     }
 }
 

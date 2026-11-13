@@ -1,0 +1,64 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "31a77d2db98dac1062d3ac00620f2858",
+      "span_id": "5b48137eef628e36",
+      "name": "generate_content gemini-2.5-flash",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.050000000Z",
+      "status": "ok",
+      "service_name": "capture-app",
+      "provider": "gcp.gen_ai",
+      "request_model": "gemini-2.5-flash",
+      "response_model": "gemini-2.5-flash",
+      "operation": "generate_content",
+      "input_tokens": 90,
+      "output_tokens": 15,
+      "cache_read_tokens": 40,
+      "total_tokens": 105,
+      "cost_source": "none",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"media_resolution=None code_execution_result=None executable_code=None file_data=None function_call=None function_response=None inline_data=None text='Describe this square.' thought=None thought_signature=None video_metadata=None tool_call=None tool_response=None part_metadata=None audio_transcription=None media_processing=None speech_metadata=None\"}]},{\"role\":\"user\",\"parts\":[{\"type\":\"uri\",\"modality\":\"image\",\"mime_type\":\"image/png\",\"uri\":\"media://03a55c3a12e3f66e3b503323e7e5d672a44ac230e18ad8b81f6420a472bd566e\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"A flat blue square.\"}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "output_preview": "A flat blue square.",
+      "attributes": {
+        "gen_ai.operation.name": "generate_content",
+        "gen_ai.provider.name": "gcp.gen_ai",
+        "gen_ai.request.model": "gemini-2.5-flash",
+        "gen_ai.response.finish_reasons": "[\"stop\"]",
+        "gen_ai.response.id": "capture-1",
+        "gen_ai.response.model": "gemini-2.5-flash",
+        "gen_ai.usage.cache_read.input_tokens": "40",
+        "gen_ai.usage.input_tokens": "90",
+        "gen_ai.usage.output_tokens": "15",
+        "gen_ai.usage.total_tokens": "105"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "opentelemetry.instrumentation.google_generativeai",
+      "scope_version": "0.21.5",
+      "media_refs": [
+        "03a55c3a12e3f66e3b503323e7e5d672a44ac230e18ad8b81f6420a472bd566e"
+      ],
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [
+    {
+      "sha256": "03a55c3a12e3f66e3b503323e7e5d672a44ac230e18ad8b81f6420a472bd566e",
+      "mime_type": "image/png",
+      "size_bytes": 179
+    }
+  ],
+  "rejected_spans": 0
+}

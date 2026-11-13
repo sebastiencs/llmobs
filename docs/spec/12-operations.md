@@ -33,7 +33,11 @@ GitHub and Google also accept the split form (`LLMOBS_AUTH__GITHUB__CLIENT_ID`, 
 | `storage.wal.sync` | | `"always"` (or a duration such as `"5ms"`: fsync at most that often) |
 | `storage.flush.max_bytes` / `storage.flush.max_age` / `storage.flush.upload_concurrency` | | `"256MiB"` / `"120s"` / `8` |
 | `storage.memtable.hard_limit` | | `"1GiB"` |
-| `storage.compaction.target_file_size` / `storage.compaction.threads` | | `"512MiB"` / cores/4 |
+| `storage.compaction.target_file_size` / `storage.compaction.threads` | | `"512MiB"` / `max(1, cores/4)` |
+| `storage.compaction.interval` / `storage.compaction.close_delay` | | `"30s"` / `"2h"` |
+| `storage.compaction.size_ratio` / `storage.compaction.max_memory` | | `4` / `"1GiB"` |
+| `storage.compaction.l0_files` / `storage.compaction.l0_bytes` / `storage.compaction.l0_age` | | `8` / `"512MiB"` / `"10m"` |
+| `storage.gc.grace` | | `"5m"` |
 | `storage.query.max_memory` | | `"2GiB"` |
 | `storage.query.metadata_cache_bytes` | | `"512MiB"` |
 | `storage.deletion.max_delay` | | `"24h"` |

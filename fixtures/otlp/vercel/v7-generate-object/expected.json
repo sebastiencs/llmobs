@@ -1,0 +1,127 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "0e40cfbbd5879de77fbd85199a4856b0",
+      "span_id": "762aeb55d6185fc0",
+      "name": "invoke_agent gpt-4o-mini-2024-07-18",
+      "span_kind": "agent",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.062000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "operation": "invoke_agent",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Describe the harbor as JSON.\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"{\\\"summary\\\":\\\"Clear skies over the harbor.\\\"}\"}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "input_preview": "Describe the harbor as JSON.",
+      "output_preview": "{\"summary\":\"Clear skies over the harbor.\"}",
+      "attributes": {
+        "gen_ai.agent.name": "v7-generate-object",
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.response.finish_reasons": "[\"stop\"]",
+        "gen_ai.usage.cache_read.input_tokens": "0",
+        "gen_ai.usage.input_tokens": "24",
+        "gen_ai.usage.output_tokens": "10"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "nodejs",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "2.12.0"
+      },
+      "scope_name": "gen_ai",
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "0e40cfbbd5879de77fbd85199a4856b0",
+      "span_id": "1ddb2a8c5d8b1e39",
+      "parent_span_id": "762aeb55d6185fc0",
+      "name": "step 1",
+      "span_kind": "span",
+      "start_time": "2025-12-31T23:59:50.002000000Z",
+      "end_time": "2025-12-31T23:59:50.059000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "operation": "agent_step",
+      "attributes": {
+        "gen_ai.operation.name": "agent_step"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "nodejs",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "2.12.0"
+      },
+      "scope_name": "gen_ai",
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "0e40cfbbd5879de77fbd85199a4856b0",
+      "span_id": "ccdfcd5fff6a92aa",
+      "parent_span_id": "1ddb2a8c5d8b1e39",
+      "name": "chat gpt-4o-mini-2024-07-18",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.002000000Z",
+      "end_time": "2025-12-31T23:59:50.056000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "response_model": "gpt-4o-mini-2024-07-18",
+      "operation": "chat",
+      "input_tokens": 24,
+      "output_tokens": 10,
+      "cache_read_tokens": 0,
+      "total_tokens": 34,
+      "cost_input": 0.000024,
+      "cost_output": 0.00004,
+      "cost_total": 0.00006400000000000001,
+      "cost_source": "computed",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Describe the harbor as JSON.\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"{\\\"summary\\\":\\\"Clear skies over the harbor.\\\"}\"}],\"finish_reason\":\"stop\"}]",
+      "output_format": "messages",
+      "input_preview": "Describe the harbor as JSON.",
+      "output_preview": "{\"summary\":\"Clear skies over the harbor.\"}",
+      "attributes": {
+        "gen_ai.client.operation.duration": "0.05364389900000004",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.response.finish_reasons": "[\"stop\"]",
+        "gen_ai.response.id": "chatcmpl-capture-1",
+        "gen_ai.response.model": "gpt-4o-mini-2024-07-18",
+        "gen_ai.usage.cache_read.input_tokens": "0",
+        "gen_ai.usage.input_tokens": "24",
+        "gen_ai.usage.output_tokens": "10"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "nodejs",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "2.12.0"
+      },
+      "scope_name": "gen_ai",
+      "conventions": [
+        "genai"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}

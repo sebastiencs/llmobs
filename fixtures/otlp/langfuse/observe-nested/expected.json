@@ -1,0 +1,119 @@
+{
+  "spans": [
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "85446f9941e1bb6472c9dad0324f60af",
+      "span_id": "a48745a3c7fba400",
+      "name": "answer-weather",
+      "span_kind": "span",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.055000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "input": "{\"args\":[\"Paris\"],\"kwargs\":{}}",
+      "input_format": "json",
+      "output": "It is 18 °C and sunny in Paris.",
+      "output_format": "text",
+      "input_preview": "{\"args\":[\"Paris\"],\"kwargs\":{}}",
+      "output_preview": "It is 18 °C and sunny in Paris.",
+      "attributes": {
+        "langfuse.internal.is_app_root": "true",
+        "langfuse.observation.type": "span"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "langfuse-sdk",
+      "scope_version": "5.1.0",
+      "conventions": [
+        "langfuse"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "85446f9941e1bb6472c9dad0324f60af",
+      "span_id": "cda5732d19463795",
+      "parent_span_id": "a48745a3c7fba400",
+      "name": "lookup_weather",
+      "span_kind": "tool",
+      "start_time": "2025-12-31T23:59:50.000000000Z",
+      "end_time": "2025-12-31T23:59:50.054000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "input": "{\"args\":[\"Paris\"],\"kwargs\":{}}",
+      "input_format": "json",
+      "output": "It is 18 °C and sunny in Paris.",
+      "output_format": "text",
+      "input_preview": "{\"args\":[\"Paris\"],\"kwargs\":{}}",
+      "output_preview": "It is 18 °C and sunny in Paris.",
+      "attributes": {
+        "langfuse.observation.type": "tool"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "langfuse-sdk",
+      "scope_version": "5.1.0",
+      "conventions": [
+        "langfuse"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    },
+    {
+      "project_id": "01900000-0000-7000-8000-000000000001",
+      "trace_id": "85446f9941e1bb6472c9dad0324f60af",
+      "span_id": "061fb3d5302c8495",
+      "parent_span_id": "cda5732d19463795",
+      "name": "OpenAI-generation",
+      "span_kind": "llm",
+      "start_time": "2025-12-31T23:59:50.015000000Z",
+      "end_time": "2025-12-31T23:59:50.054000000Z",
+      "status": "unset",
+      "service_name": "capture-app",
+      "provider": "openai",
+      "request_model": "gpt-4o-mini-2024-07-18",
+      "input_tokens": 24,
+      "output_tokens": 12,
+      "cache_read_tokens": 8,
+      "reasoning_tokens": 3,
+      "total_tokens": 36,
+      "cost_input": 0.00002,
+      "cost_output": 0.000048,
+      "cost_total": 0.000068,
+      "cost_source": "computed",
+      "request_params": "{\"frequency_penalty\":0,\"max_tokens\":\"Infinity\",\"presence_penalty\":0,\"temperature\":1,\"top_p\":1}",
+      "input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What's the weather in Paris?\"}]}]",
+      "input_format": "messages",
+      "output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"It is 18 °C and sunny in Paris.\"}]}]",
+      "output_format": "messages",
+      "input_preview": "What's the weather in Paris?",
+      "output_preview": "It is 18 °C and sunny in Paris.",
+      "attributes": {
+        "langfuse.observation.model.name": "gpt-4o-mini-2024-07-18",
+        "langfuse.observation.model.parameters": "{\"temperature\": 1, \"max_tokens\": \"Infinity\", \"top_p\": 1, \"frequency_penalty\": 0, \"presence_penalty\": 0}",
+        "langfuse.observation.type": "generation"
+      },
+      "resource_attributes": {
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope_name": "langfuse-sdk",
+      "scope_version": "5.1.0",
+      "conventions": [
+        "langfuse"
+      ],
+      "ingest_time": "2026-01-01T00:00:00.000000000Z",
+      "schema_version": 1
+    }
+  ],
+  "media": [],
+  "rejected_spans": 0
+}
