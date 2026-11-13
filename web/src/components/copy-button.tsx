@@ -2,7 +2,15 @@ import { Check, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 
-export function CopyButton({ value, label }: { value: string; label: string }) {
+export function CopyButton({
+  value,
+  label,
+  onCopied,
+}: {
+  value: string;
+  label: string;
+  onCopied?: () => void;
+}) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -27,6 +35,7 @@ export function CopyButton({ value, label }: { value: string; label: string }) {
         void navigator.clipboard.writeText(value).then(
           () => {
             setCopied(true);
+            onCopied?.();
           },
           () => {
             // The clipboard can reject the write. Leave the icon as it is.
