@@ -17,8 +17,10 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::api::common::{FieldError, Problem, ProblemCode};
+use crate::api::common::{FieldError, Problem, ProblemCode, TextPosition};
 use crate::meta::MetaError;
+use llmobs_storage::RunError;
+use llmobs_storage::error::QueryError;
 
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
 
@@ -84,6 +86,15 @@ pub(crate) enum ApiError {
         /// Seconds until the caller may retry. At least 1 when a limiter builds it.
         retry_after_s: u64,
     },
+    /// The `Range` header does not overlap the blob. `size` is the blob's size.
+    #[error("range not satisfiable")]
+    RangeNotSatisfiable {
+        /// Size of the whole blob, sent in `Content-Range`.
+        size: u64,
+    },
+    /// A2 refused or failed the query (D94). The message goes to the caller and is never logged.
+    #[error("query error")]
+    Query(#[source] RunError),
     /// The server failed. The source is logged; the response detail is generic.
     #[error("internal error")]
     Internal(#[source] Box<dyn StdError + Send + Sync>),
@@ -114,9 +125,59 @@ impl ApiError {
                 Problem::new(ProblemCode::Conflict, Some((*detail).to_owned()))
             }
             Self::RateLimited { .. } => Problem::new(ProblemCode::RateLimited, None),
+            Self::RangeNotSatisfiable { .. } => {
+                Problem::new(ProblemCode::RangeNotSatisfiable, None)
+            }
+            Self::Query(error) => query_problem(error),
             Self::Internal(_) => {
                 Problem::new(ProblemCode::Internal, Some("internal error".to_owned()))
             }
+        }
+    }
+}
+
+fn query_problem(error: &RunError) -> Problem {
+    match error {
+        RunError::Invalid(query) => {
+            let mut problem = Problem::new(
+                ProblemCode::InvalidFilter,
+                Some("invalid filter".to_owned()),
+            );
+            problem.errors.push(FieldError {
+                field: "filter".to_owned(),
+                message: query.message.clone(),
+                position: query.position.map(|position| TextPosition {
+                    line: position.line,
+                    column: position.column,
+                }),
+            });
+            problem
+        }
+        RunError::InvalidRequest(message) => {
+            Problem::new(ProblemCode::BadRequest, Some(message.clone()))
+        }
+        RunError::Failed(message) => Problem::new(ProblemCode::QueryFailed, Some(message.clone())),
+        RunError::Timeout => Problem::new(ProblemCode::QueryTimeout, Some(error.to_string())),
+        RunError::TooLarge => Problem::new(ProblemCode::QueryTooLarge, Some(error.to_string())),
+        RunError::Internal(_) => {
+            Problem::new(ProblemCode::Internal, Some("internal error".to_owned()))
+        }
+    }
+}
+
+impl From<RunError> for ApiError {
+    fn from(error: RunError) -> Self {
+        Self::Query(error)
+    }
+}
+
+impl From<QueryError> for ApiError {
+    fn from(error: QueryError) -> Self {
+        match error {
+            QueryError::Busy => Self::Unavailable {
+                detail: "too many queries are running",
+            },
+            QueryError::DataFusion(error) => Self::Query(RunError::Internal(error)),
         }
     }
 }
@@ -125,6 +186,13 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         if let Self::Internal(source) = &self {
             tracing::error!(error = %source, "internal error");
+        }
+        if let Self::Query(error) = &self {
+            if matches!(error, RunError::Internal(_)) {
+                tracing::error!(kind = error.kind(), "query failed");
+            } else {
+                tracing::info!(kind = error.kind(), "query refused");
+            }
         }
         let mut headers = HeaderMap::new();
         match self {
@@ -137,6 +205,12 @@ impl IntoResponse for ApiError {
             }
             Self::Unavailable { .. } => {
                 headers.insert(axum::http::header::RETRY_AFTER, header_u64(1));
+            }
+            Self::RangeNotSatisfiable { size } => {
+                // `bytes */<size>` is ASCII, so the value is always valid.
+                if let Ok(value) = HeaderValue::from_str(&format!("bytes */{size}")) {
+                    headers.insert(axum::http::header::CONTENT_RANGE, value);
+                }
             }
             _ => {}
         }
@@ -367,3 +441,91 @@ impl std::fmt::Display for UnsupportedPathType {
 }
 
 impl StdError for UnsupportedPathType {}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::StatusCode;
+    use axum::http::header::RETRY_AFTER;
+    use datafusion::error::DataFusionError;
+    use llmobs_storage::{InvalidQuery, Position};
+
+    use super::*;
+
+    #[test]
+    fn invalid_filter_is_400_with_a_position() {
+        let error = ApiError::Query(RunError::Invalid(InvalidQuery {
+            message: "unexpected token".to_owned(),
+            position: Some(Position { line: 2, column: 7 }),
+        }));
+        let problem = error.problem();
+        assert_eq!(problem.status, 400);
+        assert_eq!(problem.code, ProblemCode::InvalidFilter);
+        assert_eq!(problem.detail.as_deref(), Some("invalid filter"));
+        assert_eq!(problem.errors.len(), 1);
+        assert_eq!(problem.errors[0].field, "filter");
+        assert_eq!(problem.errors[0].message, "unexpected token");
+        assert_eq!(
+            problem.errors[0].position,
+            Some(TextPosition { line: 2, column: 7 })
+        );
+    }
+
+    #[test]
+    fn invalid_request_is_bad_request() {
+        let problem =
+            ApiError::Query(RunError::InvalidRequest("from must be before to".into())).problem();
+        assert_eq!(problem.status, 400);
+        assert_eq!(problem.code, ProblemCode::BadRequest);
+        assert_eq!(problem.detail.as_deref(), Some("from must be before to"));
+        assert!(problem.errors.is_empty());
+    }
+
+    #[test]
+    fn failed_query_is_query_failed() {
+        let problem = ApiError::Query(RunError::Failed("division by zero".into())).problem();
+        assert_eq!(problem.status, 400);
+        assert_eq!(problem.code, ProblemCode::QueryFailed);
+        assert_eq!(problem.detail.as_deref(), Some("division by zero"));
+    }
+
+    #[test]
+    fn timeout_is_422_query_timeout() {
+        let problem = ApiError::Query(RunError::Timeout).problem();
+        assert_eq!(problem.status, 422);
+        assert_eq!(problem.code, ProblemCode::QueryTimeout);
+        assert_eq!(
+            problem.detail.as_deref(),
+            Some("the query took longer than its time limit")
+        );
+    }
+
+    #[test]
+    fn too_large_is_422_query_too_large() {
+        let problem = ApiError::Query(RunError::TooLarge).problem();
+        assert_eq!(problem.status, 422);
+        assert_eq!(problem.code, ProblemCode::QueryTooLarge);
+        assert_eq!(
+            problem.detail.as_deref(),
+            Some("the query needed more memory than allowed")
+        );
+    }
+
+    #[test]
+    fn internal_query_error_hides_its_source() {
+        let problem = ApiError::Query(RunError::Internal(DataFusionError::Internal(
+            "secret plan text".into(),
+        )))
+        .problem();
+        assert_eq!(problem.status, 500);
+        assert_eq!(problem.code, ProblemCode::Internal);
+        assert_eq!(problem.detail.as_deref(), Some("internal error"));
+    }
+
+    #[tokio::test]
+    async fn busy_queries_are_503_with_retry_after() {
+        let error = ApiError::from(QueryError::Busy);
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers().get(RETRY_AFTER).unwrap(), "1");
+    }
+}

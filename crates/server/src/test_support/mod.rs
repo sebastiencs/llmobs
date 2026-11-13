@@ -16,12 +16,15 @@ use axum::body::{Body, Bytes};
 use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
 use bytesize::ByteSize;
+use llmobs_core::batch::{scores_to_record_batch, spans_to_record_batch};
 use llmobs_core::ids::{OrgId, ProjectId};
 use llmobs_core::names::PRODUCT;
-use llmobs_storage::Storage;
+use llmobs_core::score::Score;
+use llmobs_core::span::Span;
 use llmobs_storage::config::{
     AnchorConfig, FlushConfig, MemtableConfig, QueryConfig, S3Config, StorageConfig, WalConfig,
 };
+use llmobs_storage::{MediaBlob, Storage};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sqlx::SqliteConnection;
@@ -172,6 +175,7 @@ impl TestApp {
             providers,
             oauth_key: crate::auth::oidc::random_key().expect("oauth key"),
             ingest,
+            metrics_cache: crate::routes::metrics::MetricsCache::default(),
         });
         let router = if let Some(table) = table {
             serve_router(state.clone(), table)
@@ -311,6 +315,101 @@ impl TestApp {
             .await
             .unwrap();
         (project, plaintext)
+    }
+}
+
+/// The example project's fixed id (`fixtures/api/README.md` § Fixed identifiers).
+pub(crate) const EXAMPLE_PROJECT: &str = "01900000-0000-7000-8000-000000000001";
+
+impl TestApp {
+    /// The example user, org and project of `fixtures/api/README.md` § Fixed identifiers, with
+    /// the project's fixed id `01900000-0000-7000-8000-000000000001`. Returns a session cookie
+    /// for `ada@example.com`. Used by `just api-examples` (D-G-25).
+    pub(crate) async fn seed_examples(&self) -> String {
+        let now = self.state.clock.now_ns();
+        let user_id = self
+            .state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    let user = insert_user(
+                        conn,
+                        NewUser {
+                            email: "ada@example.com".to_owned(),
+                            name: Some("Ada Example".to_owned()),
+                            password_hash: None,
+                            email_verified_at: None,
+                            is_instance_admin: true,
+                        },
+                        now,
+                    )
+                    .await?;
+                    let org = insert_org(conn, "Acme", "acme", now).await?;
+                    add_org_member(conn, org.id, user.id, OrgRole::Owner, now).await?;
+                    let project =
+                        insert_project(conn, org.id, "Support bot", "support-bot", Some(30), now)
+                            .await?;
+                    // Nothing references the project yet, so renaming its id is safe.
+                    sqlx::query("UPDATE projects SET id = ? WHERE id = ?")
+                        .bind(EXAMPLE_PROJECT)
+                        .bind(project.id.to_string())
+                        .execute(&mut *conn)
+                        .await
+                        .map_err(MetaError::Db)?;
+                    Ok(user.id)
+                })
+            })
+            .await
+            .unwrap();
+        session_cookie(self, user_id).await
+    }
+}
+
+impl TestApp {
+    /// Appends `fixtures/api/dataset` (spans and scores) to `project` and stores the PNGs of
+    /// `fixtures/api/media`. Every row's `project_id` is set to `project`.
+    pub(crate) async fn load_example_dataset(&self, project: ProjectId) {
+        let dataset = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/api/dataset");
+        let spans_text = std::fs::read_to_string(format!("{dataset}/spans.json")).unwrap();
+        let mut spans: Vec<Span> = serde_json::from_str(&spans_text).unwrap();
+        for span in &mut spans {
+            span.project_id = project;
+        }
+        let batch = spans_to_record_batch(&spans).unwrap();
+        self.state
+            .storage
+            .append_spans(project, batch)
+            .await
+            .unwrap();
+
+        let scores_text = std::fs::read_to_string(format!("{dataset}/scores.json")).unwrap();
+        let mut scores: Vec<Score> = serde_json::from_str(&scores_text).unwrap();
+        for score in &mut scores {
+            score.project_id = project;
+        }
+        let batch = scores_to_record_batch(&scores).unwrap();
+        self.state
+            .storage
+            .append_scores(project, batch)
+            .await
+            .unwrap();
+
+        let media_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/api/media");
+        for entry in std::fs::read_dir(media_dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("png") {
+                continue;
+            }
+            let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap();
+            let sha256: [u8; 32] = hex::decode(stem).unwrap().try_into().unwrap();
+            let bytes = std::fs::read(&path).unwrap();
+            let blob = MediaBlob {
+                sha256,
+                mime_type: "image/png".to_owned(),
+                bytes: Bytes::from(bytes),
+            };
+            self.state.storage.put_media(project, blob).await.unwrap();
+        }
     }
 }
 

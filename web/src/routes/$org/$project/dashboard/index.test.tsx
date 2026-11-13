@@ -49,7 +49,9 @@ it("renders the five KPIs and every chart card", async () => {
     expect(
       screen.getByRole("region", { name: "Traces & errors: 5 traces, 1 error in range" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: /TTFT: no data in range/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "TTFT: p50 600ms, p95 600ms in range" }),
+    ).toBeInTheDocument();
     expect(metrics.urls.some((url) => url.searchParams.get("bucket") === "auto")).toBe(true);
     expect(metrics.urls.some((url) => url.searchParams.has("group_by"))).toBe(false);
   } finally {

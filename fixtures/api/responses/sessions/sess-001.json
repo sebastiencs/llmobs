@@ -7,7 +7,7 @@
     "trace_count": 2,
     "error_count": 0,
     "total_tokens": 4180,
-    "cost_total": 0.005520000000000001,
+    "cost_total": 0.00552,
     "user_id": "user-42",
     "tags": [
       "beta",
@@ -53,7 +53,7 @@
         "output_tokens": 100,
         "cache_read_tokens": 2200,
         "total_tokens": 2600,
-        "cost_total": 0.0030600000000000002,
+        "cost_total": 0.00306,
         "models": [
           "claude-sonnet-4-5"
         ],

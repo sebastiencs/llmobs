@@ -27,7 +27,7 @@ use llmobs_core::schema::{scores, spans, traces};
 use super::{ListScope, present, scoped_traces};
 use crate::filter::{Filter, FilterView};
 use crate::query_error::{RunError, classify};
-use crate::views::{QueryContext, TimeWindow};
+use crate::views::{QueryContext, TimeWindow, exact_cost_sum};
 
 const NS_MINUTE: i64 = 60_000_000_000;
 const NS_HOUR: i64 = 60 * NS_MINUTE;
@@ -492,10 +492,7 @@ async fn eval_cost(
             col(traces::COST_TOTAL),
         ])
         .map_err(classify)?
-        .aggregate(
-            vec![col(BUCKET)],
-            vec![sum(col(traces::COST_TOTAL)).alias(COST)],
-        )
+        .aggregate(vec![col(BUCKET)], vec![exact_cost_sum().alias(COST)])
         .map_err(classify)?
         .collect()
         .await
@@ -741,7 +738,7 @@ async fn llm_rows(
             vec![
                 percentile(DURATION_NS, 0.5).alias(P50),
                 percentile(DURATION_NS, 0.95).alias(P95),
-                sum(col(spans::COST_TOTAL)).alias(COST),
+                exact_cost_sum().alias(COST),
             ],
         )
         .map_err(classify)?
@@ -882,7 +879,7 @@ async fn kpi_range(
                 count(lit(1_i64)).alias(TRACES),
                 sum(errors).alias(ERRORS),
                 percentile(DURATION_NS, 0.95).alias(P95),
-                sum(col(traces::COST_TOTAL)).alias(COST),
+                exact_cost_sum().alias(COST),
                 sum(col(traces::TOTAL_TOKENS)).alias(traces::TOTAL_TOKENS),
             ],
         )
@@ -939,7 +936,7 @@ async fn top_model_rows(
             vec![
                 count(lit(1_i64)).alias(LLM_COUNT),
                 sum(col(spans::TOTAL_TOKENS)).alias(spans::TOTAL_TOKENS),
-                sum(col(spans::COST_TOTAL)).alias(COST),
+                exact_cost_sum().alias(COST),
             ],
         )
         .map_err(classify)?
@@ -1055,7 +1052,7 @@ fn aggregate(frame: DataFrame, grouped: bool) -> Result<DataFrame, RunError> {
                 percentile(DURATION_NS, 0.5).alias(P50),
                 percentile(DURATION_NS, 0.95).alias(P95),
                 percentile(DURATION_NS, 0.99).alias(P99),
-                sum(col(traces::COST_TOTAL)).alias(COST),
+                exact_cost_sum().alias(COST),
             ],
         )
         .map_err(classify)
@@ -2478,7 +2475,16 @@ mod tests {
                 );
             }
         }
-        assert_eq!(data.top_models, usage_rows(&spans));
+        // Costs are summed exactly (D-A2-4); the reference sums floats, so compare them closely.
+        let expected = usage_rows(&spans);
+        assert_eq!(data.top_models.len(), expected.len());
+        for (row, want) in data.top_models.iter().zip(&expected) {
+            assert_eq!(
+                (&row.model, row.llm_count, row.total_tokens),
+                (&want.model, want.llm_count, want.total_tokens)
+            );
+            assert_close(row.cost_total, want.cost_total);
+        }
     }
 
     #[tokio::test]

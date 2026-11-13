@@ -49,7 +49,7 @@
     "query": {},
     "status": 200,
     "content_type": "application/json",
-    "file": "static/metrics.json"
+    "file": "responses/metrics.json"
   },
   {
     "operation_id": "get_org",

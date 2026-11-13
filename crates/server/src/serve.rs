@@ -256,6 +256,7 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         providers,
         oauth_key,
         ingest,
+        metrics_cache: crate::routes::metrics::MetricsCache::default(),
     });
     if let Err(error) = crate::bootstrap::prepare(&state).await {
         release_state(state).await;

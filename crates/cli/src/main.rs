@@ -101,6 +101,8 @@ enum ListFormat {
 
 fn main() {
     let code = match tokio::runtime::Builder::new_multi_thread()
+        // A2 asks for at least 8 MiB per worker: DataFusion plans recursively (A2 plan § Boundaries).
+        .thread_stack_size(8 * 1024 * 1024)
         .enable_all()
         .build()
     {

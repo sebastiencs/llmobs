@@ -10,6 +10,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+arrow.workspace = true
 llmobs-core.workspace = true
 llmobs-otel.workspace = true
 llmobs-storage.workspace = true
@@ -51,7 +52,6 @@ futures.workspace = true
 hex.workspace = true
 
 [dev-dependencies]
-arrow.workspace = true
 datafusion.workspace = true
 tower.workspace = true
 tracing-subscriber.workspace = true

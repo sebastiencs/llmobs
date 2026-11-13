@@ -37,7 +37,7 @@ pub struct MetricsParams {
 /// Width of each metrics bucket.
 ///
 /// Spec 05 § Dashboard metrics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricsBucket {
     /// About 120 buckets across the range.
@@ -75,7 +75,7 @@ pub enum MetricsBucket {
 /// Dimension that splits series which are not already split.
 ///
 /// Spec 05 § Dashboard metrics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricsGroupBy {
     /// Each model named on the trace.

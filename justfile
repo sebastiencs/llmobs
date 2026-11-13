@@ -114,7 +114,7 @@ openapi: js-install
 
 # Regenerate fixtures/api responses and manifest
 api-examples:
-    LLMOBS_API_EXAMPLES_WRITE=1 cargo test -p llmobs-server --test api_examples -- examples_are_up_to_date
+    LLMOBS_API_EXAMPLES_WRITE=1 cargo test -p llmobs-server --lib api_examples::examples_are_up_to_date
 
 # Validate OTLP fixtures
 fixtures-check:

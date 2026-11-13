@@ -206,6 +206,20 @@ const QUERY_OR_BODY: &[&str] = &[
     "get_metrics",
 ];
 
+/// Read operations with a handler (D-G-23): their errors include 422.
+const READ_OPERATIONS: &[&str] = &[
+    "list_traces",
+    "get_trace",
+    "get_span",
+    "list_spans",
+    "list_sessions",
+    "get_session",
+    "list_users",
+    "get_user",
+    "list_scores",
+    "get_metrics",
+];
+
 const TAGS: &[&str] = &[
     "admin",
     "auth",
@@ -387,6 +401,8 @@ fn document_lint() {
             // The handler always answers 204. CSRF is the shared origin check.
         } else if *id == "get_media" {
             expected_errors.extend(["401", "403", "404", "416", "429"]);
+        } else if READ_OPERATIONS.contains(id) {
+            expected_errors.extend(["400", "401", "403", "404", "422", "429"]);
         } else if *id != "get_auth_config" && QUERY_OR_BODY.contains(id) {
             expected_errors.extend(["400", "401", "403", "404", "429"]);
         } else if *id != "get_auth_config" {
