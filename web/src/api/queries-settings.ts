@@ -33,3 +33,15 @@ export function apiKeysKey(org: string, project: string) {
   return $api.queryOptions("get", "/api/v1/projects/{project}/api-keys", apiKeysInit(org, project))
     .queryKey;
 }
+
+export function projectMembersInit(org: string, project: string) {
+  return { params: { path: { project: projectRef(org, project) }, query: { limit: 50 } } };
+}
+
+export function projectMembersKey(org: string, project: string) {
+  return $api.queryOptions(
+    "get",
+    "/api/v1/projects/{project}/members",
+    projectMembersInit(org, project),
+  ).queryKey;
+}
