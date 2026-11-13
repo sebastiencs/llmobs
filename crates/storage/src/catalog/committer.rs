@@ -1281,6 +1281,23 @@ async fn write_extra(connection: &mut SqliteConnection, extra: &Extra) -> Result
             .execute(&mut *connection)
             .await
             .map_err(CommitError::db)?;
+            // An applied deletion keeps none of the ids of the person (spec 03
+            // §7): erase the scope rows of every deletion of the project, as
+            // `mark_applied` does.
+            for delete in [
+                "DELETE FROM deletion_traces
+                 WHERE deletion_id IN (SELECT id FROM deletions WHERE project_id = ?)",
+                "DELETE FROM deletion_users
+                 WHERE deletion_id IN (SELECT id FROM deletions WHERE project_id = ?)",
+                "DELETE FROM deletion_sessions
+                 WHERE deletion_id IN (SELECT id FROM deletions WHERE project_id = ?)",
+            ] {
+                sqlx::query(delete)
+                    .bind(project.to_string())
+                    .execute(&mut *connection)
+                    .await
+                    .map_err(CommitError::db)?;
+            }
             Ok(())
         }
     }

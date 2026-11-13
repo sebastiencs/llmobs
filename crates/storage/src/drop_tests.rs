@@ -122,6 +122,30 @@ async fn file_state(dir: &Path, id: FileId) -> (String, Option<i64>) {
         .unwrap()
 }
 
+/// `(deletion_traces, deletion_users, deletion_sessions)` rows of `id`.
+async fn scope_counts(dir: &Path, id: Uuid) -> (i64, i64, i64) {
+    let mut connection = connect(dir).await;
+    let traces: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM deletion_traces WHERE deletion_id = ?")
+            .bind(id.to_string())
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+    let users: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM deletion_users WHERE deletion_id = ?")
+            .bind(id.to_string())
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+    let sessions: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM deletion_sessions WHERE deletion_id = ?")
+            .bind(id.to_string())
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+    (traces, users, sessions)
+}
+
 /// P and Q, each with one flushed span, one flushed score and one stored
 /// blob: one `spans`, one `traces` and one `scores` file per project after the
 /// shutdown flush and the reopen.
@@ -490,9 +514,9 @@ async fn a_flush_prepared_before_the_drop_conflicts() {
     }
 }
 
-// 6. A pending deletion of P is applied by the drop and its tombstones are
-//    gone; a registration for P afterwards is stored applied and publishes
-//    nothing.
+// 6. A pending deletion of P is applied by the drop, its scope rows are
+//    erased and its tombstones are gone; a registration for P afterwards is
+//    stored applied and publishes nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_pending_deletion_of_a_dropped_project_becomes_applied() {
     let dir = tempfile::tempdir().unwrap();
@@ -509,9 +533,29 @@ async fn a_pending_deletion_of_a_dropped_project_becomes_applied() {
         },
     };
     storage.register_deletion(pending.clone()).await.unwrap();
+    let user = Deletion {
+        id: Uuid::now_v7(),
+        project: project(),
+        cutoff: time + 1,
+        scope: DeletionScope::User {
+            user_id: "user-of-p".to_owned(),
+            trace_ids: vec![span.trace_id],
+            session_ids: vec!["session-of-p".to_owned()],
+        },
+    };
+    storage.register_deletion(user.clone()).await.unwrap();
     assert_eq!(
         storage.deletion_status(pending.id).await.unwrap(),
         DeletionStatus::Pending
+    );
+    assert_eq!(
+        storage.deletion_status(user.id).await.unwrap(),
+        DeletionStatus::Pending
+    );
+    assert_eq!(
+        scope_counts(dir.path(), user.id).await,
+        (1, 1, 1),
+        "the user deletion stored no scope rows"
     );
 
     storage.drop_project(project()).await.unwrap();
@@ -522,6 +566,21 @@ async fn a_pending_deletion_of_a_dropped_project_becomes_applied() {
         ),
         "the pending deletion was not applied by the drop"
     );
+    assert!(
+        matches!(
+            storage.deletion_status(user.id).await.unwrap(),
+            DeletionStatus::Applied { .. }
+        ),
+        "the user deletion was not applied by the drop"
+    );
+    // The drop erases the ids of the person with the data (spec 03 §7).
+    for id in [pending.id, user.id] {
+        assert_eq!(
+            scope_counts(dir.path(), id).await,
+            (0, 0, 0),
+            "the drop kept {id}'s scope rows"
+        );
+    }
     assert!(
         storage
             .published

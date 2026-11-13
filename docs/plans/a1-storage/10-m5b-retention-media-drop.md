@@ -390,7 +390,7 @@ CREATE TABLE projects (
 
 ### Committer
 
-- `Extra::Drop { project, now }`: `INSERT INTO projects (project_id, state, dropped_at) VALUES (?, 'dropping', ?)`; `DELETE FROM retention_watermarks WHERE project_id = ?`; `UPDATE deletions SET status = 'applied', applied_at = ? WHERE project_id = ? AND status = 'pending'`.
+- `Extra::Drop { project, now }`: `INSERT INTO projects (project_id, state, dropped_at) VALUES (?, 'dropping', ?)`; `DELETE FROM retention_watermarks WHERE project_id = ?`; `UPDATE deletions SET status = 'applied', applied_at = ? WHERE project_id = ? AND status = 'pending'`. Then delete the scope rows (`deletion_traces`, `deletion_users`, `deletion_sessions`) of every deletion of the project, as `mark_applied` does.
 - `pub(crate) async fn drop_project<F>(&self, project: ProjectId, now: i64, publish: F) -> Result<bool, CommitError> where F: FnOnce(&Arc<Catalog>, &Arc<Tombstones>)`:
   1. `SELECT 1 FROM projects WHERE project_id = ?`: present → `Ok(false)` (already dropped; no commit, no publish).
   2. `edit` removes every active file of the project in all three tables (from `inner.catalog`).

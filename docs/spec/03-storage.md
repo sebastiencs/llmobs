@@ -406,7 +406,7 @@ Compaction and the rewriter never run on the same file (claims, §4), and a comp
 
 `drop_project(project)` (D-A1-7):
 1. waits for appends in flight, and holds new ones, while it commits;
-2. commits one edit that obsoletes every file of the project in all three tables, records the project as `dropping` in `projects`, removes its retention watermark, and marks its pending deletions applied;
+2. commits one edit that obsoletes every file of the project in all three tables, records the project as `dropping` in `projects`, removes its retention watermark, and marks its pending deletions applied and erases their scope rows;
 3. publishes the read state without the project: its queries return empty tables, and `append_*` for it fail with `ProjectDropped`;
 4. deletes its media objects and `media` rows, then sets the project `dropped`.
 
