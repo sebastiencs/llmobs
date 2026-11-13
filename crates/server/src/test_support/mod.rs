@@ -152,6 +152,9 @@ impl TestApp {
         if let Some(issuer) = google_issuer {
             providers.retarget_google(issuer);
         }
+        let prices = llmobs_otel::PriceTable::new(llmobs_otel::builtin_price_rows())
+            .expect("built-in price table");
+        let ingest = crate::ingest::Ingest::new(&config.ingest, &config.media, prices);
         let state = AppState::new(AppInner {
             config,
             meta,
@@ -167,6 +170,7 @@ impl TestApp {
             mailer,
             providers,
             oauth_key: crate::auth::oidc::random_key().expect("oauth key"),
+            ingest,
         });
         let router = if let Some(table) = table {
             serve_router(state.clone(), table)

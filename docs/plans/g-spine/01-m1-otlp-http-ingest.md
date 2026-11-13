@@ -471,7 +471,6 @@ pub(crate) struct CommitReceipt {
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum IngestError {
     #[error("{0:?}")] Body(BodyError),
-    #[error("media in the request is invalid")] InvalidMedia,
     #[error("too many spans in one request")] TooManySpans,
     #[error("invalid OTLP payload")] Decode(#[source] llmobs_otel::DecodeError),
     #[error("ingest budget is full")] Busy,
@@ -498,7 +497,7 @@ impl From<IngestError> for ApiError { … }
 | `Body(Corrupt)` | `BadRequest { detail: Some("invalid compressed body") }` |
 | `Body(Read)` | `BadRequest { detail: Some("could not read the request body") }` |
 | `Decode(e)` | `BadRequest { detail: Some(e.to_string()) }` (its text has no payload bytes, `crates/otel/src/error.rs`) |
-| `InvalidMedia`, `Media(Invalid { .. })` | `BadRequest { detail: Some("invalid media in the request") }` — an over-long MIME type from the request reaches `put_media` (B1 request in the design) |
+| `Media(Invalid { .. })` | `BadRequest { detail: Some("invalid media in the request") }` — an over-long MIME type from the request reaches `put_media` (B1 request in the design) |
 | `Busy`, `Append(Backpressure)` | `Unavailable { detail: "server is busy, retry later" }` |
 | `Append(WalFailed)` | `Unavailable { detail: "storage is unavailable" }` |
 | `Append(ShuttingDown)` | `Unavailable { detail: "server is shutting down" }` |

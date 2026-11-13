@@ -59,6 +59,8 @@ pub(crate) struct AppInner {
     pub(crate) providers: crate::auth::oidc::Providers,
     /// HMAC key for the OAuth state cookie. A new process mints a new key.
     pub(crate) oauth_key: [u8; 32],
+    /// OTLP ingest core: budget, prices, `accept` and `commit` (D-G-1).
+    pub(crate) ingest: crate::ingest::Ingest,
 }
 
 impl AppState {

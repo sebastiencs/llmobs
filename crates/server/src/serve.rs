@@ -15,6 +15,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use llmobs_otel::{PriceError, PriceTable, builtin_price_rows};
 use llmobs_storage::Storage;
 use llmobs_storage::error::OpenError;
 use tokio::net::TcpListener;
@@ -25,6 +26,7 @@ use crate::auth::Limits;
 use crate::clock::Clock;
 use crate::config::{ConfigError, ServerConfig};
 use crate::http::{AppInner, AppState, router};
+use crate::ingest::Ingest;
 use crate::meta::{MetaDb, MetaError};
 
 /// How long in-flight HTTP may finish after stop-accepting (spec 12).
@@ -66,6 +68,9 @@ pub enum ServeError {
     /// Creating `data_dir`, or the accept loop, failed.
     #[error(transparent)]
     Serve(io::Error),
+    /// The built-in price table did not compile. A build defect, not a config value.
+    #[error("built-in price table")]
+    Prices(#[source] PriceError),
     /// Headless init failed a check. The reason names the rule or the variable,
     /// not the password, the key, or the email.
     #[error("init failed: {reason}")]
@@ -173,6 +178,15 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
             return Err(error.into());
         }
     };
+    let prices = match PriceTable::new(builtin_price_rows()) {
+        Ok(prices) => prices,
+        Err(error) => {
+            release_storage(storage).await;
+            meta.close().await;
+            return Err(ServeError::Prices(error));
+        }
+    };
+    let ingest = Ingest::new(&config.ingest, &config.media, prices);
     let mailer = match crate::email::Mailer::from_config(&config) {
         Ok(mailer) => mailer.map(Arc::new),
         Err(_error) => {
@@ -233,6 +247,7 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         mailer,
         providers,
         oauth_key,
+        ingest,
     });
     if let Err(error) = crate::bootstrap::prepare(&state).await {
         release_state(state).await;
