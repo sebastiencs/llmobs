@@ -4,7 +4,10 @@
 //! - table functions (`generate_series`, `range`): callers must not invent rows;
 //! - higher-order (lambda) functions: not part of the filter or SQL surface;
 //! - file formats and table factories: no `read_parquet` or URL tables;
-//! - `with_default_features()`: it registers the table functions above.
+//! - `with_default_features()`: it registers the table functions above;
+//! - the scalar functions in `guard::DENIED_FUNCTIONS`; every other scalar
+//!   function except `get_field` is wrapped so it reserves what it reads in the
+//!   memory pool (D-A2-2).
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -15,6 +18,7 @@ use datafusion::execution::{SessionState, SessionStateBuilder, SessionStateDefau
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::prelude::SessionConfig;
 
+use super::guard::guarded_functions;
 use super::hex::HexIdRule;
 
 /// Parser recursion limit. A left-deep operator chain is bounded separately (D95).
@@ -30,6 +34,7 @@ pub(crate) fn session_state(
     target_partitions: NonZeroUsize,
     rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
 ) -> SessionState {
+    let pool = Arc::clone(&runtime.memory_pool);
     let mut config = SessionConfig::new()
         .with_target_partitions(target_partitions.get())
         .with_batch_size(8192)
@@ -47,7 +52,7 @@ pub(crate) fn session_state(
     let mut builder = SessionStateBuilder::new()
         .with_config(config)
         .with_runtime_env(runtime)
-        .with_scalar_functions(SessionStateDefaults::default_scalar_functions())
+        .with_scalar_functions(guarded_functions(&pool))
         .with_aggregate_functions(SessionStateDefaults::default_aggregate_functions())
         .with_window_functions(SessionStateDefaults::default_window_functions())
         .with_expr_planners(SessionStateDefaults::default_expr_planners())
