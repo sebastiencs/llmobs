@@ -230,7 +230,7 @@ async fn login(
         .map_err(|retry| ApiError::RateLimited {
             retry_after_s: retry.0.as_secs().max(1),
         })?;
-    if domain_listed(&state.config.auth.enforce_sso_domains, &email) {
+    if crate::ee::sso_enforcement::requires_sso(&state, &email) {
         return Err(ApiError::Forbidden {
             code: ProblemCode::SsoRequired,
         });
@@ -522,7 +522,7 @@ async fn pending_signup_invite(
     if invite.email != email {
         return Err(field_error("email", "does not match the invitation"));
     }
-    if domain_listed(&state.config.auth.enforce_sso_domains, email) {
+    if crate::ee::sso_enforcement::requires_sso(state, email) {
         return Err(ApiError::Forbidden {
             code: ProblemCode::SsoRequired,
         });
@@ -565,7 +565,7 @@ async fn signup(
                 code: ProblemCode::Forbidden,
             });
         }
-        if domain_listed(&state.config.auth.enforce_sso_domains, &email) {
+        if crate::ee::sso_enforcement::requires_sso(&state, &email) {
             return Err(ApiError::Forbidden {
                 code: ProblemCode::SsoRequired,
             });
@@ -721,7 +721,7 @@ fn json_cookie(
     response
 }
 
-fn domain_listed(domains: &[String], email: &str) -> bool {
+pub(crate) fn domain_listed(domains: &[String], email: &str) -> bool {
     let Some(domain) = email.split_once('@').map(|(_, domain)| domain) else {
         return false;
     };
@@ -798,10 +798,13 @@ mod tests {
     use crate::api::account::{AuthProvider, OrgRole, SignupPolicy};
     use crate::api::common::ProblemCode;
     use crate::auth::secret::hash_token;
+    use crate::config::Secret;
     use crate::meta::members::org_role;
     use crate::meta::projects::project_by_slugs;
     use crate::meta::users::{count_users, user_by_email};
-    use crate::test_support::{TestApp, TestResponse, assert_logs_clean, capture_logs};
+    use crate::test_support::{
+        TestApp, TestResponse, assert_logs_clean, capture_logs, license_key,
+    };
 
     const PASSWORD: &str = "llmobs-ok1";
 
@@ -1248,6 +1251,7 @@ mod tests {
     async fn an_sso_domain_refuses_known_and_unknown_accounts() {
         let app = TestApp::with_config(|config| {
             config.auth.enforce_sso_domains = vec!["example.com".to_owned()];
+            config.license_key = Some(Secret::new(license_key(&["sso_enforcement"])));
         })
         .await;
         insert_account(&app, "ada@example.com", Some(PASSWORD), true).await;
@@ -1428,6 +1432,7 @@ mod tests {
             config.auth.signup = SignupPolicy::Open;
             config.auth.signup_domains = vec!["example.com".to_owned(), "sso.example".to_owned()];
             config.auth.enforce_sso_domains = vec!["sso.example".to_owned()];
+            config.license_key = Some(Secret::new(license_key(&["sso_enforcement"])));
         })
         .await;
         let outside = open
@@ -1763,6 +1768,7 @@ mod tests {
         let app = TestApp::with_config(|config| {
             config.auth.signup_domains = vec!["example.com".to_owned()];
             config.auth.enforce_sso_domains = vec!["sso.example".to_owned()];
+            config.license_key = Some(Secret::new(license_key(&["sso_enforcement"])));
         })
         .await;
         let (cookie, slug) = invite_owner(&app).await;
@@ -2214,7 +2220,7 @@ mod tests {
 
     #[tokio::test]
     async fn config_lists_providers_in_order() {
-        let secret = |value: &str| -> crate::config::Secret<String> {
+        let secret = |value: &str| -> Secret<String> {
             serde_json::from_str(&format!("\"{value}\"")).expect("secret")
         };
         let app = TestApp::with_config(|config| {

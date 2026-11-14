@@ -80,7 +80,7 @@ jobs:
       - uses: ./.github/actions/rust # zizmor: ignore[self-repository] actionlint 1.7.12 rejects the $/ form
         with:
           cache: "false"
-      - run: just deny
+      - run: just deny check-ee
       - run: just assert-clean
 
   web:

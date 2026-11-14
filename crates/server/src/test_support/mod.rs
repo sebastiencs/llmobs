@@ -42,8 +42,8 @@ use crate::auth::secret::{self, KeyKind, NewKey};
 use crate::auth::session::start_session;
 use crate::clock::Clock;
 use crate::config::{
-    AuthSettings, EvalConfig, IngestConfig, InitConfig, LogConfig, MediaConfig, PublicUrl,
-    SecurityConfig, ServerConfig,
+    AuthSettings, EntitlementsConfig, EvalConfig, IngestConfig, InitConfig, LogConfig, MediaConfig,
+    PublicUrl, SecurityConfig, ServerConfig,
 };
 use crate::http::access::RouteDef;
 use crate::http::{AppInner, AppState, router, router_with, serve_router};
@@ -60,6 +60,55 @@ const MANUAL_NOW_NS: i64 = 1_767_225_600_000_000_000;
 
 /// The key every test `SecretBox` is built from (D-I-2).
 pub(crate) const TEST_KEY: [u8; 32] = [7; 32];
+
+/// The development signing seed (`fixtures/license/dev-1.key`, D-P-6).
+const DEV_SEED: &str = include_str!("../../../../fixtures/license/dev-1.key");
+
+/// Signs `payload` as a `dev-1` token (D-P-5). Debug builds trust it.
+pub(crate) fn sign_token(payload: &serde_json::Value) -> String {
+    sign_raw(&serde_json::to_vec(payload).expect("payload serializes"))
+}
+
+/// Signs the bytes `payload` as a `dev-1` token, whatever they are (not necessarily JSON).
+pub(crate) fn sign_raw(payload: &[u8]) -> String {
+    use base64::Engine;
+    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+    use ed25519_dalek::Signer;
+
+    let seed: [u8; 32] = STANDARD
+        .decode(DEV_SEED.trim())
+        .expect("dev seed is base64")
+        .try_into()
+        .expect("dev seed is 32 bytes");
+    let key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let body = URL_SAFE_NO_PAD.encode(payload);
+    let signed = format!("{}.dev-1.{body}", crate::ee::token::TOKEN_TAG);
+    let signature = URL_SAFE_NO_PAD.encode(key.sign(signed.as_bytes()).to_bytes());
+    format!("{signed}.{signature}")
+}
+
+/// A `dev-1` licence listing `features`, issued 2025-01-01, active until 2099-01-01.
+pub(crate) fn license_key(features: &[&str]) -> String {
+    license_key_until(features, "2099-01-01T00:00:00Z", "2099-01-01T00:00:00Z")
+}
+
+/// A `dev-1` licence listing `features` with the given RFC 3339 `expires_at` and
+/// `grace_ends_at`. The manual clock is `2026-01-01T00:00:00Z`.
+pub(crate) fn license_key_until(
+    features: &[&str],
+    expires_at: &str,
+    grace_ends_at: &str,
+) -> String {
+    sign_token(&serde_json::json!({
+        "kind": "license",
+        "id": "01900000-0000-7000-8000-000000000510",
+        "issued_at": "2025-01-01T00:00:00Z",
+        "customer": "Test Customer",
+        "features": features,
+        "expires_at": expires_at,
+        "grace_ends_at": grace_ends_at,
+    }))
+}
 
 /// One process's data directory and router.
 pub(crate) struct TestApp {
@@ -127,6 +176,15 @@ impl TestApp {
     /// [`Self::with_config`] with the stub mailer.
     pub(crate) async fn with_mailer_config(tweak: impl FnOnce(&mut ServerConfig)) -> Self {
         Self::open(tweak, None, None, true, None, None).await
+    }
+
+    /// An app whose licence lists `features`.
+    pub(crate) async fn with_license(features: &[&str]) -> Self {
+        let key = license_key(features);
+        Self::with_config(move |config| {
+            config.license_key = Some(crate::config::Secret::new(key));
+        })
+        .await
     }
 
     /// [`Self::with_config`] with GitHub's endpoints pointed at `base`.
@@ -200,6 +258,9 @@ impl TestApp {
         let prices = llmobs_otel::PriceTable::new(llmobs_otel::builtin_price_rows())
             .expect("built-in price table");
         let ingest = crate::ingest::Ingest::new(&config.ingest, &config.media, prices);
+        let license = crate::ee::license::LicenseState::from_key(
+            config.license_key.as_ref().map(|key| key.expose().as_str()),
+        );
         let state = AppState::new(AppInner {
             config,
             meta,
@@ -222,6 +283,7 @@ impl TestApp {
             secrets,
             eval_runner,
             connections: crate::eval::connection::ConnectionCache::default(),
+            entitlements: crate::entitlements::EntitlementsState::new(license),
         });
         let router = if let Some(table) = table {
             serve_router(state.clone(), table)
@@ -654,7 +716,9 @@ fn default_config(data_dir: &std::path::Path) -> ServerConfig {
         media: MediaConfig::default(),
         eval: EvalConfig::default(),
         security: SecurityConfig::default(),
+        entitlements: EntitlementsConfig::default(),
         encryption_key: None,
+        license_key: None,
         auth: AuthSettings::default(),
         smtp_url: None,
         email_from: None,

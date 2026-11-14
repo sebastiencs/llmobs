@@ -12,12 +12,13 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::admin::{
-    AdminResetLink, AdminSettings, AdminUser, CreateAdminUserRequest, CreatedAdminUser,
-    UpdateAdminUserRequest,
+    AdminLicense, AdminResetLink, AdminSettings, AdminUser, CreateAdminUserRequest,
+    CreatedAdminUser, LicenseStatus, UpdateAdminUserRequest,
 };
 use crate::api::common::{FieldError, Page, PageParams, Problem, ProblemCode};
 use crate::auth::principal::{self, Principal};
 use crate::auth::reset::{self, ResetError};
+use crate::ee::license::LicenseState;
 use crate::email::Email;
 use crate::http::AppState;
 use crate::http::access::{Access, RouteDef};
@@ -65,6 +66,13 @@ pub(crate) fn routes() -> Vec<RouteDef> {
             access: Access::InstanceAdmin,
             documented: true,
             handler: get(get_settings),
+        },
+        RouteDef {
+            method: axum::http::Method::GET,
+            path: "/api/v1/admin/license",
+            access: Access::InstanceAdmin,
+            documented: true,
+            handler: get(get_license),
         },
         RouteDef {
             method: axum::http::Method::POST,
@@ -267,6 +275,7 @@ async fn get_settings(
         password_enabled: !auth.disable_password,
         email_verification_required: auth.require_email_verification,
         enforce_sso_domains: auth.enforce_sso_domains.clone(),
+        enforce_sso_applied: crate::ee::sso_enforcement::applies(&state),
         smtp_enabled: state.mailer.is_some(),
         email_from: state.config.email_from.clone(),
         providers: state.providers.list(),
@@ -276,6 +285,43 @@ async fn get_settings(
             .iter()
             .map(ToString::to_string)
             .collect(),
+    })
+}
+
+async fn get_license(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> error::Json<AdminLicense> {
+    let license = state.entitlements.license();
+    let status = match license.status(state.clock.now_ns()) {
+        crate::ee::license::LicenseStatus::Absent => LicenseStatus::None,
+        crate::ee::license::LicenseStatus::Invalid => LicenseStatus::Invalid,
+        crate::ee::license::LicenseStatus::Active => LicenseStatus::Active,
+        crate::ee::license::LicenseStatus::Grace => LicenseStatus::Grace,
+        crate::ee::license::LicenseStatus::Expired => LicenseStatus::Expired,
+    };
+    let none = AdminLicense {
+        status,
+        reason: None,
+        id: None,
+        customer: None,
+        features: Vec::new(),
+        expires_at: None,
+        grace_ends_at: None,
+    };
+    error::Json(match license {
+        LicenseState::Absent => none,
+        LicenseState::Invalid(reason) => AdminLicense {
+            reason: Some(reason.to_string()),
+            ..none
+        },
+        LicenseState::Valid(valid) => AdminLicense {
+            id: Some(valid.id),
+            customer: Some(valid.customer.clone()),
+            features: valid.features.to_vec(),
+            expires_at: Some(valid.expires_at),
+            grace_ends_at: Some(valid.grace_ends_at),
+            ..none
+        },
     })
 }
 
@@ -385,17 +431,27 @@ mod tests {
     use axum::http::{Method, header};
 
     use crate::api::account::SetupResponse;
+    use serde_json::json;
+
     use crate::api::admin::{AdminSettings, CreatedAdminUser};
     use crate::api::common::{Page, Problem};
     use crate::bootstrap;
     use crate::config::{Secret, SmtpUrl, Tls};
-    use crate::test_support::{TestApp, TestResponse, assert_logs_clean, capture_logs};
+    use crate::test_support::{
+        TestApp, TestResponse, assert_logs_clean, capture_logs, license_key, license_key_until,
+    };
 
     const PASSWORD: &str = "llmobs-ok1";
     const REPLACEMENT: &str = "llmobs-ok2";
 
     async fn admin() -> (TestApp, String, SetupResponse) {
-        let app = TestApp::new().await;
+        admin_with(|_| {}).await
+    }
+
+    async fn admin_with(
+        tweak: impl FnOnce(&mut crate::config::ServerConfig),
+    ) -> (TestApp, String, SetupResponse) {
+        let app = TestApp::with_config(tweak).await;
         bootstrap::prepare(&app.state).await.unwrap();
         let token = app.state.setup.token().unwrap().expect("setup token");
         let created = app
@@ -888,6 +944,118 @@ mod tests {
         assert_eq!(
             missing.problem().detail.as_deref(),
             Some("email is not configured")
+        );
+    }
+
+    async fn license(app: &TestApp, cookie: &str) -> serde_json::Value {
+        let response = app
+            .request(Method::GET, "/api/v1/admin/license")
+            .header("cookie", cookie)
+            .send()
+            .await;
+        assert_eq!(response.status, 200);
+        response.json()
+    }
+
+    #[tokio::test]
+    async fn license_needs_an_instance_admin() {
+        let (app, cookie, _) = admin().await;
+        let anonymous = app
+            .request(Method::GET, "/api/v1/admin/license")
+            .send()
+            .await;
+        assert_eq!(anonymous.status, 401);
+
+        let created = create_account(&app, &cookie, "bob@example.com", false).await;
+        set_password(&app, &created.reset_url, REPLACEMENT).await;
+        let bob = login(&app, "bob@example.com", REPLACEMENT).await;
+        let denied = app
+            .request(Method::GET, "/api/v1/admin/license")
+            .header("cookie", &session_cookie(&bob))
+            .send()
+            .await;
+        assert_eq!(denied.status, 403);
+    }
+
+    #[tokio::test]
+    async fn license_none_without_a_key() {
+        let (app, cookie, _) = admin().await;
+        assert_eq!(
+            license(&app, &cookie).await,
+            json!({ "status": "none", "features": [] })
+        );
+    }
+
+    #[tokio::test]
+    async fn license_active_lists_the_claims() {
+        let key = license_key(&["project_roles"]);
+        let (app, cookie, _) = admin_with(move |config| {
+            config.license_key = Some(Secret::new(key));
+        })
+        .await;
+        assert_eq!(
+            license(&app, &cookie).await,
+            json!({
+                "status": "active",
+                "id": "01900000-0000-7000-8000-000000000510",
+                "customer": "Test Customer",
+                "features": ["project_roles"],
+                "expires_at": "2099-01-01T00:00:00.000000000Z",
+                "grace_ends_at": "2099-01-01T00:00:00.000000000Z",
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn license_grace_and_expired_keep_the_listed_features() {
+        let grace = license_key_until(
+            &["project_roles"],
+            "2025-12-01T00:00:00Z",
+            "2026-02-01T00:00:00Z",
+        );
+        let (app, cookie, _) = admin_with(move |config| {
+            config.license_key = Some(Secret::new(grace));
+        })
+        .await;
+        let body = license(&app, &cookie).await;
+        assert_eq!(body["status"], "grace");
+        assert_eq!(body["features"], json!(["project_roles"]));
+
+        let expired = license_key_until(
+            &["project_roles"],
+            "2025-11-01T00:00:00Z",
+            "2025-12-01T00:00:00Z",
+        );
+        let (app, cookie, _) = admin_with(move |config| {
+            config.license_key = Some(Secret::new(expired));
+        })
+        .await;
+        let body = license(&app, &cookie).await;
+        assert_eq!(body["status"], "expired");
+        assert_eq!(body["features"], json!(["project_roles"]));
+    }
+
+    #[tokio::test]
+    async fn license_invalid_never_echoes_the_key() {
+        let (app, cookie, _) = admin_with(|config| {
+            config.license_key = Some(Secret::new("garbage".to_owned()));
+        })
+        .await;
+        let response = app
+            .request(Method::GET, "/api/v1/admin/license")
+            .header("cookie", &cookie)
+            .send()
+            .await;
+        assert_eq!(response.status, 200);
+        let text = String::from_utf8_lossy(&response.body).into_owned();
+        assert!(!text.contains("garbage"), "{text}");
+        assert_eq!(
+            response.json::<serde_json::Value>(),
+            json!({
+                "status": "invalid",
+                "reason": "the token is malformed",
+                "features": [],
+            })
         );
     }
 }

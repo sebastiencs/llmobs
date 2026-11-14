@@ -30,8 +30,8 @@ use super::account::{
     UpdateMeRequest, UpdateOrgRequest, UpdateProjectRequest, User, VerifyEmailRequest,
 };
 use super::admin::{
-    AdminResetLink, AdminSettings, AdminUser, CreateAdminUserRequest, CreatedAdminUser,
-    UpdateAdminUserRequest,
+    AdminLicense, AdminResetLink, AdminSettings, AdminUser, CreateAdminUserRequest,
+    CreatedAdminUser, UpdateAdminUserRequest,
 };
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
 use super::connections::{
@@ -39,6 +39,7 @@ use super::connections::{
     LlmConnectionTestError, LlmConnectionTestResult, StructuredOutputMode, TestErrorClass,
     TestLlmConnectionRequest, UpdateLlmConnectionRequest,
 };
+use super::entitlements::{Feature, OrgEntitlements};
 use super::invites::{CreateInviteRequest, CreatedInvite, Invite, InvitePreview};
 use super::keys::{
     ApiKey as ProjectApiKey, CreateApiKeyRequest, CreatePersonalTokenRequest, CreatedApiKey,
@@ -126,6 +127,9 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<UpdateAdminUserRequest>();
     set.insert::<AdminResetLink>();
     set.insert::<AdminSettings>();
+    set.insert::<AdminLicense>();
+    set.insert::<OrgEntitlements>();
+    set.insert::<Feature>();
     set.insert::<OrgMembership>();
     set.insert::<CreateOrgRequest>();
     set.insert::<UpdateOrgRequest>();
@@ -607,6 +611,14 @@ fn admin_paths(paths: PathsBuilder) -> PathsBuilder {
             &[401, 403, 429],
         ))
         .build();
+    let license = operation("get_admin_license", "admin", "Read the instance licence")
+        .securities(session.clone())
+        .responses(responses(
+            "200",
+            json_of::<AdminLicense>("The licence status. The key itself is never returned."),
+            &[401, 403, 429],
+        ))
+        .build();
     let test_email = operation(
         "post_admin_settings_test_email",
         "admin",
@@ -636,6 +648,10 @@ fn admin_paths(paths: PathsBuilder) -> PathsBuilder {
         .path(
             "/api/v1/admin/settings",
             PathItem::new(HttpMethod::Get, settings),
+        )
+        .path(
+            "/api/v1/admin/license",
+            PathItem::new(HttpMethod::Get, license),
         )
         .path(
             "/api/v1/admin/settings/test-email",
@@ -1035,6 +1051,21 @@ fn project_paths(paths: PathsBuilder) -> PathsBuilder {
         .build();
     let mut orgs = PathItem::new(HttpMethod::Get, list_orgs);
     orgs.post = Some(post_org);
+    let get_entitlements = operation(
+        "get_org_entitlements",
+        "orgs",
+        "Read the org's entitlements",
+    )
+    .description(Some(
+        "Features the org may use now and where Upgrade buttons go (D179). Any org member.",
+    ))
+    .parameters(Some(vec![path_string("org", "Org UUID or slug.")]))
+    .responses(responses(
+        "200",
+        json_of::<OrgEntitlements>("The org's entitlements."),
+        AUTH_ERRORS,
+    ))
+    .build();
     let mut org = PathItem::new(HttpMethod::Get, get_org);
     org.patch = Some(patch_org);
     let mut projects = PathItem::new(HttpMethod::Get, list);
@@ -1044,6 +1075,10 @@ fn project_paths(paths: PathsBuilder) -> PathsBuilder {
     paths
         .path("/api/v1/orgs", orgs)
         .path("/api/v1/orgs/{org}", org)
+        .path(
+            "/api/v1/orgs/{org}/entitlements",
+            PathItem::new(HttpMethod::Get, get_entitlements),
+        )
         .path("/api/v1/orgs/{org}/projects", projects)
         .path("/api/v1/projects/{project}", project)
 }
@@ -1969,7 +2004,9 @@ fn problem(code: u16) -> Response {
     let description = match code {
         400 => "The request is malformed or a filter is invalid.",
         401 => "No credentials, or the credentials are invalid.",
-        403 => "The credentials do not allow this operation.",
+        403 => {
+            "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required)."
+        }
         404 => "The resource does not exist.",
         409 => "The request conflicts with the current state.",
         413 => "The request body is larger than the limit.",

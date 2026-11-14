@@ -375,6 +375,13 @@ async fn generate() -> (BTreeMap<String, String>, Vec<Example>) {
             "application/json",
         ),
         example(
+            "get_admin_license",
+            BTreeMap::new(),
+            BTreeMap::new(),
+            "static/admin-license.json",
+            "application/json",
+        ),
+        example(
             "get_auth_config",
             BTreeMap::new(),
             BTreeMap::new(),
@@ -409,6 +416,13 @@ async fn generate() -> (BTreeMap<String, String>, Vec<Example>) {
             params(&[("org", "acme")]),
             BTreeMap::new(),
             "static/org.json",
+            "application/json",
+        ),
+        example(
+            "get_org_entitlements",
+            params(&[("org", "acme")]),
+            BTreeMap::new(),
+            "static/org-entitlements.json",
             "application/json",
         ),
         example(
