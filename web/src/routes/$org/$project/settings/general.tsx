@@ -1,10 +1,11 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 import { $api } from "@/api/client";
 import { fieldErrors, problemMessage, problemOf } from "@/api/problem";
-import { projectListOptions, projectQuery } from "@/api/queries";
+import { meQuery, projectListOptions, projectQuery } from "@/api/queries";
 import type { Schema } from "@/api/types";
+import { DangerZone } from "@/components/deletions/danger-zone";
 import { DisabledReason } from "@/components/disabled-reason";
 import { FormError } from "@/components/form/form-error";
 import { FormSuccess } from "@/components/form/form-success";
@@ -12,6 +13,7 @@ import { SubmitButton } from "@/components/form/submit-button";
 import { TextField } from "@/components/form/text-field";
 import { SettingsPage } from "@/components/settings/settings-page";
 import { useProject } from "@/components/shell/project-context";
+import { TypeToConfirmDialog } from "@/components/type-to-confirm-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { atLeast } from "@/lib/roles";
@@ -42,6 +44,13 @@ function ProjectGeneralPage() {
   const [saved, setSaved] = useState(false);
   const mutation = $api.useMutation("patch", "/api/v1/projects/{project}");
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const me = useQuery(meQuery);
+  // Deleting a project is an org action (spec 08): a project-admin override is not enough.
+  const orgRole = me.data?.orgs.find((entry) => entry.slug === org)?.role;
+  const canDelete = atLeast(orgRole, "admin");
+  const [dropOpen, setDropOpen] = useState(false);
+  const dropMutation = $api.useMutation("delete", "/api/v1/projects/{project}");
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -85,6 +94,10 @@ function ProjectGeneralPage() {
           if (fields.name !== undefined || fields.retention_days !== undefined) {
             return;
           }
+          if (problemOf(caught)?.code === "plan_required") {
+            setError("Data retention management is part of the Pro plan.");
+            return;
+          }
           if (problemOf(caught)?.status === 403) {
             setError("Only project admins can change these settings.");
             return;
@@ -94,6 +107,28 @@ function ProjectGeneralPage() {
       },
     );
   }
+
+  function confirmDrop() {
+    dropMutation.mutate(
+      { params: { path: { project: ref }, query: { confirm: data.slug } } },
+      {
+        onSuccess: async () => {
+          setDropOpen(false);
+          await navigate({ to: "/$org", params: { org } });
+          // The project layout holds a suspense query on this key, and the 30 s stale time keeps
+          // the entry, so it is removed rather than invalidated.
+          queryClient.removeQueries({ queryKey: projectQuery(org, project).queryKey });
+          void queryClient.invalidateQueries({ queryKey: projectListOptions(org).queryKey });
+        },
+      },
+    );
+  }
+
+  const dropError = dropMutation.error
+    ? problemOf(dropMutation.error)?.status === 403
+      ? "Only organization admins and owners can delete projects."
+      : problemMessage(dropMutation.error, "Could not delete the project.")
+    : undefined;
 
   return (
     <SettingsPage title="General" description="Name, URL and data retention of this project.">
@@ -157,6 +192,31 @@ function ProjectGeneralPage() {
           </SubmitButton>
         </DisabledReason>
       </form>
+      <DangerZone
+        title="Delete project"
+        description="Deletes every trace, span, score, media file and setting of this project. Data is erased within 24 hours. This cannot be undone."
+        buttonLabel="Delete project…"
+        disabledReason={
+          canDelete ? undefined : "Only organization admins and owners can delete projects"
+        }
+        onOpen={() => {
+          dropMutation.reset();
+          setDropOpen(true);
+        }}
+      >
+        <TypeToConfirmDialog
+          open={dropOpen}
+          onOpenChange={setDropOpen}
+          title={`Delete project ${data.name}?`}
+          description="Deletes every trace, span, score, media file and setting of this project. Data is erased within 24 hours. This cannot be undone."
+          expected={data.slug}
+          inputLabel={`Type the project slug "${data.slug}" to confirm`}
+          confirmLabel="Delete project"
+          pending={dropMutation.isPending}
+          error={dropError}
+          onConfirm={confirmDrop}
+        />
+      </DangerZone>
     </SettingsPage>
   );
 }

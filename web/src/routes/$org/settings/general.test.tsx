@@ -5,6 +5,7 @@ import { server } from "@/mocks/node";
 import { ORG_ID } from "@/test/fixtures";
 import { problemResponse } from "@/test/problem";
 import { renderApp } from "@/test/render";
+import deletionOrgFixture from "../../../../../fixtures/api/static/deletion-org.json";
 import meFixture from "../../../../../fixtures/api/static/me.json";
 
 const orgNav = () => within(screen.getByRole("list", { name: "Organization settings" }));
@@ -84,6 +85,65 @@ it("disables renaming for a member", async () => {
   expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "Save" }).parentElement).toHaveAccessibleDescription(
     "Only admins and owners can rename the organization",
+  );
+});
+
+it("deletes the organization once its slug is typed, then returns to the home page", async () => {
+  let path = "";
+  let confirm: string | null = null;
+  let deleted = false;
+  server.use(
+    http.delete("/api/v1/orgs/:org", ({ request }) => {
+      const url = new URL(request.url);
+      path = url.pathname;
+      confirm = url.searchParams.get("confirm");
+      deleted = true;
+      return HttpResponse.json(deletionOrgFixture, { status: 202 });
+    }),
+    http.get("/api/auth/me", () =>
+      HttpResponse.json(deleted ? { user: meFixture.user, orgs: [] } : meFixture),
+    ),
+  );
+
+  const { router, user } = await renderApp("/acme/settings/general");
+  await user.click(await screen.findByRole("button", { name: "Delete organization…" }));
+
+  const dialog = await screen.findByRole("alertdialog");
+  const confirmButton = within(dialog).getByRole("button", { name: "Delete organization" });
+  expect(confirmButton).toBeDisabled();
+  await user.type(
+    within(dialog).getByLabelText('Type the organization slug "acme" to confirm'),
+    "acme",
+  );
+  await user.click(confirmButton);
+
+  expect(
+    await screen.findByText("You are not a member of any organization yet."),
+  ).toBeInTheDocument();
+  expect(router.state.location.pathname).toBe("/");
+  expect(path).toBe("/api/v1/orgs/acme");
+  expect(confirm).toBe("acme");
+});
+
+it("disables organization deletion for an admin", async () => {
+  server.use(
+    http.get("/api/auth/me", () =>
+      HttpResponse.json({
+        user: meFixture.user,
+        orgs: [{ id: ORG_ID, slug: "acme", name: "Acme", role: "admin" }],
+      }),
+    ),
+    http.get("/api/v1/orgs/:org", () =>
+      HttpResponse.json({ id: ORG_ID, slug: "acme", name: "Acme", role: "admin" }),
+    ),
+  );
+
+  await renderApp("/acme/settings/general");
+
+  const button = await screen.findByRole("button", { name: "Delete organization…" });
+  expect(button).toBeDisabled();
+  expect(button.parentElement).toHaveAccessibleDescription(
+    "Only owners can delete the organization",
   );
 });
 
