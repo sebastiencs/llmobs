@@ -346,7 +346,6 @@ async fn webhook_resolves_a_span_and_posts_it() {
             url: url.to_string(),
             timeout_ms: 10_000,
             headers: BTreeMap::new(),
-            secret_enc: None,
         }),
         ScoreDataType::Boolean,
     );
@@ -403,7 +402,6 @@ async fn a_webhook_without_a_secret_is_permanent() {
             url: "https://hooks.example/hook".to_owned(),
             timeout_ms: 10_000,
             headers: BTreeMap::new(),
-            secret_enc: None,
         }),
         ScoreDataType::Boolean,
     );

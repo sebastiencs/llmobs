@@ -536,7 +536,7 @@ impl Check {
 /// the same document. Judge and check configs reject unknown fields.
 ///
 /// [`Debug`](fmt::Debug) prints the URL host and the header names. The URL path
-/// and query, the header values, and `secret_enc` are omitted.
+/// and query and the header values are omitted.
 #[derive(Clone, PartialEq, Eq, Deserialize, serde::Serialize)]
 pub struct WebhookConfig {
     /// Absolute `http` or `https` URL with a host and no userinfo.
@@ -548,12 +548,6 @@ pub struct WebhookConfig {
     /// be `content-type`, `content-length`, `host`, or `x-llmobs-signature`.
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
-    /// Opaque ciphertext stored by the server.
-    ///
-    /// This crate does not decrypt or read the value. The server supplies the
-    /// decrypted signing secret separately when the webhook runs.
-    #[serde(default)]
-    pub secret_enc: Option<String>,
 }
 
 impl fmt::Debug for WebhookConfig {
@@ -566,7 +560,6 @@ impl fmt::Debug for WebhookConfig {
             .field("host", &host)
             .field("timeout_ms", &self.timeout_ms)
             .field("header_names", &self.headers.keys().collect::<Vec<_>>())
-            .field("has_secret_enc", &self.secret_enc.is_some())
             .finish()
     }
 }
@@ -763,12 +756,11 @@ mod tests {
     }
 
     #[test]
-    fn debug_omits_prompts_header_values_url_paths_and_the_secret() {
+    fn debug_omits_prompts_header_values_and_url_paths() {
         let webhook = super::WebhookConfig {
             url: "https://hooks.example/SECRET-PAYLOAD?token=SECRET-PAYLOAD".to_owned(),
             timeout_ms: 10_000,
             headers: BTreeMap::from([("X-Api-Key".to_owned(), "SECRET-PAYLOAD".to_owned())]),
-            secret_enc: Some("SECRET-PAYLOAD".to_owned()),
         };
         let judge = JudgeConfig {
             connection_id: connection(),
@@ -794,7 +786,6 @@ mod tests {
         assert_no_payload(&rendered, "SECRET-PAYLOAD");
         assert!(rendered.contains("hooks.example"), "{rendered}");
         assert!(rendered.contains("X-Api-Key"), "{rendered}");
-        assert!(rendered.contains("has_secret_enc: true"), "{rendered}");
         assert!(rendered.contains("prompt_bytes: 20"), "{rendered}");
     }
 
@@ -880,7 +871,6 @@ mod tests {
 
         let webhook = json!({
             "url": "https://example.com/hook",
-            "secret_enc": "opaque-ciphertext",
             "timeout_ms": 10000,
             "headers": {"X-Custom": "1"}
         });
@@ -890,7 +880,6 @@ mod tests {
             panic!("webhook");
         };
         assert_eq!(config.url, "https://example.com/hook");
-        assert_eq!(config.secret_enc.as_deref(), Some("opaque-ciphertext"));
         assert_eq!(config.timeout_ms, 10_000);
         assert_eq!(config.headers["X-Custom"], "1");
     }
@@ -960,7 +949,6 @@ mod tests {
         };
         assert_eq!(config.timeout_ms, 10_000);
         assert!(config.headers.is_empty());
-        assert_eq!(config.secret_enc, None);
     }
 
     #[test]

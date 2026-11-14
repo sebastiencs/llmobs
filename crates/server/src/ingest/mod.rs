@@ -17,6 +17,7 @@ use llmobs_core::batch::spans_to_record_batch;
 use llmobs_core::error::CoreError;
 use llmobs_core::ids::{OrgId, ProjectId};
 use llmobs_core::media::MediaBlob as CoreBlob;
+use llmobs_core::names::environment::EVAL as EVAL_ENVIRONMENT;
 use llmobs_otel::{
     DecodeError, ExportTraceServiceRequest, IngestContext, IngestLimits, Normalized, PriceTable,
     decode_json, decode_protobuf, normalize,
@@ -177,6 +178,16 @@ impl Ingest {
         self.max_request_bytes
     }
 
+    /// The normalizer's context for an in-process commit into `project` (D-I-21).
+    pub(crate) fn context(&self, project: &ProjectRow, now_ns: i64) -> IngestContext {
+        IngestContext {
+            project_id: project.id,
+            ingest_time: now_ns,
+            retention_days: project.retention_days,
+            limits: self.limits,
+        }
+    }
+
     /// Reserves budget before the body is read (D-G-5). Never waits.
     ///
     /// The amount is `Content-Length` when it is at most `max_request_bytes`, otherwise
@@ -289,12 +300,7 @@ impl Ingest {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        let ctx = IngestContext {
-            project_id: project.id,
-            ingest_time: now_ns,
-            retention_days: project.retention_days,
-            limits: self.limits,
-        };
+        let ctx = self.context(project, now_ns);
         let max_spans = self.max_spans_per_request;
         let work = tokio::task::spawn_blocking(move || -> Result<_, IngestError> {
             let spans = request
@@ -324,9 +330,10 @@ impl Ingest {
         })
     }
 
-    /// Stores the media, then appends the spans (D-G-8, D-G-9), then counts them and the
-    /// request bytes (D-G-30). Nothing is appended when a blob fails, and nothing is counted
-    /// then. The caller's reservation covers the spans until this returns.
+    /// Stores the media, then appends the spans (D-G-8, D-G-9), then counts the billable spans
+    /// (every span outside the reserved evaluation environment, D-I-31) and the request bytes
+    /// (D-G-30). Nothing is appended when a blob fails, and nothing is counted then. The
+    /// caller's reservation covers the spans until this returns.
     pub(crate) async fn commit(
         &self,
         storage: &Storage,
@@ -349,6 +356,10 @@ impl Ingest {
             stored += 1;
         }
         let accepted = spans.len();
+        let billable = spans
+            .iter()
+            .filter(|span| span.environment.as_deref() != Some(EVAL_ENVIRONMENT))
+            .count();
         if !spans.is_empty() {
             let (batch, spans) = tokio::task::spawn_blocking(move || {
                 spans_to_record_batch(&spans).map(|batch| (batch, spans))
@@ -366,7 +377,7 @@ impl Ingest {
             target.org_id,
             target.project_id,
             target.now_ns,
-            u64::try_from(accepted).unwrap_or(u64::MAX),
+            u64::try_from(billable).unwrap_or(u64::MAX),
             target.request_bytes,
             0,
         );
@@ -1031,6 +1042,62 @@ mod tests {
                 .await
                 .expect("one usage row for the day");
         assert_eq!(counted, (0, 7));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn judge_spans_are_not_billable() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let normalized = accepted_fixture(
+            &app,
+            &seeded.project,
+            "genai/openai-v2-chat-tool/input.json",
+        )
+        .await;
+        let base = normalized
+            .spans
+            .first()
+            .cloned()
+            .expect("the fixture has a span");
+        let spans = [
+            Some(EVAL_ENVIRONMENT.to_owned()),
+            Some(EVAL_ENVIRONMENT.to_owned()),
+            Some("production".to_owned()),
+        ]
+        .into_iter()
+        .map(|environment| llmobs_core::span::Span {
+            environment,
+            ..base.clone()
+        })
+        .collect();
+        let receipt = app
+            .state
+            .ingest
+            .commit(
+                &app.state.storage,
+                &app.state.usage,
+                &app.state.live,
+                target(&app, &seeded.project),
+                Normalized {
+                    spans,
+                    media: Vec::new(),
+                    rejections: Rejections::default(),
+                },
+            )
+            .await
+            .expect("committed");
+        assert_eq!(receipt.accepted, 3);
+        app.state
+            .usage
+            .flush(&app.state.meta)
+            .await
+            .expect("usage flushes");
+        let counted: i64 = sqlx::query_scalar("SELECT spans FROM usage_daily WHERE project_id = ?")
+            .bind(seeded.project.id.to_string())
+            .fetch_one(app.state.meta.reader())
+            .await
+            .expect("one usage row for the day");
+        assert_eq!(counted, 1);
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -93,7 +93,8 @@ impl Variables {
         self.0.get(name)
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, &Value)> {
+    /// The variables, sorted by name. Values are JSON.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Value)> {
         self.0.iter().map(|(name, value)| (name.as_str(), value))
     }
 }

@@ -63,7 +63,6 @@ fn config(url: String, headers: Vec<(&str, &str)>) -> WebhookConfig {
             .into_iter()
             .map(|(name, value)| (name.to_owned(), value.to_owned()))
             .collect(),
-        secret_enc: None,
     }
 }
 
