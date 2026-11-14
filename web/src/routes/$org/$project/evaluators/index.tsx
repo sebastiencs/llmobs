@@ -1,8 +1,9 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { Gauge, Loader2 } from "lucide-react";
 import { $api } from "@/api/client";
 import { evaluatorsInit } from "@/api/queries-evaluation";
 import type { Schema } from "@/api/types";
+import { DisabledReason } from "@/components/disabled-reason";
 import { EmptyState } from "@/components/empty-state";
 import { useProject } from "@/components/shell/project-context";
 import { TimeText } from "@/components/time-text";
@@ -16,6 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { canManageEvaluation } from "@/lib/roles";
 
 export const Route = createFileRoute("/$org/$project/evaluators/")({
   component: EvaluatorsPage,
@@ -37,7 +39,8 @@ function detailOf(evaluator: Schema<"Evaluator">): string {
 }
 
 function EvaluatorsPage() {
-  const { org, project } = useProject();
+  const { org, project, data } = useProject();
+  const canManage = canManageEvaluation(data.role);
   const query = $api.useInfiniteQuery(
     "get",
     "/api/v1/projects/{project}/evaluators",
@@ -57,8 +60,19 @@ function EvaluatorsPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 overflow-auto px-4 py-6">
-      <div className="flex flex-col gap-1">
+      <div className="flex items-start justify-between gap-4">
         <h1 className="text-lg font-medium">Evaluators</h1>
+        <DisabledReason reason={canManage ? undefined : "Only members can create evaluators"}>
+          {canManage ? (
+            <Button asChild>
+              <Link to="/$org/$project/evaluators/new" params={{ org, project }}>
+                New evaluator
+              </Link>
+            </Button>
+          ) : (
+            <Button disabled>New evaluator</Button>
+          )}
+        </DisabledReason>
       </div>
       {query.isPending ? (
         <>
@@ -87,7 +101,15 @@ function EvaluatorsPage() {
           <TableBody>
             {rows.map((evaluator) => (
               <TableRow key={evaluator.id}>
-                <TableCell>{evaluator.name}</TableCell>
+                <TableCell>
+                  <Link
+                    to="/$org/$project/evaluators/$evaluatorId"
+                    params={{ org, project, evaluatorId: evaluator.id }}
+                    className="rounded-sm underline-offset-4 outline-none hover:underline focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2 focus-visible:outline-solid"
+                  >
+                    {evaluator.name}
+                  </Link>
+                </TableCell>
                 <TableCell>{KIND_LABELS[evaluator.kind]}</TableCell>
                 <TableCell>
                   <div className="flex flex-col">

@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { server } from "@/mocks/node";
 import { renderApp } from "@/test/render";
 import evaluatorsFixture from "../../../../../../fixtures/api/static/evaluators.json";
+import projectFixture from "../../../../../../fixtures/api/static/project.json";
 
 /** The table row whose name cell reads `name`. */
 function rowOf(table: HTMLElement, name: string): HTMLElement {
@@ -39,11 +40,34 @@ it("shows the empty state when the project has no evaluators", async () => {
   expect(screen.queryByRole("table", { name: "Evaluators" })).toBeNull();
 });
 
-it("has no create button until the editor exists", async () => {
+it("links the name and the New button to the editor for members", async () => {
+  await renderApp("/acme/support-bot/evaluators");
+
+  const table = await screen.findByRole("table", { name: "Evaluators" });
+  expect(within(table).getByRole("link", { name: "Relevance" })).toHaveAttribute(
+    "href",
+    "/acme/support-bot/evaluators/01900000-0000-7000-8000-000000000500",
+  );
+  expect(screen.getByRole("link", { name: "New evaluator" })).toHaveAttribute(
+    "href",
+    "/acme/support-bot/evaluators/new",
+  );
+});
+
+it("shows the New button disabled to viewers, with the reason", async () => {
+  server.use(
+    http.get("/api/v1/projects/:project", () =>
+      HttpResponse.json({ ...projectFixture, role: "viewer" }),
+    ),
+  );
+
   await renderApp("/acme/support-bot/evaluators");
 
   await screen.findByRole("table", { name: "Evaluators" });
-  expect(screen.queryByRole("button", { name: "New evaluator" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "New evaluator" })).toBeNull();
+  const button = screen.getByRole("button", { name: "New evaluator" });
+  expect(button).toBeDisabled();
+  expect(button.parentElement).toHaveAccessibleDescription("Only members can create evaluators");
 });
 
 it("shows a check's function and a webhook's host by kind", async () => {

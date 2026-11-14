@@ -2,6 +2,7 @@ import { type HttpHandler, HttpResponse, http } from "msw";
 import adminUserCreatedDocument from "../../../fixtures/api/static/admin-user-created.json";
 import adminUsersDocument from "../../../fixtures/api/static/admin-users.json";
 import apiKeyCreatedDocument from "../../../fixtures/api/static/api-key-created.json";
+import evaluatorDocument from "../../../fixtures/api/static/evaluator.json";
 import inviteCreatedDocument from "../../../fixtures/api/static/invite-created.json";
 import llmConnectionDocument from "../../../fixtures/api/static/llm-connection.json";
 import llmConnectionTestDocument from "../../../fixtures/api/static/llm-connection-test.json";
@@ -90,6 +91,21 @@ export const WRITE_OPERATIONS: readonly WriteOperation[] = [
     operationId: "delete_project_member",
     method: "delete",
     path: "/api/v1/projects/{project}/members/{user}",
+  },
+  {
+    operationId: "post_evaluator",
+    method: "post",
+    path: "/api/v1/projects/{project}/evaluators",
+  },
+  {
+    operationId: "patch_evaluator",
+    method: "patch",
+    path: "/api/v1/projects/{project}/evaluators/{id}",
+  },
+  {
+    operationId: "delete_evaluator",
+    method: "delete",
+    path: "/api/v1/projects/{project}/evaluators/{id}",
   },
   {
     operationId: "post_score_definition",
@@ -276,6 +292,10 @@ const RESPONSES: Record<string, Respond> = {
     });
   },
   delete_project_member: () => noContent(),
+  post_evaluator: ({ body }) =>
+    HttpResponse.json({ ...evaluatorDocument, ...named(body) }, { status: 201 }),
+  patch_evaluator: ({ body }) => HttpResponse.json({ ...evaluatorDocument, ...named(body) }),
+  delete_evaluator: () => noContent(),
   post_score_definition: ({ body }) =>
     HttpResponse.json({ ...scoreDefinitionDocument, ...named(body) }, { status: 201 }),
   patch_score_definition: ({ body }) =>

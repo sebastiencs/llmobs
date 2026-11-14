@@ -12,6 +12,27 @@ export function evaluatorsKey(org: string, project: string) {
   }).queryKey;
 }
 
+export function evaluatorInit(org: string, project: string, evaluatorId: string) {
+  return { params: { path: { project: projectRef(org, project), id: evaluatorId } } };
+}
+
+export function evaluatorQuery(org: string, project: string, evaluatorId: string) {
+  return $api.queryOptions(
+    "get",
+    "/api/v1/projects/{project}/evaluators/{id}",
+    evaluatorInit(org, project, evaluatorId),
+  );
+}
+
+/** The key of one evaluator's detail query, for invalidation. */
+export function evaluatorKey(org: string, project: string, evaluatorId: string) {
+  return evaluatorQuery(org, project, evaluatorId).queryKey;
+}
+
+export function evaluatorTemplatesInit(org: string, project: string) {
+  return { params: { path: { project: projectRef(org, project) } } };
+}
+
 export function scoreDefinitionsInit(org: string, project: string, includeArchived: boolean) {
   return {
     params: {
