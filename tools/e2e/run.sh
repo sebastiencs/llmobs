@@ -25,6 +25,12 @@ server_pid=""
 cleanup() {
   if [[ -n "${server_pid}" ]]; then
     kill "${server_pid}" 2>/dev/null || true
+    # A drain that hangs must not hold the job until its timeout.
+    for _ in $(seq 20); do
+      kill -0 "${server_pid}" 2>/dev/null || break
+      sleep 0.5
+    done
+    kill -KILL "${server_pid}" 2>/dev/null || true
     wait "${server_pid}" 2>/dev/null || true
   fi
   rm -rf "$dir"
