@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
-import { meQuery } from "@/api/queries";
+import { meQuery, traceDetailQuery } from "@/api/queries";
 import { server } from "@/mocks/node";
 import { ORG_ID } from "@/test/fixtures";
 import { problemResponse } from "@/test/problem";
@@ -160,7 +160,9 @@ it("deletes the project once its slug is typed, then returns to the org home", a
     }),
   );
 
-  const { router, user } = await renderApp("/acme/support-bot/settings/general");
+  const { router, user, queryClient } = await renderApp("/acme/support-bot/settings/general");
+  const cachedTrace = traceDetailQuery("acme", "support-bot", "a".repeat(32)).queryKey;
+  queryClient.setQueryData(cachedTrace, {});
   const open = await screen.findByRole("button", { name: "Delete project…" });
   await waitFor(() => expect(open).toBeEnabled());
   await user.click(open);
@@ -177,6 +179,7 @@ it("deletes the project once its slug is typed, then returns to the org home", a
   await waitFor(() => expect(router.state.location.pathname).toBe("/acme"));
   expect(path).toBe("/api/v1/projects/acme%2Fsupport-bot");
   expect(confirm).toBe("support-bot");
+  await waitFor(() => expect(queryClient.getQueryState(cachedTrace)).toBeUndefined());
 });
 
 it("disables project deletion for a project admin who is not an org admin", async () => {

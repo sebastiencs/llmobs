@@ -94,6 +94,9 @@ export function UserDeletionForm() {
   const [userId, setUserId] = useState("");
   const [userIdError, setUserIdError] = useState<string | undefined>();
   const [dialogOpen, setDialogOpen] = useState(false);
+  // The id the dialog was opened with. The field is cleared after success, but the
+  // dialog keeps this value while it animates closed.
+  const [dialogUserId, setDialogUserId] = useState("");
   const [saved, setSaved] = useState(false);
 
   function onSubmit(event: FormEvent) {
@@ -108,6 +111,7 @@ export function UserDeletionForm() {
       setUserIdError("Use at most 255 bytes.");
       return;
     }
+    setDialogUserId(userId);
     setDialogOpen(true);
   }
 
@@ -151,7 +155,7 @@ export function UserDeletionForm() {
         />
       </form>
       <UserDeletionDialog
-        userId={userId}
+        userId={dialogUserId}
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         onDone={() => {

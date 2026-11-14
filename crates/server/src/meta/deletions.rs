@@ -852,19 +852,27 @@ pub(crate) async fn open_deletions(
         .collect())
 }
 
-/// Every row, oldest first (`created_at, id`). Unlike [`open_deletions`], a row that does not
-/// decode fails the whole read: its caller copies every row and must not skip one silently.
+/// Every row, oldest first (`created_at, id`). A row that does not decode is `Err((its id, the
+/// error))`, like [`open_deletions`]; the caller decides, and a copy must refuse the whole set.
 ///
 /// # Errors
 ///
-/// Returns [`MetaError`] when the query fails or a stored row does not decode.
-pub(crate) async fn all_deletions(pool: &SqlitePool) -> Result<Vec<DeletionRow>, MetaError> {
+/// Returns [`MetaError`] when the query itself fails.
+pub(crate) async fn all_deletions(
+    pool: &SqlitePool,
+) -> Result<Vec<Result<DeletionRow, (Option<Uuid>, MetaError)>>, MetaError> {
     // The SQL is built only from constants.
     let sql = format!("SELECT {SELECT_COLUMNS} FROM deletions ORDER BY created_at, id");
     let records: Vec<DeletionRecord> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await?;
-    records.into_iter().map(row_from).collect()
+    Ok(records
+        .into_iter()
+        .map(|record| {
+            let id = Uuid::parse_str(&record.id).ok();
+            row_from(record).map_err(|error| (id, error))
+        })
+        .collect())
 }
 
 /// The stored trace scope, ordered by trace id.

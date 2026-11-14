@@ -41,7 +41,7 @@ export function TraceHeader({
   trace: Schema<"TraceSummary">;
   spanId?: string;
   mode?: TraceMode;
-  onClose?: () => void;
+  onClose?: () => void | Promise<void>;
   live?: { status: StreamStatus; onStop: () => void };
 }) {
   const { org, project, ref, data } = useProject();
@@ -62,12 +62,13 @@ export function TraceHeader({
       {
         onSuccess: async () => {
           setConfirmOpen(false);
-          forgetTrace(trace.trace_id);
+          // Leave the trace first: a view still showing it would refetch a deleted trace.
           if (onClose) {
-            onClose();
+            await onClose();
           } else {
             await navigate({ to: "/$org/$project/traces", params: { org, project } });
           }
+          forgetTrace(trace.trace_id);
           // Drop the cached detail so a view still mounted does not flash "Could not load this trace".
           queryClient.removeQueries({
             queryKey: traceDetailQuery(org, project, trace.trace_id).queryKey,

@@ -47,75 +47,85 @@ export function DeletionHistory() {
       <h2 id={headingId} className="text-base font-medium">
         Deletion history
       </h2>
-      {list.isPending ? null : list.error ? (
+      {list.data === undefined && list.error ? (
         <FormError message={problemMessage(list.error, "Could not load the deletions.")} />
-      ) : rows.length === 0 ? (
-        <EmptyState icon={History} title="No deletions yet" />
-      ) : (
-        <Table aria-label="Deletions">
-          <TableHeader>
-            <TableRow>
-              <TableHead>Requested</TableHead>
-              <TableHead>What</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>By</TableHead>
-              <TableHead>Applied</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((deletion) => (
-              <TableRow key={deletion.id}>
-                <TableCell>
-                  <TimeText value={deletion.created_at} style="datetime" />
-                </TableCell>
-                <TableCell>
-                  <div className="flex flex-col">
-                    <span>{deletionKindLabel(deletion.kind)}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {deletionSubject(deletion)}
-                    </span>
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <div className="flex flex-col items-start gap-1">
-                    <Badge
-                      variant={
-                        deletion.status === "failed"
-                          ? "destructive"
-                          : deletion.status === "applied"
-                            ? "secondary"
-                            : "outline"
-                      }
-                    >
-                      {deletionStatusLabel(deletion.status)}
-                    </Badge>
-                    {deletion.error ? (
-                      <span className="text-xs text-muted-foreground">
-                        {deletionErrorLabel(deletion.error)}
-                      </span>
-                    ) : null}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <div className="flex flex-col">
-                    <span>{deletion.requested_by.kind === "api_key" ? "API key" : "Member"}</span>
-                    <IdText
-                      value={deletion.requested_by.id}
-                      kind={deletion.requested_by.kind === "api_key" ? "API key" : "user"}
-                    />
-                  </div>
-                </TableCell>
-                <TableCell>
-                  {deletion.applied_at ? (
-                    <TimeText value={deletion.applied_at} style="datetime" />
-                  ) : (
-                    "—"
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+      ) : null}
+      {list.data === undefined ? null : (
+        <>
+          {list.error ? (
+            <FormError message={problemMessage(list.error, "Could not load the deletions.")} />
+          ) : null}
+          {rows.length === 0 ? (
+            <EmptyState icon={History} title="No deletions yet" />
+          ) : (
+            <Table aria-label="Deletions">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Requested</TableHead>
+                  <TableHead>What</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>By</TableHead>
+                  <TableHead>Applied</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((deletion) => (
+                  <TableRow key={deletion.id}>
+                    <TableCell>
+                      <TimeText value={deletion.created_at} style="datetime" />
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col">
+                        <span>{deletionKindLabel(deletion.kind)}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {deletionSubject(deletion)}
+                        </span>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col items-start gap-1">
+                        <Badge
+                          variant={
+                            deletion.status === "failed"
+                              ? "destructive"
+                              : deletion.status === "applied"
+                                ? "secondary"
+                                : "outline"
+                          }
+                        >
+                          {deletionStatusLabel(deletion.status)}
+                        </Badge>
+                        {deletion.error ? (
+                          <span className="text-xs text-muted-foreground">
+                            {deletionErrorLabel(deletion.error)}
+                          </span>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col">
+                        <span>
+                          {deletion.requested_by.kind === "api_key" ? "API key" : "Member"}
+                        </span>
+                        <IdText
+                          value={deletion.requested_by.id}
+                          kind={deletion.requested_by.kind === "api_key" ? "API key" : "user"}
+                        />
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      {deletion.applied_at ? (
+                        <TimeText value={deletion.applied_at} style="datetime" />
+                      ) : (
+                        "—"
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </>
       )}
     </section>
   );

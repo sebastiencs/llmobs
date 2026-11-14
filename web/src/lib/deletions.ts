@@ -97,3 +97,20 @@ export function invalidateProjectReads(queryClient: QueryClient): Promise<void> 
     },
   });
 }
+
+/** The project path value of a project read's key (`[method, path, init]`), or undefined. */
+function projectOfRead(queryKey: readonly unknown[]): unknown {
+  const [, path, init] = queryKey;
+  if (typeof path !== "string" || !path.startsWith("/api/v1/projects/{project}/")) {
+    return undefined;
+  }
+  const params = (init as { params?: { path?: { project?: unknown } } } | undefined)?.params;
+  return params?.path?.project;
+}
+
+/** Drops the cached reads of one dropped project (its `ref`, `org/slug`), so no view refetches a 404. */
+export function removeProjectReads(queryClient: QueryClient, ref: string): void {
+  queryClient.removeQueries({
+    predicate: (query) => projectOfRead(query.queryKey) === ref,
+  });
+}

@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { expect, it, vi } from "vitest";
+import { traceDetailQuery } from "@/api/queries";
 import type { Schema } from "@/api/types";
 import { ProjectProvider } from "@/components/shell/project-context";
 import { server } from "@/mocks/node";
@@ -46,7 +47,7 @@ function renderDialog(selection: Partial<TraceSelection> = {}) {
       </ProjectProvider>
     </QueryClientProvider>,
   );
-  return { onOpenChange };
+  return { onOpenChange, queryClient };
 }
 
 it("counts the matches, then deletes them with the selection's filter and range", async () => {
@@ -126,4 +127,78 @@ it("shows the narrow-it message when the deletion is refused as too large", asyn
 
   expect(await screen.findByRole("alert")).toHaveTextContent(CAPPED);
   expect(screen.queryByRole("button", { name: /^Delete/ })).not.toBeInTheDocument();
+});
+
+it("shows the counting text before the preview answers", () => {
+  server.use(http.post(PREVIEW, () => new Promise<Response>(() => undefined)));
+  renderDialog();
+
+  expect(screen.getByText("Counting matching traces…")).toHaveAttribute("aria-live", "polite");
+});
+
+it("keeps the count in a polite live region", async () => {
+  server.use(http.post(PREVIEW, () => HttpResponse.json({ matched_traces: 3, capped: false })));
+  renderDialog();
+
+  expect(await screen.findByText(/^3 traces match/)).toHaveAttribute("aria-live", "polite");
+});
+
+it("explains a failed preview", async () => {
+  server.use(http.post(PREVIEW, () => HttpResponse.json({}, { status: 500 })));
+  renderDialog();
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not count the traces.");
+  expect(screen.queryByRole("button", { name: /^Delete/ })).not.toBeInTheDocument();
+});
+
+it("explains a failed deletion request", async () => {
+  server.use(
+    http.post(PREVIEW, () => HttpResponse.json({ matched_traces: 3, capped: false })),
+    http.post(DELETE, () => HttpResponse.json({}, { status: 500 })),
+  );
+  const user = userEvent.setup();
+  renderDialog();
+
+  await user.click(await screen.findByRole("button", { name: "Delete 3 traces" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not request the deletion.");
+});
+
+it("does not close on Escape while the deletion request runs", async () => {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.use(
+    http.post(PREVIEW, () => HttpResponse.json({ matched_traces: 3, capped: false })),
+    http.post(DELETE, async () => {
+      await gate;
+      return HttpResponse.json(deletionFixture, { status: 202 });
+    }),
+  );
+  const user = userEvent.setup();
+  const { onOpenChange } = renderDialog();
+
+  await user.click(await screen.findByRole("button", { name: "Delete 3 traces" }));
+  await user.keyboard("{Escape}");
+  expect(onOpenChange).not.toHaveBeenCalledWith(false);
+
+  release();
+  await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+});
+
+it("marks the project's reads stale after a deletion", async () => {
+  server.use(
+    http.post(PREVIEW, () => HttpResponse.json({ matched_traces: 3, capped: false })),
+    http.post(DELETE, () => HttpResponse.json(deletionFixture, { status: 202 })),
+  );
+  const user = userEvent.setup();
+  const { onOpenChange, queryClient } = renderDialog();
+  const read = traceDetailQuery("acme", "support-bot", "a".repeat(32)).queryKey;
+  queryClient.setQueryData(read, {});
+
+  await user.click(await screen.findByRole("button", { name: "Delete 3 traces" }));
+
+  await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  expect(queryClient.getQueryState(read)?.isInvalidated).toBe(true);
 });

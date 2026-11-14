@@ -445,7 +445,7 @@ function TracesPage() {
                 }}
                 onAddFilter={onFilter}
                 onClose={() => {
-                  void navigate({
+                  return navigate({
                     to: "/$org/$project/traces",
                     params: { org, project },
                     search: (prev) => withoutTrace(prev),

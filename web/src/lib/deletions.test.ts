@@ -1,5 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
+import { projectListOptions, traceDetailQuery } from "@/api/queries";
+import { traceListOptions } from "@/components/data-table/use-infinite-list";
 import {
   count,
   deletionErrorLabel,
@@ -99,13 +101,17 @@ describe("isOpenDeletion", () => {
 
 it("invalidates the project's reads and leaves other queries alone", async () => {
   const queryClient = new QueryClient();
-  const projectRead = ["get", "/api/v1/projects/{project}/traces", {}] as const;
-  const orgRead = ["get", "/api/v1/orgs/{org}/projects", {}] as const;
-  queryClient.setQueryData(projectRead, { data: [] });
-  queryClient.setQueryData(orgRead, { data: [] });
+  const range = { from: "2026-01-01T00:00:00Z", to: "2026-01-02T00:00:00Z" };
+  const traceList = traceListOptions("acme", "support-bot", range).queryKey;
+  const traceDetail = traceDetailQuery("acme", "support-bot", "a".repeat(32)).queryKey;
+  const orgProjects = projectListOptions("acme").queryKey;
+  queryClient.setQueryData(traceList, { pages: [], pageParams: [] });
+  queryClient.setQueryData(traceDetail, { trace: {} });
+  queryClient.setQueryData(orgProjects, { data: [] });
 
   await invalidateProjectReads(queryClient);
 
-  expect(queryClient.getQueryState(projectRead)?.isInvalidated).toBe(true);
-  expect(queryClient.getQueryState(orgRead)?.isInvalidated).toBe(false);
+  expect(queryClient.getQueryState(traceList)?.isInvalidated).toBe(true);
+  expect(queryClient.getQueryState(traceDetail)?.isInvalidated).toBe(true);
+  expect(queryClient.getQueryState(orgProjects)?.isInvalidated).toBe(false);
 });

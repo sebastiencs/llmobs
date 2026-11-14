@@ -1,7 +1,9 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { describe, expect, it, vi } from "vitest";
+import { traceDetailQuery } from "@/api/queries";
 import type { Schema } from "@/api/types";
+import { readRecent, rememberTrace } from "@/components/command/recent-traces";
 import { traceIsRecent } from "@/components/trace/trace-view";
 import { server } from "@/mocks/node";
 import { type StreamEmit, spanStreamHandler, traceStreamHandler } from "@/mocks/sse";
@@ -257,7 +259,8 @@ it("deletes the trace from its header and returns to the list", async () => {
       return HttpResponse.json(deletionFixture, { status: 202 });
     }),
   );
-  const { router, user } = await renderApp(`/acme/support-bot/traces/${TRACE}`);
+  rememberTrace("acme", "support-bot", { id: TRACE, name: "support-agent" });
+  const { router, user, queryClient } = await renderApp(`/acme/support-bot/traces/${TRACE}`);
   const header = await screen.findByRole("region", { name: "Trace" });
   await user.click(within(header).getByRole("button", { name: "Delete trace" }));
   const dialog = await screen.findByRole("alertdialog");
@@ -265,6 +268,48 @@ it("deletes the trace from its header and returns to the list", async () => {
 
   await waitFor(() => expect(router.state.location.pathname).toBe("/acme/support-bot/traces"));
   expect(body).toEqual({ kind: "trace_ids", trace_ids: [TRACE] });
+  expect(readRecent("acme", "support-bot").map((item) => item.id)).not.toContain(TRACE);
+  expect(
+    queryClient.getQueryData(traceDetailQuery("acme", "support-bot", TRACE).queryKey),
+  ).toBeUndefined();
+});
+
+it("closes the split after deleting the trace from its header and forgets it", async () => {
+  let body: unknown;
+  server.use(
+    http.post("/api/v1/projects/:project/deletions", async ({ request }) => {
+      body = await request.json();
+      return HttpResponse.json(deletionFixture, { status: 202 });
+    }),
+  );
+  rememberTrace("acme", "support-bot", { id: TRACE, name: "support-agent" });
+  const { router, user } = await renderApp(`/acme/support-bot/traces?trace=${TRACE}`);
+  const header = await screen.findByRole("region", { name: "Trace" });
+  await user.click(within(header).getByRole("button", { name: "Delete trace" }));
+  const dialog = await screen.findByRole("alertdialog");
+  await user.click(within(dialog).getByRole("button", { name: "Delete trace" }));
+
+  await waitFor(() =>
+    expect(screen.queryByRole("region", { name: "Trace" })).not.toBeInTheDocument(),
+  );
+  expect(router.state.location.pathname).toBe("/acme/support-bot/traces");
+  expect(body).toEqual({ kind: "trace_ids", trace_ids: [TRACE] });
+  expect(readRecent("acme", "support-bot").map((item) => item.id)).not.toContain(TRACE);
+  expect(screen.queryByText("Could not load this trace")).not.toBeInTheDocument();
+});
+
+it("shows the server error in the delete dialog and keeps the trace", async () => {
+  server.use(
+    http.post("/api/v1/projects/:project/deletions", () => HttpResponse.json({}, { status: 409 })),
+  );
+  const { router, user } = await renderApp(`/acme/support-bot/traces/${TRACE}`);
+  const header = await screen.findByRole("region", { name: "Trace" });
+  await user.click(within(header).getByRole("button", { name: "Delete trace" }));
+  const dialog = await screen.findByRole("alertdialog");
+  await user.click(within(dialog).getByRole("button", { name: "Delete trace" }));
+
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("Could not delete the trace.");
+  expect(router.state.location.pathname).toBe(`/acme/support-bot/traces/${TRACE}`);
 });
 
 it("disables the header delete for members, with the reason", async () => {

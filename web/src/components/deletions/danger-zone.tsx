@@ -9,6 +9,7 @@ export function DangerZone({
   description,
   buttonLabel,
   disabledReason,
+  disabled,
   onOpen,
   children,
 }: {
@@ -19,6 +20,8 @@ export function DangerZone({
   buttonLabel: string;
   /** Set → the button is disabled with this reason (D-L-4). */
   disabledReason?: string;
+  /** Disabled without a reason, for example while the role is still loading. */
+  disabled?: boolean;
   onOpen: () => void;
   /** The confirmation dialog. */
   children?: ReactNode;
@@ -42,7 +45,7 @@ export function DangerZone({
             <Button
               type="button"
               variant="destructive"
-              disabled={disabledReason !== undefined}
+              disabled={disabled === true || disabledReason !== undefined}
               onClick={onOpen}
             >
               {buttonLabel}

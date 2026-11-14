@@ -16,6 +16,7 @@ import { useProject } from "@/components/shell/project-context";
 import { TypeToConfirmDialog } from "@/components/type-to-confirm-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { removeProjectReads } from "@/lib/deletions";
 import { atLeast } from "@/lib/roles";
 
 export const Route = createFileRoute("/$org/$project/settings/general")({
@@ -48,7 +49,7 @@ function ProjectGeneralPage() {
   const me = useQuery(meQuery);
   // Deleting a project is an org action (spec 08): a project-admin override is not enough.
   const orgRole = me.data?.orgs.find((entry) => entry.slug === org)?.role;
-  const canDelete = atLeast(orgRole, "admin");
+  const canDelete = me.isSuccess && atLeast(orgRole, "admin");
   const [dropOpen, setDropOpen] = useState(false);
   const dropMutation = $api.useMutation("delete", "/api/v1/projects/{project}");
 
@@ -118,6 +119,7 @@ function ProjectGeneralPage() {
           // The project layout holds a suspense query on this key, and the 30 s stale time keeps
           // the entry, so it is removed rather than invalidated.
           queryClient.removeQueries({ queryKey: projectQuery(org, project).queryKey });
+          removeProjectReads(queryClient, ref);
           void queryClient.invalidateQueries({ queryKey: projectListOptions(org).queryKey });
         },
       },
@@ -196,8 +198,11 @@ function ProjectGeneralPage() {
         title="Delete project"
         description="Deletes every trace, span, score, media file and setting of this project. Data is erased within 24 hours. This cannot be undone."
         buttonLabel="Delete project…"
+        disabled={!canDelete}
         disabledReason={
-          canDelete ? undefined : "Only organization admins and owners can delete projects"
+          me.isSuccess && !canDelete
+            ? "Only organization admins and owners can delete projects"
+            : undefined
         }
         onOpen={() => {
           dropMutation.reset();

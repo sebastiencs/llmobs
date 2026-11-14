@@ -78,3 +78,17 @@ it("keeps Cancel and Esc inert while pending", async () => {
   await user.keyboard("{Escape}");
   expect(onOpenChange).not.toHaveBeenCalled();
 });
+
+it("keeps confirm disabled for text with a leading space", async () => {
+  const user = userEvent.setup();
+  render(dialog());
+
+  await user.type(screen.getByRole("textbox"), " support-bot");
+  expect(confirmButton()).toBeDisabled();
+});
+
+it("focuses the input when opened", () => {
+  render(dialog());
+
+  expect(screen.getByRole("textbox")).toHaveFocus();
+});

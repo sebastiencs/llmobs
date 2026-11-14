@@ -95,7 +95,7 @@ export function SessionView({
                   spanId={spanId}
                   onSelectSpan={(next) => setSpan({ traceId, spanId: next })}
                   onClose={() => {
-                    void navigate({
+                    return navigate({
                       to: "/$org/$project/sessions/$sessionId",
                       params: { org, project, sessionId },
                       search: (prev: SessionPageSearch) => {

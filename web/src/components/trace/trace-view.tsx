@@ -43,7 +43,7 @@ export function TraceView({
   onModeChange?: (mode: TraceMode) => void;
   onSelectSpan: (spanId: string) => void;
   onAddFilter?: (conjunct: string) => void;
-  onClose?: () => void;
+  onClose?: () => void | Promise<void>;
 }) {
   const { org, project } = useProject();
   const detailOptions = traceDetailQuery(org, project, traceId);

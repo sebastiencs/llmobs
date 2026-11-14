@@ -244,16 +244,28 @@ pub async fn reapply_deletions(
     let outcome = copy_all(&target, &source).await;
     source.close().await;
     target.close().await;
-    outcome.map_err(map_meta)
+    outcome
 }
 
-async fn copy_all(target: &MetaDb, source: &MetaDb) -> Result<ReapplyReport, MetaError> {
-    let rows = all_deletions(source.reader()).await?;
+/// Copies every deletion of `source` that `target` lacks. Every row is decoded before the
+/// first write, so a corrupt row copies nothing.
+async fn copy_all(target: &MetaDb, source: &MetaDb) -> Result<ReapplyReport, AdminError> {
+    let mut rows = Vec::new();
+    for decoded in all_deletions(source.reader()).await.map_err(map_meta)? {
+        rows.push(decoded.map_err(|(id, error)| source_row_error(id, &error))?);
+    }
     let mut report = ReapplyReport::default();
     for row in rows {
-        let traces = scope_traces(source.reader(), row.id).await?;
-        let sessions = scope_sessions(source.reader(), row.id).await?;
-        let projects = scope_projects(source.reader(), row.id).await?;
+        let id = row.id;
+        let traces = scope_traces(source.reader(), id)
+            .await
+            .map_err(|error| source_row_error(Some(id), &error))?;
+        let sessions = scope_sessions(source.reader(), id)
+            .await
+            .map_err(|error| source_row_error(Some(id), &error))?;
+        let projects = scope_projects(source.reader(), id)
+            .await
+            .map_err(|error| source_row_error(Some(id), &error))?;
         let failed = row.state == DeletionState::Failed;
         let copied = target
             .write(move |conn| {
@@ -261,7 +273,8 @@ async fn copy_all(target: &MetaDb, source: &MetaDb) -> Result<ReapplyReport, Met
                     async move { insert_copy(conn, &row, &traces, &sessions, &projects).await },
                 )
             })
-            .await?;
+            .await
+            .map_err(map_meta)?;
         if !copied {
             report.present += 1;
         } else if failed {
@@ -541,6 +554,14 @@ fn map_source(error: MetaError) -> AdminError {
         }
         other => map_meta(other),
     }
+}
+
+/// A source row that does not decode. The text names the id and the stored column, never values.
+fn source_row_error(id: Option<Uuid>, error: &MetaError) -> AdminError {
+    let id = id.map_or_else(|| "unknown".to_owned(), |id| id.to_string());
+    AdminError::Database(format!(
+        "deletion {id} of the --from meta.db cannot be copied ({error}); repair the source row, then re-run"
+    ))
 }
 
 fn map_meta(error: MetaError) -> AdminError {
@@ -1800,5 +1821,112 @@ mod tests {
             .await
             .status;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn corrupt_source_row_copies_nothing_and_names_it() {
+        let (_dir, config) = ready_config().await;
+        let ids = target_with_projects(&config).await;
+        let source = tempfile::tempdir().unwrap();
+        let db = MetaDb::open(source.path()).await.unwrap();
+        // A good row, then a row whose request does not decode.
+        put(
+            &db,
+            new_row(
+                1,
+                DeletionKind::TraceIds,
+                ids.org,
+                Some(ids.p1),
+                DeletionState::Resolving,
+            ),
+            vec![trace(1)],
+            vec![],
+            vec![],
+        )
+        .await;
+        put(
+            &db,
+            new_row(
+                2,
+                DeletionKind::TraceIds,
+                ids.org,
+                Some(ids.p1),
+                DeletionState::Resolving,
+            ),
+            vec![],
+            vec![],
+            vec![],
+        )
+        .await;
+        db.write(move |connection| {
+            Box::pin(async move {
+                sqlx::query("UPDATE deletions SET request = '{\"bogus\":1}' WHERE id = ?")
+                    .bind(did(2).to_string())
+                    .execute(&mut *connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+        db.close().await;
+
+        let error = reapply_deletions(&config, source.path()).await.unwrap_err();
+        let AdminError::Database(text) = &error else {
+            panic!("expected a database error, got {error}");
+        };
+        assert!(text.contains(&did(2).to_string()), "{text}");
+        assert!(
+            text.contains("repair the source row, then re-run"),
+            "{text}"
+        );
+        assert!(!text.contains("bogus"), "{text}");
+
+        let target = MetaDb::open_existing(&config.data_dir).await.unwrap();
+        assert!(
+            deletion_by_id(target.reader(), did(1))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        target.close().await;
+    }
+
+    #[tokio::test]
+    async fn copied_failed_project_row_leaves_its_project_active() {
+        let (_dir, config) = ready_config().await;
+        let ids = target_with_projects(&config).await;
+        let source = tempfile::tempdir().unwrap();
+        let db = MetaDb::open(source.path()).await.unwrap();
+        put(
+            &db,
+            new_row(
+                7,
+                DeletionKind::Project,
+                ids.org2,
+                Some(ids.p0),
+                DeletionState::Resolving,
+            ),
+            vec![],
+            vec![],
+            vec![],
+        )
+        .await;
+        set_failed(&db, did(7), FailReason::ResolutionFailed).await;
+        db.close().await;
+
+        let report = reapply_deletions(&config, source.path()).await.unwrap();
+        assert_eq!(
+            report,
+            ReapplyReport {
+                reopened: 0,
+                failed_copied: 1,
+                present: 0
+            }
+        );
+        let target = MetaDb::open_existing(&config.data_dir).await.unwrap();
+        assert_eq!(row_of(&target, 7).await.state, DeletionState::Failed);
+        assert_eq!(project_state(&target, ids.p0).await, "active");
+        target.close().await;
     }
 }

@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import type { UserEvent } from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
-import { DELETION_POLL_MS, setDeletionPollMs } from "@/lib/deletions";
+import { DELETION_POLL_MS, deletionPollMs, setDeletionPollMs } from "@/lib/deletions";
 import { server } from "@/mocks/node";
 import { problemResponse } from "@/test/problem";
 import { renderApp } from "@/test/render";
@@ -166,4 +166,65 @@ it("shows the empty history", async () => {
   await renderApp("/acme/support-bot/settings/data");
 
   expect(await screen.findByText("No deletions yet")).toBeInTheDocument();
+});
+
+it("closes the dialog and empties the field after a request", async () => {
+  server.use(
+    http.post("/api/v1/projects/:project/deletions", () =>
+      HttpResponse.json(deletionFixture, { status: 202 }),
+    ),
+  );
+
+  const { user } = await renderApp("/acme/support-bot/settings/data");
+  await screen.findByRole("table", { name: "Deletions" });
+  await typeUserId(user, "user-7");
+  const dialog = await openDialog(user);
+  await user.type(within(dialog).getByRole("textbox"), "user-7");
+  await user.click(within(dialog).getByRole("button", { name: "Delete user data" }));
+
+  await waitFor(() =>
+    expect(screen.queryByRole("alertdialog", { name: "Delete this user's data?" })).toBeNull(),
+  );
+  expect(screen.getByLabelText("User ID")).toHaveValue("");
+});
+
+it("tells a project member who is not an admin that they cannot delete data", async () => {
+  server.use(
+    http.post("/api/v1/projects/:project/deletions", () => problemResponse(403, "forbidden")),
+  );
+
+  const { user } = await renderApp("/acme/support-bot/settings/data");
+  await screen.findByRole("table", { name: "Deletions" });
+  await typeUserId(user, "user-7");
+  const dialog = await openDialog(user);
+  await user.type(within(dialog).getByRole("textbox"), "user-7");
+  await user.click(within(dialog).getByRole("button", { name: "Delete user data" }));
+
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "Only project admins can delete data.",
+  );
+});
+
+it("stops polling when no deletion is open", async () => {
+  let gets = 0;
+  const applied = {
+    data: deletionsFixture.data.filter((deletion) => deletion.status === "applied"),
+    next_cursor: null,
+  };
+  server.use(
+    http.get("/api/v1/projects/:project/deletions", () => {
+      gets += 1;
+      return HttpResponse.json(applied);
+    }),
+  );
+
+  setDeletionPollMs(20);
+  try {
+    await renderApp("/acme/support-bot/settings/data");
+    await screen.findByRole("table", { name: "Deletions" });
+    await new Promise((resolve) => setTimeout(resolve, 3 * deletionPollMs() + 100));
+    expect(gets).toBe(1);
+  } finally {
+    setDeletionPollMs(DELETION_POLL_MS);
+  }
 });

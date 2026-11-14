@@ -89,7 +89,7 @@ function DeleteMatchingBody({
   const count = matched?.toLocaleString("en-US") ?? "";
 
   let description: string | undefined;
-  if (preview.isPending) {
+  if (preview.isPending || preview.isIdle) {
     description = "Counting matching traces…";
   } else if (matched === 0) {
     description = "No trace matches. Nothing to delete.";
@@ -128,13 +128,13 @@ function DeleteMatchingBody({
     );
   }
 
-  const showConfirm = preview.isPending || showCount;
+  const showConfirm = preview.isPending || preview.isIdle || showCount;
 
   return (
     <>
       <AlertDialogHeader>
         <AlertDialogTitle>Delete matching traces?</AlertDialogTitle>
-        <AlertDialogDescription>{description}</AlertDialogDescription>
+        <AlertDialogDescription aria-live="polite">{description}</AlertDialogDescription>
       </AlertDialogHeader>
       <FormError message={error} />
       <AlertDialogFooter>
@@ -145,7 +145,7 @@ function DeleteMatchingBody({
           <Button
             type="button"
             variant="destructive"
-            disabled={preview.isPending || remove.isPending}
+            disabled={preview.isPending || preview.isIdle || remove.isPending}
             onClick={confirm}
           >
             {showCount ? `Delete ${count} ${matched === 1 ? "trace" : "traces"}` : "Delete traces"}

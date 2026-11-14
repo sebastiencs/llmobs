@@ -299,7 +299,7 @@ function SpansPage() {
                 spanId={search.span}
                 onAddFilter={onFilter}
                 onClose={() => {
-                  void navigate({
+                  return navigate({
                     to: "/$org/$project/spans",
                     params: { org, project },
                     search: (prev) => withoutTrace(prev),
