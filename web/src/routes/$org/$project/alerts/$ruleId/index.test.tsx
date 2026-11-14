@@ -146,6 +146,24 @@ it("keeps the delete dialog open when the delete fails", async () => {
   expect(screen.getByRole("alertdialog", { name: "Delete alert rule?" })).toBeInTheDocument();
 });
 
+it("links Edit to the editor", async () => {
+  await renderApp(PAGE);
+
+  expect(await screen.findByRole("link", { name: "Edit" })).toHaveAttribute("href", `${PAGE}/edit`);
+});
+
+it("disables Edit for viewers", async () => {
+  server.use(
+    http.get("/api/v1/projects/:project", () =>
+      HttpResponse.json({ ...projectFixture, role: "viewer" }),
+    ),
+  );
+
+  await renderApp(PAGE);
+
+  expect(await screen.findByRole("button", { name: "Edit" })).toBeDisabled();
+});
+
 it("shows not found for an unknown rule", async () => {
   server.use(http.get(RULE, () => problemResponse(404, "not_found")));
 

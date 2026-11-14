@@ -6,6 +6,7 @@ import { FIRING_RULE_ID } from "@/test/fixtures";
 import { problemResponse } from "@/test/problem";
 import { renderApp } from "@/test/render";
 import rulesFixture from "../../../../../../fixtures/api/static/alert-rules.json";
+import projectFixture from "../../../../../../fixtures/api/static/project.json";
 
 const PAGE = "/acme/support-bot/alerts";
 const RULES = "/api/v1/projects/:project/alert-rules";
@@ -85,4 +86,26 @@ it("shows the forbidden state", async () => {
   expect(
     await screen.findByText("You don't have access to this project's alert rules."),
   ).toBeInTheDocument();
+});
+
+it("links New rule to the editor", async () => {
+  await renderApp(PAGE);
+
+  expect(await screen.findByRole("link", { name: "New rule" })).toHaveAttribute(
+    "href",
+    "/acme/support-bot/alerts/new",
+  );
+});
+
+it("disables New rule for viewers", async () => {
+  server.use(
+    http.get("/api/v1/projects/:project", () =>
+      HttpResponse.json({ ...projectFixture, role: "viewer" }),
+    ),
+  );
+
+  await renderApp(PAGE);
+
+  expect(await screen.findByRole("button", { name: "New rule" })).toBeDisabled();
+  expect(screen.queryByRole("link", { name: "New rule" })).toBeNull();
 });

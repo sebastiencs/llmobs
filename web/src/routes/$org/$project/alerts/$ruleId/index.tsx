@@ -101,17 +101,35 @@ function AlertRulePage() {
               <h1 className="text-lg font-medium">{rule.name}</h1>
               <StateBadge state={rule.state} enabled={rule.enabled} />
             </div>
-            <DisabledReason reason={canEdit ? undefined : CANNOT_MANAGE}>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={!canEdit}
-                onClick={() => setDeleteOpen(true)}
-              >
-                Delete rule
-              </Button>
-            </DisabledReason>
+            <div className="flex items-center gap-2">
+              <DisabledReason reason={canEdit ? undefined : CANNOT_MANAGE}>
+                {canEdit ? (
+                  <Button asChild variant="outline" size="sm">
+                    <Link
+                      to="/$org/$project/alerts/$ruleId/edit"
+                      params={{ org, project, ruleId: rule.id }}
+                    >
+                      Edit
+                    </Link>
+                  </Button>
+                ) : (
+                  <Button type="button" variant="outline" size="sm" disabled>
+                    Edit
+                  </Button>
+                )}
+              </DisabledReason>
+              <DisabledReason reason={canEdit ? undefined : CANNOT_MANAGE}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!canEdit}
+                  onClick={() => setDeleteOpen(true)}
+                >
+                  Delete rule
+                </Button>
+              </DisabledReason>
+            </div>
           </div>
         </div>
 
