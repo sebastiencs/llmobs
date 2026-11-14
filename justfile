@@ -118,7 +118,7 @@ check-ee:
     expected=6448026f2e06ab3da9ed8ddda686694bba37179e88db92dea6d4aab516c957ea
     header='// SPDX-License-Identifier: Elastic-2.0'
     status=0
-    for dir in crates/server/src/ee web/src/ee; do
+    for dir in crates/server/src/ee web/src/ee tools/license; do
         if [ ! -f "$dir/LICENSE" ]; then
             echo "$dir/LICENSE is missing"
             status=1
@@ -135,11 +135,15 @@ check-ee:
     done
     while IFS= read -r file; do
         case "$file" in
-            crates/server/src/ee/*|web/src/ee/*) ;;
+            crates/server/src/ee/*|web/src/ee/*|tools/license/*) ;;
             *) echo "$file: Elastic-2.0 header outside an ee directory"; status=1 ;;
         esac
     done < <(git grep -l -F 'SPDX-License-Identifier: Elastic-2.0' -- '*.rs' '*.ts' '*.tsx' || true)
     exit "$status"
+
+# Re-sign fixtures/license/payloads with the dev key (D-P-6)
+license-fixtures:
+    cargo run -q -p llmobs-license-tool -- fixtures
 
 # Web dev server with mocked API (fixtures/api)
 web-dev: js-install

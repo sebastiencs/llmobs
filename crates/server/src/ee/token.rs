@@ -242,4 +242,28 @@ mod tests {
             assert!(!error.to_string().contains("llmobs1."), "{error}");
         }
     }
+
+    #[test]
+    fn fixture_tokens_verify() {
+        let fixtures = [
+            (
+                include_str!("../../../../fixtures/license/tokens/active.token"),
+                include_str!("../../../../fixtures/license/payloads/active.json"),
+            ),
+            (
+                include_str!("../../../../fixtures/license/tokens/future-feature.token"),
+                include_str!("../../../../fixtures/license/payloads/future-feature.json"),
+            ),
+            (
+                include_str!("../../../../fixtures/license/tokens/wrong-kind.token"),
+                include_str!("../../../../fixtures/license/payloads/wrong-kind.json"),
+            ),
+        ];
+        for (token, payload) in fixtures {
+            let verified = verify(token).unwrap();
+            assert_eq!(verified.kid, "dev-1");
+            let parsed: serde_json::Value = serde_json::from_str(payload).unwrap();
+            assert_eq!(verified.payload, serde_json::to_vec(&parsed).unwrap());
+        }
+    }
 }
