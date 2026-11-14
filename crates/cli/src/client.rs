@@ -164,6 +164,35 @@ impl ApiClient {
             .send()
             .await
             .map_err(|error| self.unreachable(error))?;
+        self.json_answer(response).await
+    }
+
+    /// `GET` with `Accept: application/json`; `query` pairs are form-encoded in order. `timeout`
+    /// covers the whole exchange.
+    pub(crate) async fn get_json(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+        timeout: Duration,
+    ) -> anyhow::Result<serde_json::Value> {
+        let response = self
+            .http
+            .get(format!("{}{path}", self.target.server))
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bearer {}", self.target.token.expose()),
+            )
+            .header(reqwest::header::ACCEPT, "application/json")
+            .query(query)
+            .timeout(timeout)
+            .send()
+            .await
+            .map_err(|error| self.unreachable(error))?;
+        self.json_answer(response).await
+    }
+
+    /// The JSON body of a 2xx answer; any other status is a problem error.
+    async fn json_answer(&self, response: reqwest::Response) -> anyhow::Result<serde_json::Value> {
         let status = response.status();
         if !status.is_success() {
             let text = read_limited(response).await;

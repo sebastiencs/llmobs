@@ -2,15 +2,17 @@ mod client;
 mod credentials;
 mod login;
 mod output;
+mod projects;
 mod query;
 #[cfg(test)]
 mod test_server;
+mod traces;
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use llmobs_server::admin::{self, UserSummary};
 use llmobs_server::config::{LogConfig, LogFormat, ServerConfig};
 use llmobs_server::serve::{self, ServeError};
@@ -58,6 +60,16 @@ enum Command {
     },
     /// Run a SQL query on a project.
     Query(Box<query::QueryArgs>),
+    /// List and show traces.
+    Traces {
+        #[command(subcommand)]
+        command: Box<traces::TracesCommand>,
+    },
+    /// List the projects you can read.
+    Projects {
+        #[command(subcommand)]
+        command: Box<projects::ProjectsCommand>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -93,17 +105,11 @@ enum AdminCommand {
     ListUsers {
         /// `table` or `json`.
         #[arg(long, value_enum, default_value = "table")]
-        format: ListFormat,
+        format: output::ListFormat,
         /// Config file. Overrides `LLMOBS_CONFIG`.
         #[arg(long)]
         config: Option<PathBuf>,
     },
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum ListFormat {
-    Table,
-    Json,
 }
 
 fn main() {
@@ -183,6 +189,30 @@ async fn run_cli(
                 chrono::Utc::now(),
             )
             .await?;
+        }
+        Command::Traces { command } => {
+            let stdout = io::stdout();
+            let stdout_is_terminal = stdout.is_terminal();
+            let (mut out, mut err, mut input) = (stdout.lock(), io::stderr().lock(), io::stdin());
+            let mut streams = output::Io {
+                out: &mut out,
+                err: &mut err,
+                input: &mut input,
+                stdout_is_terminal,
+            };
+            traces::run(&command, credentials::credentials_path, &mut streams).await?;
+        }
+        Command::Projects { command } => {
+            let stdout = io::stdout();
+            let stdout_is_terminal = stdout.is_terminal();
+            let (mut out, mut err, mut input) = (stdout.lock(), io::stderr().lock(), io::stdin());
+            let mut streams = output::Io {
+                out: &mut out,
+                err: &mut err,
+                input: &mut input,
+                stdout_is_terminal,
+            };
+            projects::run(&command, credentials::credentials_path, &mut streams).await?;
         }
     }
     Ok(())
@@ -297,8 +327,8 @@ async fn admin_command(command: AdminCommand) -> anyhow::Result<()> {
             let users = admin::list_users(&loaded).await.context("listing users")?;
             let mut stdout = io::stdout().lock();
             match format {
-                ListFormat::Table => write_table(&mut stdout, &users)?,
-                ListFormat::Json => {
+                output::ListFormat::Table => write_table(&mut stdout, &users)?,
+                output::ListFormat::Json => {
                     let listed = users.iter().map(listed_user).collect::<Vec<_>>();
                     writeln!(stdout, "{}", serde_json::to_string_pretty(&listed)?)?;
                 }
@@ -419,7 +449,10 @@ impl Signals {
 
 #[cfg(test)]
 mod tests {
-    use super::run_cli;
+    use clap::Parser;
+
+    use super::{AdminCommand, Cli, Command, run_cli};
+    use crate::output;
 
     #[tokio::test]
     async fn missing_config_exits_with_the_path() {
@@ -430,6 +463,27 @@ mod tests {
         let text = format!("{error:#}");
         assert!(text.contains("loading config"), "{text}");
         assert!(text.contains(&path.display().to_string()), "{text}");
+    }
+
+    #[test]
+    fn admin_list_users_keeps_its_format_flag() {
+        let format_of = |argv: &[&str]| match Cli::try_parse_from(argv).unwrap().command {
+            Command::Admin {
+                command: AdminCommand::ListUsers { format, .. },
+            } => format,
+            other => panic!("unexpected command {other:?}"),
+        };
+        assert_eq!(
+            format_of(&["llmobs", "admin", "list-users", "--format", "json"]),
+            output::ListFormat::Json
+        );
+        assert_eq!(
+            format_of(&["llmobs", "admin", "list-users"]),
+            output::ListFormat::Table
+        );
+        let error =
+            Cli::try_parse_from(["llmobs", "admin", "list-users", "--format", "xml"]).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
     }
 
     #[test]

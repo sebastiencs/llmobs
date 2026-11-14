@@ -3,6 +3,7 @@
 use std::io::{self, Read, Write};
 
 use chrono::{DateTime, SecondsFormat};
+use clap::ValueEnum;
 use serde_json::Value;
 
 /// Where a command reads and writes. `main` passes the real stdin, stdout and stderr; tests
@@ -16,6 +17,15 @@ pub(crate) struct Io<'a> {
     pub(crate) input: &'a mut dyn Read,
     /// Whether stdout is a terminal. Parquet refuses to write binary to one.
     pub(crate) stdout_is_terminal: bool,
+}
+
+/// Output of the list commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ListFormat {
+    /// Aligned columns.
+    Table,
+    /// The server's JSON, re-indented.
+    Json,
 }
 
 /// One table column.
@@ -139,6 +149,16 @@ pub(crate) fn format_time(ns: i64) -> String {
     DateTime::from_timestamp(seconds, subsec)
         .map(|time| time.to_rfc3339_opts(SecondsFormat::Nanos, true))
         .unwrap_or_default()
+}
+
+/// Writes a command's whole output and flushes it. `Ok(false)` when the reader closed the pipe
+/// (`BrokenPipe`): the command then stops without writing a note.
+pub(crate) fn write_output(out: &mut dyn Write, bytes: &[u8]) -> io::Result<bool> {
+    match out.write_all(bytes).and_then(|()| out.flush()) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 /// One note line: `1 row` or `<n> rows`, then `; <more>` when given.
