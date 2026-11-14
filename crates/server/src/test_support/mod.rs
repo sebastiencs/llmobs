@@ -2,6 +2,7 @@
 #![cfg(test)]
 
 pub(crate) mod mock_idp;
+pub(crate) mod mock_llm;
 
 use std::future::Future;
 use std::io::{self, Write};
@@ -41,7 +42,8 @@ use crate::auth::secret::{self, KeyKind, NewKey};
 use crate::auth::session::start_session;
 use crate::clock::Clock;
 use crate::config::{
-    AuthSettings, IngestConfig, InitConfig, LogConfig, MediaConfig, PublicUrl, ServerConfig,
+    AuthSettings, EvalConfig, IngestConfig, InitConfig, LogConfig, MediaConfig, PublicUrl,
+    SecurityConfig, ServerConfig,
 };
 use crate::http::access::RouteDef;
 use crate::http::{AppInner, AppState, router, router_with, serve_router};
@@ -55,6 +57,9 @@ use crate::meta::{MetaDb, MetaError};
 
 /// `2026-01-01T00:00:00Z`.
 const MANUAL_NOW_NS: i64 = 1_767_225_600_000_000_000;
+
+/// The key every test `SecretBox` is built from (D-I-2).
+pub(crate) const TEST_KEY: [u8; 32] = [7; 32];
 
 /// One process's data directory and router.
 pub(crate) struct TestApp {
@@ -159,6 +164,20 @@ impl TestApp {
             .await
             .expect("storage opens");
         let meta = MetaDb::open(&config.data_dir).await.expect("meta.db opens");
+        let secrets = crate::crypto::SecretBox::new(&TEST_KEY);
+        crate::crypto::verify_or_record(
+            &meta,
+            &secrets,
+            &crate::crypto::key_path(&config.data_dir),
+        )
+        .await
+        .expect("check value");
+        let eval_runner = Arc::new(
+            llmobs_eval::EvalRunner::new(llmobs_eval::EgressPolicy {
+                allow_private_network: config.security.allow_private_network_egress,
+            })
+            .expect("eval runner"),
+        );
         let mailer = if stub_mailer {
             let from = format!("{PRODUCT} <noreply@example.com>");
             Some(Arc::new(crate::email::Mailer::stub(&from)))
@@ -200,6 +219,9 @@ impl TestApp {
             live: crate::live::LiveBus::new(crate::live::StreamTiming::TEST),
             metrics_cache: crate::routes::metrics::MetricsCache::default(),
             usage: crate::usage::Usage::default(),
+            secrets,
+            eval_runner,
+            connections: crate::eval::connection::ConnectionCache::default(),
         });
         let router = if let Some(table) = table {
             serve_router(state.clone(), table)
@@ -630,6 +652,9 @@ fn default_config(data_dir: &std::path::Path) -> ServerConfig {
         },
         ingest: IngestConfig::default(),
         media: MediaConfig::default(),
+        eval: EvalConfig::default(),
+        security: SecurityConfig::default(),
+        encryption_key: None,
         auth: AuthSettings::default(),
         smtp_url: None,
         email_from: None,

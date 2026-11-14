@@ -168,6 +168,11 @@ impl Ingest {
         *self.prices.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(prices);
     }
 
+    /// The current price table (D-G-10). Judge runs price their `llm` span with it.
+    pub(crate) fn prices(&self) -> Arc<PriceTable> {
+        Arc::clone(&self.prices.read().unwrap_or_else(PoisonError::into_inner))
+    }
+
     pub(crate) fn max_request_bytes(&self) -> usize {
         self.max_request_bytes
     }

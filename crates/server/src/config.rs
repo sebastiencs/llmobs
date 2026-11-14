@@ -47,6 +47,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("LLMOBS_OBJECT_STORE", "storage.object_store"),
     ("LLMOBS_SMTP_URL", "smtp_url"),
     ("LLMOBS_EMAIL_FROM", "email_from"),
+    ("LLMOBS_ENCRYPTION_KEY", "encryption_key"),
     ("LLMOBS_AUTH_SIGNUP", "auth.signup"),
     ("LLMOBS_AUTH_SIGNUP_DOMAINS", "auth.signup_domains"),
     ("LLMOBS_AUTH_DISABLE_PASSWORD", "auth.disable_password"),
@@ -76,6 +77,11 @@ impl<T> Secret<T> {
     /// The value this secret holds.
     pub fn expose(&self) -> &T {
         &self.0
+    }
+
+    /// Wraps a value read from somewhere other than the config loader.
+    pub fn new(value: T) -> Self {
+        Self(value)
     }
 }
 
@@ -468,11 +474,32 @@ impl Default for MediaConfig {
     }
 }
 
+/// `[eval]` (spec 06, D-I-6).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct EvalConfig {
+    /// Evaluation jobs run at once by this process. Default 16, 1 to 256.
+    pub workers: u32,
+}
+
+impl Default for EvalConfig {
+    fn default() -> Self {
+        Self { workers: 16 }
+    }
+}
+
+/// `[security]` (spec 12, D166).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SecurityConfig {
+    /// Let judges and webhooks reach private, loopback and link-local addresses. Default false.
+    pub allow_private_network_egress: bool,
+}
+
 /// Everything `llmobs serve` reads from the environment and `llmobs.toml`.
 ///
-/// Keys that spec 12 lists for later work (encryption key, evaluation workers,
-/// telemetry, compaction, gc, deletion, anchor) are not fields. Setting one is
-/// an unknown-key error.
+/// Keys that spec 12 lists for later work (telemetry, compaction, gc, deletion,
+/// anchor) are not fields. Setting one is an unknown-key error.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
@@ -515,6 +542,15 @@ pub struct ServerConfig {
     /// `[media]` extraction bounds.
     #[serde(default)]
     pub media: MediaConfig,
+    /// `[eval]` worker settings.
+    #[serde(default)]
+    pub eval: EvalConfig,
+    /// `[security]` settings.
+    #[serde(default)]
+    pub security: SecurityConfig,
+    /// 32 bytes in standard base64. Unset: `<data_dir>/secret.key` (D-I-1).
+    #[serde(default)]
+    pub encryption_key: Option<Secret<String>>,
     /// Sign-up policy and the auth flags from spec 08.
     #[serde(default)]
     pub auth: AuthSettings,
@@ -713,6 +749,7 @@ fn map_figment(error: figment::Error) -> ConfigError {
 
 fn secret_key(path: &[String]) -> Option<&'static str> {
     match path {
+        [key] if key == "encryption_key" => Some("encryption_key"),
         [key] if key == "smtp_url" => Some("smtp_url"),
         [parent, key] if parent == "init" && key == "admin_password" => Some("init.admin_password"),
         [parent, key] if parent == "init" && key == "secret_key" => Some("init.secret_key"),
@@ -773,6 +810,12 @@ fn validate(config: &mut ServerConfig) -> Result<(), ConfigError> {
             reason: rule,
         },
     })?;
+    if !(1..=256).contains(&config.eval.workers) {
+        return Err(ConfigError::Invalid {
+            key: "eval.workers",
+            reason: "must be between 1 and 256",
+        });
+    }
     Ok(())
 }
 
@@ -1438,7 +1481,7 @@ fn env_value(dotted: &str, raw: &str) -> Value {
 fn is_secret_path(dotted: &str) -> bool {
     matches!(
         dotted,
-        "smtp_url" | "init.admin_password" | "init.secret_key"
+        "encryption_key" | "smtp_url" | "init.admin_password" | "init.secret_key"
     ) || dotted.ends_with(".client_secret")
 }
 
@@ -1483,7 +1526,8 @@ mod tests {
     use llmobs_storage::config::{ObjectStoreUrl, WalSync};
 
     use super::{
-        ConfigError, IngestConfig, LogFormat, MediaConfig, ServerConfig, SmtpUrl, Tls, load_from,
+        ConfigError, IngestConfig, LogFormat, MediaConfig, Secret, ServerConfig, SmtpUrl, Tls,
+        load_from,
     };
     use crate::api::account::SignupPolicy;
 
@@ -1832,6 +1876,84 @@ mod tests {
         let (user, password) = config.smtp_url.unwrap().credentials.unwrap();
         assert_eq!(user, "user");
         assert_eq!(password.expose(), "s3cret-token");
+    }
+
+    #[test]
+    fn eval_and_security_default() {
+        let config = load_from(None, &[]).unwrap();
+        assert_eq!(config.eval.workers, 16);
+        assert!(!config.security.allow_private_network_egress);
+        assert!(config.encryption_key.is_none());
+    }
+
+    #[test]
+    fn eval_workers_out_of_range_is_rejected() {
+        for toml in ["[eval]\nworkers = 0\n", "[eval]\nworkers = 257\n"] {
+            let error = load_from(Some(toml), &[]).unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    ConfigError::Invalid {
+                        key: "eval.workers",
+                        ..
+                    }
+                ),
+                "{toml}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn encryption_key_comes_from_the_environment() {
+        let config = load_from(None, &[("LLMOBS_ENCRYPTION_KEY", "abc")]).unwrap();
+        assert_eq!(
+            config.encryption_key.map(|key| key.expose().clone()),
+            Some("abc".to_owned())
+        );
+    }
+
+    #[test]
+    fn numeric_encryption_key_stays_a_string() {
+        let config = load_from(None, &[("LLMOBS_ENCRYPTION_KEY", "12345678")]).unwrap();
+        assert_eq!(
+            config.encryption_key.map(|key| key.expose().clone()),
+            Some("12345678".to_owned())
+        );
+    }
+
+    #[test]
+    fn encryption_key_type_error_does_not_quote_the_value() {
+        let error = load_from(Some("encryption_key = 424242\n"), &[]).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ConfigError::Invalid {
+                    key: "encryption_key",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+        let text = error.to_string();
+        assert!(!text.contains("424242"), "{text}");
+    }
+
+    #[test]
+    fn security_section_parses() {
+        let config = load_from(
+            Some("[security]\nallow_private_network_egress = true\n"),
+            &[],
+        )
+        .unwrap();
+        assert!(config.security.allow_private_network_egress);
+    }
+
+    #[test]
+    fn server_config_debug_hides_the_key() {
+        let mut config = load_from(None, &[]).unwrap();
+        config.encryption_key = Some(Secret::new("topsecretvalue".to_owned()));
+        let text = format!("{config:?}");
+        assert!(!text.contains("topsecretvalue"), "{text}");
     }
 
     #[test]

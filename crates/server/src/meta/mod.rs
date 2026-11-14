@@ -7,8 +7,10 @@
 #![cfg_attr(not(test), allow(dead_code))] // `llmobs serve` opens this from P5 on
 
 pub(crate) mod api_keys;
+pub(crate) mod connections;
 pub(crate) mod email_verifications;
 pub(crate) mod identities;
+pub(crate) mod instance_settings;
 pub(crate) mod invites;
 pub(crate) mod members;
 pub(crate) mod orgs;
@@ -385,7 +387,7 @@ mod tests {
             .fetch_one(db.reader())
             .await
             .unwrap();
-        assert_eq!(count, 3);
+        assert_eq!(count, 4);
         let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
             .fetch_one(db.reader())
             .await
@@ -409,7 +411,7 @@ mod tests {
                 sqlx::query(
                     "INSERT INTO _sqlx_migrations \
                      (version, description, success, checksum, execution_time) \
-                     VALUES (4, 'future', 1, ?, 0)",
+                     VALUES (5, 'future', 1, ?, 0)",
                 )
                 .bind(Vec::<u8>::new())
                 .execute(&mut *connection)
@@ -424,8 +426,8 @@ mod tests {
         let error = MetaDb::open_existing(dir.path()).await.unwrap_err();
         match error {
             MetaError::SchemaMismatch { found, expected } => {
-                assert_eq!(found, 4);
-                assert_eq!(expected, 3);
+                assert_eq!(found, 5);
+                assert_eq!(expected, 4);
             }
             other => panic!("{other}"),
         }

@@ -8,7 +8,7 @@ import { WRITE_OPERATIONS, writeHandlers } from "./writes";
 
 const PROJECT = "/api/v1/projects/acme%2Fsupport-bot";
 
-/** Writes that later tracks add under the covered prefixes (none today). */
+/** Writes that later sub-phases add under the covered prefixes. */
 const LATER_TRACKS: string[] = [];
 
 beforeEach(() => {

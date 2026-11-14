@@ -10,8 +10,10 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+aes-gcm.workspace = true
 arrow.workspace = true
 llmobs-core.workspace = true
+llmobs-eval.workspace = true
 llmobs-otel.workspace = true
 llmobs-storage.workspace = true
 utoipa.workspace = true

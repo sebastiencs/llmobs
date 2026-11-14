@@ -43,9 +43,8 @@ impl Adapter {
         }
     }
 
-    /// Parses the stored connection value.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn from_name(text: &str) -> Result<Self, UnknownName> {
+    /// Parses the stored connection value. Unknown text is [`UnknownName`].
+    pub fn from_name(text: &str) -> Result<Self, UnknownName> {
         match text {
             "openai" => Ok(Self::OpenAi),
             "anthropic" => Ok(Self::Anthropic),
@@ -90,9 +89,8 @@ impl StructuredOutput {
         }
     }
 
-    /// Parses the stored connection value.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn from_name(text: &str) -> Result<Self, UnknownName> {
+    /// Parses the stored connection value. Unknown text is [`UnknownName`].
+    pub fn from_name(text: &str) -> Result<Self, UnknownName> {
         match text {
             "native" => Ok(Self::Native),
             "tool" => Ok(Self::Tool),
@@ -104,10 +102,9 @@ impl StructuredOutput {
 
 /// [`Adapter::from_name`] or [`StructuredOutput::from_name`] rejected the text.
 ///
-/// The rejected text is omitted.
+/// The rejected text is not kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct UnknownName;
+pub struct UnknownName;
 
 impl std::fmt::Display for UnknownName {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -334,6 +331,14 @@ mod tests {
         crate::error::assert_no_payload(&debug, "SECRET-PAYLOAD");
         assert!(debug.contains("judge.example"), "{debug}");
         assert!(debug.contains("X-Tenant"), "{debug}");
+    }
+
+    #[test]
+    fn from_name_rejects_other_text() {
+        for text in ["OPENAI", "", "open ai"] {
+            assert_eq!(Adapter::from_name(text), Err(UnknownName), "{text:?}");
+        }
+        assert_eq!(StructuredOutput::from_name("NATIVE"), Err(UnknownName));
     }
 
     #[test]

@@ -2356,6 +2356,600 @@
         ]
       }
     },
+    "/api/v1/orgs/{org}/llm-connections": {
+      "get": {
+        "tags": [
+          "llm_connections"
+        ],
+        "summary": "List LLM connections",
+        "description": "Any member of the organization.",
+        "operationId": "list_llm_connections",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Org UUID or slug.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return (1–1000, default 50).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Limit",
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of connections, ordered by name. Keys and header values are not included.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmConnectionPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "llm_connections"
+        ],
+        "summary": "Create an LLM connection",
+        "description": "Organization admins and owners.",
+        "operationId": "post_llm_connection",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Org UUID or slug.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateLlmConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmConnection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{org}/llm-connections/{id}": {
+      "get": {
+        "tags": [
+          "llm_connections"
+        ],
+        "summary": "Get an LLM connection",
+        "description": "Any member of the organization.",
+        "operationId": "get_llm_connection",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Org UUID or slug.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmConnection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "llm_connections"
+        ],
+        "summary": "Delete an LLM connection",
+        "description": "Organization admins and owners.",
+        "operationId": "delete_llm_connection",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Org UUID or slug.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The connection is deleted."
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "llm_connections"
+        ],
+        "summary": "Update an LLM connection",
+        "description": "Organization admins and owners.",
+        "operationId": "patch_llm_connection",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Org UUID or slug.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateLlmConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmConnection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{org}/llm-connections/{id}/test": {
+      "post": {
+        "tags": [
+          "llm_connections"
+        ],
+        "summary": "Test an LLM connection",
+        "description": "Organization admins and owners.",
+        "operationId": "post_llm_connection_test",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Org UUID or slug.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestLlmConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome. A provider failure is ok: false, not an error status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmConnectionTestResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/orgs/{org}/members": {
       "get": {
         "tags": [
@@ -7019,6 +7613,14 @@
           "json"
         ]
       },
+      "ConnectionStatus": {
+        "type": "string",
+        "description": "Whether the connection's last test reached the provider.",
+        "enum": [
+          "ok",
+          "failing"
+        ]
+      },
       "Convention": {
         "type": "string",
         "description": "An instrumentation convention detected on a span.\n\nSpec 01 `conventions` and spec 02 § Convention detection.",
@@ -7108,6 +7710,64 @@
           "role": {
             "$ref": "#/components/schemas/OrgRole",
             "description": "Role granted on accept. Not above the caller's role."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateLlmConnectionRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/orgs/{org}/llm-connections` body.",
+        "required": [
+          "name",
+          "adapter",
+          "api_key"
+        ],
+        "properties": {
+          "adapter": {
+            "$ref": "#/components/schemas/LlmAdapter",
+            "description": "The provider API the connection talks to."
+          },
+          "api_key": {
+            "type": "string",
+            "description": "Provider API key, 1 to 4096 bytes. Write-only."
+          },
+          "base_url": {
+            "type": "string",
+            "description": "Provider endpoint overriding the provider's default."
+          },
+          "default_model": {
+            "type": "string",
+            "description": "Model used when a caller names none."
+          },
+          "extra_headers": {
+            "type": "object",
+            "description": "Extra headers sent with every provider call, at most 20. Values are\nwrite-only.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "max_concurrency": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Provider calls the connection runs at once, 1 to 64. Default 4.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name, 1 to 100 characters after trimming."
+          },
+          "requests_per_minute": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Provider calls per minute, 1 to 10000. Default 300.",
+            "minimum": 0
+          },
+          "structured_output": {
+            "$ref": "#/components/schemas/StructuredOutputMode",
+            "description": "How the provider is asked to fill the answer schema. Default `native`."
           }
         },
         "additionalProperties": false
@@ -7671,6 +8331,181 @@
         "default": 50,
         "maximum": 1000,
         "minimum": 1
+      },
+      "LlmAdapter": {
+        "type": "string",
+        "description": "The provider API a connection talks to.",
+        "enum": [
+          "openai",
+          "anthropic",
+          "gemini"
+        ]
+      },
+      "LlmConnection": {
+        "type": "object",
+        "description": "An LLM provider connection an evaluator calls. The API key and the header\nvalues are not fields (D-I-4).",
+        "required": [
+          "id",
+          "name",
+          "adapter",
+          "structured_output",
+          "max_concurrency",
+          "requests_per_minute",
+          "api_key_hint",
+          "extra_header_names",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "adapter": {
+            "$ref": "#/components/schemas/LlmAdapter",
+            "description": "The provider API the connection talks to."
+          },
+          "api_key_hint": {
+            "type": "string",
+            "description": "Last 4 characters of the API key, or an empty string when the key is\nshorter than 16 characters."
+          },
+          "base_url": {
+            "type": "string",
+            "description": "Provider endpoint. Omitted when the provider's default is used. May\ncarry only an `api-version` query parameter (Azure)."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Creation time. JSON is RFC 3339."
+          },
+          "created_by": {
+            "type": "string",
+            "format": "uuid",
+            "description": "User who created the connection. Omitted when that user is unknown."
+          },
+          "default_model": {
+            "type": "string",
+            "description": "Model used when a caller names none. Omitted when unset."
+          },
+          "extra_header_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Extra header names, lowercase, sorted. The values are not included."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Connection id."
+          },
+          "last_error": {
+            "type": "string",
+            "description": "Last pause-class error. Omitted when unset."
+          },
+          "last_error_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When `last_error` was recorded. Omitted when unset."
+          },
+          "max_concurrency": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Provider calls the connection runs at once, 1 to 64.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name, unique in the organization."
+          },
+          "requests_per_minute": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Provider calls per minute, 1 to 10000.",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConnectionStatus",
+            "description": "Whether the connection's last test reached the provider."
+          },
+          "structured_output": {
+            "$ref": "#/components/schemas/StructuredOutputMode",
+            "description": "How the provider is asked to fill the answer schema."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last change time. JSON is RFC 3339."
+          }
+        }
+      },
+      "LlmConnectionPage": {
+        "type": "object",
+        "description": "One page of results. `next_cursor` is null when there is no next page.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LlmConnection"
+            },
+            "description": "Items in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
+      },
+      "LlmConnectionTestError": {
+        "type": "object",
+        "description": "Why a connection test failed.",
+        "required": [
+          "class",
+          "message"
+        ],
+        "properties": {
+          "class": {
+            "$ref": "#/components/schemas/TestErrorClass",
+            "description": "What the caller should do with the failure."
+          },
+          "message": {
+            "type": "string",
+            "description": "Provider or transport error text, without secrets."
+          }
+        }
+      },
+      "LlmConnectionTestResult": {
+        "type": "object",
+        "description": "`POST /api/v1/orgs/{org}/llm-connections/{id}/test` response.",
+        "required": [
+          "ok",
+          "model",
+          "latency_ms"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/LlmConnectionTestError",
+            "description": "The failure. Omitted when `ok` is true."
+          },
+          "latency_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Round-trip time of the call.",
+            "minimum": 0
+          },
+          "model": {
+            "type": "string",
+            "description": "The model the test called."
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "Whether one boolean judge call succeeded."
+          }
+        }
       },
       "LoginRequest": {
         "type": "object",
@@ -9987,6 +10822,35 @@
           }
         }
       },
+      "StructuredOutputMode": {
+        "type": "string",
+        "description": "How the provider is asked to fill the answer schema.",
+        "enum": [
+          "native",
+          "tool",
+          "prompt"
+        ]
+      },
+      "TestErrorClass": {
+        "type": "string",
+        "description": "What the caller should do with a failed connection test.",
+        "enum": [
+          "retryable",
+          "pause",
+          "permanent"
+        ]
+      },
+      "TestLlmConnectionRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/orgs/{org}/llm-connections/{id}/test` body.",
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "Model to call. Default: the connection's `default_model`."
+          }
+        },
+        "additionalProperties": false
+      },
       "TextPart": {
         "type": "object",
         "description": "Plain text.",
@@ -10374,6 +11238,59 @@
         },
         "additionalProperties": false
       },
+      "UpdateLlmConnectionRequest": {
+        "type": "object",
+        "description": "`PATCH /api/v1/orgs/{org}/llm-connections/{id}` body. Absent means\nunchanged; an empty body is valid and changes only `updated_at`.",
+        "properties": {
+          "adapter": {
+            "$ref": "#/components/schemas/LlmAdapter",
+            "description": "The provider API the connection talks to."
+          },
+          "api_key": {
+            "type": "string",
+            "description": "Replaces the API key. Write-only."
+          },
+          "base_url": {
+            "type": "string",
+            "description": "Provider endpoint. An empty string clears it."
+          },
+          "default_model": {
+            "type": "string",
+            "description": "Model used when a caller names none. An empty string clears it."
+          },
+          "extra_headers": {
+            "type": "object",
+            "description": "Replaces the whole header map. An empty object clears it.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "max_concurrency": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Provider calls the connection runs at once, 1 to 64.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name, 1 to 100 characters after trimming."
+          },
+          "requests_per_minute": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Provider calls per minute, 1 to 10000.",
+            "minimum": 0
+          },
+          "structured_output": {
+            "$ref": "#/components/schemas/StructuredOutputMode",
+            "description": "How the provider is asked to fill the answer schema."
+          }
+        },
+        "additionalProperties": false
+      },
       "UpdateMeRequest": {
         "type": "object",
         "description": "`PATCH /api/v1/me`.\n\nA missing `name` and JSON null both clear the display name.",
@@ -10617,6 +11534,10 @@
     {
       "name": "orgs",
       "description": "Organizations the caller belongs to."
+    },
+    {
+      "name": "llm_connections",
+      "description": "LLM provider connections that evaluators use. Keys are write-only."
     },
     {
       "name": "projects",

@@ -68,6 +68,12 @@ pub(crate) struct AppInner {
     pub(crate) metrics_cache: crate::routes::metrics::MetricsCache,
     /// Usage counters, flushed every 10 s (D-G-11).
     pub(crate) usage: crate::usage::Usage,
+    /// Seals and opens secret columns (D-I-2).
+    pub(crate) secrets: crate::crypto::SecretBox,
+    /// One egress client for judges, webhooks and connection tests (D-I-29).
+    pub(crate) eval_runner: Arc<llmobs_eval::EvalRunner>,
+    /// Decrypted connections, keyed by id and `updated_at`.
+    pub(crate) connections: crate::eval::connection::ConnectionCache,
 }
 
 impl AppState {

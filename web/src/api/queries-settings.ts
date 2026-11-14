@@ -25,6 +25,15 @@ export function orgInvitesKey(org: string) {
   return $api.queryOptions("get", "/api/v1/orgs/{org}/invites", orgInvitesInit(org)).queryKey;
 }
 
+export function connectionsInit(org: string) {
+  return { params: { path: { org }, query: { limit: 100 } } };
+}
+
+export function connectionsKey(org: string) {
+  return $api.queryOptions("get", "/api/v1/orgs/{org}/llm-connections", connectionsInit(org))
+    .queryKey;
+}
+
 export function apiKeysInit(org: string, project: string) {
   return { params: { path: { project: projectRef(org, project) }, query: { limit: 50 } } };
 }

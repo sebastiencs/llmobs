@@ -92,6 +92,8 @@ Overrides apply only to org `member`s and `viewer`s (D139). They can raise the p
 | Delete org, transfer ownership, change owners | | | | ✓ |
 | Instance settings (instance admins only) | — | — | — | — |
 
+LLM connections belong to the org. Org admins and owners manage and test them, and every org member can list them without their keys (D-I-4, D-I-24).
+
 A resource outside the caller's reach answers **404**, never 403, so ids cannot be probed. A visible resource with too low a role answers **403** (D138).
 
 Enforced in one place: every route is declared with its access (public, any signed-in user, session-only, an org permission, a project permission, or instance admin). One middleware enforces it before the handler, resolves `{org}` and `{project}`, and hands the handler the resolved access. The principal is a session user, a PAT user, or an API key.

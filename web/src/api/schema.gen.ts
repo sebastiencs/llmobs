@@ -511,6 +511,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orgs/{org}/llm-connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List LLM connections
+         * @description Any member of the organization.
+         */
+        get: operations["list_llm_connections"];
+        put?: never;
+        /**
+         * Create an LLM connection
+         * @description Organization admins and owners.
+         */
+        post: operations["post_llm_connection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{org}/llm-connections/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get an LLM connection
+         * @description Any member of the organization.
+         */
+        get: operations["get_llm_connection"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete an LLM connection
+         * @description Organization admins and owners.
+         */
+        delete: operations["delete_llm_connection"];
+        options?: never;
+        head?: never;
+        /**
+         * Update an LLM connection
+         * @description Organization admins and owners.
+         */
+        patch: operations["patch_llm_connection"];
+        trace?: never;
+    };
+    "/api/v1/orgs/{org}/llm-connections/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test an LLM connection
+         * @description Organization admins and owners.
+         */
+        post: operations["post_llm_connection_test"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orgs/{org}/members": {
         parameters: {
             query?: never;
@@ -1238,6 +1310,11 @@ export interface components {
          */
         ColumnType: "string" | "integer" | "float" | "boolean" | "timestamp" | "string_list" | "string_map" | "json";
         /**
+         * @description Whether the connection's last test reached the provider.
+         * @enum {string}
+         */
+        ConnectionStatus: "ok" | "failing";
+        /**
          * @description An instrumentation convention detected on a span.
          *
          *     Spec 01 `conventions` and spec 02 § Convention detection.
@@ -1277,6 +1354,38 @@ export interface components {
             email: string;
             /** @description Role granted on accept. Not above the caller's role. */
             role: components["schemas"]["OrgRole"];
+        };
+        /** @description `POST /api/v1/orgs/{org}/llm-connections` body. */
+        CreateLlmConnectionRequest: {
+            /** @description The provider API the connection talks to. */
+            adapter: components["schemas"]["LlmAdapter"];
+            /** @description Provider API key, 1 to 4096 bytes. Write-only. */
+            api_key: string;
+            /** @description Provider endpoint overriding the provider's default. */
+            base_url?: string;
+            /** @description Model used when a caller names none. */
+            default_model?: string;
+            /**
+             * @description Extra headers sent with every provider call, at most 20. Values are
+             *     write-only.
+             */
+            extra_headers?: {
+                [key: string]: string;
+            };
+            /**
+             * Format: int32
+             * @description Provider calls the connection runs at once, 1 to 64. Default 4.
+             */
+            max_concurrency?: number;
+            /** @description Display name, 1 to 100 characters after trimming. */
+            name: string;
+            /**
+             * Format: int32
+             * @description Provider calls per minute, 1 to 10000. Default 300.
+             */
+            requests_per_minute?: number;
+            /** @description How the provider is asked to fill the answer schema. Default `native`. */
+            structured_output?: components["schemas"]["StructuredOutputMode"];
         };
         /** @description `POST /api/v1/orgs`. */
         CreateOrgRequest: {
@@ -1577,6 +1686,104 @@ export interface components {
          * @default 50
          */
         Limit: number;
+        /**
+         * @description The provider API a connection talks to.
+         * @enum {string}
+         */
+        LlmAdapter: "openai" | "anthropic" | "gemini";
+        /**
+         * @description An LLM provider connection an evaluator calls. The API key and the header
+         *     values are not fields (D-I-4).
+         */
+        LlmConnection: {
+            /** @description The provider API the connection talks to. */
+            adapter: components["schemas"]["LlmAdapter"];
+            /**
+             * @description Last 4 characters of the API key, or an empty string when the key is
+             *     shorter than 16 characters.
+             */
+            api_key_hint: string;
+            /**
+             * @description Provider endpoint. Omitted when the provider's default is used. May
+             *     carry only an `api-version` query parameter (Azure).
+             */
+            base_url?: string;
+            /**
+             * Format: date-time
+             * @description Creation time. JSON is RFC 3339.
+             */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description User who created the connection. Omitted when that user is unknown.
+             */
+            created_by?: string;
+            /** @description Model used when a caller names none. Omitted when unset. */
+            default_model?: string;
+            /** @description Extra header names, lowercase, sorted. The values are not included. */
+            extra_header_names: string[];
+            /**
+             * Format: uuid
+             * @description Connection id.
+             */
+            id: string;
+            /** @description Last pause-class error. Omitted when unset. */
+            last_error?: string;
+            /**
+             * Format: date-time
+             * @description When `last_error` was recorded. Omitted when unset.
+             */
+            last_error_at?: string;
+            /**
+             * Format: int32
+             * @description Provider calls the connection runs at once, 1 to 64.
+             */
+            max_concurrency: number;
+            /** @description Display name, unique in the organization. */
+            name: string;
+            /**
+             * Format: int32
+             * @description Provider calls per minute, 1 to 10000.
+             */
+            requests_per_minute: number;
+            /** @description Whether the connection's last test reached the provider. */
+            status: components["schemas"]["ConnectionStatus"];
+            /** @description How the provider is asked to fill the answer schema. */
+            structured_output: components["schemas"]["StructuredOutputMode"];
+            /**
+             * Format: date-time
+             * @description Last change time. JSON is RFC 3339.
+             */
+            updated_at: string;
+        };
+        /** @description One page of results. `next_cursor` is null when there is no next page. */
+        LlmConnectionPage: {
+            /** @description Items in this page. */
+            data: components["schemas"]["LlmConnection"][];
+            /** @description Opaque cursor for the next page, or null when this is the last page. */
+            next_cursor: string | null;
+        };
+        /** @description Why a connection test failed. */
+        LlmConnectionTestError: {
+            /** @description What the caller should do with the failure. */
+            class: components["schemas"]["TestErrorClass"];
+            /** @description Provider or transport error text, without secrets. */
+            message: string;
+        };
+        /** @description `POST /api/v1/orgs/{org}/llm-connections/{id}/test` response. */
+        LlmConnectionTestResult: {
+            /** @description The failure. Omitted when `ok` is true. */
+            error?: components["schemas"]["LlmConnectionTestError"];
+            /**
+             * Format: int64
+             * @description Round-trip time of the call.
+             */
+            latency_ms: number;
+            /** @description The model the test called. */
+            model: string;
+            /** @description Whether one boolean judge call succeeded. */
+            ok: boolean;
+        };
         /** @description `POST /api/auth/login`. */
         LoginRequest: {
             /** @description Email address. */
@@ -2783,6 +2990,21 @@ export interface components {
             /** @description More rows matched than `limit`; `rows` holds the first `limit`. */
             truncated: boolean;
         };
+        /**
+         * @description How the provider is asked to fill the answer schema.
+         * @enum {string}
+         */
+        StructuredOutputMode: "native" | "tool" | "prompt";
+        /**
+         * @description What the caller should do with a failed connection test.
+         * @enum {string}
+         */
+        TestErrorClass: "retryable" | "pause" | "permanent";
+        /** @description `POST /api/v1/orgs/{org}/llm-connections/{id}/test` body. */
+        TestLlmConnectionRequest: {
+            /** @description Model to call. Default: the connection's `default_model`. */
+            model?: string;
+        };
         /** @description Plain text. */
         TextPart: {
             /** @description The text. */
@@ -3010,6 +3232,38 @@ export interface components {
             disabled?: boolean;
             /** @description Grant or remove instance admin. */
             is_instance_admin?: boolean;
+        };
+        /**
+         * @description `PATCH /api/v1/orgs/{org}/llm-connections/{id}` body. Absent means
+         *     unchanged; an empty body is valid and changes only `updated_at`.
+         */
+        UpdateLlmConnectionRequest: {
+            /** @description The provider API the connection talks to. */
+            adapter?: components["schemas"]["LlmAdapter"];
+            /** @description Replaces the API key. Write-only. */
+            api_key?: string;
+            /** @description Provider endpoint. An empty string clears it. */
+            base_url?: string;
+            /** @description Model used when a caller names none. An empty string clears it. */
+            default_model?: string;
+            /** @description Replaces the whole header map. An empty object clears it. */
+            extra_headers?: {
+                [key: string]: string;
+            };
+            /**
+             * Format: int32
+             * @description Provider calls the connection runs at once, 1 to 64.
+             */
+            max_concurrency?: number;
+            /** @description Display name, 1 to 100 characters after trimming. */
+            name?: string;
+            /**
+             * Format: int32
+             * @description Provider calls per minute, 1 to 10000.
+             */
+            requests_per_minute?: number;
+            /** @description How the provider is asked to fill the answer schema. */
+            structured_output?: components["schemas"]["StructuredOutputMode"];
         };
         /**
          * @description `PATCH /api/v1/me`.
@@ -4965,6 +5219,455 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_llm_connections: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of items to return (1–1000, default 50). */
+                limit?: components["schemas"]["Limit"];
+                /** @description Opaque cursor from a previous page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Org UUID or slug. */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of connections, ordered by name. Keys and header values are not included. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmConnectionPage"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    post_llm_connection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Org UUID or slug. */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateLlmConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description The connection. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmConnection"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request conflicts with the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_llm_connection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Org UUID or slug. */
+                org: string;
+                /** @description Connection id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmConnection"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_llm_connection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Org UUID or slug. */
+                org: string;
+                /** @description Connection id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection is deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    patch_llm_connection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Org UUID or slug. */
+                org: string;
+                /** @description Connection id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateLlmConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description The connection. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmConnection"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request conflicts with the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    post_llm_connection_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Org UUID or slug. */
+                org: string;
+                /** @description Connection id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestLlmConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description The outcome. A provider failure is ok: false, not an error status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmConnectionTestResult"];
+                };
             };
             /** @description The request is malformed or a filter is invalid. */
             400: {

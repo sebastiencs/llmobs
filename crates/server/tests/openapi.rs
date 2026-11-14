@@ -82,6 +82,36 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
         "/api/v1/orgs/{org}/invites/{id}",
         "delete_org_invite",
     ),
+    (
+        "get",
+        "/api/v1/orgs/{org}/llm-connections",
+        "list_llm_connections",
+    ),
+    (
+        "post",
+        "/api/v1/orgs/{org}/llm-connections",
+        "post_llm_connection",
+    ),
+    (
+        "get",
+        "/api/v1/orgs/{org}/llm-connections/{id}",
+        "get_llm_connection",
+    ),
+    (
+        "patch",
+        "/api/v1/orgs/{org}/llm-connections/{id}",
+        "patch_llm_connection",
+    ),
+    (
+        "delete",
+        "/api/v1/orgs/{org}/llm-connections/{id}",
+        "delete_llm_connection",
+    ),
+    (
+        "post",
+        "/api/v1/orgs/{org}/llm-connections/{id}/test",
+        "post_llm_connection_test",
+    ),
     ("get", "/api/v1/orgs/{org}/projects", "list_projects"),
     ("post", "/api/v1/orgs/{org}/projects", "post_project"),
     ("get", "/api/v1/projects/{project}", "get_project"),
@@ -196,6 +226,7 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
 const QUERY_OR_BODY: &[&str] = &[
     "list_org_members",
     "list_org_invites",
+    "list_llm_connections",
     "list_project_members",
     "list_projects",
     "list_api_keys",
@@ -232,6 +263,7 @@ const TAGS: &[&str] = &[
     "admin",
     "auth",
     "orgs",
+    "llm_connections",
     "projects",
     "traces",
     "spans",
@@ -424,6 +456,13 @@ fn document_lint() {
             expected_errors.extend(["400", "401", "403", "404", "413", "429"]);
         } else if *id == "get_media" {
             expected_errors.extend(["401", "403", "404", "416", "429"]);
+        } else if *id == "post_llm_connection" || *id == "patch_llm_connection" {
+            expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
+        } else if *id == "get_llm_connection"
+            || *id == "delete_llm_connection"
+            || *id == "post_llm_connection_test"
+        {
+            expected_errors.extend(["400", "401", "403", "404", "429"]);
         } else if *id == "run_sql" {
             expected_errors.extend(["400", "401", "403", "404", "413", "415", "422", "429"]);
         } else if READ_OPERATIONS.contains(id) {
@@ -507,6 +546,7 @@ fn document_lint() {
         ("ApiKeyPage", "ApiKey"),
         ("PersonalTokenPage", "PersonalToken"),
         ("SavedViewPage", "SavedView"),
+        ("LlmConnectionPage", "LlmConnection"),
     ];
     for (page, item) in pages {
         let schema = &schemas[page];
@@ -756,6 +796,7 @@ fn assert_nullability(schemas: &serde_json::Map<String, Value>) {
         "ApiKeyPage",
         "PersonalTokenPage",
         "SavedViewPage",
+        "LlmConnectionPage",
     ];
     let expected: BTreeSet<String> = pages
         .iter()

@@ -126,17 +126,28 @@ CREATE TABLE personal_tokens (        -- for CLI / MCP; act as the user, with th
 CREATE TABLE llm_connections (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
-  project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,  -- NULL = org-wide
   name TEXT NOT NULL,
-  adapter TEXT NOT NULL,              -- 'openai' | 'anthropic' | 'gemini'
-  base_url TEXT,                      -- for OpenAI-compatible (Azure, vLLM, Ollama, OpenRouter, LiteLLM)
-  secret_enc BLOB NOT NULL,           -- AES-256-GCM(nonce || ciphertext) of the API key
-  extra_headers_enc BLOB,             -- encrypted JSON map
+  adapter TEXT NOT NULL,
+  base_url TEXT,
+  secret_enc BLOB NOT NULL,
+  api_key_hint TEXT NOT NULL,
+  extra_headers_enc BLOB,
+  extra_header_names TEXT NOT NULL DEFAULT '[]',
   default_model TEXT,
-  structured_output TEXT NOT NULL DEFAULT 'native', -- 'native' | 'tool' | 'prompt' (06)
-  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+  structured_output TEXT NOT NULL DEFAULT 'native',
+  max_concurrency INTEGER NOT NULL DEFAULT 4,
+  requests_per_minute INTEGER NOT NULL DEFAULT 300,
+  status TEXT NOT NULL DEFAULT 'ok',
+  last_error TEXT,
+  last_error_at INTEGER,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(org_id, name)
 );
 ```
+
+Connections belong to the org (D-I-4). `secret_enc` and `extra_headers_enc` are sealed (§ Encryption of secrets); `api_key_hint` and `extra_header_names` are what the API shows.
 
 ## Deletion requests
 
@@ -402,13 +413,15 @@ CREATE TABLE usage_daily (
 );
 
 CREATE TABLE instance_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
--- e.g. encryption key check value, signup policy, telemetry id
+-- 'encryption.check': hex HMAC-SHA256 check value of the encryption key (D-I-2)
 ```
 
-`instance_settings` is created by track E with its first use (D135).
+`instance_settings` is created by track I (migration `0004`, D156).
 
 Usage counters are accumulated in memory and flushed to `usage_daily` every 10 s (upsert-add).
 
 ## Encryption of secrets
 
-`LLMOBS_ENCRYPTION_KEY` (32 bytes, base64). If unset at first start, a key is generated and written to `<data_dir>/secret.key` (mode 0600) with a warning. A check value (`HMAC(key, "llmobs")`) in `instance_settings` detects a wrong key at startup. Encrypted columns use AES-256-GCM with a random 96-bit nonce and the row id as associated data. Key rotation: `llmobs admin rotate-encryption-key --new <key>` re-encrypts all columns in one transaction.
+The key is 32 bytes in standard base64. Source order (D-I-1): the `encryption_key` config value (`LLMOBS_ENCRYPTION_KEY`) wins and the file is neither read nor written; otherwise `<data_dir>/secret.key`; otherwise the server generates a key, but only while `instance_settings` has no `encryption.check` — once a check value exists, a missing key fails startup. The file holds the base64 of the 32 key bytes plus one trailing newline, mode 0600, written through a `.tmp` file and a rename so a crash leaves either no file or a whole one; a mode readable by group or other is warned about and still used. `llmobs admin rotate-encryption-key` re-encrypts every sealed column in one transaction, writing `secret.key.new` first; a start that finds a `secret.key.new` whose check value matches the stored one renames it over `secret.key`, finishing an interrupted rotation, and otherwise deletes it (D-I-3).
+
+A sealed value is `0x01` ‖ key id (4 bytes) ‖ nonce (12) ‖ AES-256-GCM ciphertext and tag (D-I-2). The key id is `HMAC-SHA256(key, "llmobs.key-id.v1")[0..4]`; the associated data is `table:column:row_id`, with the row id a hyphenated lowercase UUID; the nonce is 96 random bits. `instance_settings['encryption.check']` holds the lowercase hex of `HMAC-SHA256(key, "llmobs.encryption-check.v1")`: the server records it on the first start of a data directory and refuses a different key afterwards.
