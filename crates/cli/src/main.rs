@@ -420,6 +420,8 @@ impl Signals {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use super::{log_filter, run_cli};
 
     #[test]
@@ -428,6 +430,46 @@ mod tests {
             let filter = log_filter(level).unwrap().to_string();
             assert!(filter.contains("rmcp=warn"), "{level}: {filter}");
             assert!(!filter.contains("rmcp=trace"), "{level}: {filter}");
+        }
+    }
+
+    /// `log_filter("debug")` admits debug events, but not rmcp's: a subscriber built from it
+    /// drops an rmcp event (rmcp logs whole requests and results at debug) and still emits a
+    /// debug event for another target.
+    #[test]
+    fn a_debug_filter_drops_rmcp_debug_events() {
+        use tracing_subscriber::Layer;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let buffer = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let writer = Arc::clone(&buffer);
+        let layer = tracing_subscriber::fmt::layer()
+            .with_writer(move || Buffer(Arc::clone(&writer)))
+            .with_ansi(false)
+            .with_target(true)
+            .with_filter(log_filter("debug").unwrap());
+        let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(layer));
+        let guard = tracing::dispatcher::set_default(&dispatch);
+        tracing::debug!(target: "rmcp::service", "dropped-canary");
+        tracing::debug!(target: "llmobs::serve", "kept-canary");
+        drop(guard);
+        drop(dispatch);
+        let logs = String::from_utf8_lossy(&buffer.lock().unwrap().clone()).into_owned();
+        assert!(!logs.contains("dropped-canary"), "{logs}");
+        assert!(logs.contains("kept-canary"), "{logs}");
+        assert!(logs.contains("llmobs::serve"), "{logs}");
+    }
+
+    /// `io::Write` over the shared buffer of [`a_debug_filter_drops_rmcp_debug_events`].
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Buffer {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().write(data)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
         }
     }
 

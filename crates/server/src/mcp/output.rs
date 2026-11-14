@@ -17,6 +17,9 @@ pub(crate) fn render(value: &Value) -> String {
     value.to_string()
 }
 
+/// Longest error message in a tool result: serde errors can echo up to 1 MiB of the input.
+const MAX_MESSAGE: usize = 500;
+
 /// Length in characters (Unicode scalar values), the unit of every budget.
 pub(crate) fn char_len(text: &str) -> usize {
     text.chars().count()
@@ -39,15 +42,18 @@ pub(crate) fn max_chars(given: Option<i64>) -> Result<usize, ApiError> {
     }
 }
 
-/// `text` cut to its first `max` characters followed by `…`, or `None` when it has at most
-/// `max` characters. A cut string therefore has `max + 1` characters. Characters are Unicode
-/// scalar values, so a multibyte character is never split.
+/// `text` cut to at most `max` characters in total: its first `max - 1` characters followed
+/// by `…` (for `max == 0`, the empty string), or `None` when it has at most `max` characters.
+/// A cut string has exactly `max` characters, so cutting it again is a no-op. Characters are
+/// Unicode scalar values, so a multibyte character is never split.
 pub(crate) fn cut(text: &str, max: usize) -> Option<String> {
     if text.chars().count() <= max {
         return None;
     }
-    let mut out: String = text.chars().take(max).collect();
-    out.push('…');
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    if max > 0 {
+        out.push('…');
+    }
     Some(out)
 }
 
@@ -58,7 +64,8 @@ pub(crate) fn success(body: &Value) -> CallToolResult {
 
 /// A failed tool result: `{"error": {"code", "message", "position"?}}` with the spec 09
 /// problem code. The message is the first field error's message when there is one (it carries
-/// the position), else the problem's detail, else its title. Logged like an HTTP error.
+/// the position), else the problem's detail, else its title, cut to [`MAX_MESSAGE`]
+/// characters. Logged like an HTTP error.
 pub(crate) fn failure(error: &ApiError) -> CallToolResult {
     error.log();
     let problem = error.problem();
@@ -67,6 +74,7 @@ pub(crate) fn failure(error: &ApiError) -> CallToolResult {
         Some(field) => (field.message.clone(), field.position),
         None => (problem.detail.unwrap_or(problem.title), None),
     };
+    let message = cut(&message, MAX_MESSAGE).unwrap_or(message);
     let mut inner = Map::new();
     inner.insert("code".to_owned(), json!(problem.code));
     inner.insert("message".to_owned(), Value::String(message));
@@ -193,12 +201,15 @@ mod tests {
     #[test]
     fn cut_counts_characters() {
         assert_eq!(cut("héllo", 5), None);
-        assert_eq!(cut("héllo", 2), Some("hé…".to_owned()));
+        assert_eq!(cut("héllo", 2), Some("h…".to_owned()));
         assert_eq!(cut("", 0), None);
         assert_eq!(cut(&"é".repeat(2000), 2000), None);
         let long = cut(&"é".repeat(2001), 2000).expect("cut");
-        assert_eq!(long.chars().count(), 2001);
-        assert_eq!(long, format!("{}…", "é".repeat(2000)));
+        assert_eq!(long.chars().count(), 2000);
+        assert_eq!(long, format!("{}…", "é".repeat(1999)));
+        // Cutting a cut value is a no-op.
+        assert_eq!(cut(&long, 2000), None);
+        assert_eq!(cut("x", 0), Some(String::new()));
     }
 
     #[test]
@@ -233,5 +244,19 @@ mod tests {
             text_of(&failure(&ApiError::NotFound)),
             r#"{"error":{"code":"not_found","message":"Not Found"}}"#
         );
+    }
+
+    #[test]
+    fn failure_clamps_the_message() {
+        let error = ApiError::BadRequest {
+            detail: Some(format!("invalid arguments: {}", "x".repeat(10_000))),
+            errors: Vec::new(),
+        };
+        let result = failure(&error);
+        let body: Value = serde_json::from_str(text_of(&result)).unwrap();
+        let message = body["error"]["message"].as_str().unwrap();
+        assert_eq!(message.chars().count(), 500);
+        assert!(message.ends_with('…'));
+        assert!(message.starts_with("invalid arguments: xxx"));
     }
 }

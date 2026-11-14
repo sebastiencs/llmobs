@@ -730,7 +730,7 @@ mod tests {
         .await;
         assert!(!is_error);
         let big = body["rows"][0]["big"].as_str().unwrap();
-        assert_eq!(big.chars().count(), 2001);
+        assert_eq!(big.chars().count(), 2000);
         assert!(big.ends_with('…'));
         assert_eq!(body["truncated"], json!(false));
         assert_eq!(
@@ -935,6 +935,13 @@ mod tests {
         assert_eq!(body["rows"], json!([{"one": 1}]));
     }
 
+    /// The query must be one that cannot finish on its first poll: `tokio::time::timeout`
+    /// polls the future before the deadline, so a query that runs to completion inline (a
+    /// plain aggregate over the in-memory example data) wins the race however small the
+    /// timeout. The `GROUP BY` plan is executed through a `RepartitionExec`: its partition
+    /// tasks are spawned during the first poll and deliver through a channel, so that poll
+    /// always returns `Pending` — a task spawned microseconds ago cannot have produced a
+    /// batch yet — and the already-elapsed 1 ns deadline then maps to `RunError::Timeout`.
     #[tokio::test(flavor = "multi_thread")]
     async fn run_query_times_out() {
         let (app, seeded, _) = with_dataset().await;
@@ -944,7 +951,7 @@ mod tests {
             .unwrap();
         let result = run_query(
             &ctx,
-            "SELECT count(*) FROM spans",
+            "SELECT span_kind, count(*) AS n FROM spans GROUP BY span_kind",
             &Map::new(),
             10,
             Duration::from_nanos(1),
@@ -1146,7 +1153,7 @@ mod tests {
             .find(|view| view["name"] == json!("Long"))
             .unwrap();
         let filter = long["state"]["filter"].as_str().unwrap();
-        assert_eq!(filter.chars().count(), 2001);
+        assert_eq!(filter.chars().count(), 2000);
         assert!(filter.ends_with('…'));
         assert_eq!(
             body["notes"],
@@ -1209,12 +1216,16 @@ mod tests {
         assert!(cut_cells(&mut rows));
         let row = &rows[0];
         let a = row["a"].as_str().unwrap();
-        assert_eq!(a.chars().count(), 2001);
+        assert_eq!(a.chars().count(), 2000);
         assert!(a.ends_with('…'));
         assert_eq!(row["b"].as_str().unwrap().chars().count(), 2000);
         assert_eq!(row["c"], json!(["x".repeat(3000)]));
         assert_eq!(row["d"], json!({"k": "x".repeat(3000)}));
         assert_eq!(row["e"], json!(5));
+        // A cut value is at the cap already, so a second call changes nothing.
+        let a = a.to_owned();
+        assert!(!cut_cells(&mut rows));
+        assert_eq!(rows[0]["a"].as_str().unwrap(), a);
     }
 
     #[test]

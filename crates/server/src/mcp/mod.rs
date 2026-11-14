@@ -17,13 +17,14 @@ use axum::http::Method;
 use axum::response::Response;
 use axum::routing::post;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, Implementation, ListToolsResult,
+    CallToolRequestParams, CallToolResponse, Implementation, JsonObject, ListToolsResult,
     PaginatedRequestParams, ServerCapabilities, ServerConfig,
 };
 use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
+use serde_json::Value;
 
 use crate::api::common::ProblemCode;
 use crate::auth::principal::{AuthUser, Principal};
@@ -115,11 +116,57 @@ impl ServerHandler for McpServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         let started = Instant::now();
         let arguments = request.arguments.unwrap_or_default();
-        let (tool, outcome) = match &*request.name {
+        // rmcp runs this in a spawned task and cancels `context.ct` when the client disconnects
+        // (or cancels the request), while the concurrency guard in the axum handler is already
+        // released. Racing the tool against the token drops its query instead of letting it run
+        // to completion for a caller that is gone (DataFusion cancels on drop). `biased` with
+        // the tool first: a tool that already finished is never thrown away.
+        let (tool, outcome) = tokio::select! {
+            biased;
+            result = self.run_tool(&request.name, arguments) => match result {
+                Ok(pair) => pair,
+                Err(error) => return Err(error),
+            },
+            () = context.ct.cancelled() => {
+                let duration_ms =
+                    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                tracing::info!(target: "mcp", tool = %request.name, user_id = %self.user.id,
+                               cancelled = true, duration_ms, "tool call");
+                return Err(McpError::internal_error(
+                    "tool call cancelled: the client went away",
+                    None,
+                ));
+            }
+        };
+        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let result = match outcome {
+            Ok(body) => {
+                tracing::info!(target: "mcp", tool, user_id = %self.user.id, status = 200u16, duration_ms, "tool call");
+                output::success(&body)
+            }
+            Err(error) => {
+                let status = error.problem().status;
+                tracing::info!(target: "mcp", tool, user_id = %self.user.id, status, duration_ms, "tool call");
+                output::failure(&error)
+            }
+        };
+        Ok(result.into())
+    }
+}
+
+impl McpServer {
+    /// The tool named `name` run with `arguments`: its name and outcome. `Err` only for an
+    /// unknown tool (a protocol error, not a tool error).
+    async fn run_tool(
+        &self,
+        name: &str,
+        arguments: JsonObject,
+    ) -> Result<(&'static str, Result<Value, ApiError>), McpError> {
+        let pair = match name {
             tools::LIST_PROJECTS => (
                 tools::LIST_PROJECTS,
                 tools::list_projects(&self.state, &self.user, arguments).await,
@@ -150,19 +197,7 @@ impl ServerHandler for McpServer {
             ),
             _ => return Err(McpError::invalid_params("unknown tool", None)),
         };
-        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let result = match outcome {
-            Ok(body) => {
-                tracing::info!(target: "mcp", tool, user_id = %self.user.id, status = 200u16, duration_ms, "tool call");
-                output::success(&body)
-            }
-            Err(error) => {
-                let status = error.problem().status;
-                tracing::info!(target: "mcp", tool, user_id = %self.user.id, status, duration_ms, "tool call");
-                output::failure(&error)
-            }
-        };
-        Ok(result.into())
+        Ok(pair)
     }
 }
 
@@ -245,6 +280,7 @@ pub(crate) mod test_helpers {
     pub(crate) async fn capture_info_logs<T>(future: impl Future<Output = T>) -> (T, String) {
         use tracing_subscriber::Layer;
         use tracing_subscriber::layer::SubscriberExt;
+        crate::test_support::ask_every_time();
         let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
         let writer = std::sync::Arc::clone(&buffer);
         let filter = tracing_subscriber::filter::Targets::new()
@@ -644,6 +680,12 @@ mod tests {
         assert_eq!(response.status, StatusCode::METHOD_NOT_ALLOWED);
         let body: Value = response.json();
         assert_eq!(body["code"], json!("method_not_allowed"));
+
+        // Every rejected request released its in-flight slot.
+        assert_eq!(
+            app.state.limits.mcp.in_flight(token_id(&app, &tok).await),
+            0
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -861,6 +903,72 @@ mod tests {
         assert_eq!(app.state.limits.mcp.in_flight(id), 0);
     }
 
+    /// A call whose client disconnects mid-tool drops its query instead of running it to
+    /// completion.
+    ///
+    /// Deterministic in three parts: the slow call's cross join over the 14 example spans
+    /// (14⁹ ≈ 20 billion rows) runs for minutes, so whether it is still running when the
+    /// probes run never depends on timing precision; the head start (250 ms) only orders the
+    /// slow call's admission before the first probe, and needs only to exceed loopback
+    /// dispatch and the meta.db read (sub-10 ms); and after the disconnect the free probe
+    /// itself waits out the 200 ms admission window, so the cancellation's propagation (all
+    /// in-memory, µs–ms) is absorbed rather than raced.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_disconnected_call_drops_its_query() {
+        use bytesize::ByteSize;
+        use tokio::io::AsyncWriteExt;
+
+        let app = TestApp::with_config(|config| {
+            config.storage.query.max_memory_total = Some(ByteSize::mib(64));
+            config.storage.query.max_memory = ByteSize::mib(64);
+            config.storage.query.initial_memory = ByteSize::mib(64);
+            config.storage.query.admission_wait = Duration::from_millis(200);
+        })
+        .await;
+        let seeded = app.seed().await;
+        app.load_example_dataset(seeded.project.id).await;
+        let token = app.personal_token(seeded.user_id, false).await;
+        let addr = app.serve_loopback().await;
+        let project = seeded.project.id.to_string();
+        let select_one =
+            json!({"project": project, "query": "SELECT 1 AS one", "from": FROM, "to": TO});
+
+        // The slow call, sent over a socket we hold: its response only exists once the tool
+        // finishes, so the connection stays open in the meantime.
+        let slow = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "query_sql", "arguments": {
+                "project": project,
+                "query": "SELECT count(*) FROM spans a CROSS JOIN spans b CROSS JOIN spans c \
+                          CROSS JOIN spans d CROSS JOIN spans e CROSS JOIN spans f \
+                          CROSS JOIN spans g CROSS JOIN spans h CROSS JOIN spans i",
+                "from": FROM, "to": TO}}});
+        let body = serde_json::to_string(&slow).unwrap();
+        let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let head = format!(
+            "POST /mcp HTTP/1.1\r\nhost: {addr}\r\nauthorization: Bearer {token}\r\n\
+             accept: application/json, text/event-stream\r\ncontent-type: application/json\r\n\
+             mcp-protocol-version: {V2025}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len(),
+        );
+        socket.write_all(head.as_bytes()).await.unwrap();
+        socket.write_all(body.as_bytes()).await.unwrap();
+        socket.flush().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(250)).await;
+
+        // While it runs it holds the only query memory: another call is busy.
+        let (is_error, body) = call(&app, &token, "query_sql", &select_one).await;
+        assert!(is_error, "{body}");
+        assert_eq!(body["error"]["code"], json!("busy"));
+
+        // The client goes away. rmcp cancels the call's token, `call_tool` drops the tool
+        // future, the query context (and its memory) is dropped with it, and a following
+        // call is admitted again.
+        drop(socket);
+        let (is_error, body) = call(&app, &token, "query_sql", &select_one).await;
+        assert!(!is_error, "{body}");
+        assert_eq!(body["rows"], json!([{"one": 1}]));
+    }
+
     // Tools
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1059,6 +1167,109 @@ mod tests {
                 .unwrap()
                 .starts_with("invalid arguments: missing field `project`")
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_schema_needs_a_visible_active_project() {
+        let (app, seeded, tok) = app_with_token().await;
+        let not_found = json!({"error": {"code": "not_found", "message": "Not Found"}});
+        let gone = "acme/gone";
+        let user_id = seeded.user_id;
+        let now = app.state.clock.now_ns();
+        let (gone_project, _) = app.add_project(&seeded, "gone", None).await;
+        let gone_id = gone_project.id;
+        let viewer = app
+            .add_member(&seeded, "viewer@example.com", OrgRole::Viewer)
+            .await;
+        let (hidden, _) = app.add_project(&seeded, "hidden", None).await;
+        let (viewer_id, hidden_id) = (viewer.id, hidden.id);
+        app.state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    set_project_override(conn, hidden_id, viewer_id, ProjectOverride::None).await?;
+                    sqlx::query("UPDATE projects SET state = 'deleting' WHERE id = ?")
+                        .bind(gone_id.to_string())
+                        .execute(&mut *conn)
+                        .await?;
+                    let org = insert_org(conn, "Beta", "beta", now).await?;
+                    add_org_member(conn, org.id, user_id, OrgRole::Owner, now).await?;
+                    insert_project(conn, org.id, "Beta app", "beta-app", None, now).await?;
+                    sqlx::query("UPDATE orgs SET state = 'deleting' WHERE id = ?")
+                        .bind(org.id.to_string())
+                        .execute(&mut *conn)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
+
+        // (a) a project hidden from the caller by an override.
+        let viewer_tok = app.personal_token(viewer_id, false).await;
+        let (is_error, body) = call(
+            &app,
+            &viewer_tok,
+            "get_schema",
+            &json!({"project": "acme/hidden"}),
+        )
+        .await;
+        assert!(is_error);
+        assert_eq!(body, not_found);
+
+        // (b) an inactive project, (c) a project of an inactive org.
+        for project in [gone, "beta/beta-app"] {
+            let (is_error, body) =
+                call(&app, &tok, "get_schema", &json!({"project": project})).await;
+            assert!(is_error, "{project}");
+            assert_eq!(body, not_found, "{project}");
+        }
+
+        // (d) a user who is not a member of the org.
+        let stranger_id = app
+            .state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    let user = insert_user(
+                        conn,
+                        NewUser {
+                            email: "stranger@example.com".to_owned(),
+                            name: None,
+                            password_hash: None,
+                            email_verified_at: None,
+                            is_instance_admin: false,
+                        },
+                        0,
+                    )
+                    .await?;
+                    Ok(user.id)
+                })
+            })
+            .await
+            .unwrap();
+        let stranger_tok = app.personal_token(stranger_id, false).await;
+        let (is_error, body) = call(
+            &app,
+            &stranger_tok,
+            "get_schema",
+            &json!({"project": "acme/support-bot"}),
+        )
+        .await;
+        assert!(is_error);
+        assert_eq!(body, not_found);
+
+        // (e) an org viewer's read-only PAT reads the schema.
+        let (is_error, body) = call(
+            &app,
+            &viewer_tok,
+            "get_schema",
+            &json!({"project": "acme/support-bot"}),
+        )
+        .await;
+        assert!(!is_error);
+        let expected = serde_json::to_value(convert::schema_response()).unwrap();
+        assert_eq!(body, expected);
     }
 
     // Logs

@@ -32,7 +32,8 @@ const MAX_TRACES: usize = 100;
 /// Metadata, attribute and preview values longer than this are cut (D-H-11).
 const VALUE_CUT: usize = 200;
 /// The note added when [`cut_values`] cut something.
-const CUT_NOTE: &str = "metadata, attribute and preview values longer than 200 characters were cut to 200 characters plus …";
+const CUT_NOTE: &str =
+    "metadata, attribute and preview values longer than 200 characters were cut to 200 characters";
 /// The two preview fields of trace and span summaries.
 const PREVIEWS: [&str; 2] = ["input_preview", "output_preview"];
 /// The fields of a span detail that can be large. They are cut, all to the same length, only
@@ -435,7 +436,7 @@ struct NotAnObject;
 ///
 /// When it does not fit, every `HEAVY` field that is present, not `null`, and whose compact
 /// JSON (`render`) is longer than `n` characters is replaced by the string
-/// `output::cut(&render(field), n)` (its JSON text cut to `n` characters plus `…`), and the
+/// `output::cut(&render(field), n)` (its JSON text cut to `n` characters in total), and the
 /// note `"fields cut to {n} characters of their JSON text: {names}"` is appended (`names` =
 /// the cut fields in `HEAVY` order, joined with ", "). `n` is the largest value in
 /// `0..=max_chars` for which the whole body fits, found by binary search; if even `n = 0`
@@ -1534,7 +1535,7 @@ mod tests {
             } else {
                 body["traces"][0][field].as_str().unwrap()
             };
-            assert_eq!(value.chars().count(), 201, "{field}");
+            assert_eq!(value.chars().count(), 200, "{field}");
             assert!(value.ends_with('…'), "{field}");
         }
         assert_eq!(body["notes"], json!([CUT_NOTE]));
@@ -1557,7 +1558,7 @@ mod tests {
                         .unwrap(),
                     body["spans"][0]["span"]["input_preview"].as_str().unwrap(),
                 ] {
-                    assert_eq!(value.chars().count(), 201);
+                    assert_eq!(value.chars().count(), 200);
                     assert!(value.ends_with('…'));
                 }
             } else {
@@ -1566,7 +1567,7 @@ mod tests {
                 let note = body["spans"][0]["span"]["metadata"]["note"]
                     .as_str()
                     .unwrap();
-                assert_eq!(note.chars().count(), 201);
+                assert_eq!(note.chars().count(), 200);
                 assert!(note.ends_with('…'));
             }
             assert_eq!(body["notes"], json!([CUT_NOTE]));
@@ -1589,7 +1590,7 @@ mod tests {
             body["span"]["input_preview"].as_str().unwrap(),
             body["span"]["output_preview"].as_str().unwrap(),
         ] {
-            assert_eq!(value.chars().count(), 201);
+            assert_eq!(value.chars().count(), 200);
             assert!(value.ends_with('…'));
         }
         assert_eq!(body["notes"], json!([CUT_NOTE]));
@@ -1640,16 +1641,20 @@ mod tests {
         .clone();
         assert!(cut_values(&mut object, &["metadata"], &PREVIEWS));
         let a = object["metadata"]["a"].as_str().unwrap();
-        assert_eq!(a.chars().count(), 201);
+        assert_eq!(a.chars().count(), 200);
         assert!(a.ends_with('…'));
         assert_eq!(object["metadata"]["b"], json!("short"));
         assert_eq!(object["metadata"]["n"], json!(5));
         assert_eq!(
             object["input_preview"].as_str().unwrap().chars().count(),
-            201
+            200
         );
         assert_eq!(object["output_preview"], json!(null));
         assert_eq!(object["other"].as_str().unwrap().chars().count(), 300);
+        // A cut value is at the cap already, so a second call changes nothing.
+        let a = a.to_owned();
+        assert!(!cut_values(&mut object, &["metadata"], &PREVIEWS));
+        assert_eq!(object["metadata"]["a"].as_str().unwrap(), a);
     }
 
     #[test]
@@ -1702,7 +1707,7 @@ mod tests {
             body["notes"],
             json!([format!(
                 "fields cut to {} characters of their JSON text: input, output",
-                count - 1
+                count
             )])
         );
     }
