@@ -343,12 +343,12 @@ There is no custom `ParquetFileReaderFactory`; the metadata cache is DataFusion'
 
 ### Requests
 
-A request is created by the server in `meta.db` (04), with its cascades, and handed to storage with `register_deletion`. It has a `kind`, a `created_at` that serves as the **cut-off**, and a resolved scope:
+A request is created by the server in `meta.db` (04); the server's deletion worker resolves its scope, stores it with its cascades, and hands it to storage with `register_deletion` (D-M-3). The storage kinds below are the server's `trace_ids`/`filter` (→ `traces`) and `user`. It has a `kind`, a `created_at` that serves as the **cut-off**, and a resolved scope:
 
 | Kind | Scope stored | Rows deleted |
 |---|---|---|
-| `traces` | `deletion_traces(trace_id…)`. A filter-based request is resolved to trace IDs when it is created. The set is extended with the **evaluation traces** whose `metadata['llmobs.eval.target_trace_id']` is in it (they contain copies of the evaluated data). | `spans` and `scores` rows of those traces with `ingest_time ≤ cut-off` |
-| `user` | `user_id`, plus the trace IDs and session IDs resolved at creation, plus their evaluation traces | with `ingest_time ≤ cut-off`: `spans` rows of those traces or with that `user_id`; `scores` rows of those traces, with that `user_id`, or with one of those `session_id`s (D-A1-4) |
+| `traces` | `deletion_traces(trace_id…)`. A filter-based request is resolved to trace IDs by the server's worker, before registration. The set is extended with the **evaluation traces** whose `metadata['llmobs.eval.target_trace_id']` is in it (they contain copies of the evaluated data). | `spans` and `scores` rows of those traces with `ingest_time ≤ cut-off` |
+| `user` | `user_id`, plus the trace IDs and session IDs the server's worker resolved before registration, plus their evaluation traces | with `ingest_time ≤ cut-off`: `spans` rows of those traces or with that `user_id`; `scores` rows of those traces, with that `user_id`, or with one of those `session_id`s (D-A1-4) |
 | `project` | `project_id` | everything in the project (`drop_project`) |
 | `org` | `org_id` | every project of the org (`drop_project` for each), plus org-level metadata in `meta.db` |
 
@@ -356,12 +356,13 @@ Session IDs match `scores` only: a session shared with another user keeps that u
 
 The cut-off makes the result deterministic: data ingested after the request is new data, not covered by the deletion.
 
-**Handoff.** `register_deletion` is idempotent by deletion id. It stores the request and its resolved scope in `catalog.db` with the next **`deletion_seq`** (1, 2, … across all projects), then publishes the tombstones in a new read state, and returns only after both. A request for a dropped project is stored as already applied, without its scope, and publishes nothing. The server:
-1. creates the request in `meta.db`;
-2. calls `register_deletion`;
-3. sets `handed_over_at`.
+**Handoff.** `register_deletion` is idempotent by deletion id. It stores the request and its resolved scope in `catalog.db` with the next **`deletion_seq`** (1, 2, … across all projects), then publishes the tombstones in a new read state, and returns only after both. A request for a dropped project is stored as already applied, without its scope, and publishes nothing. The server (04 § Deletion requests, D-M-3):
+1. creates the request in `meta.db` (status `resolving`);
+2. resolves the scope and stores it with the `meta.db` cascades in one transaction;
+3. calls `register_deletion`;
+4. sets `handed_over_at` (status `pending`).
 
-At startup it re-registers every request not yet handed over, and storage ignores ids it already knows. The server polls `deletion_status` (`pending` or `applied`) to mark its own row `applied`.
+Rows stay visible until step 3, normally seconds after the request (D13 as amended by D-M-3). At startup the worker resumes every open request: it resolves the ones without a stored scope and registers the others; storage ignores ids it already knows. The server polls `deletion_status` (`pending` or `applied`) to mark its own row `applied`.
 
 ### Making data invisible immediately
 
@@ -385,8 +386,10 @@ A deletion may cover rows of a `spans` or `scores` file only when its `deletion_
 
 ### Cascades, inside the server's request transaction (`meta.db`)
 
-- Dataset items whose `source_trace_id` is in scope are hard-deleted, all versions.
-- `experiment_items` and `eval_jobs` referencing those traces are deleted.
+The server stores a resolved scope and its cascades in one transaction, before it registers the deletion (D-M-3):
+- Dataset items whose `source_trace_id` is in scope are hard-deleted, all versions (track J).
+- `experiment_items` referencing those traces are deleted (track J); `eval_jobs` referencing them are deleted unless `running` (D-M-6).
+- A running judge job, and any judge run that loaded its target before the deletion, is stopped by the server's 24-hour deletion guard before it commits a judge trace or a score (D-M-6).
 - `alert_events` hold only aggregates; they are pruned after 90 days with their deliveries (D-K-10).
 
 ### Physical erasure: the deletion rewriter
@@ -406,7 +409,7 @@ After each compaction pass, the compaction task runs a **deletion pass** (D-A1-5
    - every active `spans` and `scores` file of the project with `min_ingest_time ≤ cut-off` has `deletions_applied_seq ≥` its `deletion_seq` (`traces` files follow their source `spans` files, §3);
    - no memtable batch of the project has `min_ingest_time ≤ cut-off`. A batch that held covered rows is dropped by the next flush, which writes none of them.
 
-   Both are read from one published read state, so a flush committing in between cannot make a deletion look applied. Then `status = 'applied'`, `applied_at` is set, its scope rows (`deletion_traces`, `deletion_users`, `deletion_sessions`) are deleted, its tombstone entries are removed, and media GC runs for the project (§9). An applied request keeps only its id, project, kind, cut-off, sequence and dates; the audit record is the server's `meta.db` row.
+   Both are read from one published read state, so a flush committing in between cannot make a deletion look applied. Then `status = 'applied'`, `applied_at` is set, its scope rows (`deletion_traces`, `deletion_users`, `deletion_sessions`) are deleted, its tombstone entries are removed, and media GC runs for the project (§9). An applied request keeps only its id, project, kind, cut-off, sequence and dates; the audit record is the server's `meta.db` row, which keeps the scope (D-M-8).
 
 Compaction and the rewriter never run on the same file (claims, §4), and a compaction that started before a deletion records an older `deletions_applied_seq`, so its outputs remain candidates. Deleted rows cannot come back through a merge.
 
@@ -424,7 +427,7 @@ GC removes the obsolete files like any others (§5), so no listing of the `proje
 
 ## 8. Retention
 
-Each project has `retention_days` in `meta.db` (null means keep forever). The server calls `apply_retention(project, keep_from = today − retention_days)` hourly. Storage then:
+Each project has `retention_days` in `meta.db` (null means keep forever). The server calls `apply_retention(project, keep_from = today − effective days)` hourly, and once when a `PATCH` sets retention. The effective days are the shorter of the project's `retention_days` and its org's plan cap (data-access window + 30 days, D175), when either is set (D-M-10, D-M-15). Storage then:
 - commits one catalog edit that obsoletes every file of the project in days before the watermark, across `spans`, `traces` and `scores`, quarantined files included (no file is rewritten, because partitions are per day);
 - records the watermark in `retention_watermarks`, in the same transaction. The watermark is the later of the stored one and `keep_from`: it never moves back.
 
