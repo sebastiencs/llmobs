@@ -3337,6 +3337,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "llmobs-ui"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "flate2",
+ "hex",
+ "http-body-util",
+ "sha2 0.11.1",
+ "tokio",
+ "tower",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"

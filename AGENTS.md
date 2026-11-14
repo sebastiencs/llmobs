@@ -89,6 +89,7 @@ crates/
                              deletion, DataFusion providers, filter DSL, SQL sandbox  (specs 03, 05)
   server/    llmobs-server   API, auth, metadata DB, evaluation, alerts, email, MCP   (specs 04, 06–09)
   cli/       llmobs-cli      the `llmobs` binary                                       (spec 09 § CLI)
+  ui/        llmobs-ui       the web UI embedded at build time (D-G-18, D-G-35)
 web/                         React UI (Vite, TanStack, shadcn/ui, pnpm)               (spec 11)
 sdks/python/                 Python SDK (uv)                                           (spec 10)
 sdks/typescript/             TypeScript SDK (pnpm)                                     (spec 10)
@@ -103,7 +104,8 @@ docs/                        decisions, specs, plans, research
 - `core` depends on no workspace crate.
 - `otel` and `storage` depend only on `core`. **They never depend on each other**, so they can be built in parallel; `server` connects them.
 - `eval` depends on `core` and `otel`.
-- `server` depends on `core`, `otel`, `storage` and `eval`; `cli` depends on `server` and `core`.
+- `server` depends on `core`, `otel`, `storage` and `eval`; `cli` depends on `server`, `core` and `ui`.
+- `ui` depends on no workspace crate.
 
 ## Parallel work and ownership
 
