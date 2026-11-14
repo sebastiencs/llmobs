@@ -856,6 +856,41 @@ pub(crate) async fn assert_logs_clean<T>(needles: &[&str], future: impl Future<O
     value
 }
 
+static ASK_EVERY_TIME: std::sync::Once = std::sync::Once::new();
+
+/// Global subscriber of the test process. It records nothing but answers `Interest::sometimes`
+/// for every callsite, so each event asks the current thread's dispatcher. Without it, a
+/// callsite first reached by a test thread with no capture installed can cache
+/// `Interest::never`, and a later capture on another thread misses that event.
+struct AskEveryTime;
+
+impl tracing::Subscriber for AskEveryTime {
+    fn register_callsite(
+        &self,
+        _metadata: &'static tracing::Metadata<'static>,
+    ) -> tracing::subscriber::Interest {
+        tracing::subscriber::Interest::sometimes()
+    }
+
+    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+        false
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, _event: &tracing::Event<'_>) {}
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
 /// The formatted tracing output produced while `future` is polled.
 pub(crate) async fn capture_logs<T>(future: impl Future<Output = T>) -> (T, String) {
     let buffer = Arc::new(Mutex::new(Vec::<u8>::new()));
@@ -865,6 +900,10 @@ pub(crate) async fn capture_logs<T>(future: impl Future<Output = T>) -> (T, Stri
         .with_ansi(false)
         .with_target(true);
     let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(layer));
+    ASK_EVERY_TIME.call_once(|| {
+        // Another global default may exist already; then it decides interest itself.
+        let _ = tracing::dispatcher::set_global_default(tracing::Dispatch::new(AskEveryTime));
+    });
     let value = {
         let _guard = tracing::dispatcher::set_default(&dispatch);
         future.await

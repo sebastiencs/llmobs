@@ -378,16 +378,6 @@ mod tests {
     const START_NS: i64 = 1_767_225_600_000_000_000;
     const ONE_SECOND_NS: i64 = 1_000_000_000;
 
-    /// The tests of this module run one at a time. A log capture only sees an event when the
-    /// event's callsite registered while the capture was the thread's subscriber, and a
-    /// callsite registers on its first hit in any thread. A test running beside the capture
-    /// could register the handler's callsites without it, and the capture would miss them.
-    static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-    async fn serial() -> tokio::sync::MutexGuard<'static, ()> {
-        SERIAL.lock().await
-    }
-
     fn row(owner: Option<Uuid>, shared: bool) -> SavedViewRow {
         SavedViewRow {
             id: Uuid::now_v7(),
@@ -531,7 +521,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_list_update_delete_round_trip() {
-        let _serial = serial().await;
         let app = TestApp::new().await;
         let seeded = app.seed().await;
         let base = views_path(&seeded);
@@ -596,7 +585,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn visibility_by_caller() {
-        let _serial = serial().await;
         let app = TestApp::new().await;
         let seeded = app.seed().await;
         let member = app
@@ -645,7 +633,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn sharing_needs_member() {
-        let _serial = serial().await;
         let app = TestApp::new().await;
         let seeded = app.seed().await;
         let viewer = app
@@ -686,7 +673,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn only_the_owner_edits() {
-        let _serial = serial().await;
         let app = TestApp::new().await;
         let seeded = app.seed().await;
         let member = app
@@ -772,7 +758,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_viewer_owner_of_a_shared_view() {
-        let _serial = serial().await;
         let app = TestApp::new().await;
         let seeded = app.seed().await;
         let viewer = app
@@ -814,7 +799,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_viewer_owner_deletes_their_shared_view() {
-        let _serial = serial().await;
         let app = TestApp::new().await;
         let seeded = app.seed().await;
         let viewer = app
@@ -844,7 +828,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn private_views_are_not_found_for_others() {
-        let _serial = serial().await;
         let app = TestApp::new().await;
         let seeded = app.seed().await;
         let member = app
@@ -895,7 +878,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn missing_and_foreign_ids_are_not_found() {
-        let _serial = serial().await;
         let app = TestApp::new().await;
         let seeded = app.seed().await;
         let (other, _key) = app.add_project(&seeded, "other-bot", None).await;
@@ -939,7 +921,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn defaults_follow_their_scope() {
-        let _serial = serial().await;
         let app = TestApp::new().await;
         let seeded = app.seed().await;
         let member = app
@@ -1012,7 +993,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn orphan_shared_views_are_deleted_not_unshared() {
-        let _serial = serial().await;
         let app = TestApp::new().await;
         let seeded = app.seed().await;
         let member = app
@@ -1070,7 +1050,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn keys_and_read_tokens_cannot_write() {
-        let _serial = serial().await;
         let app = TestApp::new().await;
         let seeded = app.seed().await;
         let member = app
@@ -1126,7 +1105,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn validation_errors_name_the_field() {
-        let _serial = serial().await;
         let app = TestApp::new().await;
         let seeded = app.seed().await;
         let viewer = app
@@ -1293,9 +1271,44 @@ mod tests {
         assert_eq!(no_type.problem().code, ProblemCode::UnsupportedMediaType);
     }
 
+    #[tokio::test]
+    async fn patch_rejects_large_and_untyped_bodies() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let base = views_path(&seeded);
+        let created = create(
+            &app,
+            &seeded.cookie,
+            &base,
+            json!({"kind": "traces", "name": "x", "state": {}}),
+        )
+        .await;
+        assert_eq!(created.status, StatusCode::CREATED);
+        let item = format!("{base}/{}", id_of(&created));
+
+        let huge = call(
+            &app,
+            Method::PATCH,
+            &item,
+            &seeded.cookie,
+            Some(json!({"state": {"s": "x".repeat(140_000)}})),
+        )
+        .await;
+        assert_eq!(huge.status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(huge.problem().code, ProblemCode::PayloadTooLarge);
+
+        let no_type = app
+            .request(Method::PATCH, &item)
+            .header("cookie", &seeded.cookie)
+            .body(serde_json::to_vec(&json!({"name": "y"})).unwrap())
+            .send()
+            .await;
+        assert_eq!(no_type.status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(no_type.problem().code, ProblemCode::UnsupportedMediaType);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn owner_cap_is_conflict() {
-        let _serial = serial().await;
         let app = TestApp::new().await;
         let seeded = app.seed().await;
         let project = seeded.project.id;
@@ -1343,7 +1356,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn pages_follow_the_cursor() {
-        let _serial = serial().await;
         let app = TestApp::new().await;
         let seeded = app.seed().await;
         let base = views_path(&seeded);
@@ -1425,7 +1437,6 @@ mod tests {
 
     #[tokio::test]
     async fn logs_carry_ids_not_names_or_state() {
-        let _serial = serial().await;
         let app = TestApp::new().await;
         let seeded = app.seed().await;
         let viewer = app
@@ -1438,8 +1449,6 @@ mod tests {
             "state": {"filter": "secret-filter-text"},
         });
         let (ids, logs) = capture_logs(async {
-            // Register every callsite of the handlers under this capture (see `SERIAL`).
-            tracing::callsite::rebuild_interest_cache();
             let created = create(&app, &seeded.cookie, &base, body.clone()).await;
             assert_eq!(created.status, StatusCode::CREATED);
             let id = id_of(&created);
