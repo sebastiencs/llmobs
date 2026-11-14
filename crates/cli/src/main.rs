@@ -1,10 +1,15 @@
+mod client;
+mod credentials;
 mod login;
+mod output;
+mod query;
+#[cfg(test)]
+mod test_server;
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use chrono::{DateTime, SecondsFormat};
 use clap::{Parser, Subcommand, ValueEnum};
 use llmobs_server::admin::{self, UserSummary};
 use llmobs_server::config::{LogConfig, LogFormat, ServerConfig};
@@ -51,6 +56,8 @@ enum Command {
         #[arg(long)]
         url: Option<String>,
     },
+    /// Run a SQL query on a project.
+    Query(Box<query::QueryArgs>),
 }
 
 #[derive(Debug, Subcommand)]
@@ -148,9 +155,35 @@ async fn run_cli(
         Command::Serve { config } => serve(config.as_deref()).await?,
         Command::Admin { command } => admin_command(command).await?,
         Command::Login { url, no_browser } => {
-            login::login(&url, no_browser, &credentials_path()?, io::stdout()).await?;
+            login::login(
+                &url,
+                no_browser,
+                &credentials::credentials_path()?,
+                io::stdout(),
+            )
+            .await?;
         }
-        Command::Logout { url } => login::logout(url.as_deref(), &credentials_path()?).await?,
+        Command::Logout { url } => {
+            login::logout(url.as_deref(), &credentials::credentials_path()?).await?;
+        }
+        Command::Query(args) => {
+            let stdout = io::stdout();
+            let stdout_is_terminal = stdout.is_terminal();
+            let (mut out, mut err, mut input) = (stdout.lock(), io::stderr().lock(), io::stdin());
+            let mut streams = output::Io {
+                out: &mut out,
+                err: &mut err,
+                input: &mut input,
+                stdout_is_terminal,
+            };
+            query::run(
+                &args,
+                credentials::credentials_path,
+                &mut streams,
+                chrono::Utc::now(),
+            )
+            .await?;
+        }
     }
     Ok(())
 }
@@ -279,11 +312,6 @@ fn load_config(path: Option<&Path>) -> anyhow::Result<ServerConfig> {
     ServerConfig::load(path).context("loading config")
 }
 
-fn credentials_path() -> anyhow::Result<PathBuf> {
-    let config = dirs::config_dir().context("finding the config directory")?;
-    Ok(config.join("llmobs").join("credentials.toml"))
-}
-
 /// One stdin line, with a trailing `\n` or `\r\n` removed. The password itself is not trimmed.
 fn read_password_line(mut input: impl BufRead) -> anyhow::Result<String> {
     let mut line = String::new();
@@ -311,7 +339,7 @@ fn write_table(out: &mut impl Write, users: &[UserSummary]) -> io::Result<()> {
             user.name.as_deref().unwrap_or(""),
             yes_no(user.instance_admin),
             yes_no(user.disabled),
-            format_time(user.created_at),
+            output::format_time(user.created_at),
         )?;
     }
     Ok(())
@@ -319,20 +347,6 @@ fn write_table(out: &mut impl Write, users: &[UserSummary]) -> io::Result<()> {
 
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
-}
-
-fn format_time(ns: i64) -> String {
-    if ns < 0 {
-        return String::new();
-    }
-    let seconds = ns.div_euclid(1_000_000_000);
-    let nanos = ns.rem_euclid(1_000_000_000);
-    let Ok(subsec) = u32::try_from(nanos) else {
-        return String::new();
-    };
-    DateTime::from_timestamp(seconds, subsec)
-        .map(|time| time.to_rfc3339_opts(SecondsFormat::Nanos, true))
-        .unwrap_or_default()
 }
 
 #[derive(serde::Serialize)]
@@ -352,7 +366,7 @@ fn listed_user(user: &UserSummary) -> ListedUser {
         name: user.name.clone(),
         instance_admin: user.instance_admin,
         disabled: user.disabled,
-        created_at: format_time(user.created_at),
+        created_at: output::format_time(user.created_at),
     }
 }
 

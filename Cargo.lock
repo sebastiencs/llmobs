@@ -3169,6 +3169,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "bytes",
  "chrono",
  "clap",
  "dirs",
@@ -3178,6 +3179,7 @@ dependencies = [
  "llmobs-ui",
  "mimalloc",
  "opentelemetry-proto",
+ "parquet",
  "prost",
  "rand 0.10.3",
  "reqwest",

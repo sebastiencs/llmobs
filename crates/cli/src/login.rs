@@ -4,10 +4,9 @@
 //! whose `token` parses as a personal access token. The token is checked with
 //! `GET /api/auth/me` and stored in the credentials file. It is never logged.
 
-use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -15,9 +14,10 @@ use anyhow::Context;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rand::TryRng;
-use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+
+use crate::credentials::{SavedToken, chosen_server, load, normalize_server_url, save};
 
 const WAIT: Duration = Duration::from_secs(5 * 60);
 const READ_LIMIT: usize = 8192;
@@ -82,31 +82,6 @@ pub(crate) async fn logout(server_url: Option<&str>, credentials: &Path) -> anyh
         return Ok(());
     }
     save(credentials, &file)
-}
-
-/// Drops a trailing slash so one server is one map key.
-pub(crate) fn normalize_server_url(url: &str) -> String {
-    let mut url = url.trim().to_owned();
-    while url.ends_with('/') {
-        url.pop();
-    }
-    url
-}
-
-fn chosen_server(server_url: Option<&str>, file: &CredentialsFile) -> anyhow::Result<String> {
-    if let Some(url) = server_url {
-        return Ok(normalize_server_url(url));
-    }
-    match file.servers.len() {
-        0 => anyhow::bail!("no saved server"),
-        1 => {
-            let Some(server) = file.servers.keys().next() else {
-                anyhow::bail!("no saved server");
-            };
-            Ok(server.clone())
-        }
-        _ => anyhow::bail!("more than one saved server; pass --url"),
-    }
 }
 
 fn new_state() -> anyhow::Result<String> {
@@ -330,78 +305,6 @@ fn warn(message: &str) {
     let _ = writeln!(io::stderr(), "warning: {message}");
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct CredentialsFile {
-    #[serde(default)]
-    servers: BTreeMap<String, SavedToken>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct SavedToken {
-    token: String,
-}
-
-fn load(path: &Path) -> anyhow::Result<CredentialsFile> {
-    if !path.exists() {
-        return Ok(CredentialsFile::default());
-    }
-    let text = fs::read_to_string(path).context("reading credentials")?;
-    toml::from_str(&text).map_err(|_| anyhow::anyhow!("credentials file is invalid"))
-}
-
-fn save(path: &Path, file: &CredentialsFile) -> anyhow::Result<()> {
-    let directory = path.parent().context("credentials path has no directory")?;
-    fs::create_dir_all(directory).context("creating the credentials directory")?;
-    set_dir_mode(directory)?;
-    let text = toml::to_string(file).map_err(|_| anyhow::anyhow!("encoding credentials"))?;
-    let temporary = temporary_path(path);
-    write_private(&temporary, text.as_bytes())?;
-    fs::rename(&temporary, path).context("replacing credentials")?;
-    Ok(())
-}
-
-fn temporary_path(path: &Path) -> PathBuf {
-    let mut temporary = path.to_path_buf();
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("credentials.toml");
-    temporary.set_file_name(format!("{name}.tmp"));
-    temporary
-}
-
-fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    let mut options = OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path).context("creating credentials")?;
-    file.write_all(bytes).context("writing credentials")?;
-    file.sync_all().context("writing credentials")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .context("setting the credentials file mode")?;
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_dir_mode(directory: &Path) -> anyhow::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
-        .context("setting the credentials directory mode")
-}
-
-#[cfg(not(unix))]
-fn set_dir_mode(_directory: &Path) -> anyhow::Result<()> {
-    Ok(())
-}
-
 fn open_browser(url: &str) {
     let _ = browser_command(url).status();
 }
@@ -430,14 +333,6 @@ fn browser_command(url: &str) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn server_url_loses_trailing_slashes() {
-        assert_eq!(
-            normalize_server_url(" http://127.0.0.1:8080/ "),
-            "http://127.0.0.1:8080"
-        );
-    }
 
     #[test]
     fn a_personal_token_has_the_pat_shape() {

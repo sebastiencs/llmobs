@@ -1405,8 +1405,17 @@ fn split_key(name: &str) -> Option<String> {
     )
 }
 
+/// `LLMOBS_CONFIG` and the CLI's own variables (D-H-12) are not config keys.
 fn is_filtered(name: &str) -> bool {
-    name.eq_ignore_ascii_case("LLMOBS_CONFIG") || alias_key(name).is_some()
+    [
+        "LLMOBS_CONFIG",
+        "LLMOBS_URL",
+        "LLMOBS_TOKEN",
+        "LLMOBS_PROJECT",
+    ]
+    .iter()
+    .any(|filtered| name.eq_ignore_ascii_case(filtered))
+        || alias_key(name).is_some()
 }
 
 fn alias_key(name: &str) -> Option<&'static str> {
@@ -1581,6 +1590,22 @@ mod tests {
 
         let env_error = load_from(None, &[("LLMOBS_FOO", "1")]).unwrap_err();
         assert!(env_error.to_string().contains("foo"), "{env_error}");
+    }
+
+    #[test]
+    fn cli_variables_are_not_config_keys() {
+        let config = load_from(
+            None,
+            &[
+                ("LLMOBS_URL", "http://127.0.0.1:8080"),
+                (
+                    "LLMOBS_TOKEN",
+                    "pat-llmobs-EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0",
+                ),
+                ("llmobs_project", "acme/app"),
+            ],
+        );
+        assert!(config.is_ok());
     }
 
     #[test]
