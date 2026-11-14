@@ -17,7 +17,8 @@ If any is missing, stop: commit nothing, and report "M8 waits for track I's M3".
 - `crates/server/src/deletion/cascade.rs` (new), `crates/server/src/deletion/mod.rs` (declare it), `crates/server/src/deletion/resolve.rs` (call it);
 - `crates/server/src/deletion/guard.rs` (drop the `dead_code` allowance);
 - `crates/server/src/meta/eval_jobs.rs` (one function, below);
-- `crates/server/src/eval/execute.rs` (the job runner and its result type), `crates/server/src/eval/test_run.rs`, and the manual-run handler (found below) — only at the points named.
+- `crates/server/src/eval/execute.rs` (the job runner and its result type), `crates/server/src/eval/dispatch.rs` and `crates/server/src/eval/budget.rs` (only the handling of the new outcome), `crates/server/src/eval/test_run.rs`, and the route file that holds the manual-run handler (`grep -rln 'evaluators/{id}/run' crates/server/src/routes`; list it in your report) — only at the points named;
+- the `error_class` value set, if I enumerates it: `grep -rn 'error_class' crates/server/src/api web/src` — when an API type, the OpenAPI schema or the web code lists the allowed values, add `deleted` there (and run `just openapi`); otherwise report that none needed it.
 
 **Commit:** `Cascade deletions to evaluation jobs`
 
@@ -39,7 +40,11 @@ If any is missing, stop: commit nothing, and report "M8 waits for track I's M3".
 pub(crate) async fn delete_for_traces(conn: &mut SqliteConnection, project: ProjectId, traces: &[TraceId]) -> Result<u64, MetaError>;
 ```
 
-SQL per chunk (`sqlx::QueryBuilder<Sqlite>`): `DELETE FROM eval_jobs WHERE project_id = ? AND status <> 'running' AND trace_id IN (?, ?, …)`, binding `project.to_string()` and each `trace.as_bytes().as_slice()`. An empty slice does nothing.
+`eval_jobs` has no index on `trace_id`, and a scope can hold 100,000 traces, so scan once instead of once per chunk:
+1. An empty `traces` returns `Ok(0)` at once.
+2. `let wanted: HashSet<TraceId> = traces.iter().copied().collect();`
+3. `SELECT id, trace_id FROM eval_jobs WHERE project_id = ? AND status <> 'running'` (bind `project.to_string()`), keeping the ids whose `TraceId::from_slice(&trace_id)` is in `wanted` (a blob that does not decode is skipped, never a panic).
+4. `DELETE FROM eval_jobs WHERE id IN (?, …)` in chunks of 500 (`sqlx::QueryBuilder<Sqlite>`), summing `rows_affected()`.
 
 `crates/server/src/deletion/cascade.rs`:
 
@@ -50,18 +55,20 @@ SQL per chunk (`sqlx::QueryBuilder<Sqlite>`): `DELETE FROM eval_jobs WHERE proje
 //! deletion here (README § Coordination).
 
 /// Runs every cascade of a stored scope. Returns the number of `eval_jobs` rows deleted.
+/// Today it has one statement; it exists so that track J adds its dataset-item deletion here
+/// instead of in `resolve.rs` (README § Coordination).
 pub(crate) async fn traces_deleted(conn: &mut SqliteConnection, project: ProjectId, traces: &[TraceId]) -> Result<u64, MetaError> {
     crate::meta::eval_jobs::delete_for_traces(conn, project, traces).await
 }
 ```
 
-`deletion/resolve.rs`: in the scope `meta.write`, after `insert_sessions` and before `store_counts`, call `crate::deletion::cascade::traces_deleted(conn, project, &scope).await?` (`scope` includes the evaluation traces). Right after that transaction commits (and before `register`), also call `state.deletions.guard.add_traces(project, &scope, row.created_at)`, so a job that is running now is caught at its next check (M3's `register` adds them again; it is idempotent).
+`deletion/resolve.rs`: in the scope `meta.write`, after `store_counts` and only when it returned `true`, call `crate::deletion::cascade::traces_deleted(conn, project, &scope).await?` (`scope` includes the evaluation traces). Inside the same closure, before the cascade, call `guard.add_traces(project, &scope, row.created_at)` on a clone of the guard handle (pass `&state.deletions.guard` into the closure by reference if the closure's lifetime allows, else call it right before `meta.write`); it is idempotent and harmless if the transaction rolls back, and it closes the gap in which a running job could pass its last check. M3's `register` adds the same entries again.
 
 `running` jobs keep their rows, as do the `skipped` rows they become, for up to 7 days (D-I-28 prunes them); they hold ids, not payload. Accepted.
 
 ## Guard in the job runner
 
-A new outcome in the type `run_job` returns to `finish` (name it as the type's existing variants are named; e.g. `JobResult::Deleted` or `Outcome::Skipped { reason }`). `finish` writes it with the usual fenced `UPDATE`: `status = 'skipped'`, `error_class = 'deleted'`, `error = NULL`, `finished_at = now`, `updated_at = now`. It does not pause the rule, does not touch `online_rules` or `llm_connections`, does not count in the breaker window (D-I-14), and releases any budget reservation the way a failure before the call does.
+A new outcome in the type `run_job` returns to `finish` (in `eval/dispatch.rs`; name it as the type's existing variants are named, e.g. `JobResult::Deleted { usage }`), carrying `usage: Option<…>` of the same type `finish` already takes for `done`/`failed` (tokens, cost, latency). `finish` writes it with the usual fenced `UPDATE`: `status = 'skipped'`, `error_class = 'deleted'`, `error = NULL`, `finished_at = now`, `updated_at = now`, and, when `usage` is `Some`, also `input_tokens`, `output_tokens`, `cost_usd`, `latency_ms` and the `rule_spend` update, as the failure-after-call path does. Checks 0 and A return `usage: None`. It does not pause the rule, does not touch `online_rules` or `llm_connections`, does not count in the breaker window (D-I-14), and releases any budget reservation the way a failure before the call does.
 
 Checks in `run_job`, each with a `// D-M-6` comment:
 
@@ -73,14 +80,15 @@ if state.deletions.guard.blocks(job.project_id, job.trace_id, &[], 0, now) { ret
 
 - **Check 0**, at the very start of `run_job`, before loading: trace id only (`&[]`, `0`). It catches jobs re-queued from `running` (retries, janitor, restart) that the cascade left.
 - **Check A**, right after the trace is loaded (D-I-23) and before the cost reservation and the judge call: compute `users` = the distinct non-empty `user_id`s of the loaded spans (`Vec<&str>`), and `newest` = the largest `ingest_time` of the loaded spans; `if state.deletions.guard.blocks(project, trace, &users, newest, now) { return <Deleted>; }`. Nothing was reserved or sent yet.
-- **Check B**, immediately before the first commit (the judge trace or the score), and again before each retry of those writes (D-I-13): the same call with the same `users` and `newest`. If it blocks, the judge was already paid: record the actual tokens and cost on the job row and in `rule_spend`, and call the judge usage counter as the success path does (D-I-15, D-I-18: usage counts either way), but commit no judge trace and no score; then return `<Deleted>`.
+- **Check B**, immediately before the judge-trace commit, and again before each retry of that write (D-I-13): the same call with the same `users` and `newest`. If it blocks, the judge was already paid: return `Deleted { usage: Some(actual) }` (the job row and `rule_spend` get the actual cost) and call the judge usage counter as the success path does (D-I-15, D-I-18: usage counts either way); commit no judge trace and no score.
+- **Check B2**, immediately before `scores::write` (I commits the judge trace first, then the score), and before each retry of it: the same call. If it blocks now, the judge trace is already stored (it targets the deleted trace and will be found by a later deletion's eval-trace lookup only if one is made; note it in the report); write no score and return `Deleted { usage: Some(actual) }`.
 
 Use the executor's real names for the job's project, trace id and loaded spans. If check 0 turns out to be dead code in I's structure (every path already loads first), keep checks A and B and say so in the report.
 
 ## Guard in test runs and manual runs
 
-- `eval/test_run.rs` (D-I-21), for a test run whose target is a trace: right after the target trace is loaded and before the judge call, the same check as A; when it blocks, answer `ApiError::NotFound` (the trace is gone from the caller's point of view). A test run on literal variables has no target and is not checked.
-- The manual-run handler, `POST /api/v1/projects/{project}/evaluators/{id}/run` (D-I-22; find it with `grep -rn 'evaluators/{id}/run' crates/server/src/routes`): after the body's `trace_id` is decoded and before the job is inserted, `if state.deletions.guard.blocks(project_id, trace_id, &[], 0, now) { return Err(ApiError::NotFound) }`. It does not load the trace; check A in the runner covers end users.
+- `eval/test_run.rs` (D-I-21), for a test run whose target is a trace: right after the target trace is loaded and before the judge call, the same check as A; and again immediately before it commits the test judge trace (it copies target data). When either blocks, answer `ApiError::NotFound` (the trace is gone from the caller's point of view) and commit nothing. A test run on literal variables has no target and is not checked.
+- The manual-run handler, `POST /api/v1/projects/{project}/evaluators/{id}/run` (D-I-22): after the body's `trace_id` is decoded and before the job is inserted, `let now = state.clock.now_ns(); if state.deletions.guard.blocks(project_id, trace_id, &[], 0, now) { return Err(ApiError::NotFound) }`. It does not load the trace; check A in the runner covers end users.
 
 Remove `#![cfg_attr(not(test), allow(dead_code))]` from `deletion/guard.rs`. If clippy then reports an unused item there, delete the item rather than restoring the allowance.
 
@@ -92,6 +100,8 @@ Remove `#![cfg_attr(not(test), allow(dead_code))]` from `deletion/guard.rs`. If 
 2. `empty_scope_deletes_nothing`: returns 0.
 3. `resolution_cascades_to_eval_jobs` (in `deletion/mod.rs` tests): a `queued` job for trace A (A committed with `ingest_time = now`, as in M3), then a `trace_ids` deletion of A and `run_once` → the job row is gone, the deletion is `pending`.
 
+Spans in tests 3–7 are committed with explicit `ingest_time` (and `user_id = "u1"` where named), as in M3: the fixture's own `ingest_time` is later than the manual clock.
+
 Executor tests, next to I's: find the M3 executor test that ends with a `done` job, a score and a judge trace (`grep -n 'judge_trace_id' crates/server/src/eval/*.rs`) and copy its setup (it runs a job against the mock provider or a stub runner).
 
 4. `a_job_on_a_deleted_trace_is_skipped`: `state.deletions.guard.add_traces(project, &[A], now)` before `run_job` → the job row has `status = 'skipped'` and `error_class = 'deleted'`; no score for A (scores list), and the project's trace list with `include_eval=true` has no judge trace; the provider stub was not called.
@@ -100,10 +110,11 @@ Executor tests, next to I's: find the M3 executor test that ends with a `done` j
 7. `a_trace_deleted_during_the_judge_call_is_not_committed` (check B): a stub runner (or a mock-provider hook, whichever I's tests already use) that calls `add_traces(project, &[A], now)` while the judge "runs" → the job is `skipped`/`deleted`, the provider was called once, no score and no judge trace exist, and the job row carries the actual cost.
 8. `manual_run_on_a_deleted_trace_is_404`: guard holds A → `POST …/evaluators/{id}/run` for A answers `404`.
 9. `test_run_on_a_deleted_trace_is_404`: guard holds A → `POST …/evaluators/test` with target trace A answers `404`.
+10. `test_run_deleted_during_the_call_commits_nothing`: a stub runner that adds A to the guard while the judge runs → `404`, and no judge trace for A exists.
 
 ## Done when
 
 - [ ] `meta::eval_jobs::delete_for_traces` runs in the scope transaction through `deletion::cascade::traces_deleted`; `running` jobs are left to the guard.
 - [ ] `run_job` checks the guard at start, after loading and before committing; test runs and manual runs refuse a guarded trace; every call site has a `// D-M-6` comment.
-- [ ] The 9 tests pass; `just check` is green; one commit `Cascade deletions to evaluation jobs`.
+- [ ] The 10 tests pass; `just check` is green; one commit `Cascade deletions to evaluation jobs`.
 - [ ] Report the function and line of each guard call, the outcome type and variant you added, and anything in I's code that differed from this file.

@@ -13,7 +13,7 @@ Read [README.md](README.md) first, especially § Design › Kinds and Limits, an
 - `web/src/components/trace/trace-header.tsx`, `web/src/components/trace/trace-view.test.tsx`;
 - `web/src/routes/$org/$project/users/$userId.tsx` and `$userId.test.tsx`;
 - `web/src/components/deletions/user-deletion-form.tsx` (extract `UserDeletionDialog`, below);
-- `web/src/components/command/recent-traces.ts` (add `forgetTrace`);
+- `web/src/components/command/recent-traces.ts` and `recent-traces.test.ts` (add `forgetTrace`);
 - `web/src/lib/deletions.ts` and its test (add `invalidateProjectReads`).
 
 **Commit:** `Add delete actions to the traces and user pages`
@@ -30,7 +30,7 @@ Read [README.md](README.md) first, especially § Design › Kinds and Limits, an
 
 All mutations use `$api.useMutation("post", "/api/v1/projects/{project}/deletions")` (or `/deletions/preview`) with `params: { path: { project: ref } }`, `ref` from `useProject()`. After a successful deletion, invalidate every read of the project, since traces, spans, sessions, users and metrics all show deleted data: `queryClient.invalidateQueries({ predicate: (query) => typeof query.queryKey[1] === "string" && query.queryKey[1].startsWith("/api/v1/projects/{project}/") })` (openapi-react-query keys are `[method, path template, init]`; check one with `traceListOptions(...).queryKey`). Put this in one exported helper `invalidateProjectReads(queryClient)` in `lib/deletions.ts`.
 
-`components/command/recent-traces.ts` keeps recently opened traces (id and name) in `localStorage`. Add `export function forgetTrace(traceId: string): void` that removes that id (follow the file's read/write helpers), and call it after a successful single-trace deletion.
+`components/command/recent-traces.ts` keeps recently opened traces (id and name) in `localStorage`. Extract the `localStorage.setItem` try/catch that `rememberTrace` inlines into `function writeStore(store)`, use it in `rememberTrace`, and add `export function forgetTrace(traceId: string): void` that removes that id from every project's list (dropping lists that become empty) through `readStore`/`writeStore`. Call it after a successful single-trace deletion.
 
 ## Delete matching
 
@@ -81,7 +81,7 @@ Behaviour:
 - Add `const { org, project, ref, data } = useProject();` (it already takes `org`, `project`), `const navigate = useNavigate();` (`import { useNavigate } from "@tanstack/react-router"`) and `useQueryClient`.
 - In the right-hand button group, before `CopyButton`: an icon button (`variant="ghost" size="icon-xs"`, `aria-label="Delete trace"`, lucide `Trash2`), wrapped in `DisabledReason` (`Only project admins can delete traces`) and disabled for non-admins.
 - It opens `ConfirmDialog`: title `Delete this trace?`, description "Its spans, scores and evaluation traces are hidden within seconds and erased within 24 hours. This cannot be undone.", `confirmLabel="Delete trace"`, `destructive`.
-- Confirm → `POST …/deletions { kind: "trace_ids", trace_ids: [trace.trace_id] }`. Success: close the dialog, `forgetTrace(trace.trace_id)`, then `onClose?.()` when the header is in a split pane (the traces and spans list pages both pass `onClose`), else `await navigate({ to: "/$org/$project/traces", params: { org, project } })`; invalidate after leaving (navigating first keeps the trace query from refetching a 404 into the error boundary). Error: `problemMessage(caught, "Could not delete the trace.")` in the dialog.
+- Confirm → `POST …/deletions { kind: "trace_ids", trace_ids: [trace.trace_id] }`. Success: close the dialog, `forgetTrace(trace.trace_id)`, then `onClose?.()` when the header is in a split pane (the traces, spans and sessions views pass `onClose`; `components/session/session-view.tsx` is the third), else `await navigate({ to: "/$org/$project/traces", params: { org, project } })`. Then `queryClient.removeQueries({ queryKey: traceDetailQuery(org, project, trace.trace_id).queryKey })` (from `@/api/queries`; check the helper's exact name and arguments) so the still-mounted view does not flash "Could not load this trace", and finally `invalidateProjectReads(queryClient)`. Error: `problemMessage(caught, "Could not delete the trace.")` in the dialog.
 
 ## Delete user data
 
@@ -105,7 +105,7 @@ export function UserDeletionDialog({ userId, open, onOpenChange, onDone, onField
 })
 ```
 
-It owns the mutation (and its `reset()` on opening) and the `TypeToConfirmDialog`. `UserDeletionForm` passes `onDone` (show the success text, clear the field, invalidate the history) and `onFieldError`; the user page passes only `onDone`. M9's tests must pass unchanged.
+It owns the mutation (and its `reset()` on opening) and the `TypeToConfirmDialog`. On success it calls `onOpenChange(false)`, then `onDone()`. On a `400` with a `user_id` field error: with `onFieldError`, it calls `onFieldError(message)` then `onOpenChange(false)`; without it, it shows the message in the dialog and stays open. `UserDeletionForm` passes `onDone` (show the success text, clear the field, invalidate the history) and `onFieldError`; the user page passes only `onDone`. M9's tests must pass unchanged.
 
 ## Tests
 
@@ -122,16 +122,19 @@ It owns the mutation (and its `reset()` on opening) and the `TypeToConfirmDialog
 8. `projectAs("member")` (define the 4-line helper locally, as `general.test.tsx` does): the button is disabled, and `expect(button.parentElement).toHaveAccessibleDescription("Only project admins can delete traces")`.
 
 `trace-view.test.tsx`:
-9. delete flow from the trace header on `renderApp("/acme/support-bot/traces/<fixture trace id>")`: confirm → body `{kind: "trace_ids", trace_ids: ["<the fixture trace id>"]}`; then the router is on `/acme/support-bot/traces`.
+9. delete flow from the trace header on `renderApp("/acme/support-bot/traces/<fixture trace id>")`: click the header's `Delete trace` button, then the confirm button found with `within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete trace" })` (both have the same name) → body `{kind: "trace_ids", trace_ids: ["<the fixture trace id>"]}`; then the router is on `/acme/support-bot/traces`.
 10. member (`projectAs("member")`, local helper): the delete button is disabled; its reason is the wrapper's accessible description.
 
 `users/$userId.test.tsx`:
 11. type-to-confirm with the fixture user id → body `{kind: "user", user_id: <id>}` → navigates to `/acme/support-bot/settings/data`.
 12. member (`projectAs`, local helper): disabled, with the reason as the wrapper's accessible description.
 
-Each page test answers the POST with `server.use(http.post(…, () => HttpResponse.json(deletionDocument, { status: 202 })))` and captures the body (D-L-10).
+Each page test answers its deletion POST with `server.use(http.post(…, () => HttpResponse.json(deletionDocument, { status: 202 })))` and captures the body (D-L-10); `deletionDocument` is `import deletionDocument from "<…>/fixtures/api/static/deletion.json"` with the relative depth of each test file (`traces/index.test.tsx` and `users/$userId.test.tsx` use `../../../../../../fixtures/…`). Test 7's POST is the preview: answer it with `{ matched_traces: 2, capped: false }`.
+
+13. `recent-traces.test.ts`: remember two traces, `forgetTrace` one, `readRecent` returns only the other.
+14. `deletions.test.ts`: a `QueryClient` with data under `["get", "/api/v1/projects/{project}/traces", {}]` and `["get", "/api/v1/orgs/{org}/projects", {}]`; after `invalidateProjectReads`, the first query is invalidated and the second is not (`queryClient.getQueryState(key)?.isInvalidated`).
 
 ## Done when
 
 - [ ] The three actions work against the mocks; non-admins see them disabled with the reason.
-- [ ] The 12 tests pass; M9's tests still pass; `just check` is green; one commit `Add delete actions to the traces and user pages`.
+- [ ] The 14 tests pass; M9's tests still pass; `just check` is green; one commit `Add delete actions to the traces and user pages`.
