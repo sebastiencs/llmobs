@@ -13,7 +13,7 @@
 | `LLMOBS_AUTH_SIGNUP_DOMAINS` | empty | With `open`, restrict to these email domains. |
 | `LLMOBS_AUTH_DISABLE_PASSWORD` | `false` | Hide and refuse password login/sign-up (SSO only). The CLI admin commands still work. |
 | `LLMOBS_AUTH_REQUIRE_EMAIL_VERIFICATION` | `false` | Requires SMTP. |
-| `LLMOBS_AUTH_ENFORCE_SSO_DOMAINS` | empty | Users with these email domains must log in through an OAuth/OIDC provider (password login refused). Any configured provider satisfies it. |
+| `LLMOBS_AUTH_ENFORCE_SSO_DOMAINS` | empty | Users with these email domains must log in through an OAuth/OIDC provider (password login refused). Any configured provider satisfies it. Enforced only with a genuine licence that lists `sso_enforcement`, expired or not (D-P-8); otherwise ignored with a startup warning. |
 
 The default is `invite_only` (stricter than Langfuse's open default) because a self-hosted instance reachable on the internet should not accept strangers.
 
@@ -80,7 +80,7 @@ auto_provision = { org = "acme", role = "member" }   # optional: auto-join org o
 
 Effective role on a project = `project_members.role` if present, else the org role (`owner` behaves as `admin` at project level). `none` in `project_members` hides the project from that user.
 
-Overrides apply only to org `member`s and `viewer`s (D139). They can raise the project role to `admin` or lower it to `viewer` or `none`. Org owners and admins are never overridden; setting an override for one is a 400. Only a caller with effective role `admin` on the project edits overrides. Nobody grants a role above their own, and only owners grant or change `owner`. An org always keeps at least one owner. Any signed-in user may create an org and becomes its owner. Instance admins get the `/api/v1/admin/*` endpoints only, with no implicit access to org data.
+Setting an override needs the `project_roles` entitlement (Teams add-on or an enterprise licence; `403 plan_required` otherwise); removing one never does, and stored overrides keep applying whatever the plan (D178, D-P-8). Overrides apply only to org `member`s and `viewer`s (D139). They can raise the project role to `admin` or lower it to `viewer` or `none`. Org owners and admins are never overridden; setting an override for one is a 400. Only a caller with effective role `admin` on the project edits overrides. Nobody grants a role above their own, and only owners grant or change `owner`. An org always keeps at least one owner. Any signed-in user may create an org and becomes its owner. Instance admins get the `/api/v1/admin/*` endpoints only, with no implicit access to org data.
 
 | Action | viewer | member | admin | owner |
 |---|:-:|:-:|:-:|:-:|
@@ -100,7 +100,7 @@ Enforced in one place: every route is declared with its access (public, any sign
 
 **Session-only** (a session cookie; a PAT or an API key is refused): creating, listing or revoking API keys and personal access tokens, changing members, roles, overrides or invites, the password and the account name. Exception: a PAT may revoke itself with `DELETE /api/v1/me/tokens/current` (D140). A PAT with scope `read` may call safe methods (GET, HEAD) only, plus the two reads that use POST: `POST /api/v1/projects/{project}/sql` and `POST /mcp` (D-H-4); `read, write` may call everything except those session-only routes.
 
-API keys are project-bound and their scopes map onto permissions: `ingest` (OTLP + scores write), `read` (safe methods of project-scoped routes, and `POST …/sql`, D-H-4), `write` (datasets, experiments, scores, deletions by trace), `feedback` (public feedback only). Track D enforces `read`; later tracks map `ingest`, `write` and `feedback` (D140). Deletion by user or project requires `admin` with a session or a `read, write` PAT, never an API key.
+API keys are project-bound and their scopes map onto permissions: `ingest` (OTLP + scores write), `read` (safe methods of project-scoped routes, and `POST …/sql`, D-H-4), `write` (datasets, experiments, scores, deletions by trace), `feedback` (public feedback only). Track D enforces `read`; later tracks map `ingest`, `write` and `feedback` (D140). Deletion by user or by filter requires project `admin` with a session or a `read, write` PAT, never an API key; deleting a project requires the **org** role `admin` or `owner` (a project-admin override is not enough), and deleting an org requires `owner` (D-M-4). An `sk` key needs `write`, not `read`, even for `GET …/deletions`: the history names the people whose data was erased.
 
 ## API keys
 

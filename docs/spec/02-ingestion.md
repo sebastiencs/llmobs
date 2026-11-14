@@ -11,7 +11,7 @@ OTLP/JSON follows the OTLP specification strictly (D108): lowerCamelCase fields,
 
 Authentication: `Authorization: Bearer <sk-…>` (project secret key with `ingest` scope). For OTel exporters that only support custom headers this is set via `OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer sk-…"`. The key determines the project; there is no project header.
 
-Responses follow OTLP: `200` with `ExportTraceServiceResponse` in the request's encoding (with `partial_success.rejected_spans` and an error message when some spans were dropped), `400` malformed, `401` no or bad key, `403` a credential that is not a key with the `ingest` scope, `413` too large, `415` unknown `Content-Type` (parameters such as `charset` are ignored) or `Content-Encoding`, `429` per-org rate limit or quota (with `Retry-After`, track N), `503` with `Retry-After: 1` when the server is overloaded (memtable at its hard limit, in-flight budget full), the WAL has failed, the disk is full or the server is shutting down (D-G-3). Error bodies are the API's problem+json, not a `google.rpc.Status` (D-G-6). gRPC uses `UNAUTHENTICATED`, `PERMISSION_DENIED`, `INVALID_ARGUMENT`, `RESOURCE_EXHAUSTED` (message size and per-org limits) and `UNAVAILABLE` (overload) the same way.
+Responses follow OTLP: `200` with `ExportTraceServiceResponse` in the request's encoding (with `partial_success.rejected_spans` and an error message when some spans were dropped), `400` malformed, `401` no or bad key, `403` a credential that is not a key with the `ingest` scope, `413` too large, `415` unknown `Content-Type` (parameters such as `charset` are ignored) or `Content-Encoding`, `402` the org's monthly units cap (`quota_exceeded`, no retry; track P, D-P-17), `429` per-org rate limit (with `Retry-After`; track P, D-P-19), `503` with `Retry-After: 1` when the server is overloaded (memtable at its hard limit, in-flight budget full), the WAL has failed, the disk is full or the server is shutting down (D-G-3). Error bodies are the API's problem+json, not a `google.rpc.Status` (D-G-6). gRPC uses `UNAUTHENTICATED`, `PERMISSION_DENIED`, `INVALID_ARGUMENT`, `RESOURCE_EXHAUSTED` (message size, the per-org rate limit with `RetryInfo`, and the units cap without it) and `UNAVAILABLE` (overload) the same way.
 
 **Durability contract:** a `200` means every accepted span is in the fsynced WAL.
 
@@ -24,22 +24,24 @@ Responses follow OTLP: `200` with `ExportTraceServiceResponse` in the request's 
 | Single attribute value | 8 MiB | truncated (below) |
 | Spans per request, counted after decoding (`ingest.max_spans_per_request`) | 50 000 | 413 (gRPC `INVALID_ARGUMENT`) |
 | Request bytes held at once, all requests: raw bodies reserved before reading, decompressed output reserved per 64 KiB (`ingest.max_inflight_bytes`, D-G-5) | 256 MiB | 503, `Retry-After: 1`, no waiting |
-| Per-org ingest rate | from org limits (12) | 429 |
+| Per-org ingest rate (spans, counted after decoding) | the org's `ingest_spans_per_sec` / `ingest_burst` entitlements (12, D-P-19) | 429 |
+| Per-org monthly units | the org's `units_cap` entitlement (12, D-P-17), checked before decoding | 402 |
 
 ## Pipeline
 
 ```
-authenticate ─► read body (capped) ─► in-flight budget ─► rate-limit (track N)
+authenticate ─► units cap (402, track P) ─► read body (capped) ─► in-flight budget
 accept:  decompress (capped) ─► decode ─► count spans ─► normalize (for each span: detect conventions ─►
          normalize ─► extract media ─► truncate ─► compute cost) ─► rewrite reserved environment
+rate limit (429, track P, on the accepted span count)
 commit:  store media ─► build batch ─► append batch to WAL (group commit, fsync) ─► insert into memtable
-         ─► publish to live bus ─► count usage ─► enqueue online-eval triggers (track I)
+         ─► publish to live bus ─► count usage and month units ─► enqueue online-eval triggers (track I)
 ─► respond 200
 ```
 
 The server runs this per request, with no queue between the request and storage; decoding and normalization run on a blocking thread (D-G-2). `accept` exists only for OTLP. `commit` is the in-process entry point: track I commits judge traces with it, so they skip the environment rewrite (D-G-8).
 
-Normalization is a pure function in `llmobs-otel`: `normalize(request, ingest_context, price_table) -> Normalized { spans, media, rejections }` (D102, D103, D105). It does no I/O. The server stores each returned media blob through `llmobs-storage` before the WAL append. Re-sends are safe because blobs are content-addressed. `ingest_context` carries the project ID, the ingest time, the project's `retention_days` and the limits.
+Normalization is a pure function in `llmobs-otel`: `normalize(request, ingest_context, price_table) -> Normalized { spans, media, rejections }` (D102, D103, D105). It does no I/O. The server stores each returned media blob through `llmobs-storage` before the WAL append. Re-sends are safe because blobs are content-addressed. `ingest_context` carries the project ID, the ingest time, the project's `retention_days` (capped by the org's retention cap from track P's M4, D-P-22) and the limits.
 
 Scalar fields (model, provider, tokens, context, parameters, reported cost) come from precedence tables. Span kind, payloads and time-to-first-token come from one function per convention, called in the order below. There is no per-convention type (D102). The result is a `Vec<Span>` (D105); the server converts it with `llmobs_core::batch` before `append_spans`.
 
