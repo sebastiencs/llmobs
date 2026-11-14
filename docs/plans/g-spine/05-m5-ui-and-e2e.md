@@ -205,9 +205,9 @@ Drive `router_with(true, TEST_ASSETS)` with `tower::ServiceExt::oneshot`:
    1. **Config.** Write `<tmp>/llmobs.toml` and load it with `ServerConfig::load(Some(&path))` (as `crates/cli/src/login.rs`'s test does; read it first):
       ```toml
       data_dir = "<tmp>/data"
-      http_addr = "127.0.0.1:0"
-      otlp_http_addr = "127.0.0.1:0"
-      grpc_addr = "127.0.0.1:0"
+      http_addr = "127.0.0.1:<port 1>"
+      otlp_http_addr = "127.0.0.1:<port 2>"
+      grpc_addr = "127.0.0.1:<port 3>"
       public_url = "http://127.0.0.1:8080"
 
       [init]
@@ -217,6 +217,7 @@ Drive `router_with(true, TEST_ASSETS)` with `tower::ServiceExt::oneshot`:
       project = "Proto"
       secret_key = "sk-llmobs-0123456789ABCDEFGHIJKLMNOPQRSTUV"
       ```
+      The three ports are distinct free loopback ports, reserved together and released just before `bind` (config validation rejects equal addresses, so `:0` cannot be used three times).
       `let running = llmobs_server::serve::bind(config, Some(llmobs_ui::router())).await.unwrap();` (an integration test of `llmobs-cli` can use the cli's normal dependencies, and `llmobs-ui` is one since G5.2).
    2. **UI and API paths.** `GET /` → 200 `text/html` when `web/dist/index.html` exists (`Path` check as in G5.2), else 503; `GET /api/v1/nope` → 404 with `content-type: application/problem+json`.
    3. **Sign in.** `reqwest::Client` without a cookie store. `POST /api/auth/login` with `{"email": "ada@example.com", "password": "llmobs-e2e-1"}` and `Origin: http://127.0.0.1:8080` (every session `POST` needs that exact origin; `public_url` does not follow the port). Take the first `set-cookie`, keep the text before the first `;`, and send it as `Cookie` on every later request (as `login.rs`'s test does).
