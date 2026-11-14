@@ -1532,13 +1532,13 @@ fn score_paths(paths: PathsBuilder) -> PathsBuilder {
 fn sql_paths(paths: PathsBuilder) -> PathsBuilder {
     let run = operation("run_sql", "sql", "Run a SQL query")
         .description(Some(
-            "Runs one read-only statement over the project's `spans`, `traces`, `sessions` and `scores` views (spec 05 § SQL console). `from` and `to` window `spans` and `traces` on `start_time` and `scores` on `created_at`. Without them the query reads all history. At most 10,000 rows; `truncated` says when more matched. SQL errors are `invalid_filter` on the `query` field, with a `position` when one is known.",
+            "Runs one read-only statement over the project's `spans`, `traces`, `sessions` and `scores` views (spec 05 § SQL console). `from` and `to` window `spans` and `traces` on `start_time` and `scores` on `created_at`. Without them the query reads all history. At most 10,000 rows; `truncated` says when more matched. SQL errors are `invalid_filter` on the `query` field, with a `position` when one is known. Exports stream; an error before the first row is a problem document, a later one cuts the transfer. `timeout_ms` bounds the whole export.",
         ))
         .parameters(Some(vec![project_param()]))
         .request_body(Some(json_body("SqlQueryRequest")))
         .responses(responses(
             "200",
-            json_of::<SqlQueryResult>("Columns and rows."),
+            sql_result(),
             &[400, 401, 403, 404, 413, 415, 422, 429, 503],
         ))
         .build();
@@ -1793,14 +1793,35 @@ fn binary(description: &str) -> Response {
 }
 
 fn media_bytes() -> Content {
-    Content::new(Some(
-        ObjectBuilder::new()
-            .schema_type(Type::String)
-            .format(Some(SchemaFormat::KnownFormat(KnownFormat::Binary)))
-            .description(Some(
-                "Bytes of the blob. The response Content-Type is the blob's MIME type.",
-            )),
-    ))
+    Content::new(Some(binary_string().description(Some(
+        "Bytes of the blob. The response Content-Type is the blob's MIME type.",
+    ))))
+}
+
+/// `type: string, format: binary`.
+fn binary_string() -> ObjectBuilder {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .format(Some(SchemaFormat::KnownFormat(KnownFormat::Binary)))
+}
+
+/// The `200` of `run_sql`: the JSON result first, then the three export types (D-H-8).
+fn sql_result() -> Response {
+    ResponseBuilder::new()
+        .description(
+            "Columns and rows as JSON. With `Accept: text/csv`, `application/x-ndjson` or `application/vnd.apache.parquet`, the whole result in that format instead (at most 10,000,000 rows; `limit` is validated but not applied; exports need role member), with `Content-Disposition: attachment`. The first of those types in `Accept`, or `application/json`, decides; anything else is JSON.",
+        )
+        .content(
+            "application/json",
+            Content::new(Some(Ref::from_schema_name(SqlQueryResult::name()))),
+        )
+        .content("text/csv", Content::new(Some(string_schema())))
+        .content("application/x-ndjson", Content::new(Some(string_schema())))
+        .content(
+            "application/vnd.apache.parquet",
+            Content::new(Some(binary_string())),
+        )
+        .build()
 }
 
 fn responses(status: &str, success: Response, errors: &[u16]) -> Responses {

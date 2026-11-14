@@ -90,6 +90,25 @@ impl TestApp {
         Self::open(tweak, Some(routes), None, false, None, None).await
     }
 
+    /// Serves this app's router on `127.0.0.1` at an ephemeral port, in a background task that
+    /// ends with the test's runtime. Returns the address. For tests that need a real socket
+    /// (how hyper ends a failed body).
+    pub(crate) async fn serve_loopback(&self) -> SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a loopback port");
+        let addr = listener.local_addr().expect("loopback address");
+        let router = self.router.clone();
+        tokio::spawn(async move {
+            let _ = axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await;
+        });
+        addr
+    }
+
     /// The given route table instead of the server's, with the same layers.
     pub(crate) async fn with_route_table(routes: Vec<RouteDef>) -> Self {
         Self::open(|_| {}, None, Some(routes), false, None, None).await
@@ -751,7 +770,8 @@ impl TestResponse {
     }
 }
 
-/// A streaming response, read event by event (D-G-12). Dropping it ends the stream.
+/// A streaming response: read event by event (D-G-12) or frame by frame. Dropping it ends the
+/// stream.
 pub(crate) struct TestStream {
     pub(crate) status: StatusCode,
     pub(crate) headers: HeaderMap,
@@ -769,6 +789,45 @@ pub(crate) struct SseEvent {
 }
 
 impl TestStream {
+    /// Reads data frames until the body ends or fails. Returns the bytes and whether the body
+    /// ended with an error. Panics when it does not end within `wait`.
+    pub(crate) async fn read_to_end(&mut self, wait: Duration) -> (Vec<u8>, bool) {
+        let read = async {
+            let mut bytes = Vec::new();
+            loop {
+                match self.body.frame().await {
+                    Some(Ok(frame)) => {
+                        if let Ok(data) = frame.into_data() {
+                            bytes.extend_from_slice(&data);
+                        }
+                    }
+                    Some(Err(_)) => return (bytes, true),
+                    None => return (bytes, false),
+                }
+            }
+        };
+        tokio::time::timeout(wait, read)
+            .await
+            .unwrap_or_else(|_| panic!("body did not end"))
+    }
+
+    /// The next data frame, or `None` when the body ends, fails, or `wait` passes first.
+    pub(crate) async fn next_frame(&mut self, wait: Duration) -> Option<Bytes> {
+        let next = async {
+            loop {
+                match self.body.frame().await {
+                    Some(Ok(frame)) => {
+                        if let Ok(data) = frame.into_data() {
+                            return Some(data);
+                        }
+                    }
+                    Some(Err(_)) | None => return None,
+                }
+            }
+        };
+        tokio::time::timeout(wait, next).await.ok().flatten()
+    }
+
     /// The next event, or `None` when `wait` passes first or the body ends.
     pub(crate) async fn next_event(&mut self, wait: Duration) -> Option<SseEvent> {
         tokio::time::timeout(wait, self.read_event())

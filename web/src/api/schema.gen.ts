@@ -869,7 +869,7 @@ export interface paths {
         put?: never;
         /**
          * Run a SQL query
-         * @description Runs one read-only statement over the project's `spans`, `traces`, `sessions` and `scores` views (spec 05 § SQL console). `from` and `to` window `spans` and `traces` on `start_time` and `scores` on `created_at`. Without them the query reads all history. At most 10,000 rows; `truncated` says when more matched. SQL errors are `invalid_filter` on the `query` field, with a `position` when one is known.
+         * @description Runs one read-only statement over the project's `spans`, `traces`, `sessions` and `scores` views (spec 05 § SQL console). `from` and `to` window `spans` and `traces` on `start_time` and `scores` on `created_at`. Without them the query reads all history. At most 10,000 rows; `truncated` says when more matched. SQL errors are `invalid_filter` on the `query` field, with a `position` when one is known. Exports stream; an error before the first row is a problem document, a later one cuts the transfer. `timeout_ms` bounds the whole export.
          */
         post: operations["run_sql"];
         delete?: never;
@@ -7150,13 +7150,16 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Columns and rows. */
+            /** @description Columns and rows as JSON. With `Accept: text/csv`, `application/x-ndjson` or `application/vnd.apache.parquet`, the whole result in that format instead (at most 10,000,000 rows; `limit` is validated but not applied; exports need role member), with `Content-Disposition: attachment`. The first of those types in `Accept`, or `application/json`, decides; anything else is JSON. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["SqlQueryResult"];
+                    "text/csv": string;
+                    "application/x-ndjson": string;
+                    "application/vnd.apache.parquet": string;
                 };
             };
             /** @description The request is malformed or a filter is invalid. */
