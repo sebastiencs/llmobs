@@ -36,7 +36,7 @@ enum Command {
         #[arg(long)]
         config: Option<PathBuf>,
     },
-    /// Manage users and the encryption key in this data directory.
+    /// Admin operations on this data directory (users, encryption key, deletions).
     Admin {
         #[command(subcommand)]
         command: AdminCommand,
@@ -116,6 +116,17 @@ enum AdminCommand {
         /// generate one, unless the current key comes from `LLMOBS_ENCRYPTION_KEY`.
         #[arg(long)]
         new_from_stdin: bool,
+        /// Config file. Overrides `LLMOBS_CONFIG`.
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Re-open the deletions of another data directory that this one lacks (after a backup restore).
+    /// Both `meta.db` files must be at this binary's schema; run `llmobs serve` once on a restored older backup first.
+    ReapplyDeletions {
+        /// The data directory whose `meta.db` holds the deletions to re-apply (for example the
+        /// directory as it was before the restore).
+        #[arg(long)]
+        from: PathBuf,
         /// Config file. Overrides `LLMOBS_CONFIG`.
         #[arg(long)]
         config: Option<PathBuf>,
@@ -381,6 +392,19 @@ async fn admin_command(command: AdminCommand) -> anyhow::Result<()> {
                     "Set LLMOBS_ENCRYPTION_KEY to the new key before the next start."
                 )?;
             }
+        }
+        AdminCommand::ReapplyDeletions { from, config } => {
+            let loaded = load_config(config.as_deref())?;
+            let report = admin::reapply_deletions(&loaded, &from)
+                .await
+                .context("re-applying deletions")?;
+            writeln!(
+                io::stdout().lock(),
+                "Re-opened {} deletions ({} failed ones copied for the record, {} already present). `llmobs serve` applies them.",
+                report.reopened,
+                report.failed_copied,
+                report.present
+            )?;
         }
     }
     Ok(())
@@ -674,5 +698,52 @@ mod tests {
             "{text}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reapply_deletions_requires_from() {
+        assert!(Cli::try_parse_from(["llmobs", "admin", "reapply-deletions"]).is_err());
+        let parsed =
+            Cli::try_parse_from(["llmobs", "admin", "reapply-deletions", "--from", "/x"]).unwrap();
+        assert!(matches!(
+            parsed.command,
+            Command::Admin {
+                command: AdminCommand::ReapplyDeletions { .. }
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn reapply_deletions_on_a_missing_database_names_serve() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("llmobs-admin-{}-{stamp}", std::process::id()));
+        let from =
+            std::env::temp_dir().join(format!("llmobs-admin-from-{}-{stamp}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&from).unwrap();
+        let config_path = dir.join("llmobs.toml");
+        let data = dir.join("data");
+        std::fs::write(&config_path, format!("data_dir = \"{}\"\n", data.display())).unwrap();
+        let error = run_cli([
+            "llmobs",
+            "admin",
+            "reapply-deletions",
+            "--from",
+            from.to_str().unwrap(),
+            "--config",
+            config_path.to_str().unwrap(),
+        ])
+        .await
+        .unwrap_err();
+        let text = format!("{error:#}");
+        assert!(
+            text.contains("run `llmobs serve` once to create the database"),
+            "{text}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&from);
     }
 }

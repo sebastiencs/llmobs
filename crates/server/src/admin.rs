@@ -15,6 +15,9 @@ use crate::auth::secret::constant_time_eq;
 use crate::clock::Clock;
 use crate::config::ServerConfig;
 use crate::crypto::{self, Aad, KeySource, SecretBox};
+use crate::meta::deletions::{
+    DeletionState, all_deletions, insert_copy, scope_projects, scope_sessions, scope_traces,
+};
 use crate::meta::instance_settings::{self, ENCRYPTION_CHECK};
 use crate::meta::password_resets::insert_reset;
 use crate::meta::users::{self, NewUser, normalize_email};
@@ -93,6 +96,19 @@ pub enum AdminError {
     /// The new key is the current key.
     #[error("the new key is the current key")]
     SameKey,
+    /// `--from` holds no `meta.db`.
+    #[error("no meta.db in the --from directory")]
+    SourceNotInitialized,
+    /// The `--from` database is at another schema version.
+    #[error(
+        "the --from meta.db has schema {found}, this binary expects {expected}; run `llmobs serve` on a copy of it first"
+    )]
+    SourceSchema {
+        /// Migration version embedded in this binary.
+        expected: i64,
+        /// Latest applied migration of the source.
+        found: i64,
+    },
 }
 
 /// Creates a verified user. Without `password`, the result carries a one-hour reset URL.
@@ -187,6 +203,74 @@ pub async fn list_users(config: &ServerConfig) -> Result<Vec<UserSummary>, Admin
     let outcome = list_all(&meta).await;
     meta.close().await;
     outcome
+}
+
+/// What [`reapply_deletions`] did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReapplyReport {
+    /// Rows copied as open rows, to be applied again.
+    pub reopened: u64,
+    /// `failed` rows copied for the audit trail.
+    pub failed_copied: u64,
+    /// Rows the current `meta.db` already had.
+    pub present: u64,
+}
+
+/// Copies the deletions of `<from>/meta.db` that `config`'s `meta.db` lacks (D-M-9).
+///
+/// Each copied row keeps its id, scope and cut-off and is opened again: the running
+/// (or next) `llmobs serve` registers or drops it through its worker. Each row is one
+/// transaction, so an interrupted run leaves whole rows, and a second run copies nothing
+/// new. `from` is opened read-write (WAL), so copy a read-only backup somewhere writable
+/// first. Pointing `from` at the current data directory copies nothing.
+///
+/// # Errors
+///
+/// [`AdminError::NotInitialized`] / [`AdminError::Schema`] for the target,
+/// [`AdminError::SourceNotInitialized`] / [`AdminError::SourceSchema`] for `from`,
+/// [`AdminError::Database`] for a query failure.
+pub async fn reapply_deletions(
+    config: &ServerConfig,
+    from: &Path,
+) -> Result<ReapplyReport, AdminError> {
+    let target = open_meta(config).await?;
+    let source = match MetaDb::open_existing(from).await {
+        Ok(db) => db,
+        Err(error) => {
+            target.close().await;
+            return Err(map_source(error));
+        }
+    };
+    let outcome = copy_all(&target, &source).await;
+    source.close().await;
+    target.close().await;
+    outcome.map_err(map_meta)
+}
+
+async fn copy_all(target: &MetaDb, source: &MetaDb) -> Result<ReapplyReport, MetaError> {
+    let rows = all_deletions(source.reader()).await?;
+    let mut report = ReapplyReport::default();
+    for row in rows {
+        let traces = scope_traces(source.reader(), row.id).await?;
+        let sessions = scope_sessions(source.reader(), row.id).await?;
+        let projects = scope_projects(source.reader(), row.id).await?;
+        let failed = row.state == DeletionState::Failed;
+        let copied = target
+            .write(move |conn| {
+                Box::pin(
+                    async move { insert_copy(conn, &row, &traces, &sessions, &projects).await },
+                )
+            })
+            .await?;
+        if !copied {
+            report.present += 1;
+        } else if failed {
+            report.failed_copied += 1;
+        } else {
+            report.reopened += 1;
+        }
+    }
+    Ok(report)
 }
 
 const PAGE: u32 = 500;
@@ -448,6 +532,17 @@ fn map_reset(error: ResetError) -> AdminError {
     }
 }
 
+/// The `--from` database's errors: the same as the target's, with the source variants.
+fn map_source(error: MetaError) -> AdminError {
+    match error {
+        MetaError::NotInitialized => AdminError::SourceNotInitialized,
+        MetaError::SchemaMismatch { expected, found } => {
+            AdminError::SourceSchema { expected, found }
+        }
+        other => map_meta(other),
+    }
+}
+
 fn map_meta(error: MetaError) -> AdminError {
     match error {
         MetaError::NotInitialized => AdminError::NotInitialized,
@@ -462,9 +557,20 @@ mod tests {
     use super::*;
     use crate::auth::secret::hash_token;
     use crate::config::Secret;
+    use crate::meta::deletions::{
+        ActorKind, DeletionKind, DeletionRow, FailReason, NewDeletion, RequestDetails,
+        deletion_by_id, insert_deletion, insert_projects, insert_sessions, insert_traces,
+        mark_applied, mark_dropped, mark_failed, mark_handed_over, scope_projects, scope_sessions,
+        scope_traces, store_counts,
+    };
+    use crate::meta::orgs::insert_org;
     use crate::meta::password_resets::valid_reset;
+    use crate::meta::projects::insert_project;
     use crate::meta::users::{set_disabled, user_by_email};
-    use crate::test_support::TestApp;
+    use crate::test_support::{TestApp, dataset_span};
+    use axum::http::{Method, StatusCode};
+    use llmobs_core::ids::{OrgId, ProjectId, SpanId, TraceId};
+    use std::time::Duration;
 
     const PASSWORD: &str = "llmobs-ok1";
 
@@ -1201,5 +1307,498 @@ mod tests {
     fn reset_hash(url: &str) -> String {
         let token = url.split("token=").nth(1).expect("reset url");
         hash_token(token)
+    }
+
+    /// A trace id for test `n`. Never all zero.
+    fn trace(n: u128) -> TraceId {
+        TraceId::from_bytes((n + 1).to_be_bytes()).unwrap()
+    }
+
+    fn did(n: u128) -> Uuid {
+        Uuid::from_u128(n)
+    }
+
+    /// The org and projects the source rows refer to, as ids in the target.
+    struct Ids {
+        org: OrgId,
+        p1: ProjectId,
+        p2: ProjectId,
+        org2: OrgId,
+        p0: ProjectId,
+    }
+
+    fn fresh_ids() -> Ids {
+        Ids {
+            org: OrgId::from_uuid(Uuid::now_v7()),
+            p1: ProjectId::from_uuid(Uuid::now_v7()),
+            p2: ProjectId::from_uuid(Uuid::now_v7()),
+            org2: OrgId::from_uuid(Uuid::now_v7()),
+            p0: ProjectId::from_uuid(Uuid::now_v7()),
+        }
+    }
+
+    /// Row `n` of the source: created at `n * 10`, actor `100 + n`.
+    fn new_row(
+        n: u128,
+        kind: DeletionKind,
+        org: OrgId,
+        project: Option<ProjectId>,
+        state: DeletionState,
+    ) -> NewDeletion {
+        NewDeletion {
+            id: did(n),
+            org_id: org,
+            project_id: project,
+            kind,
+            user_id: (kind == DeletionKind::User).then(|| "u1".to_owned()),
+            request: RequestDetails::default(),
+            actor_kind: ActorKind::User,
+            actor_id: Uuid::from_u128(100 + n),
+            state,
+            created_at: (n as i64) * 10,
+        }
+    }
+
+    async fn put(
+        db: &MetaDb,
+        new: NewDeletion,
+        traces: Vec<TraceId>,
+        sessions: Vec<String>,
+        projects: Vec<ProjectId>,
+    ) {
+        let id = new.id;
+        db.write(move |conn| {
+            Box::pin(async move {
+                insert_deletion(conn, &new).await?;
+                insert_traces(conn, id, &traces).await?;
+                insert_sessions(conn, id, &sessions).await?;
+                insert_projects(conn, id, &projects).await
+            })
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn set_counts(db: &MetaDb, id: Uuid, traces: u64, sessions: Option<u64>) {
+        db.write(move |conn| {
+            Box::pin(async move { store_counts(conn, id, traces, sessions).await })
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn set_handed_over(db: &MetaDb, id: Uuid) {
+        db.write(move |conn| Box::pin(async move { mark_handed_over(conn, id, 11).await }))
+            .await
+            .unwrap();
+    }
+
+    async fn set_applied(db: &MetaDb, id: Uuid) {
+        db.write(move |conn| Box::pin(async move { mark_applied(conn, id, 12).await }))
+            .await
+            .unwrap();
+    }
+
+    async fn set_dropped(db: &MetaDb, id: Uuid) {
+        db.write(move |conn| Box::pin(async move { mark_dropped(conn, id, 13).await }))
+            .await
+            .unwrap();
+    }
+
+    async fn set_failed(db: &MetaDb, id: Uuid, reason: FailReason) {
+        db.write(move |conn| Box::pin(async move { mark_failed(conn, id, reason).await }))
+            .await
+            .unwrap();
+    }
+
+    /// A target with the org and projects of `Ids`, under the ids the database gives them.
+    async fn target_with_projects(config: &ServerConfig) -> Ids {
+        let db = MetaDb::open_existing(&config.data_dir).await.unwrap();
+        let ids = db
+            .write(|conn| {
+                Box::pin(async move {
+                    let org = insert_org(conn, "O", "o", 1).await?;
+                    let p1 = insert_project(conn, org.id, "p1", "p1", None, 1).await?;
+                    let p2 = insert_project(conn, org.id, "p2", "p2", None, 1).await?;
+                    let org2 = insert_org(conn, "O2", "o2", 1).await?;
+                    let p0 = insert_project(conn, org2.id, "p0", "p0", None, 1).await?;
+                    Ok(Ids {
+                        org: org.id,
+                        p1: p1.id,
+                        p2: p2.id,
+                        org2: org2.id,
+                        p0: p0.id,
+                    })
+                })
+            })
+            .await
+            .unwrap();
+        db.close().await;
+        ids
+    }
+
+    /// A source `meta.db` in a new directory with the six rows of the first test: each case
+    /// of the plan's copy list, with the transitions that leave it in that state.
+    async fn build_source(ids: &Ids) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MetaDb::open(dir.path()).await.unwrap();
+        // (a) resolved trace_ids request, handed over and applied.
+        put(
+            &db,
+            new_row(
+                1,
+                DeletionKind::TraceIds,
+                ids.org,
+                Some(ids.p1),
+                DeletionState::Resolving,
+            ),
+            vec![trace(1), trace(2)],
+            vec![],
+            vec![],
+        )
+        .await;
+        set_counts(&db, did(1), 2, None).await;
+        set_handed_over(&db, did(1)).await;
+        set_applied(&db, did(1)).await;
+        // (b) user request, resolved, pending.
+        put(
+            &db,
+            new_row(
+                2,
+                DeletionKind::User,
+                ids.org,
+                Some(ids.p1),
+                DeletionState::Resolving,
+            ),
+            vec![trace(3)],
+            vec!["s1".to_owned()],
+            vec![],
+        )
+        .await;
+        set_counts(&db, did(2), 1, Some(1)).await;
+        set_handed_over(&db, did(2)).await;
+        // (c) filter request, still resolving, with its request text.
+        let mut filter = new_row(
+            3,
+            DeletionKind::Filter,
+            ids.org,
+            Some(ids.p1),
+            DeletionState::Resolving,
+        );
+        filter.request = RequestDetails {
+            filter: Some("model = 'gpt'".to_owned()),
+            ..RequestDetails::default()
+        };
+        put(&db, filter, vec![], vec![], vec![]).await;
+        // (d) project drop of P0, applied.
+        put(
+            &db,
+            new_row(
+                4,
+                DeletionKind::Project,
+                ids.org2,
+                Some(ids.p0),
+                DeletionState::Pending,
+            ),
+            vec![],
+            vec![],
+            vec![],
+        )
+        .await;
+        set_dropped(&db, did(4)).await;
+        // (e) org drop of O, applied, with its projects.
+        put(
+            &db,
+            new_row(5, DeletionKind::Org, ids.org, None, DeletionState::Pending),
+            vec![],
+            vec![],
+            vec![ids.p1, ids.p2],
+        )
+        .await;
+        set_dropped(&db, did(5)).await;
+        // (f) trace_ids request that failed.
+        put(
+            &db,
+            new_row(
+                6,
+                DeletionKind::TraceIds,
+                ids.org,
+                Some(ids.p1),
+                DeletionState::Resolving,
+            ),
+            vec![trace(5)],
+            vec![],
+            vec![],
+        )
+        .await;
+        set_failed(&db, did(6), FailReason::ResolutionFailed).await;
+        db.close().await;
+        dir
+    }
+
+    async fn row_of(db: &MetaDb, n: u128) -> DeletionRow {
+        deletion_by_id(db.reader(), did(n)).await.unwrap().unwrap()
+    }
+
+    async fn project_state(db: &MetaDb, id: ProjectId) -> String {
+        sqlx::query_scalar::<_, String>("SELECT state FROM projects WHERE id = ?")
+            .bind(id.to_string())
+            .fetch_one(db.reader())
+            .await
+            .unwrap()
+    }
+
+    async fn org_state(db: &MetaDb, id: OrgId) -> String {
+        sqlx::query_scalar::<_, String>("SELECT state FROM orgs WHERE id = ?")
+            .bind(id.to_string())
+            .fetch_one(db.reader())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn copies_missing_rows_as_open_rows() {
+        let (_dir, config) = ready_config().await;
+        let ids = target_with_projects(&config).await;
+        let source = build_source(&ids).await;
+        let report = reapply_deletions(&config, source.path()).await.unwrap();
+        assert_eq!(
+            report,
+            ReapplyReport {
+                reopened: 5,
+                failed_copied: 1,
+                present: 0
+            }
+        );
+
+        let db = MetaDb::open_existing(&config.data_dir).await.unwrap();
+        for (n, kind) in [
+            (1, DeletionKind::TraceIds),
+            (2, DeletionKind::User),
+            (3, DeletionKind::Filter),
+            (4, DeletionKind::Project),
+            (5, DeletionKind::Org),
+            (6, DeletionKind::TraceIds),
+        ] {
+            let row = row_of(&db, n).await;
+            assert_eq!(row.kind, kind);
+            assert_eq!(row.created_at, (n as i64) * 10, "row {n}");
+            assert_eq!(row.actor_id, Uuid::from_u128(100 + n), "row {n}");
+        }
+
+        // (a) resolved scope, open again.
+        let a = row_of(&db, 1).await;
+        assert_eq!(a.state, DeletionState::Resolving);
+        assert_eq!(a.trace_count, Some(2));
+        assert_eq!(a.handed_over_at, None);
+        assert_eq!(a.applied_at, None);
+        assert_eq!(
+            scope_traces(db.reader(), did(1)).await.unwrap(),
+            vec![trace(1), trace(2)]
+        );
+
+        // (b) user request keeps its counts, user and sessions.
+        let b = row_of(&db, 2).await;
+        assert_eq!(b.state, DeletionState::Resolving);
+        assert_eq!(b.trace_count, Some(1));
+        assert_eq!(b.session_count, Some(1));
+        assert_eq!(b.user_id.as_deref(), Some("u1"));
+        assert_eq!(b.handed_over_at, None);
+        assert_eq!(
+            scope_traces(db.reader(), did(2)).await.unwrap(),
+            vec![trace(3)]
+        );
+        assert_eq!(
+            scope_sessions(db.reader(), did(2)).await.unwrap(),
+            vec!["s1".to_owned()]
+        );
+
+        // (c) unresolved filter request keeps its text.
+        let c = row_of(&db, 3).await;
+        assert_eq!(c.state, DeletionState::Resolving);
+        assert_eq!(c.trace_count, None);
+        assert_eq!(c.request.filter.as_deref(), Some("model = 'gpt'"));
+
+        // (d) project drop: pending, and P0 hidden at once.
+        let d = row_of(&db, 4).await;
+        assert_eq!(d.state, DeletionState::Pending);
+        assert_eq!(d.handed_over_at, None);
+        assert_eq!(d.applied_at, None);
+        assert_eq!(project_state(&db, ids.p0).await, "deleting");
+
+        // (e) org drop: pending, with its projects, all hidden at once.
+        let e = row_of(&db, 5).await;
+        assert_eq!(e.state, DeletionState::Pending);
+        assert_eq!(e.handed_over_at, None);
+        assert_eq!(scope_projects(db.reader(), did(5)).await.unwrap(), {
+            let mut expected = vec![ids.p1, ids.p2];
+            expected.sort();
+            expected
+        });
+        assert_eq!(org_state(&db, ids.org).await, "deleting");
+        assert_eq!(project_state(&db, ids.p1).await, "deleting");
+        assert_eq!(project_state(&db, ids.p2).await, "deleting");
+        assert_eq!(org_state(&db, ids.org2).await, "active");
+
+        // (f) failed stays failed, with its error.
+        let f = row_of(&db, 6).await;
+        assert_eq!(f.state, DeletionState::Failed);
+        assert_eq!(f.error, Some(FailReason::ResolutionFailed));
+        db.close().await;
+    }
+
+    #[tokio::test]
+    async fn second_run_copies_nothing() {
+        let (_dir, config) = ready_config().await;
+        let ids = target_with_projects(&config).await;
+        let source = build_source(&ids).await;
+        reapply_deletions(&config, source.path()).await.unwrap();
+        let again = reapply_deletions(&config, source.path()).await.unwrap();
+        assert_eq!(
+            again,
+            ReapplyReport {
+                reopened: 0,
+                failed_copied: 0,
+                present: 6
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn rows_already_present_are_left_alone() {
+        let (_dir, config) = ready_config().await;
+        let ids = fresh_ids();
+        let source = build_source(&ids).await;
+        let target = MetaDb::open_existing(&config.data_dir).await.unwrap();
+        put(
+            &target,
+            new_row(
+                1,
+                DeletionKind::TraceIds,
+                ids.org,
+                Some(ids.p1),
+                DeletionState::Resolving,
+            ),
+            vec![],
+            vec![],
+            vec![],
+        )
+        .await;
+        set_applied(&target, did(1)).await;
+        target.close().await;
+
+        let report = reapply_deletions(&config, source.path()).await.unwrap();
+        assert_eq!(
+            report,
+            ReapplyReport {
+                reopened: 4,
+                failed_copied: 1,
+                present: 1
+            }
+        );
+        let db = MetaDb::open_existing(&config.data_dir).await.unwrap();
+        assert_eq!(row_of(&db, 1).await.state, DeletionState::Applied);
+        db.close().await;
+    }
+
+    #[tokio::test]
+    async fn missing_source_is_refused() {
+        let (_dir, config) = ready_config().await;
+        let empty = tempfile::tempdir().unwrap();
+        let error = reapply_deletions(&config, empty.path()).await.unwrap_err();
+        assert!(matches!(error, AdminError::SourceNotInitialized), "{error}");
+    }
+
+    #[tokio::test]
+    async fn source_at_another_schema_is_refused() {
+        let (_dir, config) = ready_config().await;
+        let source = tempfile::tempdir().unwrap();
+        let db = MetaDb::open(source.path()).await.unwrap();
+        let expected = crate::meta::expected_version();
+        let future = expected + 1;
+        db.write(move |connection| {
+            Box::pin(async move {
+                sqlx::query(
+                    "INSERT INTO _sqlx_migrations \
+                     (version, description, success, checksum, execution_time) \
+                     VALUES (?, 'future', 1, ?, 0)",
+                )
+                .bind(future)
+                .bind(Vec::<u8>::new())
+                .execute(&mut *connection)
+                .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+        db.close().await;
+        let error = reapply_deletions(&config, source.path()).await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                AdminError::SourceSchema { expected: e, found } if e == expected && found == future
+            ),
+            "{error}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn copied_rows_are_applied_by_the_worker() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let project = &seeded.project;
+
+        // Trace 1 exists before the deletion's cut-off, so the deletion covers it.
+        let t0 = app.state.clock.now_ns();
+        let mut span = dataset_span(0);
+        span.trace_id = trace(1);
+        span.span_id = SpanId::from_bytes([1, 0, 0, 0, 0, 0, 0, 1]).unwrap();
+        span.parent_span_id = None;
+        span.user_id = None;
+        span.session_id = None;
+        span.environment = None;
+        span.metadata.clear();
+        span.ingest_time = t0;
+        app.commit_spans(project, vec![span]).await;
+        app.state.clock.advance(Duration::from_secs(1));
+
+        // The deletion made after the backup, in the source directory.
+        let source = tempfile::tempdir().unwrap();
+        let db = MetaDb::open(source.path()).await.unwrap();
+        let mut new = new_row(
+            7,
+            DeletionKind::TraceIds,
+            seeded.org_id,
+            Some(project.id),
+            DeletionState::Resolving,
+        );
+        new.created_at = app.state.clock.now_ns();
+        put(&db, new, vec![trace(1)], vec![], vec![]).await;
+        set_counts(&db, did(7), 1, None).await;
+        set_applied(&db, did(7)).await;
+        db.close().await;
+
+        let report = reapply_deletions(&app.state.config, source.path())
+            .await
+            .unwrap();
+        assert_eq!(report.reopened, 1);
+
+        crate::deletion::run_once(&app.state).await.unwrap();
+        let row = deletion_by_id(app.state.meta.reader(), did(7))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.state, DeletionState::Pending);
+        let status = app
+            .request(
+                Method::GET,
+                &format!("/api/v1/projects/{}/traces/{}", project.id, trace(1)),
+            )
+            .header("cookie", &seeded.cookie)
+            .send()
+            .await
+            .status;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 }

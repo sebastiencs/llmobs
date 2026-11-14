@@ -402,6 +402,121 @@ pub(crate) async fn insert_deletion(
     })
 }
 
+/// Inserts `row` from another `meta.db` as an open row, with its scope. Returns `false`
+/// (and writes nothing) when a row with that id exists.
+///
+/// The new row keeps `id`, `org_id`, `project_id`, `kind`, `user_id`, `request`, the
+/// actor and `created_at` (the cut-off). Its state:
+/// - `failed` rows: copied as `failed` with their `error`, `trace_count` and `session_count` as in the source, and their scope (audit only, nothing to redo);
+/// - `trace_ids`, `filter`, `user`: `resolving`, with `trace_count` and `session_count`
+///   as in the source (so a resolved scope is registered as is, and an unresolved one is
+///   resolved again), `handed_over_at` and `applied_at` NULL;
+/// - `project`, `org`: `pending`, `handed_over_at` and `applied_at` NULL; in the same
+///   transaction the project (for `project`) or the org and every listed project (for
+///   `org`) is set to `state = 'deleting'` when it exists, so it is hidden at once, as
+///   when the drop was first requested.
+///
+/// # Errors
+///
+/// Returns [`MetaError`] when the request does not encode or a write fails.
+pub(crate) async fn insert_copy(
+    conn: &mut SqliteConnection,
+    row: &DeletionRow,
+    traces: &[TraceId],
+    sessions: &[String],
+    projects: &[ProjectId],
+) -> Result<bool, MetaError> {
+    let id = row.id.to_string();
+    let present: Option<i64> = sqlx::query_scalar("SELECT 1 FROM deletions WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&mut *conn)
+        .await?;
+    if present.is_some() {
+        return Ok(false);
+    }
+    let request = serde_json::to_string(&row.request).map_err(|_| corrupt("request"))?;
+    let (status, trace_count, session_count, error) = match (row.state, row.kind) {
+        (DeletionState::Failed, _) => (
+            DeletionState::Failed,
+            row.trace_count,
+            row.session_count,
+            row.error.map(FailReason::as_str),
+        ),
+        (_, DeletionKind::Project | DeletionKind::Org) => {
+            (DeletionState::Pending, None, None, None)
+        }
+        _ => (
+            DeletionState::Resolving,
+            row.trace_count,
+            row.session_count,
+            None,
+        ),
+    };
+    let trace_count = trace_count
+        .map(i64::try_from)
+        .transpose()
+        .map_err(|_| corrupt("trace_count"))?;
+    let session_count = session_count
+        .map(i64::try_from)
+        .transpose()
+        .map_err(|_| corrupt("session_count"))?;
+    sqlx::query(
+        "INSERT INTO deletions \
+         (id, org_id, project_id, kind, user_id, request, requested_by_kind, requested_by, \
+         status, trace_count, session_count, created_at, handed_over_at, applied_at, error) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
+    )
+    .bind(&id)
+    .bind(row.org_id.to_string())
+    .bind(row.project_id.map(|project| project.to_string()))
+    .bind(row.kind.as_str())
+    .bind(&row.user_id)
+    .bind(&request)
+    .bind(row.actor_kind.as_str())
+    .bind(row.actor_id.to_string())
+    .bind(status.as_str())
+    .bind(trace_count)
+    .bind(session_count)
+    .bind(row.created_at)
+    .bind(error)
+    .execute(&mut *conn)
+    .await
+    .map_err(|error| unique_or(error, "duplicate deletion"))?;
+    insert_traces(conn, row.id, traces).await?;
+    insert_sessions(conn, row.id, sessions).await?;
+    insert_projects(conn, row.id, projects).await?;
+    if row.state == DeletionState::Failed {
+        return Ok(true);
+    }
+    match row.kind {
+        DeletionKind::Project => {
+            if let Some(project) = row.project_id {
+                sqlx::query("UPDATE projects SET state = 'deleting', updated_at = ? WHERE id = ?")
+                    .bind(row.created_at)
+                    .bind(project.to_string())
+                    .execute(&mut *conn)
+                    .await?;
+            }
+        }
+        DeletionKind::Org => {
+            sqlx::query("UPDATE orgs SET state = 'deleting', updated_at = ? WHERE id = ?")
+                .bind(row.created_at)
+                .bind(row.org_id.to_string())
+                .execute(&mut *conn)
+                .await?;
+            for project in projects {
+                sqlx::query("UPDATE projects SET state = 'deleting', updated_at = ? WHERE id = ?")
+                    .bind(row.created_at)
+                    .bind(project.to_string())
+                    .execute(&mut *conn)
+                    .await?;
+            }
+        }
+        DeletionKind::TraceIds | DeletionKind::Filter | DeletionKind::User => {}
+    }
+    Ok(true)
+}
+
 /// Adds trace ids to the scope. Ids already present are ignored.
 ///
 /// # Errors
@@ -735,6 +850,21 @@ pub(crate) async fn open_deletions(
             row_from(record).map_err(|error| (id, error))
         })
         .collect())
+}
+
+/// Every row, oldest first (`created_at, id`). Unlike [`open_deletions`], a row that does not
+/// decode fails the whole read: its caller copies every row and must not skip one silently.
+///
+/// # Errors
+///
+/// Returns [`MetaError`] when the query fails or a stored row does not decode.
+pub(crate) async fn all_deletions(pool: &SqlitePool) -> Result<Vec<DeletionRow>, MetaError> {
+    // The SQL is built only from constants.
+    let sql = format!("SELECT {SELECT_COLUMNS} FROM deletions ORDER BY created_at, id");
+    let records: Vec<DeletionRecord> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .fetch_all(pool)
+        .await?;
+    records.into_iter().map(row_from).collect()
 }
 
 /// The stored trace scope, ordered by trace id.
