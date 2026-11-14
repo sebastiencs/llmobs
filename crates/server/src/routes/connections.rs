@@ -640,14 +640,22 @@ fn check_api_key(key: &str, errors: &mut Vec<FieldError>) {
     }
 }
 
-/// `base_url` when it carries a value: an http or https URL without
-/// credentials, fragment, or a query other than one `api-version` pair.
-/// An empty value clears the field and is not checked.
+/// `base_url` when it carries a value: no control character, and an http or
+/// https URL without credentials, fragment, or a query other than one
+/// `api-version` pair. An empty or whitespace-only value clears the field and
+/// is not checked.
 fn check_base_url(value: Option<&str>, errors: &mut Vec<FieldError>) {
-    let Some(value) = value.filter(|value| !value.is_empty()) else {
+    let Some(raw) = value else {
         return;
     };
-    if base_url_is_valid(value) {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    // `Url::parse` strips tab, CR and LF, so the raw value is checked: a
+    // control character must not be stored.
+    let no_control = !raw.chars().any(char::is_control);
+    if no_control && base_url_is_valid(trimmed) {
         return;
     }
     errors.push(field_error("base_url", BASE_URL_MESSAGE));
@@ -691,12 +699,12 @@ fn authority_is_written(value: &str, url: &url::Url) -> bool {
 }
 
 /// `default_model` when it carries a value: the eval crate's own model rule,
-/// 1 to 200 bytes. An empty value clears the field and is not checked.
+/// 1 to 200 bytes. An empty or whitespace-only value clears the field and is
+/// not checked.
 fn check_default_model(model: Option<&str>, errors: &mut Vec<FieldError>) {
-    let Some(model) = model.filter(|model| !model.is_empty()) else {
+    let Some(trimmed) = model.map(str::trim).filter(|model| !model.is_empty()) else {
         return;
     };
-    let trimmed = model.trim();
     let forbidden = trimmed.chars().any(|ch| {
         ch.is_whitespace() || ch.is_control() || matches!(ch, '/' | '\\' | '%' | '?' | '#')
     });
@@ -999,6 +1007,8 @@ mod tests {
             "http:///v1",
             too_long.as_str(),
             "https://x.com/v1?key=abc",
+            // `Url::parse` strips tab, CR and LF; the raw value is refused.
+            "https://x.com/a\nb",
         ] {
             let response = create(
                 &app,
@@ -1452,6 +1462,77 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn patch_rejects_each_invalid_field() {
+        let (app, cookie) = app().await;
+        let created = create(&app, &cookie, &body("Stored")).await;
+        assert_eq!(created.status, 201);
+        let id = created_id(&created);
+        for (field, body) in [
+            ("base_url", json!({ "base_url": "ftp://x" })),
+            ("default_model", json!({ "default_model": "a/b" })),
+            ("api_key", json!({ "api_key": " sk-x" })),
+            (
+                "extra_headers.content-type",
+                json!({ "extra_headers": { "content-type": "v" } }),
+            ),
+        ] {
+            let response = patch(&app, &cookie, id, &body).await;
+            assert_eq!(response.status, 400, "{field}");
+            let problem = response.problem();
+            assert_eq!(problem.errors.len(), 1, "{field}");
+            assert_eq!(problem.errors[0].field, field);
+        }
+        // Nothing was stored.
+        let got: LlmConnection = get(&app, &cookie, id).await.json();
+        assert_eq!(got.name, "Stored");
+        assert_eq!(got.base_url, None);
+        assert_eq!(got.default_model, None);
+        assert!(got.extra_header_names.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn patch_base_url_clears_with_empty_or_whitespace() {
+        let (app, cookie) = app().await;
+        let created = create(
+            &app,
+            &cookie,
+            &json!({
+                "name": "Cleared",
+                "adapter": "openai",
+                "api_key": "sk-test-0123456789abcdef",
+                "base_url": "https://x.com/v1",
+                "default_model": "gpt-test"
+            }),
+        )
+        .await;
+        assert_eq!(created.status, 201, "{}", text(&created));
+        let id = created_id(&created);
+
+        // A whitespace-only value clears the field, like "".
+        let patched = patch(&app, &cookie, id, &json!({ "base_url": "   " })).await;
+        assert_eq!(patched.status, 200, "{}", text(&patched));
+        let patched: LlmConnection = patched.json();
+        assert_eq!(patched.base_url, None);
+        let cleared = patch(&app, &cookie, id, &json!({ "default_model": "  " })).await;
+        assert_eq!(cleared.status, 200, "{}", text(&cleared));
+        assert_eq!(cleared.json::<LlmConnection>().default_model, None);
+
+        // Whitespace around a value is trimmed, leading like trailing.
+        let set = patch(
+            &app,
+            &cookie,
+            id,
+            &json!({ "base_url": "  https://x.com/v2 " }),
+        )
+        .await;
+        assert_eq!(set.status, 200, "{}", text(&set));
+        assert_eq!(
+            set.json::<LlmConnection>().base_url.as_deref(),
+            Some("https://x.com/v2")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn patch_unknown_field_is_400() {
         let (app, cookie) = app().await;
         let created = create(&app, &cookie, &body("Stored")).await;
@@ -1513,6 +1594,52 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn patch_extra_headers_keeps_the_key_and_hint() {
+        let (app, cookie) = app().await;
+        let key = "sk-headers-0123456789";
+        let created = create(
+            &app,
+            &cookie,
+            &json!({
+                "name": "Headers",
+                "adapter": "openai",
+                "api_key": key,
+                "extra_headers": { "x-a": "1" }
+            }),
+        )
+        .await;
+        assert_eq!(created.status, 201, "{}", text(&created));
+        let id = created_id(&created);
+
+        let patched = patch(
+            &app,
+            &cookie,
+            id,
+            &json!({ "extra_headers": { "x-b": "2" } }),
+        )
+        .await;
+        assert_eq!(patched.status, 200, "{}", text(&patched));
+        let patched: LlmConnection = patched.json();
+        assert_eq!(patched.api_key_hint, "6789");
+        assert_eq!(patched.extra_header_names, ["x-b"]);
+
+        let stored = stored_secret(&app, id).await;
+        let opened = app
+            .state
+            .secrets
+            .open(
+                &stored,
+                Aad {
+                    table: "llm_connections",
+                    column: "secret_enc",
+                    row_id: &id,
+                },
+            )
+            .unwrap();
+        assert_eq!(opened, key.as_bytes());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn member_can_list_but_not_write() {
         let (app, cookie) = app().await;
         let created = create(&app, &cookie, &body("Stored")).await;
@@ -1543,7 +1670,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn viewer_can_list() {
-        let (app, _cookie) = app().await;
+        let (app, cookie) = app().await;
+        let created = create(&app, &cookie, &body("Stored")).await;
+        assert_eq!(created.status, 201);
+        let id = created_id(&created);
         let org = crate::meta::orgs::org_by_slug(app.state.meta.reader(), "acme")
             .await
             .unwrap()
@@ -1556,6 +1686,12 @@ mod tests {
             .send()
             .await;
         assert_eq!(listed.status, 200);
+        let post = create(&app, &viewer, &body("Nope")).await;
+        assert_eq!(post.status, 403);
+        let patched = patch(&app, &viewer, id, &json!({ "name": "Nope" })).await;
+        assert_eq!(patched.status, 403);
+        let deleted = delete(&app, &viewer, id).await;
+        assert_eq!(deleted.status, 403);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1621,6 +1757,32 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn read_only_pat_cannot_write() {
+        let (app, cookie) = app().await;
+        let minted = app
+            .request(Method::POST, "/api/v1/me/tokens")
+            .header(header::COOKIE.as_str(), &cookie)
+            .json(&json!({ "name": "ro", "scopes": ["read"] }))
+            .send()
+            .await;
+        assert_eq!(minted.status, 201, "{}", text(&minted));
+        let secret = minted.json::<Value>()["secret"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let response = app
+            .request(Method::POST, "/api/v1/orgs/acme/llm-connections")
+            .header(header::AUTHORIZATION.as_str(), &format!("Bearer {secret}"))
+            .json(&body("Nope"))
+            .send()
+            .await;
+        assert_eq!(response.status, 403);
+    }
+
+    // Current-thread, like every `capture_logs` test: the subscriber is the
+    // thread default, and a multi-thread runtime could move the task away
+    // from it between awaits.
+    #[tokio::test]
     async fn no_key_material_in_logs() {
         let (app, cookie) = app().await;
         let first = "sk-logcheck-one-01234567";
@@ -1640,6 +1802,9 @@ mod tests {
         .await;
         assert!(!logs.contains(first), "{logs}");
         assert!(!logs.contains(second), "{logs}");
+        // The capture worked: both audit events are in it.
+        assert!(logs.contains("llm connection created"), "{logs}");
+        assert!(logs.contains("llm connection updated"), "{logs}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
