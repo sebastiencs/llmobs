@@ -17,7 +17,7 @@ use crate::http::AppState;
 use crate::http::access::{Access, ProjectAccess, RouteDef};
 use crate::http::error::{self, ApiError};
 use crate::routes::read::{
-    READ_TIMEOUT, attach_trace_scores, list_scope, open_query, page_limit, sort_order,
+    READ_TIMEOUT, attach_trace_scores, check_search, list_scope, open_query, page_limit, sort_order,
 };
 
 /// Trace and span read routes. All are documented and need project view.
@@ -82,6 +82,7 @@ async fn list_traces(
     Extension(access): Extension<ProjectAccess>,
     error::Query(params): error::Query<TraceListParams>,
 ) -> Result<error::Json<Page<TraceSummary>>, ApiError> {
+    check_search(params.search.as_deref())?;
     let scope = list_scope(
         params.from,
         params.to,
@@ -116,6 +117,7 @@ async fn list_spans(
     Extension(access): Extension<ProjectAccess>,
     error::Query(params): error::Query<SpanListParams>,
 ) -> Result<error::Json<Page<SpanSummary>>, ApiError> {
+    check_search(params.search.as_deref())?;
     let scope = list_scope(
         params.from,
         params.to,
@@ -348,6 +350,25 @@ mod tests {
         assert_eq!(json["code"], "invalid_filter");
         assert_eq!(problem.errors[0].field, "filter");
         assert!(!problem.errors[0].message.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn search_is_at_most_1024_bytes() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        for path in ["/traces", "/spans"] {
+            // A search needs a time window (spec 05), so both queries carry one.
+            let long = format!("?from=2000-01-01T00:00:00Z&search={}", "a".repeat(1025));
+            let (status, body) = get_json(&app, &seeded, &format!("{path}{long}")).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(body["code"], "bad_request");
+            let detail = body["detail"].as_str().unwrap_or_default();
+            assert!(!detail.contains("aaaa"), "the detail never quotes the text");
+
+            let short = format!("?from=2000-01-01T00:00:00Z&search={}", "a".repeat(1024));
+            let (status, body) = get_json(&app, &seeded, &format!("{path}{short}")).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -6887,7 +6887,7 @@ export interface operations {
             query?: {
                 /** @description Filter DSL expression over the `spans` view (spec 05). */
                 filter?: string;
-                /** @description Full-text search (spec 05 § Full-text search). */
+                /** @description Full-text search (spec 05 § Full-text search). At most 1,024 bytes (D-G-39). */
                 search?: string;
                 /** @description Inclusive range start. RFC 3339 or epoch milliseconds. */
                 from?: components["schemas"]["TimeParam"];
@@ -6994,7 +6994,7 @@ export interface operations {
             query?: {
                 /** @description Filter DSL expression over the `traces` view (spec 05). */
                 filter?: string;
-                /** @description Full-text search (spec 05 § Full-text search). */
+                /** @description Full-text search (spec 05 § Full-text search). At most 1,024 bytes (D-G-39). */
                 search?: string;
                 /** @description Inclusive range start. RFC 3339 or epoch milliseconds. */
                 from?: components["schemas"]["TimeParam"];
@@ -7102,8 +7102,9 @@ export interface operations {
                 /** @description Filter DSL expression over the light columns of the `traces` view (spec 05). */
                 filter?: string;
                 /**
-                 * @description Full-text search (spec 05 § Full-text search). A trace is sent once any of its spans
-                 *     matches, then on every later update while the stream stays open.
+                 * @description Full-text search (spec 05 § Full-text search). A trace is sent once a span of it that
+                 *     arrives while the stream is open matches, then on every update (D-C-5, D-G-33). At most
+                 *     1,024 bytes (D-G-39).
                  */
                 search?: string;
                 /** @description Include traces from the evaluation environment. Default false. Spec 05 § Default exclusions. */

@@ -486,6 +486,14 @@ impl Running {
             let _ = task.await;
         }
         if let Some(state) = self.state.take() {
+            // Commits whose request was dropped still run (D-G-38): they append and count
+            // before the final flushes.
+            if tokio::time::timeout(STORAGE_SHUTDOWN, state.ingest.wait_for_commits())
+                .await
+                .is_err()
+            {
+                tracing::error!("ingest commits did not finish before shutdown");
+            }
             if let Err(error) = state.last_used.flush(&state.meta).await {
                 tracing::error!(error = %error, "last_used flush failed");
             }

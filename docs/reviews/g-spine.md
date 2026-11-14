@@ -39,12 +39,14 @@ Counts: **0 blocker, 4 major, 12 minor**.
 - Reference: D-G-35 ("paths with an extension are `404`"), spec 11 (client routes).
 - Problem: a path that matches no asset is treated as a file when `last_segment.contains('.')`. The server sees the raw (percent-encoded) path, so `/acme/proj/users/alice%40example.com` has the segment `alice%40example.com` and gets a bare 404 instead of `index.html`. Reload, a pasted link, or opening in a new tab breaks for every end user whose id is an email, and for session ids such as `chat.2026-01`. In-app navigation still works, so tests that click through do not see it. Not run; follows from the code and from the test list (`/missing.png` is the only dotted case).
 - Fix: treat a path as a file only when it is under `/assets/` or its last segment ends in an extension that is a known asset extension (`.js .css .map .svg .png .ico .woff .woff2 .json .txt .webmanifest`), or send `Accept: text/html` navigations (`Sec-Fetch-Mode: navigate` / `Accept` containing `text/html`) to `index.html` regardless of dots. Add a test with `/a/b/users/alice%40example.com` and `/sessions/s.1`.
+- Fixed by: F1 of [`plans/g-fixes/`](../plans/g-fixes/).
 
 **M-2. A stream outlives the credential that opened it, and the trace stream has no end.**
 - Location: `crates/server/src/routes/streams.rs:253-329` (trace stream loop, no idle or age limit), `:121-173` (span stream, idle only), `:466-471`.
 - Reference: D-G-34 and the M4 plan accept "access is not re-checked while a stream is open"; spec 09 § SSE says only that the span stream ends after 10 min without a span.
 - Problem: after logout, session expiry, key revocation, a role downgrade or removal from the project, an already open trace stream keeps receiving live trace summaries (with input/output previews) for as long as the TCP connection lives, which can be days. The span stream lasts as long as the trace keeps getting spans. The 100-slot cap is per owner, so a revoked user's old streams also keep occupying slots. Accepting this "for M4" was reasonable while sessions were a stub; D and L have since shipped real revocation, so the accepted gap now defeats it.
 - Fix: give every stream a maximum age (for example 15 min; the web client already reconnects and refetches, and its reconnect re-authenticates), and end the stream when the principal's session expiry passes. Record the age in D-G-34 and spec 09. A cheaper stronger option: carry the session id or key id into the task and re-read the web session row once per ping (every 15 s).
+- Fixed by: F2 of [`plans/g-fixes/`](../plans/g-fixes/).
 
 **M-3. No automatic check runs the embedded UI on the real server, nor the live path end to end.**
 - Location: `crates/cli/tests/e2e.rs:175-183`, `justfile:47-49`, `.github/workflows/ci.yml` (`e2e` job runs `just e2e` only), `tools/e2e/run.sh`.
@@ -54,6 +56,7 @@ Counts: **0 blocker, 4 major, 12 minor**.
   - The e2e test reads only traces and spans. Sessions, users, scores, metrics, schema, media and both SSE streams have no test over real HTTP, so nothing covers ingest → live bus → SSE → client, which is exactly where the manual smoke test found its bug.
   - The two SDK e2e tests (`sdks/*/…e2e…`) poll the list and detail only.
 - Fix:
+- Fixed by: F5 of [`plans/g-fixes/`](../plans/g-fixes/).
   - Add `just check-release` to the `e2e` CI job (it already builds with Node), and run the Rust e2e test there with the UI embedded so the `200` branch runs.
   - Extend `e2e.rs`: open `/traces/stream` and a span stream with `reqwest` bytes streaming, ingest a span over OTLP, and assert the `trace`/`span` event (and `resync` on `Last-Event-ID`); add one read each of sessions, users, scores, metrics, schema and media; a deep link with a dot (M-1).
   - Optionally one headless-browser smoke step for the live list (out-of-order arrival).
@@ -63,6 +66,7 @@ Counts: **0 blocker, 4 major, 12 minor**.
 - Reference: D-G-2 (acknowledge after the WAL), D-G-11/D-G-30 (counters add after each acknowledgement), D-G-12 (publish after `append_spans` returns).
 - Problem: hyper drops the handler future when the client disconnects (exporter timeout, load balancer reset). If that happens while `append_spans` is awaiting, the append may still complete inside storage, but `publish` and `usage.add` never run. Result: spans that exist but do not appear in open live lists until the trace gets another span, and usage that is under-counted exactly when the server is slow. No await sits between `publish` and `usage.add`, so only the append window matters. Whether storage's append itself is cancel-safe is the "cancelled-flush window" already known; this is its server-side consequence. Not run.
 - Fix: run `append_spans` + `publish` + `usage.add` in a detached `tokio::spawn` (own the `Arc`s) and await its `JoinHandle` in the handler, so a dropped request does not skip the bookkeeping; the shutdown path must await these tasks before the usage flush. Add a test that drops the request future mid-append and asserts one event and the counters.
+- Fixed by: F4 of [`plans/g-fixes/`](../plans/g-fixes/).
 
 ## Minor
 
@@ -101,3 +105,19 @@ Counts: **0 blocker, 4 major, 12 minor**.
 
 - M-2: a fixed maximum stream age, or a per-ping access check? The first is a few lines; the second needs the stream task to hold a meta handle.
 - M-3: is a headless-browser step in CI wanted, or is the extended Rust e2e test enough?
+
+## Fixes
+
+[`plans/g-fixes/`](../plans/g-fixes/) fixed every major and the minors next to them, one commit per phase:
+
+| Finding | Phase | Commit subject |
+|---|---|---|
+| M-1, m-8 | F1 | `Serve the app for dotted deep links and tighten the UI headers` |
+| M-2, m-1, m-4, m-5, m-12 | F2 | `End live streams after 15 minutes or a stalled client` |
+| m-2 | F3 | `Cap search text at 1 KiB` |
+| M-4 | F4 | `Finish an ingest commit even when the client goes away` |
+| M-3, m-10 | F5 | `Run the embedded UI, live streams and every read route end to end` |
+
+- m-9 needs no change: `vite build` emits no `.map` file (`build.sourcemap` is off by default).
+- m-3, m-6, m-7 and m-11 are a backlog.
+- Found while fixing F4: the log-capture test helper lost events to a cached callsite interest, so `routes::otlp` log tests (and `an_empty_database_logs_the_setup_url_once`) failed now and then with empty logs, and the "no secrets in logs" asserts could pass on empty logs. Fixed by installing a global test subscriber (`Keep captured test logs from losing events to a cached callsite interest`).
