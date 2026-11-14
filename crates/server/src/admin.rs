@@ -4,7 +4,6 @@
 //! they work while `llmobs serve` is running (D136). `rotate_encryption_key`
 //! is the exception: it takes the lock and needs the server stopped (D-I-3).
 
-use std::fmt;
 use std::path::Path;
 
 use uuid::Uuid;
@@ -222,33 +221,26 @@ async fn list_all(meta: &MetaDb) -> Result<Vec<UserSummary>, AdminError> {
 }
 
 /// What [`rotate_encryption_key`] did.
+#[derive(Debug)]
 pub struct Rotated {
     /// Sealed values re-encrypted.
     pub values: u64,
-    /// The new key in base64, only when the old key came from the environment: the operator
-    /// sets it before the next start. `None` when `secret.key` was replaced.
-    pub new_key_for_env: Option<String>,
-}
-
-impl fmt::Debug for Rotated {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("Rotated")
-            .field("values", &self.values)
-            .field("new_key_for_env", &self.new_key_for_env.is_some())
-            .finish()
-    }
 }
 
 /// Re-encrypts every sealed column under a new key (D-I-3). The server must be stopped.
-/// `new_key` is base64 text (from stdin); `None` generates a key.
+/// `new_key` is base64 text (from stdin); `None` generates a key, unless the current
+/// key comes from `LLMOBS_ENCRYPTION_KEY`: then the new key must be given, because
+/// a generated one would exist only in memory after the commit.
 ///
 /// # Errors
 ///
 /// Returns [`AdminError`] when the server is running ([`AdminError::Locked`]),
 /// `meta.db` is missing, the current key is missing or does not match this
-/// data directory, or a stored value does not open. A failure leaves the
-/// database and `secret.key` unchanged; `secret.key.new` is removed.
+/// data directory, no new key was given for an environment key, or a stored
+/// value does not open. A failure before the commit leaves the database and
+/// `secret.key` unchanged and removes `secret.key.new`; a failure after the
+/// commit (the rename) leaves the new key in `secret.key.new`, which the
+/// next start renames into place.
 pub async fn rotate_encryption_key(
     config: &ServerConfig,
     new_key: Option<&str>,
@@ -323,6 +315,14 @@ async fn rotate_locked(
     let new = match new_key {
         Some(text) => crypto::decode_key(text.trim(), "--new-from-stdin")
             .map_err(|error| AdminError::Crypto(error.to_string()))?,
+        None if old.source == KeySource::Env => {
+            // A generated key would exist only in memory after the commit,
+            // and the next start would still use the env value.
+            return Err(AdminError::Crypto(
+                "the key comes from LLMOBS_ENCRYPTION_KEY: pass the new key with --new-from-stdin"
+                    .into(),
+            ));
+        }
         None => crypto::random_key().map_err(|error| AdminError::Crypto(error.to_string()))?,
     };
     if new == old.key {
@@ -332,8 +332,12 @@ async fn rotate_locked(
     let file_source = old.source == KeySource::File;
     if file_source {
         let _ = std::fs::remove_file(&new_path);
-        crypto::write_key_file(&new_path, &new)
-            .map_err(|error| AdminError::Crypto(error.to_string()))?;
+        if let Err(error) = crypto::write_key_file(&new_path, &new) {
+            // The failed write can leave `secret.key.new.tmp` behind; a missing
+            // file is fine.
+            let _ = std::fs::remove_file(config.data_dir.join("secret.key.new.tmp"));
+            return Err(AdminError::Crypto(error.to_string()));
+        }
     }
     let old_key = old.key;
     let written = meta
@@ -400,10 +404,7 @@ async fn rotate_locked(
         // `finish_rotation`, so a directory sync failure needs no error here.
         let _ = std::fs::File::open(&config.data_dir).and_then(|dir| dir.sync_all());
     }
-    Ok(Rotated {
-        values,
-        new_key_for_env: (old.source == KeySource::Env).then(|| crypto::encode_key(&new)),
-    })
+    Ok(Rotated { values })
 }
 
 fn checked_name(name: Option<&str>) -> Result<Option<String>, AdminError> {
@@ -667,6 +668,38 @@ mod tests {
         .unwrap();
     }
 
+    /// Inserts one connection with the given sealed columns.
+    async fn insert_connection(
+        db: &MetaDb,
+        id: &Uuid,
+        secret_enc: Vec<u8>,
+        extra_headers_enc: Option<Vec<u8>>,
+    ) {
+        let id = id.to_string();
+        // `name` is unique per org; the row id doubles as the seed name.
+        let name = id.clone();
+        db.write(move |conn| {
+            Box::pin(async move {
+                sqlx::query(
+                    "INSERT INTO llm_connections \
+                     (id, org_id, name, adapter, secret_enc, api_key_hint, extra_headers_enc, \
+                      created_at, updated_at) \
+                     VALUES (?, ?, ?, 'openai', ?, 'TEST', ?, 0, 0)",
+                )
+                .bind(id)
+                .bind(ORG)
+                .bind(name)
+                .bind(&secret_enc)
+                .bind(extra_headers_enc)
+                .execute(&mut *conn)
+                .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+    }
+
     /// Inserts one connection whose sealed columns were written by `secrets`.
     async fn seed_connection(db: &MetaDb, id: &Uuid, secrets: &SecretBox, with_headers: bool) {
         let secret_enc = secrets
@@ -691,29 +724,7 @@ mod tests {
                 )
                 .unwrap()
         });
-        let id = id.to_string();
-        // `name` is unique per org; the row id doubles as the seed name.
-        let name = id.clone();
-        db.write(move |conn| {
-            Box::pin(async move {
-                sqlx::query(
-                    "INSERT INTO llm_connections \
-                     (id, org_id, name, adapter, secret_enc, api_key_hint, extra_headers_enc, \
-                      created_at, updated_at) \
-                     VALUES (?, ?, ?, 'openai', ?, 'TEST', ?, 0, 0)",
-                )
-                .bind(id)
-                .bind(ORG)
-                .bind(name)
-                .bind(&secret_enc)
-                .bind(extra_headers_enc)
-                .execute(&mut *conn)
-                .await?;
-                Ok(())
-            })
-        })
-        .await
-        .unwrap();
+        insert_connection(db, id, secret_enc, extra_headers_enc).await;
     }
 
     /// Records the check value of `key`, as a started server would have.
@@ -775,7 +786,6 @@ mod tests {
 
         let rotated = rotate_encryption_key(&config, None).await.unwrap();
         assert_eq!(rotated.values, 3);
-        assert!(rotated.new_key_for_env.is_none());
         assert!(!dir.path().join("secret.key.new").exists());
 
         let new_text = std::fs::read_to_string(crypto::key_path(dir.path())).unwrap();
@@ -798,7 +808,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rotation_with_an_env_key_prints_the_new_key() {
+    async fn rotation_with_an_env_key_reencrypts_under_a_given_key() {
         let (dir, mut config) = ready_config().await;
         let old = [1; 32];
         let new = [2; 32];
@@ -813,12 +823,86 @@ mod tests {
             db.close().await;
         }
         config.encryption_key = Some(Secret::new(crypto::encode_key(&old)));
+        // Surrounding whitespace is trimmed where the key is decoded.
+        let given = format!("  {}\r\n", crypto::encode_key(&new));
+        let rotated = rotate_encryption_key(&config, Some(&given)).await.unwrap();
+        assert_eq!(rotated.values, 1);
+        assert!(!crypto::key_path(dir.path()).exists());
+        assert!(!dir.path().join("secret.key.new").exists());
+        let db = MetaDb::open_existing(&config.data_dir).await.unwrap();
+        let sealed = stored_column(&db, &id, "secret_enc").await.unwrap();
+        let check = stored_check(&db).await;
+        db.close().await;
+        let new_box = SecretBox::new(&new);
+        assert_eq!(
+            new_box
+                .open(&sealed, connection_aad("secret_enc", &id))
+                .unwrap(),
+            b"sk-test-key"
+        );
+        assert_eq!(check, new_box.check_value());
+    }
+
+    #[tokio::test]
+    async fn rotation_with_an_env_key_leaves_secret_key_alone() {
+        let (dir, mut config) = ready_config().await;
+        let old = [1; 32];
+        let new = [2; 32];
+        let id = Uuid::now_v7();
+        crypto::write_key_file(&crypto::key_path(dir.path()), &[5; 32]).unwrap();
+        let before = std::fs::read(crypto::key_path(dir.path())).unwrap();
+        {
+            let db = MetaDb::open(&config.data_dir).await.unwrap();
+            crypto::verify_or_record(&db, &SecretBox::new(&old), &crypto::key_path(dir.path()))
+                .await
+                .unwrap();
+            seed_org(&db).await;
+            seed_connection(&db, &id, &SecretBox::new(&old), false).await;
+            db.close().await;
+        }
+        config.encryption_key = Some(Secret::new(crypto::encode_key(&old)));
         let rotated = rotate_encryption_key(&config, Some(&crypto::encode_key(&new)))
             .await
             .unwrap();
         assert_eq!(rotated.values, 1);
-        assert_eq!(rotated.new_key_for_env, Some(crypto::encode_key(&new)));
+        assert_eq!(std::fs::read(crypto::key_path(dir.path())).unwrap(), before);
+        assert!(!dir.path().join("secret.key.new").exists());
+    }
+
+    #[tokio::test]
+    async fn rotation_with_an_env_key_requires_a_new_key() {
+        let (dir, mut config) = ready_config().await;
+        let old = [1; 32];
+        let id = Uuid::now_v7();
+        {
+            let db = MetaDb::open(&config.data_dir).await.unwrap();
+            crypto::verify_or_record(&db, &SecretBox::new(&old), &crypto::key_path(dir.path()))
+                .await
+                .unwrap();
+            seed_org(&db).await;
+            seed_connection(&db, &id, &SecretBox::new(&old), false).await;
+            db.close().await;
+        }
+        config.encryption_key = Some(Secret::new(crypto::encode_key(&old)));
+        let error = rotate_encryption_key(&config, None).await.unwrap_err();
+        assert!(matches!(error, AdminError::Crypto(_)), "{error}");
+        assert_eq!(
+            error.to_string(),
+            "the key comes from LLMOBS_ENCRYPTION_KEY: pass the new key with --new-from-stdin"
+        );
         assert!(!crypto::key_path(dir.path()).exists());
+        assert!(!dir.path().join("secret.key.new").exists());
+        let db = MetaDb::open_existing(&config.data_dir).await.unwrap();
+        let sealed = stored_column(&db, &id, "secret_enc").await.unwrap();
+        let check = stored_check(&db).await;
+        db.close().await;
+        assert_eq!(
+            SecretBox::new(&old)
+                .open(&sealed, connection_aad("secret_enc", &id))
+                .unwrap(),
+            b"sk-test-key"
+        );
+        assert_eq!(check, SecretBox::new(&old).check_value());
     }
 
     #[tokio::test]
@@ -905,16 +989,29 @@ mod tests {
         let (dir, config) = ready_config().await;
         let old = crypto::load_key(None, dir.path(), false).unwrap();
         let old_box = SecretBox::new(&old.key);
-        let good = Uuid::now_v7();
+        // The bad row is seeded first and its `secret_enc` is valid, so the pass
+        // over `secret_enc` re-encrypts both rows before the pass over
+        // `extra_headers_enc` fails: a partial update would be detected.
         let bad = Uuid::now_v7();
+        let good = Uuid::now_v7();
+        let bad_secret_enc;
+        let bad_headers_enc;
         {
             let db = MetaDb::open(&config.data_dir).await.unwrap();
             crypto::verify_or_record(&db, &old_box, &crypto::key_path(dir.path()))
                 .await
                 .unwrap();
             seed_org(&db).await;
+            let secret_enc = old_box
+                .seal(b"sk-test-key", connection_aad("secret_enc", &bad))
+                .unwrap();
+            let headers_enc = SecretBox::new(&[9; 32])
+                .seal(HEADERS, connection_aad("extra_headers_enc", &bad))
+                .unwrap();
+            insert_connection(&db, &bad, secret_enc, Some(headers_enc)).await;
             seed_connection(&db, &good, &old_box, true).await;
-            seed_connection(&db, &bad, &SecretBox::new(&[9; 32]), false).await;
+            bad_secret_enc = stored_column(&db, &bad, "secret_enc").await.unwrap();
+            bad_headers_enc = stored_column(&db, &bad, "extra_headers_enc").await.unwrap();
             db.close().await;
         }
 
@@ -926,6 +1023,14 @@ mod tests {
         assert!(!dir.path().join("secret.key.new").exists());
 
         let db = MetaDb::open_existing(&config.data_dir).await.unwrap();
+        assert_eq!(
+            stored_column(&db, &bad, "secret_enc").await.unwrap(),
+            bad_secret_enc
+        );
+        assert_eq!(
+            stored_column(&db, &bad, "extra_headers_enc").await.unwrap(),
+            bad_headers_enc
+        );
         let sealed = stored_column(&db, &good, "secret_enc").await.unwrap();
         let headers = stored_column(&db, &good, "extra_headers_enc")
             .await
@@ -948,6 +1053,129 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rotation_finishes_an_interrupted_rotation_first() {
+        let (dir, config) = ready_config().await;
+        let old = [1; 32];
+        let pending = [2; 32];
+        let new = [3; 32];
+        let id = Uuid::now_v7();
+        // A previous rotation committed the check and `secret.key.new`, then
+        // crashed before the rename.
+        crypto::write_key_file(&crypto::key_path(dir.path()), &old).unwrap();
+        crypto::write_key_file(&dir.path().join("secret.key.new"), &pending).unwrap();
+        {
+            let db = MetaDb::open(&config.data_dir).await.unwrap();
+            crypto::verify_or_record(
+                &db,
+                &SecretBox::new(&pending),
+                &crypto::key_path(dir.path()),
+            )
+            .await
+            .unwrap();
+            seed_org(&db).await;
+            seed_connection(&db, &id, &SecretBox::new(&pending), false).await;
+            db.close().await;
+        }
+
+        let rotated = rotate_encryption_key(&config, Some(&crypto::encode_key(&new)))
+            .await
+            .unwrap();
+        assert_eq!(rotated.values, 1);
+        assert!(!dir.path().join("secret.key.new").exists());
+        let text = std::fs::read_to_string(crypto::key_path(dir.path())).unwrap();
+        assert_eq!(crypto::decode_key(text.trim(), "test").unwrap(), new);
+        let db = MetaDb::open_existing(&config.data_dir).await.unwrap();
+        let sealed = stored_column(&db, &id, "secret_enc").await.unwrap();
+        let check = stored_check(&db).await;
+        db.close().await;
+        let new_box = SecretBox::new(&new);
+        assert_eq!(
+            new_box
+                .open(&sealed, connection_aad("secret_enc", &id))
+                .unwrap(),
+            b"sk-test-key"
+        );
+        assert_eq!(check, new_box.check_value());
+    }
+
+    #[tokio::test]
+    async fn rotation_deletes_a_stale_new_key() {
+        let (dir, config) = ready_config().await;
+        let old = [1; 32];
+        let stale = [7; 32];
+        let new = [3; 32];
+        let id = Uuid::now_v7();
+        crypto::write_key_file(&crypto::key_path(dir.path()), &old).unwrap();
+        crypto::write_key_file(&dir.path().join("secret.key.new"), &stale).unwrap();
+        {
+            let db = MetaDb::open(&config.data_dir).await.unwrap();
+            crypto::verify_or_record(&db, &SecretBox::new(&old), &crypto::key_path(dir.path()))
+                .await
+                .unwrap();
+            seed_org(&db).await;
+            seed_connection(&db, &id, &SecretBox::new(&old), false).await;
+            db.close().await;
+        }
+
+        let rotated = rotate_encryption_key(&config, Some(&crypto::encode_key(&new)))
+            .await
+            .unwrap();
+        assert_eq!(rotated.values, 1);
+        assert!(!dir.path().join("secret.key.new").exists());
+        let text = std::fs::read_to_string(crypto::key_path(dir.path())).unwrap();
+        assert_eq!(crypto::decode_key(text.trim(), "test").unwrap(), new);
+        let db = MetaDb::open_existing(&config.data_dir).await.unwrap();
+        let sealed = stored_column(&db, &id, "secret_enc").await.unwrap();
+        let check = stored_check(&db).await;
+        db.close().await;
+        let new_box = SecretBox::new(&new);
+        assert_eq!(
+            new_box
+                .open(&sealed, connection_aad("secret_enc", &id))
+                .unwrap(),
+            b"sk-test-key"
+        );
+        assert_eq!(check, new_box.check_value());
+    }
+
+    #[tokio::test]
+    async fn rotation_removes_the_tmp_file_when_the_write_fails() {
+        let (dir, config) = ready_config().await;
+        let old = crypto::load_key(None, dir.path(), false).unwrap();
+        let old_box = SecretBox::new(&old.key);
+        let id = Uuid::now_v7();
+        {
+            let db = MetaDb::open(&config.data_dir).await.unwrap();
+            crypto::verify_or_record(&db, &old_box, &crypto::key_path(dir.path()))
+                .await
+                .unwrap();
+            seed_org(&db).await;
+            seed_connection(&db, &id, &old_box, false).await;
+            db.close().await;
+        }
+        let before = std::fs::read(crypto::key_path(dir.path())).unwrap();
+        // A directory at `secret.key.new` makes the rename inside `write_key_file` fail.
+        std::fs::create_dir(dir.path().join("secret.key.new")).unwrap();
+        let error = rotate_encryption_key(&config, Some(&crypto::encode_key(&[3; 32])))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AdminError::Crypto(_)), "{error}");
+        assert!(!dir.path().join("secret.key.new.tmp").exists());
+        assert_eq!(std::fs::read(crypto::key_path(dir.path())).unwrap(), before);
+        let db = MetaDb::open_existing(&config.data_dir).await.unwrap();
+        let sealed = stored_column(&db, &id, "secret_enc").await.unwrap();
+        let check = stored_check(&db).await;
+        db.close().await;
+        assert_eq!(
+            old_box
+                .open(&sealed, connection_aad("secret_enc", &id))
+                .unwrap(),
+            b"sk-test-key"
+        );
+        assert_eq!(check, old_box.check_value());
+    }
+
+    #[tokio::test]
     async fn rotation_on_a_missing_database_names_serve() {
         let app = TestApp::new().await;
         let empty = tempfile::tempdir().unwrap();
@@ -959,15 +1187,9 @@ mod tests {
     }
 
     #[test]
-    fn rotated_debug_hides_the_key() {
-        let rotated = Rotated {
-            values: 3,
-            new_key_for_env: Some("top-secret-key-material".to_owned()),
-        };
-        let text = format!("{rotated:?}");
-        assert!(text.contains("values: 3"), "{text}");
-        assert!(text.contains("new_key_for_env: true"), "{text}");
-        assert!(!text.contains("top-secret-key-material"));
+    fn rotated_debug_prints_only_the_values() {
+        let rotated = Rotated { values: 3 };
+        assert_eq!(format!("{rotated:?}"), "Rotated { values: 3 }");
     }
 
     fn reset_hash(url: &str) -> String {
