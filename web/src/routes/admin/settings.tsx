@@ -11,6 +11,7 @@ import { FormError } from "@/components/form/form-error";
 import { FormSuccess } from "@/components/form/form-success";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LicenseCard } from "@/ee/license-card";
 
 export const Route = createFileRoute("/admin/settings")({
   component: AdminSettingsPage,
@@ -76,6 +77,9 @@ function AdminSettingsPage() {
         <dt className="text-muted-foreground">Single sign-on required for</dt>
         <dd>
           {data.enforce_sso_domains.length > 0 ? data.enforce_sso_domains.join(", ") : "No domains"}
+          {data.enforce_sso_domains.length > 0 && !data.enforce_sso_applied
+            ? " — not enforced: needs an enterprise licence"
+            : null}
         </dd>
         <dt className="text-muted-foreground">Email (SMTP)</dt>
         <dd>{data.smtp_enabled ? "Configured" : "Not configured"}</dd>
@@ -98,6 +102,7 @@ function AdminSettingsPage() {
           {data.trusted_proxies.length > 0 ? data.trusted_proxies.join(", ") : "None"}
         </dd>
       </dl>
+      <LicenseCard />
       <h3 className="text-base font-medium">Test email</h3>
       <p className="text-sm text-muted-foreground">{`Sends a test message to ${me.user.email}.`}</p>
       <DisabledReason

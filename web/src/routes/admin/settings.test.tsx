@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
 import { server } from "@/mocks/node";
@@ -71,6 +71,76 @@ it("labels a disabled sign-up", async () => {
   await screen.findByRole("heading", { name: "Settings", level: 2 });
 
   expect(settingValue("Sign-up")).toHaveTextContent("Disabled");
+});
+
+it("shows the licence", async () => {
+  await renderApp("/admin/settings");
+  const licence = await screen.findByRole("region", { name: "Licence" });
+
+  expect(within(licence).getByText(/Active until/)).toBeInTheDocument();
+  expect(within(licence).getByText("Example Corp")).toBeInTheDocument();
+  expect(within(licence).getByText("Per-project roles, SSO enforcement")).toBeInTheDocument();
+});
+
+it("says when there is no licence key", async () => {
+  server.use(
+    http.get("/api/v1/admin/license", () => HttpResponse.json({ status: "none", features: [] })),
+  );
+
+  await renderApp("/admin/settings");
+
+  expect(
+    await screen.findByText("No licence key. Enterprise features are locked."),
+  ).toBeInTheDocument();
+});
+
+it("says why a licence key was refused", async () => {
+  server.use(
+    http.get("/api/v1/admin/license", () =>
+      HttpResponse.json({
+        status: "invalid",
+        features: [],
+        reason: "the token is malformed",
+      }),
+    ),
+  );
+
+  await renderApp("/admin/settings");
+
+  expect(
+    await screen.findByText("The licence key was refused: the token is malformed."),
+  ).toBeInTheDocument();
+});
+
+it("says when a licence is in its grace period", async () => {
+  server.use(
+    http.get("/api/v1/admin/license", () =>
+      HttpResponse.json({
+        status: "grace",
+        features: ["project_roles"],
+        customer: "Example Corp",
+        expires_at: "2026-12-01T00:00:00.000000000Z",
+        grace_ends_at: "2026-12-31T00:00:00.000000000Z",
+      }),
+    ),
+  );
+
+  await renderApp("/admin/settings");
+
+  expect(
+    await screen.findByText("Expired on 2026-12-01. Enterprise features stop on 2026-12-31."),
+  ).toBeInTheDocument();
+});
+
+it("says when single sign-on is not enforced without a licence", async () => {
+  server.use(withSettings({ enforce_sso_domains: ["sso.example"], enforce_sso_applied: false }));
+
+  await renderApp("/admin/settings");
+  await screen.findByRole("heading", { name: "Settings", level: 2 });
+
+  expect(settingValue("Single sign-on required for")).toHaveTextContent(
+    "sso.example — not enforced: needs an enterprise licence",
+  );
 });
 
 it("shows the from address and lists", async () => {

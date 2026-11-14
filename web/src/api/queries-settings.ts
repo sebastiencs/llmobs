@@ -54,3 +54,7 @@ export function projectMembersKey(org: string, project: string) {
     projectMembersInit(org, project),
   ).queryKey;
 }
+
+export function orgEntitlementsQuery(org: string) {
+  return $api.queryOptions("get", "/api/v1/orgs/{org}/entitlements", orgInit(org));
+}
