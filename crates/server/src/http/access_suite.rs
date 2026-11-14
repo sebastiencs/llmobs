@@ -437,7 +437,7 @@ fn expected(access: Access, method: &Method, who: Who) -> Outcome {
     if who == Who::Anonymous {
         return Outcome::Denied401;
     }
-    if who == Who::PatRead && !safe(method) {
+    if who == Who::PatRead && !safe(method) && !access.reads_by_post(method) {
         return Outcome::Denied403;
     }
     match access {
@@ -540,7 +540,8 @@ fn key_outcome(who: Who, perm: ProjectPerm, method: &Method) -> Outcome {
     if !holds_scope(who, scope) {
         return Outcome::Denied403;
     }
-    if scope == KeyScope::Read && !safe(method) {
+    let reads_by_post = perm == ProjectPerm::Query && *method == Method::POST;
+    if scope == KeyScope::Read && !safe(method) && !reads_by_post {
         Outcome::Denied403
     } else {
         Outcome::Allowed
