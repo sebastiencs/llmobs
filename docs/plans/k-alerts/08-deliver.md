@@ -36,6 +36,8 @@ No background task yet (K9).
 
 ## 1. `alerts/message.rs`
 
+Imports: `serde::Serialize`, `uuid::Uuid`, `llmobs_core::ids::ProjectId`, `llmobs_core::names::PRODUCT`, `llmobs_core::time_serde`, `crate::api::alerts::{AlertMetric, AlertWindow, Comparator}`, `crate::config::PublicUrl`, `crate::email::Email` (adjust to what the compiler reports; run `just fmt`).
+
 ```rust
 //! Notification bodies and links (spec 07 § Channels, D-K-8).
 
@@ -56,7 +58,6 @@ pub(crate) struct Notice {
     pub(crate) comparator: Comparator,
     pub(crate) threshold: f64,
     pub(crate) window: AlertWindow,
-    pub(crate) filter: Option<String>,
     pub(crate) value: Option<f64>,
     pub(crate) count: Option<i64>,
     pub(crate) window_from: i64,
@@ -363,8 +364,8 @@ pub(crate) async fn send_one(state: &AppState, config: &ChannelConfig, notice: &
 | `EgressError::Scheme` | false | `unsupported URL scheme` |
 | `EgressError::TooLarge { .. }` | false | `the response was too large` |
 
-  (Match the real `EgressError` variants; if there are others, map them to retryable `the request failed`.)
-- **Email**: `state.mailer` is `None` → permanent `email is not configured`. Otherwise `let email = message::email(notice);` and for each recipient in order `mailer.send_now(recipient, &email).await`; stop at the first error. Wrap the whole loop in `tokio::time::timeout(SEND_TIMEOUT, …)`; an elapsed timeout → retryable `the request timed out`. `MailError::Connect`, `Tls` and `Auth` → retryable; `Rejected`, `InvalidAddress`, `Template` → permanent. The message is the error's `Display` text (fixed strings without the address, `email/mod.rs`). D-K-7: a retry sends to every recipient again.
+  (These six are all the `EgressError` variants.)
+- **Email**: `state.mailer` is `None` → permanent `email is not configured`. Otherwise `let email = message::email(notice);` and for each recipient in order `mailer.send_now(recipient, &email).await`; stop at the first error. Wrap the whole loop in `tokio::time::timeout(SEND_TIMEOUT, …)`; an elapsed timeout → retryable `the request timed out`. `MailError::Connect`, `Tls` and `Auth` → retryable (an admin may fix SMTP credentials within the retry span, D-K-7); `Rejected`, `InvalidAddress`, `Template` → permanent. The message is the error's `Display` text (fixed strings without the address, `email/mod.rs`). D-K-7: a retry sends to every recipient again.
 
 ### A pass
 
@@ -376,13 +377,14 @@ pub(crate) struct DeliverReport { pub(crate) sent: usize, pub(crate) retried: us
 pub(crate) async fn deliver_once(state: &AppState, now: i64) -> Result<DeliverReport, MetaError>;
 ```
 
-For each `DueDelivery` (`futures::stream::iter(…).map(|due| Box::pin(deliver_one(state, due, now))).buffer_unordered(CONCURRENCY)`; boxed because reqwest futures are large):
+`async fn deliver_one(state: &AppState, due: &DueDelivery, now: i64) -> Option<Outcome>` with a private `enum Outcome { Sent, Retried, Failed }`; it returns `None` when the final write fails. Run it as `futures::stream::iter(&dues).map(|due| Box::pin(deliver_one(state, due, now))).buffer_unordered(CONCURRENCY)` (borrowed, so no `needless_pass_by_value`; boxed because reqwest futures are large). For each `DueDelivery`:
 1. `open_config(&state.secrets, &due.channel_id, &due.config_enc)`; error → `Attempt::Failed { error: "the channel config could not be read".to_owned() }`.
-2. Build the `Notice`: `kind` from `due.event.kind`, an `AlertEventKind` (`match due.event.kind { AlertEventKind::Fired => MessageKind::Fired, AlertEventKind::Resolved => MessageKind::Resolved, AlertEventKind::Reminder => MessageKind::Reminder }`); rule name, metric, comparator, window, filter from `due.event.details`; value, count, threshold, window bounds from the event; `occurred_at = due.event.created_at`; links from `rule_url(&state.config.public_url, &due.org_slug, &due.project_slug, due.event.rule_id)` and `traces_url(…, due.event.window_from, due.event.window_to, filter)`.
+2. Build the `Notice`: `kind` from `due.event.kind`, an `AlertEventKind` (`match due.event.kind { AlertEventKind::Fired => MessageKind::Fired, AlertEventKind::Resolved => MessageKind::Resolved, AlertEventKind::Reminder => MessageKind::Reminder }`); rule name, metric, comparator, window, filter from `due.event.details`; value, count, threshold, window bounds from the event; `occurred_at = due.event.created_at`; links from `rule_url(&state.config.public_url, &due.org_slug, &due.project_slug, due.event.rule_id)` and `traces_url(…, due.event.window_from, due.event.window_to, due.event.details.filter.as_deref())`.
 3. `send_one(state, &config, &notice, due.id, now)`:
    - `Ok` → `Attempt::Sent`;
    - `Err(e)` with `e.retryable && due.attempts + 1 < MAX_ATTEMPTS` → `Attempt::Retry { error: e.message, next_attempt_at: now.saturating_add(backoff_ns(due.attempts + 1)) }`;
    - otherwise → `Attempt::Failed { error: e.message }`.
+   Compute the `Outcome` and keep a copy of the error message for the log before moving `attempt` into the write closure.
 4. `state.meta.write(… finish_delivery(conn, due.id, attempt, now) …)`. The report counts the outcome (`sent`, `retried`, `failed`) whether or not `finish_delivery` returned `true`. A write error is logged, not counted, and the pass continues (the row stays `pending` and is retried next pass).
 5. Log: `tracing::info!(delivery_id = %due.id, channel_id = %due.channel_id, kind = due.channel_kind.as_str(), attempt = due.attempts + 1, outcome, "alert delivery")` where `outcome` is `"sent"`, `"retry"` or `"failed"`; for a failure add `error = %message` (the fixed message, which holds no secret).
 
@@ -495,12 +497,14 @@ async fn seed_delivery(app: &TestApp, config: ChannelConfig, now: i64) -> (Uuid,
 9. `private_addresses_are_denied_by_default`: `TestApp::new()` (policy default) → sending to the receiver gives `Err { retryable: false, message: "the address is not allowed (security.allow_private_network_egress)" }`.
 10. `deliver_once_retries_then_fails`: `seed_delivery` with a webhook channel pointing at the receiver `[500]`. Call `deliver_once` at `now`: `retried 1`, the row is `pending` with `attempts 1`, `next_attempt_at = now + 30 s`, `last_error "the endpoint answered 500"`. Calling at `now + 29 s` sends nothing (`DeliverReport::default()`). Loop 7 more times at the row's `next_attempt_at`: after the 8th attempt the row is `failed`, `next_attempt_at NULL`; the receiver got 8 requests.
 11. `deliver_once_sends`: receiver `[200]` → `sent 1`, row `sent`, `attempts 1`; a second pass sends nothing.
-12. `email_delivery_sends_to_each_recipient`: `with_mailer`; email channel `["a@x.io","b@x.io"]` → `deliver_once` → `app.sent()` has 2 messages, subject `[<PRODUCT>] Firing: <rule name>`; with `mailer.fail_next(1)` (it fails the first recipient, so `app.sent()` gets nothing from that pass) the delivery is retried (`pending`, attempts 1).
+12. `email_delivery_sends_to_each_recipient`: `with_mailer`; email channel `["a@x.io","b@x.io"]` → `deliver_once` → `app.sent()` has 2 messages, subject `[<PRODUCT>] Firing: <rule name>`; that is all for this test (`seed` runs once per app).
 13. `email_without_smtp_fails_at_once`: `TestApp::new()`, `seed_delivery` with an email config → `failed`, `last_error "email is not configured"`.
 14. `prune_keeps_recent_history`: an old event (`created_at = now − 91 d`) with one `sent` delivery; a recent event (`now − 1 d`) with a `sent` delivery updated `now − 31 d`, a `failed` delivery updated `now − 1 d`, and a `pending` delivery updated `now − 40 d` (insert them by SQL). `prune_once` returns `(1, 1)` (cascaded deletes are not counted by SQLite); afterwards the old event and its delivery are gone, and the recent event, its `failed` delivery and the `pending` one remain.
 17. `finish_delivery_is_fenced`: after `Attempt::Sent`, a second `finish_delivery(…, Attempt::Failed { … })` returns `false` and `attempts` stays 1.
 18. `due_deliveries_order_and_filter`: three pending deliveries with `next_attempt_at` 30, 10, 20 and one `sent` → `due_deliveries(now = 25, limit 10)` returns the ones at 10 and 20, in that order; `limit 1` returns one; after setting the project's `state = 'deleting'`, none.
-15. `delivery_logs_hold_no_secrets` (a default current-thread `#[tokio::test]`): `seed_delivery` with a webhook (path `/hook`, secret `0123456789abcdef`, header `X-Team: core`) to a receiver `[500]`, and wrap `deliver_once` in `assert_logs_clean(&["0123456789abcdef", "\"core\"", "/hook"], …)`; then use `capture_logs` around a second pass to assert the logs contain `alert delivery`.
+15. `delivery_logs_hold_no_secrets` (a default current-thread `#[tokio::test]`): `seed_delivery` with a webhook (path `/hook`, secret `0123456789abcdef`, header `X-Team: core`) to a receiver `[500]`; wrap `deliver_once(&app.state, now)` in `capture_logs` and assert the captured text contains `alert delivery` and none of `0123456789abcdef`, `"core"`, `/hook`; then the same around a second pass at `now + 31 s` (the first left the row due at `now + 30 s`).
+12b. `email_retry_after_a_failure`: `TestApp::with_mailer()`, then `app.state.mailer.as_ref().expect("stub mailer").fail_next(1)`, then `seed_delivery` with an email config → `deliver_once` reports `retried 1`, the row is `pending` with `attempts 1`, and `app.sent()` is empty.
+19. `permanent_failure_and_unreadable_config`: a receiver `[404]` → `failed`, `attempts 1`, `next_attempt_at NULL`, `last_error "the endpoint answered 404"`; a channel whose `config_enc` is sealed for another id (update the row by SQL) → `failed` with `"the channel config could not be read"`.
 
 `routes::channels::tests`:
 16. `send_test_reports_the_result`: `TestApp::with_config(|config| config.security.allow_private_network_egress = true)`; two receivers, `[200]` and `[500]`; create two webhook channels over `POST /channels` (`http://127.0.0.1:<port>/hook`, secret `0123456789abcdef`), one per receiver. Testing the first → `200 {"ok": true}` and its receiver got a body with `"type":"alert.test"`; the second → `{"ok": false, "error": "the endpoint answered 500"}`; a viewer → `403`; an unknown id → `404`.
@@ -534,4 +538,4 @@ just check
 ## Done when
 
 - Deliveries are sent with the classification and backoff above, a channel test answers synchronously, and pruning keeps 90 and 30 days.
-- The 18 tests and the updated `templates_render` pass; `just check` is green. If clippy's `large_futures` flags another await on a reqwest or DataFusion future, wrap it in `Box::pin(…)` as above.
+- The 20 tests and the updated `templates_render` pass; `just check` is green. If clippy's `large_futures` flags another await on a reqwest or DataFusion future, wrap it in `Box::pin(…)` as above.

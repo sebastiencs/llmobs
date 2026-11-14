@@ -9,7 +9,7 @@ Adds `/$org/$project/alerts/new` and `/$org/$project/alerts/$ruleId/edit` with o
 - README § Design, D-K-2, D-K-3, D-K-4, D-K-13.
 - K3's condition rules (`docs/plans/k-alerts/03-types.md` § 3) — the form mirrors them; the server stays the authority.
 - K10 (`queries-alerts.ts`, `channel-dialog.tsx` form style, `test/fixtures.ts`), K11 (`lib/alerts.ts`, the two pages).
-- `web/src/components/charts/metric-chart.tsx` (`ChartContainer`, `ComposedChart`, `Line`, `XAxis`, `YAxis`, `ReferenceLine`, `AXIS_TICK`), `web/src/components/ui/chart.tsx`, `web/src/lib/metrics.ts` (`seriesByMetric`, `toChartRows`, `ChartRow`, `formatMetric`), `web/src/api/queries.ts` (`metricsQuery`: it always sends `bucket: "auto"`, so the preview builds its own query).
+- `web/src/components/charts/metric-chart.tsx` (`ChartContainer`, `ComposedChart`, `Line`, `XAxis`, `YAxis`, `ReferenceLine`), `web/src/components/ui/chart.tsx`, `web/src/lib/metrics.ts` (`seriesByMetric`, `toChartRows`, `ChartRow`, `formatMetric`), `web/src/api/queries.ts` (`metricsQuery`: it always sends `bucket: "auto"`, so the preview builds its own query).
 - `web/src/components/ui/{select,switch,textarea,checkbox,label}.tsx`, `web/src/components/form/*`.
 - `web/src/mocks/writes.ts` and `writes.test.ts` (the covered prefixes and `WRITE_OPERATIONS`), `web/src/mocks/browser.ts`.
 - `docs/roadmap.md` (row K).
@@ -63,10 +63,12 @@ export function thresholdInPercent(metric: Schema<"AlertMetric">, aggregation: S
 export function thresholdUnit(metric: Schema<"AlertMetric">, aggregation: Schema<"ScoreAggregation">): string;
 
 /** Form values from a stored rule (edit). Percent thresholds are multiplied by 100 and printed
- *  with `String(Math.round(value * 1e6) / 1e6)`; cooldown_s / 60. */
+ *  with `String(Math.round(value * 1e6) / 1e6)`; `cooldownMinutes` is `String(Math.round(cooldown_s / 60))`.
+ *  Fields the metric does not use take the defaults of DEFAULT_RULE_FORM (`target` "trace",
+ *  `scoreName` "", `aggregation` "avg", `minCount` "20" for cost); `filter` is the stored filter or "". */
 export function formFromRule(rule: Schema<"AlertRule">): RuleFormValues;
 
-/** The condition to send, or field errors keyed like the server's (`name`, `condition.threshold`,
+/** The condition to send, or field errors keyed like the server's (`condition.threshold`,
  *  `condition.min_count`, `condition.score_name`, `cooldown_s`). Only the fields of the metric are
  *  set: `min_count` not for cost, `target` only for latency, `score_name` and `aggregation` only for score.
  *  An empty filter is omitted. */
@@ -110,7 +112,7 @@ export function previewSeries(condition: Pick<RuleFormValues, "metric" | "target
 
 `previewParams`: bucket `1m`→`1m`, `5m`→`5m`, `15m`→`15m`, `1h`→`1h`, `6h`→`6h`, `24h`→`1d`; range `[now − 24 h, now)` for windows up to `1h`, `[now − 3 d, now)` for `6h`, `[now − 14 d, now)` for `24h`; `from`/`to` as `new Date(ms).toISOString()`.
 
-Tests in `alerts.test.ts`: `thresholdUnit` and `thresholdInPercent` for each metric and aggregation; `conditionFromForm` with threshold `""` and `"abc"` → `"Enter a number."`; `formFromRule` of a rule with threshold 0.07 (error rate) → threshold `"7"`; `conditionChanged` false for `formFromRule(rule)` against itself; `conditionFromForm` for each metric (defaults → `{"metric":"error_rate","window":"5m","comparator":"gt","threshold":0.05,"min_count":20}` exactly); each error message; `formFromRule` of each fixture rule round-trips through `conditionFromForm` to the same condition; `previewParams("6h", Date.parse("2026-01-04T00:00:00Z"))` → `{ bucket: "6h", from: "2026-01-01T00:00:00.000Z", to: "2026-01-04T00:00:00.000Z" }`; `previewSeries` for the five cases (score avg and score pass rate both use `score_avg` with the score name as group).
+Tests in `alerts.test.ts`: `thresholdUnit` and `thresholdInPercent` for each metric and aggregation; `previewParams` for each of the six windows; `conditionFromForm` for latency with target `llm_span` includes `target: "llm_span"`; `conditionFromForm` with threshold `""` and `"abc"` → `"Enter a number."`; `formFromRule` of a rule with threshold 0.07 (error rate) → threshold `"7"`; `conditionChanged` false for `formFromRule(rule)` against itself; `conditionFromForm` for each metric (defaults → `{"metric":"error_rate","window":"5m","comparator":"gt","threshold":0.05,"min_count":20}` exactly); each error message; `formFromRule` of each fixture rule round-trips through `conditionFromForm` to the same condition; `previewParams("6h", Date.parse("2026-01-04T00:00:00Z"))` → `{ bucket: "6h", from: "2026-01-01T00:00:00.000Z", to: "2026-01-04T00:00:00.000Z" }`; `previewSeries` for the five cases (score avg and score pass rate both use `score_avg` with the score name as group).
 
 ## 2. `components/alerts/rule-preview.tsx`
 
@@ -151,60 +153,67 @@ A `<form noValidate>` (no nested forms: the filter is a plain `Textarea`, not th
 1. **Name** (`TextField`, max 100).
 Every `Select` has a `Label htmlFor="rule-<field>"` and `SelectTrigger id="rule-<field>"` (fields: `metric`, `target`, `aggregation`, `window`, `comparator`), so tests reach it with `getByRole("combobox", { name: "<label>" })`; options are reached with `findByRole("option", { name })`.
 
-2. **What to measure**: `Select` "Metric" (options exactly: `Error rate`, `Cost`, `p95 latency`, `Score`); for latency a `Select` "Latency of" (`Whole traces`, `LLM spans`); for score a `TextField` "Score name" and a `Select` "Aggregation" (`Average`, `Pass rate`; the select's description says "Pass rate counts true among boolean scores."); `Select` "Window" (`1 minute`, `5 minutes`, `15 minutes`, `1 hour`, `6 hours`, `24 hours`) with the description "Checked every minute for windows up to 15 minutes, every 5 minutes otherwise."
+2. **What to measure**: `Select` "Metric" (options exactly: `Error rate`, `Cost`, `p95 latency`, `Score`); for latency a `Select` "Latency of" (`Whole traces`, `LLM spans`); for score a `TextField` "Score name" and a `Select` "Aggregation" (`Average`, `Pass rate`; below it a `<p className="text-xs text-muted-foreground">Pass rate counts true among boolean scores.</p>`, as `Select` has no description slot); `Select` "Window" (`1 minute`, `5 minutes`, `15 minutes`, `1 hour`, `6 hours`, `24 hours`) with the line `<p className="text-xs text-muted-foreground">Checked every minute for windows up to 15 minutes, every 5 minutes otherwise.</p>` below it
 3. **Filter**: a `Label htmlFor="rule-filter"` "Filter" and a `Textarea id="rule-filter"` (`font-mono`, 2 rows, max 4096), described by "A traces filter, e.g. environment = 'production'. Empty: every trace." Errors with field `filter` (the server's `invalid_filter`) show under it, wired like `text-field.tsx`.
-4. **Condition**: `Select` "Comparator" (`Above`, `At or above`, `Below`, `At or below` → gt, gte, lt, lte); `TextField` "Threshold" (`inputMode="decimal"`, default text type) whose description is the unit: "Percent." (rates), "USD." (cost), "Milliseconds." (latency) or "Raw score." (score average) — `TextField` has no suffix slot; do not change it; `TextField` "Minimum samples" (hidden for cost) with description "Fewer samples in the window gives No data, which never fires."
-5. **Notifications**: a checkbox list of `useQuery(channelsQuery(org, project))` channels (`Checkbox id="rule-channel-<id>"` + `Label` reading `<name> (<Kind>)`, e.g. `Team Slack (Slack)`), at most 10 checked (disable the others at 10); no channels → "No channels yet." and a link "Add a channel" to `/$org/$project/settings/channels`. `Switch` "Remind while firing" and, when on, `TextField` "Remind every (minutes)".
+4. **Condition**: `Select` "Comparator" (`Above`, `At or above`, `Below`, `At or below` → gt, gte, lt, lte); `TextField` "Threshold" (default text type) whose description is the unit: "Percent." (rates), "USD." (cost), "Milliseconds." (latency) or "Raw score." (score average) — `TextField` has no suffix slot; do not change it; `TextField` "Minimum samples" (hidden for cost) with description "Fewer samples in the window gives No data, which never fires."
+5. **Notifications**: a checkbox list of `useQuery(channelsQuery(org, project))` channels (`Checkbox id="rule-channel-<id>"` + `Label` reading `` `${name} (${channelKindLabel(kind)})` ``, e.g. `Team Slack (Slack)`), at most 10 checked (disable the others at 10); no channels → "No channels yet." and a link "Add a channel" to `/$org/$project/settings/channels`. `Switch` "Remind while firing" and, when on, `TextField` "Remind every (minutes)".
 6. **Enabled**: `Switch` "Enabled" (create only; the detail page toggles it for an existing rule).
 
 Changing the aggregation sets `threshold` to `"90"` (pass rate) or `"0.5"` (average). Changing the metric resets `threshold` to the metric's default (`5` for error rate, `100` for cost, `5000` for latency, `0.5` for score avg, `90` for pass rate), `comparator` to `gt` (`lt` for score), and `minCount` to `"20"` (`"10"` for score).
 
 Submit:
-1. `conditionFromForm`; errors → shown on the fields, nothing sent. Name blank → `"Enter a name."`.
-2. Create: `POST …/alert-rules` with `{ name, condition, channel_ids, enabled, cooldown_s, notify_while_firing }` (`Schema<"CreateAlertRuleRequest">`). Edit: `PATCH …/alert-rules/{id}` with only the changed top-level fields, compared with `const initial = formFromRule(rule)`: `name` when the trimmed name differs; `condition` (sent whole) when `conditionChanged(initial, form)`; `channel_ids` when the sorted id lists differ (the server returns them sorted); `notify_while_firing` when it differs; `cooldown_s` when reminders are on and the minutes differ numerically. A PATCH with no field navigates back without a request.
+1. Name blank (after trimming) → `"Enter a name."` on the name field; then `conditionFromForm`; any error → shown on the fields, nothing sent. (The name check is not in `conditionFromForm`, which the preview also uses.)
+2. Create: `POST …/alert-rules` with `{ name, condition, channel_ids, enabled, cooldown_s, notify_while_firing }` (`Schema<"CreateAlertRuleRequest">`). Edit: `PATCH …/alert-rules/{id}` with only the changed top-level fields, compared with `const initial = formFromRule(rule)`: `name` when the trimmed name differs; `condition` (sent whole) when `conditionChanged(initial, form)`; `channel_ids` when the sorted id lists differ (the server returns them sorted); `notify_while_firing` when it differs; `cooldown_s` when reminders are on and the minutes differ numerically. A PATCH with no field calls `onSaved(rule)` with the unchanged rule, without a request.
 3. On success: invalidate `alertRulesQuery(org, project).queryKey`, set `alertRuleQuery(org, project, id)` data to the response, call `onSaved(rule)`.
-4. Errors: `fieldErrors` mapped by field name (`name`, `filter`, `condition.filter`, `condition.threshold`, `condition.min_count`, `condition.score_name`, `channel_ids`, `cooldown_s`; `condition.target` and `condition.aggregation` have no own message slot and fall through to the form error); when any mapped field error exists, set no form error. A `403` whose problem `code` is `"plan_limit"` (D-K-14) → form error with the problem's `detail` plus "Upgrade your plan, disable another rule, or save this one disabled."; `409` → form error `problemMessage(error, "A rule with this name already exists.")`; `503` → `"The server is busy. Try again."`; else `problemMessage(error, "Could not save the rule.")`.
+4. Errors: `fieldErrors` mapped by field name (`name`, `filter`, `condition.filter`, `condition.threshold`, `condition.min_count`, `condition.score_name`, `channel_ids`, `cooldown_s`; `condition.target` and `condition.aggregation` have no own message slot and fall through to the form error); when any mapped field error exists, set no form error. A `403` whose problem `code` is `"plan_limit"` (D-K-14) → `FormError` with the problem's `detail`, followed by a separate `<p className="text-xs">Upgrade your plan, disable another rule, or save this one disabled.</p>`; `409` → form error `problemMessage(error, "A rule with this name already exists.")`; `503` → `"The server is busy. Try again."`; else `problemMessage(error, "Could not save the rule.")`.
 5. In edit mode, when `conditionChanged(initial, form)`, show above the buttons: "Saving a new condition resets the rule to OK." (D-K-4).
 
 Buttons: `Cancel` (`variant="outline"`, calls `onCancel`) and `SubmitButton` "Create rule" or "Save".
 
 ## 4. Routes and buttons
 
+- Both pages use K11's frame (`<div className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 overflow-auto px-4 py-6">`). Role checks use `canManageAlerts`.
 - `alerts/new.tsx`: `createFileRoute("/$org/$project/alerts/new")({ component: NewRulePage })`. Members and above: `h1` "New alert rule" and `RuleForm` with `onSaved={(rule) => navigate({ to: "/$org/$project/alerts/$ruleId", params: { org, project, ruleId: rule.id } })}` and `onCancel` back to `/$org/$project/alerts`. Viewers: `<Forbidden description="Only project members and above can create alert rules." />`.
 - `alerts/$ruleId/edit.tsx`: `createFileRoute("/$org/$project/alerts/$ruleId/edit")` with the same loader as the detail page (404 → `notFound()`); viewers get `Forbidden`; `h1` "Edit <name>"; `RuleForm rule={…}`; saved or cancelled → the rule page.
-- `alerts/index.tsx`: a "New rule" button in the header. Members and above: `<Button asChild><Link to="/$org/$project/alerts/new" params={{ org, project }}><Plus /> New rule</Link></Button>`. Viewers: `<DisabledReason reason="Only project members and above can manage alerts"><Button disabled><Plus /> New rule</Button></DisabledReason>` (a link cannot be disabled). `EmptyState` takes no children: render the same button in a centered `div` after it.
+- `alerts/index.tsx`: a "New rule" button in the header. Members and above: `<Button asChild><Link to="/$org/$project/alerts/new" params={{ org, project }}><Plus /> New rule</Link></Button>`. Viewers: `<DisabledReason reason="Only project members and above can manage alerts"><Button disabled><Plus /> New rule</Button></DisabledReason>` (a link cannot be disabled). `EmptyState` takes no children; on an empty list the header button is hidden and the same button is rendered in a centered `div` after the `EmptyState`, so there is always one "New rule" button.
 - `alerts/$ruleId/index.tsx`: an "Edit" button next to "Delete rule", built the same way (a link to `/$org/$project/alerts/$ruleId/edit` for members, a disabled button for viewers).
 
 ## 5. Dev write mocks (`mocks/writes.ts`)
 
 Add to `WRITE_OPERATIONS`: `create_channel` (post `/api/v1/projects/{project}/channels`), `update_channel` (patch `…/channels/{id}`), `delete_channel` (delete `…/channels/{id}`), `test_channel` (post `…/channels/{id}/test`), `create_alert_rule` (post `/api/v1/projects/{project}/alert-rules`), `update_alert_rule` (patch `…/alert-rules/{id}`), `delete_alert_rule` (delete `…/alert-rules/{id}`). Responses (import `channels.json` and `alert-rules.json`):
-- `create_channel`: `201` with `{ ...channels.data[2], name: trimmed(body.name) ?? channels.data[2].name }` (the Slack example; for `kind: "email"` use `data[0]`, for `"webhook"` `data[1]`).
-- `update_channel`: the channel of `params.id` from the fixture (or `data[0]`) with the new name when given.
+Fixture rows are `T | undefined` under `noUncheckedIndexedAccess`; pick them with `find`, never by index plus `!`:
+- `create_channel`: `const sample = channels.data.find((row) => row.kind === body.kind) ?? channels.data.find(() => true);` then `201` with `{ ...sample, name: trimmed(body.name) ?? sample?.name }`.
+- `update_channel`: the channel whose `id` is `params.id` (else the first row via `find(() => true)`) with the new name when given.
 - `test_channel`: `{ ok: true }`.
-- `create_alert_rule`: `201` with `{ ...alertRules.data[1], name: trimmed(body.name) ?? …, condition: body.condition ?? …, state: "ok" }` without the `last_*` fields.
-- `update_alert_rule`: the rule of `params.id` (or `data[1]`) merged with the body's top-level fields.
+- `create_alert_rule`: take the rule named `High error rate` with `find`, drop its `last_*` fields by destructuring them into `_`-prefixed names (as `writes.ts` does for `patch_me`), and answer `201` with `{ ...rest, name: trimmed(body.name) ?? rest.name, condition: body.condition ?? rest.condition, state: "ok" }`.
+- `update_alert_rule`: the rule whose `id` is `params.id` (else the first row via `find(() => true)`) merged with the body's top-level fields.
 - `delete_channel`, `delete_alert_rule`: `noContent()`.
 
-`writes.test.ts`: extend `covered` with `path.startsWith("/api/v1/projects/{project}/channels") || path.startsWith("/api/v1/projects/{project}/alert-rules")` (`LATER_TRACKS` stays empty), and add one test like the existing ones, using the file's `PROJECT` constant (`/api/v1/projects/acme%2Fsupport-bot`): a create of a channel and of a rule each return `201` with the submitted name, and `test_channel` returns `200 { ok: true }`.
+`writes.test.ts`: extend `covered` with `path.startsWith("/api/v1/projects/{project}/channels") || path.startsWith("/api/v1/projects/{project}/alert-rules")` (`LATER_TRACKS` stays empty), and add one test like the existing ones, using the file's `PROJECT` constant (`/api/v1/projects/acme%2Fsupport-bot`): a create of a channel and of a rule each return `201` with the submitted name, an update of each returns `200` with the new name, each delete returns `204`, and `test_channel` returns `200 { ok: true }`.
 
 ## 6. Tests
 
 `alerts/new.test.tsx` (`renderApp("/acme/support-bot/alerts/new")`):
 Viewers: `http.get("/api/v1/projects/:project", () => HttpResponse.json({ ...projectFixture, role: "viewer" }))`. URL checks: `await waitFor(() => expect(router.state.location.pathname).toBe(…))`. Use real timers (MSW and user-event hang with fake timers).
 
-1. `creates an error rate rule`: type the name, check `getByRole("checkbox", { name: "Team Slack (Slack)" })`, submit → POST body `{ name: "Errors", condition: { metric: "error_rate", window: "5m", comparator: "gt", threshold: 0.05, min_count: 20 }, channel_ids: ["01900000-0000-7000-8000-000000000500"], enabled: true, cooldown_s: 3600, notify_while_firing: false }`; answer `201` with the `High error rate` fixture → the pathname becomes `/acme/support-bot/alerts/01900000-0000-7000-8000-000000000510`.
+1. `creates an error rate rule`: type the name, check `getByRole("checkbox", { name: "Team Slack (Slack)" })`, submit → POST body `{ name: "Errors", condition: { metric: "error_rate", window: "5m", comparator: "gt", threshold: 0.05, min_count: 20 }, channel_ids: [SLACK_CHANNEL_ID], enabled: true, cooldown_s: 3600, notify_while_firing: false }`; answer `201` with the `High error rate` fixture → the pathname becomes `/acme/support-bot/alerts/01900000-0000-7000-8000-000000000510`.
 2. `score fields`: choose Score, aggregation Pass rate, score name `ok`, threshold `90`, comparator below → body condition `{ metric: "score", window: "5m", comparator: "lt", threshold: 0.9, min_count: 10, score_name: "ok", aggregation: "pass_rate" }`.
 3. `client errors`: clear the threshold → "Enter a number." and no POST (a call counter on a `server.use` POST handler stays 0).
-3b. `plan limit`: the POST answers `problemResponse(403, "plan_limit", { detail: "Your plan allows 1 enabled alert rule." })` → that detail and "Upgrade your plan, disable another rule, or save this one disabled." are shown.
+3b. `plan limit`: the POST answers `problemResponse(403, "plan_limit", { detail: "Your plan allows 1 enabled alert rule." })` → `findByText("Your plan allows 1 enabled alert rule.")` and `getByText("Upgrade your plan, disable another rule, or save this one disabled.")`.
+3c. `reminders`: turn on "Remind while firing", type `120` → the body has `notify_while_firing: true, cooldown_s: 7200`; `3` → "Enter 5 to 10,080 minutes." and no POST.
+3d. `other server errors`: a `409` with detail `an alert rule with this name already exists` shows that detail; a `503` shows "The server is busy. Try again."
+3e. `channels`: the channels list answering 11 channels (ids `01900000-0000-7000-8000-0000000006NN`) → after checking 10, the 11th checkbox is disabled; an empty list → "No channels yet." and the link "Add a channel".
 4. `server filter errors`: the POST answers `problemResponse(400, "invalid_filter", { errors: [{ field: "filter", message: "unexpected end of input" }] })` → the message shows under Filter.
 5. `preview asks for window-wide buckets`: capture the `/metrics` request (`server.events.on("request:start", …)`) → `bucket=5m` and a 24 h range; choose window `24h` → a request with `bucket=1d` and a 14-day range.
 6. `no preview for llm spans`: wait for the first `/metrics` request to settle and record the count; choose p95 latency, then Latency of LLM spans → `getByText(/No preview for LLM span latency/)` and the count is unchanged.
 6b. `debounces the filter`: type `error_count > 0` into Filter → `waitFor` a `/metrics` request whose `filter` is `error_count > 0`; exactly one request carries a filter.
-6c. `preview states`: `/metrics` answering `problemResponse(400, "invalid_filter", { errors: [{ field: "filter", message: "bad" }] })` → "The filter is invalid: bad"; a response with no points → "No data in this range."; the figure is labelled "Preview of the metric over the last 24 hours".
+6c. `preview states` (the default `/metrics` fixture answers any query, so the default state renders the chart): first assert the figure labelled "Preview of the metric over the last 24 hours"; then `/metrics` answering `problemResponse(400, "invalid_filter", { errors: [{ field: "filter", message: "bad" }] })` → "The filter is invalid: bad"; a response with no points → "No data in this range." (the figure is rendered only when there is data).
 7. `viewers cannot create`: role `viewer` → Forbidden.
 
 `alerts/$ruleId/edit.test.tsx` (`renderApp("/acme/support-bot/alerts/01900000-0000-7000-8000-000000000510/edit")`):
 8. `edits the name only`: the form starts with the fixture values (threshold `5`, filter `environment = 'production'`, both channels checked, reminders on with `60` minutes); change the name → PATCH body exactly `{ name: "Errors 2" }`; answered with the rule → the URL becomes the rule page.
+10. `edit without changes sends nothing`: submit at once → no PATCH (counter 0) and the pathname becomes the rule page.
+11. `edit as a viewer or of an unknown rule`: `viewer` → Forbidden; the rule GET answering `problemResponse(404, "not_found")` → `findByRole("heading", { name: "Page not found" })`.
 9. `warns that a new condition resets the state`: change only the name → no warning; then change the threshold to `10` → the warning text shows; submit → the PATCH body has `name` and `condition` (with `threshold: 0.1`) and no other field.
 
 `alerts/index.test.tsx` and `$ruleId/index.test.tsx`: add `New rule is disabled for viewers` (`getByRole("button", { name: "New rule" })` is disabled and there is no link of that name) and `Edit links to the editor`.

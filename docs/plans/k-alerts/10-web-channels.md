@@ -25,7 +25,9 @@ Adds the query helpers every alert page uses, and the project settings page `/$o
 | `web/src/routes/$org/$project/settings/channels.test.tsx` | new |
 | `web/src/components/alerts/channel-dialog.tsx` | new |
 | `web/src/components/alerts/headers-editor.tsx` | new |
-| `web/src/test/fixtures.ts` | channel and rule ids |
+| `web/src/test/fixtures.ts` | channel ids |
+| `web/src/lib/roles.ts` (+ `roles.test.ts`) | `canManageAlerts` |
+| `web/src/lib/alerts.ts` (+ `alerts.test.ts`) | `channelKindLabel` |
 
 ## 1. `web/src/api/queries-alerts.ts`
 
@@ -47,25 +49,9 @@ export function alertRulesQuery(org: string, project: string) {
   });
 }
 
-// alertRuleQuery, alertEventsInit and alertEventsKey are used by K11 and K12.
-export function alertRuleQuery(org: string, project: string, id: string) {
-  return $api.queryOptions("get", "/api/v1/projects/{project}/alert-rules/{id}", {
-    params: { path: { project: projectRef(org, project), id } },
-  });
-}
-
-export function alertEventsInit(org: string, project: string, id: string) {
-  return { params: { path: { project: projectRef(org, project), id }, query: { limit: 50 } } };
-}
-
-export function alertEventsKey(org: string, project: string, id: string) {
-  return $api.queryOptions(
-    "get",
-    "/api/v1/projects/{project}/alert-rules/{id}/events",
-    alertEventsInit(org, project, id),
-  ).queryKey;
-}
 ```
+
+K11 adds `alertRuleQuery` and `alertEventsInit` to this file when it first uses them.
 
 Run `just fmt` (Biome) after writing; the code above may be reflowed.
 
@@ -78,10 +64,26 @@ Run `just fmt` (Biome) after writing; the code above may be reflowed.
 ```ts
 export const SLACK_CHANNEL_ID = "01900000-0000-7000-8000-000000000500";
 export const WEBHOOK_CHANNEL_ID = "01900000-0000-7000-8000-000000000501";
-export const EMAIL_CHANNEL_ID = "01900000-0000-7000-8000-000000000502";
-export const FIRING_RULE_ID = "01900000-0000-7000-8000-000000000510";
-export const SCORE_RULE_ID = "01900000-0000-7000-8000-000000000511";
-export const COST_RULE_ID = "01900000-0000-7000-8000-000000000512";
+```
+
+Tests import these instead of writing the ids (K11 adds `FIRING_RULE_ID`).
+
+`web/src/lib/roles.ts`: add, with a test in `roles.test.ts` (viewer false; member, admin, owner true; `undefined` false):
+
+```ts
+/** Members and above manage alert rules and channels (D-K-9). */
+export function canManageAlerts(role: OrgRole | undefined): boolean {
+  return atLeast(role, "member");
+}
+```
+
+`web/src/lib/alerts.ts` (new; K11 and K12 add to it):
+
+```ts
+import type { Schema } from "@/api/types";
+
+/** "Slack", "Webhook" or "Email". */
+export function channelKindLabel(kind: Schema<"ChannelKind">): string;
 ```
 
 ## 3. The page (`settings/channels.tsx`)
@@ -93,7 +95,7 @@ export const Route = createFileRoute("/$org/$project/settings/channels")({
 ```
 
 `ChannelsPage`:
-- `const { org, project, data } = useProject(); const canEdit = atLeast(data.role, "member"); const reason = "Only project members and above can manage channels";`
+- `const { org, project, data } = useProject(); const canEdit = canManageAlerts(data.role); const reason = "Only project members and above can manage channels";`
 - `const query = useQuery(channelsQuery(org, project));` (`useQuery` from `@tanstack/react-query`); `const channels = query.data?.data ?? [];`.
 - Dialog state follows `api-keys.tsx`: for the create/edit dialog, the delete dialog and the test result, keep a target that is never cleared on close plus an `open` boolean, so a dialog does not blank while it animates out.
 - A `403` from the query (`problemOf(query.error)?.status === 403`) → `<Forbidden description="You don't have access to this project's channels." />`; another error is thrown (as `api-keys.tsx` does).
@@ -101,13 +103,13 @@ export const Route = createFileRoute("/$org/$project/settings/channels")({
 - Loading: three `<Skeleton className="h-8 w-full" />`.
 - Empty (`channels.length === 0`): `<EmptyState icon={BellRing} title="No channels yet" description="Add Slack, a webhook or email to receive alert notifications." />`.
 - Otherwise a `Table aria-label="Notification channels"` with columns **Name**, **Kind**, **Target**, **Last delivery**, and an actions column (`<span className="sr-only">Actions</span>`):
-  - Kind: `Badge variant="outline"` with `Slack`, `Webhook` or `Email`. When `available` is false, a second `Badge variant="destructive"` reading `SMTP not configured`, with `title="Email channels need SMTP (smtp_url). Ask an instance admin."`.
+  - Kind: `Badge variant="outline"` with `channelKindLabel(kind)`. When `available` is false, a second `Badge variant="destructive"` reading `SMTP not configured`, with `title="Email channels need SMTP (smtp_url). Ask an instance admin."`.
   - Target: `target_hint` in `font-mono text-xs`.
   - Last delivery: absent → `—`; else `Badge` (`sent` → `secondary` reading `Sent`, `failed` → `destructive` reading `Failed`) followed by `<TimeText value={last_delivery.at} style="datetime" />`; when `error` is present, a line below in `text-xs text-muted-foreground` with the error text.
   - Actions: a `DropdownMenu` with `Button variant="ghost" size="icon-xs" aria-label={`Actions for ${channel.name}`}`, items **Send test**, **Edit**, **Delete** (`className="text-destructive"`). For a viewer the trigger is disabled and the whole `DropdownMenu` is wrapped in `DisabledReason` (as `org-members.tsx` does); the menu never opens, so there are no disabled items inside it (D-L-4).
 - **Edit** opens `ChannelDialog` in edit mode with the channel.
-- **Delete** opens `ConfirmDialog` titled `Delete channel?`, description `` `${name}` will be removed from every alert rule that uses it. ``, `confirmLabel="Delete"`, `destructive`, `pending={remove.isPending}`. It calls `const remove = $api.useMutation("delete", "/api/v1/projects/{project}/channels/{id}")`; on success: close, `remove.reset()`, invalidate `channelsQuery(org, project).queryKey` and `alertRulesQuery(org, project).queryKey` (the second has no observer on this page, so it fetches nothing). Its error shows through `ConfirmDialog`'s `error` prop with `problemMessage(remove.error, "Could not delete the channel.")`.
-- **Send test**: one `const test = $api.useMutation("post", "/api/v1/projects/{project}/channels/{id}/test")` for the page. When it settles it opens a `Dialog` titled `Test notification` whose `DialogDescription` reads the outcome: `ok` → "The channel accepted the test message."; `ok: false` → "The channel did not accept the test message:" followed by the `error` in a `FormError`; a request error → `problemMessage(error, "Could not send the test.")`. A `DialogFooter` has `Button variant="outline"` "Close"; closing calls `test.reset()`. While pending, the row whose id equals `test.variables?.params.path.id` shows a spinning `Loader2` instead of `MoreHorizontal` in its actions trigger.
+- **Delete** opens `ConfirmDialog` titled `Delete channel?`, description `<><span className="font-medium">{target.name}</span> will be removed from every alert rule that uses it.</>`, `confirmLabel="Delete"`, `destructive`, `pending={remove.isPending}`. It calls `const remove = $api.useMutation("delete", "/api/v1/projects/{project}/channels/{id}")`; on success: close, `remove.reset()`, invalidate `channelsQuery(org, project).queryKey` and `alertRulesQuery(org, project).queryKey` (the second has no observer on this page, so it fetches nothing). Its error shows through `ConfirmDialog`'s `error` prop with `problemMessage(remove.error, "Could not delete the channel.")`.
+- **Send test**: one `const test = $api.useMutation("post", "/api/v1/projects/{project}/channels/{id}/test")` for the page. The result dialog is open while `test.isSuccess || test.isError` (derived, no extra state; this replaces the "target" rule above for this dialog); `onOpenChange(false)` and its Close button call `test.reset()`. It is a `Dialog` with `<DialogContent showCloseButton={false}>`, titled `Test notification`. Its `DialogDescription` is one sentence: `ok` → "The channel accepted the test message."; `ok: false` → "The channel did not accept the test message."; a request error → "The test could not be sent.". After the `DialogHeader`, a `FormError` shows `data.error` (for `ok: false`) or `problemMessage(test.error, "Could not send the test.")` (request error). A `DialogFooter` has `Button variant="outline"` "Close". While pending, the row whose id equals `test.variables?.params.path.id` shows a spinning `Loader2` instead of `MoreHorizontal` in its actions trigger.
 
 ## 4. `components/alerts/channel-dialog.tsx`
 
@@ -122,7 +124,7 @@ export function ChannelDialog(props: {
 })
 ```
 
-No return type annotation (React 19 has no global `JSX` namespace; the repo never writes one). The title is `New channel` or `Edit channel`, with a `DialogDescription` ("Alert rules send their notifications to channels." / "Fields you leave empty keep their current value."). Both mutations, `const create = $api.useMutation("post", "/api/v1/projects/{project}/channels")` and `const update = $api.useMutation("patch", "/api/v1/projects/{project}/channels/{id}")`, live in `ChannelDialog` and are passed to the inner form; `pending = create.isPending || update.isPending`; both are reset when the dialog closes. Like `CreateKeyDialog`, the form component is mounted only while open (so its state resets), and the dialog refuses to close while pending.
+No return type annotation (React 19 has no global `JSX` namespace; the repo never writes one). The title is `New channel` or `Edit channel`, with a `DialogDescription` ("Alert rules send their notifications to channels." / "Fields you leave empty keep their current value."). Both mutations carry secrets in their variables, so they are created with `{ gcTime: 0 }` (L README pitfall "Secrets and the mutation cache"): `const create = $api.useMutation("post", "/api/v1/projects/{project}/channels", { gcTime: 0 })` and `const update = $api.useMutation("patch", "/api/v1/projects/{project}/channels/{id}", { gcTime: 0 })`, reset on success and on close. They live in `ChannelDialog` and are passed to the inner form; `pending = create.isPending || update.isPending`; both are reset when the dialog closes. Like `CreateKeyDialog`, the form component is mounted only while open (so its state resets), and the dialog refuses to close while pending.
 
 Form state (`useState`): `name`, `kind` (`Schema<"ChannelKind">`, create only; default `"slack"`), `url`, `secret`, `headers` (`{ id: number; name: string; value: string }[]`; `id` comes from a counter so React keys are stable; on create the list starts empty), `headersTouched`, `recipients` (a string, one address per line), field errors, and a form error.
 
@@ -152,6 +154,8 @@ export function HeadersEditor(props: {
   onChange: (rows: HeaderRow[]) => void;
   /** Creates the id of a new row. */
   nextId: () => number;
+  /** Shown under the legend, as `<p id="channel-headers-description">`, and referenced by the fieldset's `aria-describedby`. */
+  description?: string;
   error?: string;
   disabled?: boolean;
 })
@@ -167,10 +171,10 @@ Use `renderApp("/acme/support-bot/settings/channels")`; the default MSW handlers
 2. `shows the Channels entry in the settings nav` with `aria-current="page"`.
 3. `creates a webhook channel`: click "New channel"; in the dialog named `New channel` type the name `Pager`, choose Webhook, type the URL `https://hooks.example.com/x` and the "Signing secret" `0123456789abcdef`, click "Add header" and type `X-Team` / `core`, submit → the POST body equals `{ name: "Pager", kind: "webhook", url: "https://hooks.example.com/x", secret: "0123456789abcdef", headers: { "X-Team": "core" } }`; the response (`201`, `channelsFixture.data[1]`) closes the dialog and the list GET count goes from 1 to 2.
 4. `creates an email channel`: recipients `"a@x.io\n\n b@x.io "` → body `recipients: ["a@x.io", "b@x.io"]`.
-5. `shows field errors from the server`: type name `Team` and URL `https://x.test/hook`, submit; the POST answers `problemResponse(400, "bad_request", { errors: [{ field: "url", message: "must use https" }] })` → the URL input has `aria-invalid="true"`, the message is visible, and no form error is shown.
+5. `shows field errors from the server`: type name `Team` and URL `https://x.test/hook` (`getByLabelText("Webhook URL")`, the Slack default), submit; the POST answers `problemResponse(400, "bad_request", { errors: [{ field: "url", message: "must use https" }] })` → that input has `aria-invalid="true"`, the message is visible, and no form error is shown.
 6. `edits without resending secrets`: Edit on `Pager webhook`, change only the name → PATCH body `{ name: "Pager 2" }` exactly.
-7. `deletes a channel`: Delete → confirm in the `alertdialog` named `Delete channel?` → DELETE sent to `…/channels/01900000-0000-7000-8000-000000000501`, answered `204`; the dialog closes.
-8. `sends a test`: POST `…/test` answered `{ ok: false, error: "the endpoint answered 500" }` → the dialog `Test notification` shows "The channel did not accept the test message:" and the error; Close; then a handler answering `{ ok: true }` → "The channel accepted the test message."
+7. `deletes a channel`: Delete → confirm in the `alertdialog` named `Delete channel?` → DELETE sent to `` `…/channels/${WEBHOOK_CHANNEL_ID}` ``, answered `204`; the dialog closes.
+8. `sends a test`: POST `…/test` answered `{ ok: false, error: "the endpoint answered 500" }` → the dialog `Test notification` shows "The channel did not accept the test message." and the error; `within(dialog).getByRole("button", { name: "Close" })`; then a handler answering `{ ok: true }` → "The channel accepted the test message."
 9. `viewers can read but not write`: `projectAs("viewer")` → the list shows; "New channel" and the button `Actions for Team Slack` are disabled; with counters on `http.post`, `http.patch` and `http.delete` for `/api/v1/projects/:project/channels*`, clicking both sends nothing (counts stay 0).
 10. `email without SMTP is flagged`: the list answers `{ ...channelsFixture, data: [{ ...channelsFixture.data[0], available: false }] }` → the `SMTP not configured` badge is visible.
 11. `forbidden and empty states`: the list answering `problemResponse(403, "forbidden")` → "You don't have access to this project's channels."; an empty list → "No channels yet".
@@ -178,6 +182,9 @@ Use `renderApp("/acme/support-bot/settings/channels")`; the default MSW handlers
 13. `a duplicate name is a conflict`: POST answers `problemResponse(409, "conflict", { detail: "a channel with this name already exists" })` → that detail is shown.
 14. `edit shows header names, not values`: Edit on `Pager webhook` → "Header name 1" has value `X-Team` and "Header value 1" is empty; saving after only a name change sends no `headers`; after typing a value `abc`, the PATCH has `headers: { "X-Team": "abc" }`.
 15. `client checks`: submit an empty create form → "Enter a name." and "Enter a URL." are shown and no POST is sent (counter stays 0).
+16. `creates a Slack channel and forgets the secret`: name `Team`, Webhook URL `https://hooks.slack.com/services/T/B/abcd` → body `{ name: "Team", kind: "slack", url: "https://hooks.slack.com/services/T/B/abcd" }`; after the dialog closes, `queryClient.getMutationCache().getAll()` holds no mutation whose `state.variables` contains `hooks.slack.com/services` (as `api-keys.test.tsx` checks its secret).
+17. `edit shows the target hint`: Edit on `Team Slack` → the URL field's description contains `hooks.slack.com/…/abcd`.
+18. `header cap`: on create with Webhook, click "Add header" 10 times → "Add header" is disabled.
 
 ## Commands
 
@@ -207,4 +214,4 @@ just check
 
 ## Done when
 
-- `/acme/support-bot/settings/channels` works on the mocks as described (writes only in tests; K12 adds dev write mocks); the 15 tests pass; `just check` is green.
+- `/acme/support-bot/settings/channels` works on the mocks as described (writes only in tests; K12 adds dev write mocks); the 18 tests and the `canManageAlerts` and `channelKindLabel` tests pass; `just check` is green.

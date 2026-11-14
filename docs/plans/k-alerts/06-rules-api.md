@@ -276,7 +276,7 @@ pub(crate) async fn list_events(pool: &SqlitePool, rule_id: Uuid, before: Option
 pub(crate) async fn deliveries_for_events(pool: &SqlitePool, event_ids: &[Uuid]) -> Result<Vec<DeliveryRow>, MetaError>;
 ```
 
-- `list_events` SQL: `SELECT … FROM alert_events WHERE rule_id = ? [AND (created_at < ? OR (created_at = ? AND id < ?))] ORDER BY created_at DESC, id DESC LIMIT ?`. UUIDv7 text sorts by time, so `id < ?` on `TEXT` is the right tie-break.
+- `list_events` SQL, one static query: `SELECT … FROM alert_events WHERE rule_id = ?1 AND (?2 IS NULL OR created_at < ?2 OR (created_at = ?2 AND id < ?3)) ORDER BY created_at DESC, id DESC LIMIT ?4`, binding `before.map(|b| b.0)` and `before.map(|b| b.1.to_string())` as `Option`s. UUIDv7 text sorts by time, so `id < ?` on `TEXT` is the right tie-break.
 - `deliveries_for_events`: empty input → `Ok(vec![])`. Run one static query per event id (a page holds at most 1 000 events; sqlx 0.9 accepts only static SQL strings, so do not build an `IN (…)` list): `SELECT d.id, d.event_id, d.channel_id, c.name AS channel_name, c.kind AS channel_kind, d.status, d.attempts, d.next_attempt_at, d.last_error, d.created_at, d.updated_at FROM notification_deliveries d JOIN notification_channels c ON c.id = d.channel_id WHERE d.event_id = ? ORDER BY d.created_at, d.id`, and concatenate the results in the order of `event_ids`.
 - Decoding failures (`kind`, `status`, `details` JSON, ids) → `MetaError::Corrupt` with the table and column.
 - Tests in the existing `mod tests`: insert events and deliveries by SQL. `events_page_newest_first` (5 events, `limit 2` → the 2 newest; `before` = the second's `(created_at, id)` → the next 2); `deliveries_join_channel_names` (two events with two deliveries each: the result follows the order of `event_ids`, then `created_at`, then `id`, and carries the channel's name and kind; an empty slice → empty vector).
@@ -300,7 +300,7 @@ async fn checked_channels(state: &AppState, project: ProjectId, ids: &[Uuid]) ->
 async fn checked_condition(state: &AppState, project: ProjectId, condition: AlertCondition) -> Result<AlertCondition, ApiError>;
 ```
 
-- `checked_channels`: more than `MAX_RULE_CHANNELS` → field `channel_ids`, `"at most 10 channels"`; a duplicate id → `"duplicate channel"`; an id not in `list_channels(reader, project)` → `"unknown channel"`. Returns the ids sorted.
+- `checked_channels`: more than `alerts::MAX_RULE_CHANNELS` (the K4 store constant) → field `channel_ids`, `"at most 10 channels"`; a duplicate id → `"duplicate channel"`; an id not in `list_channels(reader, project)` → `"unknown channel"`. Returns the ids sorted.
 - `checked_condition`: `normalize_condition(condition)` (errors → `ApiError::BadRequest { detail: None, errors }`); then, when `filter` is `Some(text)`: `let ctx = open_query(state, project, None).await?; llmobs_storage::check_alert_filter(&ctx, &text)?;` (the `RunError` converts: an invalid filter is `400 invalid_filter` with field `filter`). Return the normalized condition.
 
 ### Handlers
@@ -319,7 +319,7 @@ Same extractors and write pattern as K5's handlers and `routes/api_keys.rs` (`St
 
 **`list_events`**: `error::Query(params): error::Query<PageParams>`. `rule_by_id` first (404 when the rule is not in this project). Decode `params.cursor` as `api_keys.rs` does (base64url `URL_SAFE_NO_PAD` of JSON `{"created_at": i64, "id": Uuid}`, `deny_unknown_fields`; a bad cursor → `field_error("cursor", "invalid cursor")`). `Limit::get()` returns `u32`: fetch `alerts::list_events(reader, id, before, i64::from(params.limit.get()) + 1)` and compare with `let limit = usize::try_from(params.limit.get()).unwrap_or(usize::MAX);`. When more than `limit` rows came back, drop the extra one and set `next_cursor` to the encoding of the last kept row's `(created_at, id)`. Then `deliveries_for_events` for the kept ids, and assemble `AlertEvent`s (deliveries grouped by `event_id`, in the store's order). `metric`, `comparator`, `window` come from `details`.
 
-Write the cursor encode/decode as two private functions in this file, `encode_cursor(created_at: i64, id: Uuid) -> String` and `decode_cursor(text: &str) -> Result<(i64, Uuid), ApiError>`, mirroring `api_keys.rs` (copy its struct with `#[serde(deny_unknown_fields)]`).
+Write the cursor encode/decode as two private functions in this file, `encode_cursor(created_at: i64, id: Uuid) -> Result<String, ApiError>` (serialization errors → `ApiError::Internal(Box::new(error))`, as `api_keys.rs`) and `decode_cursor(text: &str) -> Result<(i64, Uuid), ApiError>`, mirroring `api_keys.rs` (copy its struct with `#[serde(deny_unknown_fields)]`).
 
 `rule_json(row: &RuleRow) -> AlertRule` copies the fields (`state`, `last_*` included; `last_notified_at` and `clear_streak` are not exposed).
 
@@ -380,18 +380,21 @@ with status `403` (add it to the `Self::Forbidden | Self::SsoRequired | Self::Em
 
 and in `problem()`: `Self::PlanLimit { detail } => Problem::new(ProblemCode::PlanLimit, Some(detail.clone())),`. Fix any other exhaustive `match` on `ApiError` or `ProblemCode` the compiler reports the same way. The OpenAPI `ProblemCode` enum gains `plan_limit` (regenerated by `just openapi`); spec 09's code list already names it (planning commit).
 
-**Where it runs** (only when the result is an enabled rule):
-- `create_rule`, after `checked_cooldown` and before the insert, when `body.enabled.unwrap_or(true)`:
+**Where it runs** (only when the result is an enabled rule). A private helper in `routes/alert_rules.rs`, so tests can pass a limit:
 
 ```rust
-let limit = quota::rule_limit(&state, access.project.org_id);
-if limit.is_some() {
-    let enabled = alerts::count_enabled_org_rules(state.meta.reader(), access.project.org_id).await?;
-    quota::check_rule_quota(enabled, limit)?;
+/// Refuses one more enabled rule in `org` when `limit` is reached (D-K-14).
+async fn enforce_quota(state: &AppState, org: OrgId, limit: Option<i64>) -> Result<(), ApiError> {
+    if limit.is_none() {
+        return Ok(());
+    }
+    let enabled = alerts::count_enabled_org_rules(state.meta.reader(), org).await?;
+    quota::check_rule_quota(enabled, limit)
 }
 ```
 
-- `update_rule`, when the body has `enabled: Some(true)` and the stored rule is disabled, with the same code before the update.
+- `create_rule`, after `checked_cooldown` and before the insert, when `body.enabled.unwrap_or(true)`: `enforce_quota(&state, org, quota::rule_limit(&state, org)).await?;` with `org = access.project.org_id`.
+- `update_rule`: after validating the present fields, load the rule (`let Some(current) = alerts::rule_by_id(state.meta.reader(), project, id).await? else { return Err(ApiError::NotFound); };`); when `body.enabled == Some(true) && !current.enabled`, call `enforce_quota` the same way; then write.
 
 Two concurrent requests can both pass and leave the org one rule over its limit; that is accepted (the next re-enable or create is refused).
 
@@ -399,7 +402,7 @@ Two concurrent requests can both pass and leave the org one rule over its limit;
 - `no_limit_allows_everything`: `check_rule_quota(5, None)` is `Ok`.
 - `limit_one`: `check_rule_quota(0, Some(1))` is `Ok`; `check_rule_quota(1, Some(1))` is `Err(ApiError::PlanLimit { detail })` with `detail == "Your plan allows 1 enabled alert rule."`; `check_rule_quota(3, Some(3))` names `3 enabled alert rules`.
 - `plan_limit_problem`: `ApiError::PlanLimit { detail: "x".into() }.problem()` has `status 403`, `code PlanLimit` (serialized `"plan_limit"`) and `detail "x"`.
-- Route test 12 below: with `rule_limit` returning `None`, a second enabled rule is created (`201`): self-hosted has no limit.
+- Route tests 12 and 13 below: with `rule_limit` returning `None`, more enabled rules are created (self-hosted has no limit); `enforce_quota` with `Some(1)` refuses a second enabled rule.
 
 ## 4. OpenAPI
 
@@ -576,11 +579,13 @@ Only rule `…0510` has detail and event examples, so in `just web-dev` the othe
 4. `unknown_fields_are_refused`: condition with `"group_by":"model"` → `400`.
 5. `channels_are_checked`: a channel of another project → `400` field `channel_ids` `unknown channel`; the same id twice → `duplicate channel`; 11 random `Uuid::now_v7()` → `at most 10 channels` (the length check runs first); two real channels → `201` with sorted ids.
 6. `cooldown_range`: 299 → `400` field `cooldown_s`; 300 → ok.
-7. `update_resets_state_on_condition_change`: create; set the row's state by SQL to `firing` with `last_value 0.9`; PATCH `{"name":"x"}` → `state "firing"`; PATCH `{}` → `200`, unchanged; PATCH the same condition → still `firing`; PATCH a new condition → `state "ok"`, no `last_value`; set `firing` again, PATCH `{"enabled":false}` → `state "ok"`, `enabled false`; PATCH `{"channel_ids":[]}` → `channel_ids []`; PATCH `{"cooldown_s":10}` → `400`.
+7. `update_resets_state_on_condition_change`: create; set the row's state by SQL to `firing` with `last_value 0.9`; PATCH `{"name":"x"}` → `state "firing"`; PATCH `{}` → `200`, the body equal to before (the manual clock does not move, so `updated_at` is equal too); PATCH the same condition → still `firing`; PATCH a new condition → `state "ok"`, no `last_value`; set `firing` again, PATCH `{"enabled":false}` → `state "ok"`, `enabled false`; PATCH `{"channel_ids":[]}` → `channel_ids []`; PATCH `{"cooldown_s":10}` → `400`.
 8. `names_are_unique`: duplicate name on create → `409`; renaming a rule to another rule's name → `409`.
-9. `delete_and_404s`: DELETE → `204`; GET, PATCH, DELETE again → `404`; GET `…/alert-rules/not-a-uuid` → `400`.
+9. `delete_and_404s`: DELETE → `204`; GET, PATCH, DELETE again → `404`; GET `…/alert-rules/not-a-uuid` → `400`; a rule of the other project requested through the seeded project's path → `404` for GET, PATCH and DELETE.
 10. `events_are_paged_with_deliveries`: insert 3 events by SQL for the rule (times 1, 2, 3) and two deliveries on the newest; GET `…/events?limit=2` → the events at 3 and 2, the newest with 2 deliveries carrying `channel_name`; `next_cursor` present; GET with that cursor → the event at 1 and `next_cursor null`; `?cursor=garbage` → `400` field `cursor`; `?limit=0` → `400`; a rule inserted in the other project, read through the seeded project's path → `404`.
 12. `no_plan_limit_by_default`: two enabled rules in the project → both `201`; disable one and re-enable it → `200`.
+13. `enforce_quota_counts_enabled_rules`: in the route module's tests, with one enabled rule in the org, `enforce_quota(&app.state, org, Some(1))` is `Err(ApiError::PlanLimit { .. })` and its problem has `status 403`, `code "plan_limit"`; with that rule disabled instead, `Ok(())`.
+14. `audit_logs_hold_no_names`: create a rule named `Secret name` with filter `environment = 'x-secret'` inside `assert_logs_clean(&["Secret name", "x-secret"], …)`.
 11. `roles`: viewer GETs list, rule and events (`200`) but POST/PATCH/DELETE → `403`; member POST → `201`; `read_key` GET → `200`, POST → `403`.
 
 ## Commands
@@ -607,5 +612,6 @@ just check
 
 ## Done when
 
+- Imports to add beyond the K5 set: in `meta/alerts.rs`, `serde::{Deserialize, Serialize}` and `crate::api::alerts::{AlertEventKind, AlertMetric, AlertWindow, Comparator, DeliveryStatus}`; in `routes/alert_rules.rs`, `serde::{Deserialize, Serialize}` (path and cursor structs), `llmobs_core::ids::OrgId`, `crate::alerts::quota`.
 - The six routes answer as above; OpenAPI, schema types, fixtures and manifest are regenerated and committed.
-- The 11 route tests, the 2 store tests, the OpenAPI and API-example tests and the access suite pass; `just check` is green.
+- The 14 route tests, the 2 store tests, the 3 quota tests and `plan_limit_problem`, the OpenAPI and API-example tests and the access suite pass; `just check` is green.

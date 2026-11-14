@@ -2,7 +2,7 @@
 
 **Commit subject:** `storage: add the alert_value read`
 
-Adds the read that the alert loop (K6) runs once per rule evaluation: one aggregate over a sliding window that returns the sample count and the measured value. It also adds `check_alert_filter`, which the rule routes (K5) use to reject a bad filter. No server code changes in this sub-phase.
+Adds the read that the alert loop (K7) runs once per rule evaluation: one aggregate over a sliding window that returns the sample count and the measured value. It also adds `check_alert_filter`, which the rule routes (K6) use to reject a bad filter. No server code changes in this sub-phase.
 
 ## Read first
 

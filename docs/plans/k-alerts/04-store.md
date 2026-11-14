@@ -130,7 +130,7 @@ The schema version grows from `P` to `N` (migration numbers are contiguous, so `
 - `meta/mod.rs`, test `open_twice_is_idempotent`: `assert_eq!(count, P);` → `assert_eq!(count, N);`.
 - `meta/mod.rs`, test `open_existing_checks_the_file_and_the_version`: the inserted future migration `VALUES (P+1, 'future', …)` → `VALUES (N+1, 'future', …)`, `assert_eq!(found, P+1)` → `assert_eq!(found, N+1)`, `assert_eq!(expected, P)` → `assert_eq!(expected, N)`.
 - `admin.rs`, test `schema_mismatch_names_the_versions`: `VALUES (P+1, 'future', …)` → `VALUES (N+1, 'future', …)` and `"this binary expects schema P, found P+1"` → `"this binary expects schema N, found N+1"`.
-- Then run `grep -rn "'future'\|expects schema\|assert_eq!(count, " crates/server/src` and fix any other hard-coded version the same way.
+- Find every literal with `grep -rn "_sqlx_migrations\|'future'\|expects schema" crates/server/src`. With the four migrations on `main` today (P = 4, N = 5, file `0005_alerts.sql`) they are: `meta/mod.rs` `assert_eq!(count, 4)` → `5`, `VALUES (5, 'future', …)` → `6`, `assert_eq!(found, 5)` → `6`, `assert_eq!(expected, 4)` → `5`; `admin.rs` `VALUES (5, 'future', …)` → `6` and `"this binary expects schema 4, found 5"` → `"… schema 5, found 6"`. If more migrations landed first, shift them the same way.
 
 Regenerate the snapshot: `INSTA_UPDATE=always cargo test -p llmobs-server schema_matches_the_snapshot`. `git diff crates/server/tests/snapshots/meta_schema.snap` must show only added blocks for the five tables, their nine explicit indexes and five `sqlite_autoindex_*` primary-key indexes. Anything else: STOP and report.
 
@@ -149,7 +149,6 @@ Append `("notification_channels", "config_enc"),` to `ENCRYPTED_COLUMNS`. The te
 
 - `min_role`: `Self::Annotate | Self::ManageAlerts => Role::Member,` (merge with the `Annotate` arm).
 - `key_scope`: `Self::ManageSettings | Self::ManageMembers | Self::ManageAlerts => None,`.
-- If track I added `ManageEvaluation` with the same rules, keep the arms separate or merged as rustfmt and clippy accept; the behaviour above is what matters.
 - In the test `permissions_follow_the_spec_table` add:
 
 ```rust
@@ -157,7 +156,7 @@ Append `("notification_channels", "config_enc"),` to `ENCRYPTED_COLUMNS`. The te
         assert!(ProjectPerm::ManageAlerts.key_scope().is_none());
 ```
 
-Fix any other exhaustive `match` on `ProjectPerm` the compiler reports (e.g. in `http/access.rs` or `access_suite.rs`) by treating `ManageAlerts` like `Annotate` for roles and like `ManageSettings` for keys.
+No other code matches `ProjectPerm` exhaustively (`access.rs` and `access_suite.rs` only compare with `ProjectPerm::Query`).
 
 ## 4. `alerts/channel.rs`: sealing
 
@@ -346,10 +345,11 @@ pub(crate) async fn delete_rule(conn: &mut SqliteConnection, project_id: Project
 pub(crate) async fn count_enabled_org_rules(pool: &SqlitePool, org_id: OrgId) -> Result<i64, MetaError>;
 ```
 
-`count_enabled_org_rules`: `SELECT COUNT(*) FROM alert_rules r JOIN projects p ON p.id = r.project_id WHERE p.org_id = ? AND r.enabled = 1` (`OrgId` is `llmobs_core::ids::OrgId`, bound as `.to_string()`). Disabled rules do not count, so an org at its limit can keep disabled rules.
+`count_enabled_org_rules`: `SELECT COUNT(*) FROM alert_rules r JOIN projects p ON p.id = r.project_id WHERE p.org_id = ? AND p.state = 'active' AND r.enabled = 1` (`OrgId` is `llmobs_core::ids::OrgId`, bound as `.to_string()`). Disabled rules and rules of projects being deleted do not count, so an org at its limit can keep disabled rules (D-K-14).
 
 Behaviour:
 
+- `insert_channel` and `insert_rule` take their input by value and move its fields into the returned row (as `insert_api_key` does); never borrow a field and clone it (clippy's `needless_pass_by_value`).
 - **`insert_channel`**: `SELECT COUNT(*) FROM notification_channels WHERE project_id = ?`; `>= MAX_CHANNELS` → `MetaError::Conflict(TOO_MANY_CHANNELS)`. Insert all columns with `created_at = updated_at = now`. A unique violation → `unique_or(error, CHANNEL_NAME_TAKEN)`.
 - **`list_channels`**: `ORDER BY name, id`.
 - **`update_channel`**: load the row on `conn` (`WHERE project_id = ? AND id = ?`); `None` when absent. Merge the patch into the loaded values in Rust, moving the patch's fields out (`if let Some(name) = patch.name`; clippy's `needless_pass_by_value` fires if the patch is only borrowed), then run one static `UPDATE notification_channels SET name = ?, config_enc = ?, target_hint = ?, updated_at = ? WHERE project_id = ? AND id = ?`. Unique violation → `CHANNEL_NAME_TAKEN`. Return the updated row.
@@ -379,9 +379,11 @@ WHERE c.project_id = ? AND d.status IN ('sent', 'failed')
   - Return the reloaded row.
 - **`delete_rule`**: `DELETE … WHERE project_id = ? AND id = ?`; events, deliveries and links go by cascade.
 
-Imports: `std::collections::HashMap`, `std::fmt`, `llmobs_core::ids::ProjectId`, `sqlx::{SqliteConnection, SqlitePool}`, `uuid::Uuid`, `super::{MetaError, unique_or}`, `crate::api::alerts::{AlertCondition, AlertState, ChannelKind}`.
+Imports: `std::collections::HashMap`, `std::fmt`, `llmobs_core::ids::{OrgId, ProjectId}`, `sqlx::{SqliteConnection, SqlitePool}`, `uuid::Uuid`, `super::{MetaError, unique_or}`, `crate::api::alerts::{AlertCondition, AlertState, ChannelKind}`.
 
 Records: private `#[derive(Debug, sqlx::FromRow)] struct ChannelRecord` and `struct RuleRecord` with one field per selected column, named as the column: `String` for ids, texts and `kind`/`state`/`config`; `Vec<u8>` for `config_enc`; `i64` for `INTEGER NOT NULL`; `Option<i64>` for nullable integers; `Option<f64>` for `last_value`; `Option<String>` for `last_error` and `created_by`. Read them with `sqlx::query_as::<_, ChannelRecord>("SELECT id, project_id, kind, name, config_enc, target_hint, created_at, updated_at FROM notification_channels WHERE …")` (and the rule columns in table order for `RuleRecord`). Ids are stored as `id.to_string()` (hyphenated lower case), the form `Aad` uses.
+
+Name the two shared helpers (K7 reuses them): `fn rule_from(record: RuleRecord, channel_ids: Vec<Uuid>) -> Result<RuleRow, MetaError>` and `async fn rule_channel_ids(pool: &SqlitePool, rule_id: Uuid) -> Result<Vec<Uuid>, MetaError>` (`SELECT channel_id FROM alert_rule_channels WHERE rule_id = ? ORDER BY channel_id`).
 
 Decoding (`row_from` style): `kind` through `ChannelKind::parse`, `state` through `AlertState::parse`, `config` through `serde_json::from_str::<AlertCondition>`, ids through `.parse()` (as `api_keys.rs` does). Any failure → `MetaError::Corrupt { table, column }` with the real table and column names. `enabled` and `notify_while_firing` are `INTEGER` 0/1 (`!= 0`).
 
@@ -399,8 +401,10 @@ Create one org and two projects inside one `db.write`, as `meta/projects.rs`'s t
 8. `disabling_resets_state`: the same with `enabled Some(false)`; then `enabled Some(true)` keeps `Ok`.
 9. `deleting_a_channel_unlinks_it`: a rule with channel C; `delete_channel(C)` → the rule's `channel_ids` is empty.
 10. `last_deliveries_picks_the_newest_finished`: insert a rule with `insert_rule`, then an event by SQL: `INSERT INTO alert_events (id, rule_id, kind, threshold, window_from, window_to, details, created_at) VALUES (?, ?, 'fired', 1.0, 0, 1, '{}', 1)`, and deliveries with `INSERT INTO notification_deliveries (id, event_id, channel_id, status, last_error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)` (`pending` at t=30, `failed` at t=10 with `last_error 'timeout'`, `sent` at t=20) → `LastDelivery { status: "sent", at: 20, error: None }`; a channel with only `pending` deliveries is absent from the map.
-12. `enabled_rules_are_counted_per_org`: two projects A and B of one org with 2 enabled rules and 1 disabled rule in all, and one enabled rule in a project of another org → `count_enabled_org_rules(org)` is 2.
 11. `corrupt_rows_are_reported`: `UPDATE alert_rules SET state = 'weird'` → `list_rules` is `Err(MetaError::Corrupt { table: "alert_rules", column: "state" })`.
+
+12. `enabled_rules_are_counted_per_org`: also create a second org and project in the same `db.write` (`insert_org(conn, "P", "p", 1)`, `insert_project(conn, p.id, "C", "c", None, 1)`). Projects A and B of the first org hold 2 enabled rules and 1 disabled rule in all; project C holds one enabled rule → `count_enabled_org_rules(first org)` is 2; after `UPDATE projects SET state = 'deleting'` on B (holding one enabled rule), it is 1.
+13. `renames_to_a_taken_name_conflict`: `update_channel` and `update_rule` to another row's name → `Conflict(CHANNEL_NAME_TAKEN)` / `Conflict(RULE_NAME_TAKEN)`.
 
 ## Commands
 
@@ -423,4 +427,4 @@ just check
 ## Done when
 
 - The migration, store, permission and sealing exist exactly as above; the schema snapshot shows only the new tables and indexes.
-- `encrypted_columns_cover_the_schema`, `permissions_follow_the_spec_table` and the 14 new tests pass; `just check` is green.
+- `encrypted_columns_cover_the_schema`, `permissions_follow_the_spec_table` and the 15 new tests pass; `just check` is green.

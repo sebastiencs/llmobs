@@ -8,7 +8,7 @@ Adds `alerts::evaluate`: the pure state machine `step` (D-K-4) and `evaluate_onc
 
 - README § Design → Evaluation, D-K-2, D-K-3, D-K-4.
 - K1 (`alert_value`, `AlertValueRequest`, `AlertValue`), K3 (`AlertCondition`, `Comparator::breaches`, `AlertWindow::ns`, `interval_ns`, `alerts::condition::measure`), K4 (`meta::alerts`, `RuleRow`), K6 (`EventDetails`, `EventRow`, `DeliveryRow`, `list_events`, `deliveries_for_events`).
-- `crates/server/src/routes/read.rs` (`open_query_on`), `crates/server/src/clock.rs` (`Clock::Manual`, `advance`, `set`).
+- `crates/server/src/routes/read.rs` (`open_query_on`: every read builds its query context through it), `crates/server/src/clock.rs` (`Clock::Manual`, `advance`, `set`).
 - `crates/server/src/test_support/mod.rs`: `TestApp`, `seed`, `commit_spans`, `dataset_span`, `assert_logs_clean`, `capture_logs`. The manual clock starts at 2026-01-01T00:00:00Z (`MANUAL_NOW_NS` is private; use `app.state.clock.now_ns()`).
 - `crates/storage/src/lib.rs`: `Storage::query`, `QueryOptions` (derives `Default`), `QueryContext::new`, `RunError`; `QueryError` is `llmobs_storage::error::QueryError` (not re-exported at the root).
 
@@ -39,7 +39,7 @@ JOIN orgs o ON o.id = p.org_id
 WHERE r.enabled = 1 AND p.state = 'active' AND o.state = 'active'
 ```
 
-(`projects.state` and `orgs.state` are `'active'` or `'deleting'`, migration `0001_identity.sql`; the joins only filter.) Decode with K4's `RuleRecord` and its decoder, and fill `channel_ids` with the same per-rule query as `rule_by_id`. Keep a rule when `last_evaluated_at.is_none_or(|at| at.saturating_add(rule.condition.window.interval_ns()).saturating_sub(slack_ns) <= now)`. Sort as documented.
+(`projects.state` and `orgs.state` are `'active'` or `'deleting'`, migration `0001_identity.sql`; the joins only filter.) Decode with K4's `RuleRecord` and `rule_from`, and fill `channel_ids` with K4's `rule_channel_ids`. Keep a rule when `last_evaluated_at.is_none_or(|at| at.saturating_add(rule.condition.window.interval_ns()).saturating_sub(slack_ns) <= now)`. Sort as documented.
 
 ```rust
 /// What one evaluation recorded.
@@ -180,9 +180,9 @@ Steps:
 2. `futures::stream::iter(due).map(|rule| Box::pin(evaluate_rule(state, rule, now))).buffer_unordered(CONCURRENCY).collect::<Vec<_>>().await` (`use futures::StreamExt;`; `futures` is already a server dependency — check `Cargo.toml`; if it is not, STOP and report).
 3. Sum the per-rule results into the report. A `MetaError` from one rule's write is logged (`tracing::error!(rule_id = %id, error = %error, "alert evaluation write failed")`) and counted in `failed`; the pass continues. `evaluate_once` returns `Err` only when step 1 fails.
 
-`async fn evaluate_rule(state: &AppState, rule: RuleRow, now: i64) -> (Uuid, bool, Result<Recorded, MetaError>)` returns the rule id, whether the query failed, and the write's result. The report counts: `evaluated` += 1 for every rule; `failed` += 1 when the query failed or the write returned `Err`; `events` += 1 for `Recorded::Event`; `stale` += 1 for `Recorded::Stale`.
+`async fn evaluate_rule(state: &AppState, rule: RuleRow, now: i64) -> (Uuid, bool, Result<Recorded, MetaError>)` returns the rule id, whether the query failed, and the write's result. The report counts: `evaluated` += 1 for every rule; `failed` += 1 (once per rule) when the query failed, the write returned `Err`, or both; `events` += 1 for `Recorded::Event`; `stale` += 1 for `Recorded::Stale`.
 
-Imports: `futures::StreamExt`, `llmobs_core::ids::ProjectId`, `llmobs_storage::{AlertValue, AlertValueRequest, QueryContext, QueryOptions, RunError, TimeWindow, alert_value}`, `llmobs_storage::error::QueryError`, `crate::alerts::condition::measure`, `crate::api::alerts::{AlertCondition, AlertEventKind, AlertState}`, `crate::http::AppState`, `crate::meta::MetaError`, `crate::meta::alerts::{EventDetails, Evaluation, Recorded, RuleRow, due_rules, record_evaluation}`, `std::time::Duration`, `uuid::Uuid`. Remove any the compiler reports unused; run `just fmt`.
+Imports: `futures::StreamExt`, `llmobs_core::ids::ProjectId`, `llmobs_storage::{AlertValue, AlertValueRequest, RunError, TimeWindow, alert_value}`, `crate::http::error::ApiError`, `crate::alerts::condition::measure`, `crate::api::alerts::{AlertCondition, AlertEventKind, AlertState}`, `crate::http::AppState`, `crate::meta::MetaError`, `crate::meta::alerts::{EventDetails, Evaluation, Recorded, RuleRow, due_rules, record_evaluation}`, `std::time::Duration`, `uuid::Uuid`. Remove any the compiler reports unused; run `just fmt`.
 
 `rule` is taken by value and moved apart (clippy's `needless_pass_by_value`): copy `let rule_id = rule.id; let project = rule.project_id; let expected_updated_at = rule.updated_at;` first, and move `rule.name` into `EventDetails` without cloning.
 
@@ -194,8 +194,7 @@ async fn measure_rule(state: &AppState, project: ProjectId, condition: &AlertCon
 ```
 
    - `let window = TimeWindow::new(from, to).map_err(|_| "invalid window")?;`
-   - `let source = state.storage.query(project, QueryOptions::default()).await` — `Err(QueryError::Busy)` → `"storage is busy"`; any other `Err` → `"query failed"`.
-   - `let ctx = QueryContext::new(source, None).map_err(|_| "query failed")?;`
+   - `let ctx = crate::routes::read::open_query_on(&state.storage, project, None).await` — `Err(ApiError::Unavailable { .. })` (storage busy) → `"storage is busy"`; any other `Err` → `"query failed"`. Using the shared helper means track P's data-access window (D175), applied where every read builds its context, reaches alerts with no change here (D-K-16).
    - `Box::pin(alert_value(&ctx, AlertValueRequest { window, filter: condition.filter.as_deref(), measure: measure(condition), timeout: QUERY_TIMEOUT })).await` (boxed: DataFusion futures are large) with errors mapped: `RunError::Timeout` → `"query timed out"`, `RunError::TooLarge` → `"query needed more memory than allowed"`, `RunError::Invalid(_)` → `"the filter is no longer valid"`, every other variant → `"query failed"`.
    - On error, the caller logs `tracing::warn!(rule_id = %rule_id, reason, "alert evaluation failed")` (the reason is one of the fixed strings above, never a filter or a query message).
 3. Build the evaluation:
@@ -218,7 +217,9 @@ Build a `RuleRow` with a helper `fn rule(state: AlertState, streak: i64) -> Rule
 
 ### Store (`meta::alerts::tests`)
 
-4. `due_rules_respects_interval_and_state`: rules (inserted with `insert_rule`, no channels) with windows `5m` and `1h`, both marked evaluated at `t` by `UPDATE alert_rules SET last_evaluated_at = ?`: at `t + 54 s` none is due; at `t + 55 s` (slack 5 s) the `5m` rule is due; at `t + 295 s` both; a disabled rule, and a never-evaluated rule of a second project set to `state = 'deleting'` by SQL, are never due; a never-evaluated enabled rule is due at once.
+Test imports: `std::time::Duration`, `llmobs_core::enums::SpanStatus`, `llmobs_core::ids::{SpanId, TraceId}`, `llmobs_core::span::Span`, `crate::test_support::TestApp`, `crate::meta::alerts::{self, NewChannel, NewRule}`. Insert channels with `alerts::insert_channel(conn, NewChannel { id, project_id, kind: ChannelKind::Slack, name, config_enc: seal_config(&app.state.secrets, &id, &config)?, target_hint: config.target_hint() }, now)` and rules with `alerts::insert_rule(conn, NewRule { … }, now)` inside `app.state.meta.write(move |conn| Box::pin(async move { … }))`. After every `clock.advance`, read `let now = app.state.clock.now_ns();` again.
+
+4. `due_rules_respects_interval_and_state`: rules (inserted with `insert_rule`, no channels) with windows `5m` and `1h`, both marked evaluated at `t` by `UPDATE alert_rules SET last_evaluated_at = ?`: at `t + 54 s` neither of the two evaluated rules is due (a never-evaluated rule is due at every step); at `t + 55 s` (slack 5 s) the `5m` rule is due; at `t + 295 s` both; a disabled rule, and a never-evaluated rule of a second project set to `state = 'deleting'` by SQL, are never due; a never-evaluated enabled rule is due at once.
 5. `record_evaluation_is_fenced`: `Measured` with `expected_updated_at = rule.updated_at + 1` → `Stale` and no change; with the right one and `event Some(Fired)` and two channels → `Event { deliveries: 2 }`, the rule row shows `state firing`, `last_fired_at`, `last_notified_at`, `last_error NULL`, and two `pending` deliveries with `next_attempt_at = now`; `Failed` sets `last_error` and `last_evaluated_at` and keeps the state.
 
 ### Through storage, with the manual clock (`alerts::evaluate::tests`)
@@ -252,7 +253,8 @@ fn root_span(app: &TestApp, index: u8, ago: Duration, error: bool) -> Span {
    - Advance 6 minutes (the traces leave the window): count 0 < 2 → insufficient, streak 1, still `firing`, no event.
    - Advance 60 s: streak 2 → `no_data` with a `resolved` event whose `value` is absent and `count` is 0; one more pending delivery.
 7. `a_failed_query_records_the_error`: a rule inserted with `insert_rule` and a condition whose `filter` is `Some("nonsense_column = 1".to_owned())` (the store does not check filters) → `evaluate_once` reports `failed 1`; the rule keeps `state ok`, `last_error "the filter is no longer valid"`, `last_evaluated_at = now`; no event.
-8. `an_edit_during_evaluation_is_not_overwritten`: read the rule, then `update_rule(…, now + 1)` (a later time, so `updated_at` changes), then `record_evaluation` with the old `updated_at` → `Stale`; the rule keeps the edit.
+8. `an_edit_during_evaluation_is_not_overwritten`: read the rule, then `update_rule(…, now + 1)` (a later time, so `updated_at` changes), then, inside `app.state.meta.write(…)`, `record_evaluation(conn, rule.id, old_updated_at, Evaluation::Failed { message: "x".to_owned() }, now)` → `Stale`; the rule keeps the edit and has no `last_error`.
+10. `due_rules_order_and_stale_count`: two never-evaluated rules and one evaluated long ago → `due_rules` returns the two never-evaluated ones first (by id), then the other; then `evaluate_once` over two due rules, one with an unparsable filter → `EvaluateReport { evaluated: 2, failed: 1, events: 0, stale: 0 }` (the `stale` path is covered by test 8 at the store level).
 9. `evaluation_logs_hold_no_filter`: a rule with filter `"missing_column = 'secret-env'"` (it fails to parse) → `crate::test_support::assert_logs_clean(&["secret-env", "missing_column"], …)` around `evaluate_once`; afterwards the rule's `last_error` is `"the filter is no longer valid"`.
 
 ## Commands
@@ -276,4 +278,4 @@ just check
 ## Done when
 
 - `step` follows the table exactly; `evaluate_once` evaluates due rules, records failures without state changes, and creates events with pending deliveries in one transaction, fenced by `updated_at`.
-- The 9 tests pass; `just check` is green.
+- The 10 tests pass; `just check` is green.

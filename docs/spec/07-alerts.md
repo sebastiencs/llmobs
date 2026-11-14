@@ -22,7 +22,7 @@ Per-project alert rules over four metrics, evaluated in the background over slid
 ## Evaluation loop
 
 - A tick every 60 s evaluates each enabled rule of an active project and org that was never evaluated or whose `last_evaluated_at + interval − 5 s ≤ now` (`interval` = 60 s for windows ≤ 15 m, 300 s otherwise) (D-K-3).
-- Each evaluation is one aggregate query (`llmobs_storage::alert_value`) over `[now − window, now)` (memtable included) through the normal query layer, so the plan's data-access window applies (D175, D-K-16). At most 4 evaluations run at once, each with a 30 s timeout; a tick waits for the previous one.
+- Each evaluation is one aggregate query (`llmobs_storage::alert_value`) over `[now − window, now)` (memtable included) through the query context every read uses, so the plan's data-access window applies (D175, D-K-16). At most 4 evaluations run at once, each with a 30 s timeout; a tick waits for the previous one.
 - An evaluation is *insufficient* when the sample count is below `min_count`, *breaching* when it is not insufficient, has a value, and `value <comparator> threshold`, else *clear*.
 
 ```
@@ -57,7 +57,7 @@ Webhook payload (`type` is `alert.fired`, `alert.resolved`, `alert.reminder` or 
  "rule_url": "https://…/<org>/<project>/alerts/<rule id>"}
 ```
 
-Deliveries go through `notification_deliveries`: a loop every 10 s sends due ones (at most 4 at once, 10 s timeout). Retryable failures (timeouts, connection errors, 408, 429, 5xx, SMTP connection errors) wait `min(30 s · 2^(attempts−1), 1 h)`, up to 8 attempts; other failures fail at once. Delivery is at least once. Channels are never disabled automatically: the UI shows each channel's last finished delivery, and "Send test" sends one sample message synchronously (D-K-7).
+Deliveries go through `notification_deliveries`: a loop every 10 s sends due ones (at most 4 at once, 10 s timeout). Retryable failures (timeouts, connection errors, 408, 429, 5xx, SMTP connection, TLS and authentication errors) wait `min(30 s · 2^(attempts−1), 1 h)`, up to 8 attempts; other failures fail at once. Delivery is at least once. Channels are never disabled automatically: the UI shows each channel's last finished delivery, and "Send test" sends one sample message synchronously (D-K-7).
 
 History: events are kept 90 days and finished deliveries 30 days, pruned hourly (D-K-10).
 
