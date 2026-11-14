@@ -1,5 +1,7 @@
 //! Rule condition defaults and checks (D-K-2).
 
+use llmobs_storage::AlertMeasure;
+
 use crate::api::alerts::{AlertCondition, AlertMetric, LatencyTarget, ScoreAggregation};
 use crate::api::common::FieldError;
 
@@ -116,6 +118,23 @@ fn error(field: &str, message: &str) -> FieldError {
         field: format!("condition.{field}"),
         message: message.to_owned(),
         position: None,
+    }
+}
+
+/// The storage measure for a normalized condition.
+pub(crate) fn measure(condition: &AlertCondition) -> AlertMeasure {
+    let name = || condition.score_name.clone().unwrap_or_default();
+    match condition.metric {
+        AlertMetric::ErrorRate => AlertMeasure::ErrorRate,
+        AlertMetric::Cost => AlertMeasure::Cost,
+        AlertMetric::LatencyP95 => match condition.target {
+            Some(LatencyTarget::LlmSpan) => AlertMeasure::LlmLatencyP95,
+            Some(LatencyTarget::Trace) | None => AlertMeasure::TraceLatencyP95,
+        },
+        AlertMetric::Score => match condition.aggregation {
+            Some(ScoreAggregation::PassRate) => AlertMeasure::ScorePassRate { name: name() },
+            Some(ScoreAggregation::Avg) | None => AlertMeasure::ScoreAvg { name: name() },
+        },
     }
 }
 
@@ -308,5 +327,34 @@ mod tests {
         assert!(!Comparator::Lt.breaches(1.0, 1.0));
         assert!(Comparator::Lte.breaches(1.0, 1.0));
         assert!(!Comparator::Lte.breaches(1.1, 1.0));
+    }
+
+    #[test]
+    fn measure_follows_the_condition() {
+        assert_eq!(
+            measure(&condition(AlertMetric::ErrorRate)),
+            AlertMeasure::ErrorRate
+        );
+        assert_eq!(measure(&condition(AlertMetric::Cost)), AlertMeasure::Cost);
+        let mut latency = condition(AlertMetric::LatencyP95);
+        assert_eq!(measure(&latency), AlertMeasure::TraceLatencyP95);
+        latency.target = Some(LatencyTarget::Trace);
+        assert_eq!(measure(&latency), AlertMeasure::TraceLatencyP95);
+        latency.target = Some(LatencyTarget::LlmSpan);
+        assert_eq!(measure(&latency), AlertMeasure::LlmLatencyP95);
+        let mut score = condition(AlertMetric::Score);
+        score.score_name = Some("helpfulness".to_owned());
+        let name = "helpfulness".to_owned();
+        assert_eq!(
+            measure(&score),
+            AlertMeasure::ScoreAvg { name: name.clone() }
+        );
+        score.aggregation = Some(ScoreAggregation::Avg);
+        assert_eq!(
+            measure(&score),
+            AlertMeasure::ScoreAvg { name: name.clone() }
+        );
+        score.aggregation = Some(ScoreAggregation::PassRate);
+        assert_eq!(measure(&score), AlertMeasure::ScorePassRate { name });
     }
 }
