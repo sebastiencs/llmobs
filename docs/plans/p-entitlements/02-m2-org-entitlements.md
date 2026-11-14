@@ -23,7 +23,7 @@ When M2 is done:
 
 The same as M1 (`01-m1-open-core-license.md` § Conventions): one commit per sub-phase with the subject given; identifiers say `license`, prose says "licence"; every source file under an `ee` directory **and under `crates/token/`** starts with `// SPDX-License-Identifier: Elastic-2.0`; server code returns `ApiError`; no `unwrap()`/`expect()` outside tests without an invariant comment; never log or return a token, a payload field other than ids, `kid`, `kind` and status, an email, or a customer name; time is `i64` ns from `state.clock.now_ns()`; Rust tests next to the code, server tests on `TestApp` (manual clock `2026-01-01T00:00:00Z`), web tests with Vitest + Testing Library on MSW with `server.use`, never `vi.mock`; run `just openapi` and `just api-examples` when the contract or examples change.
 
-**Dead code between phases.** Items a phase adds that have no non-test caller until a later phase would fail `just lint`. Such a module gets `#![cfg_attr(not(test), allow(dead_code))]` at its top with the comment `// Track P M2: <phase> uses these outside tests.`; P9 removes every attribute M2 added (after P9 clippy must be clean without them). Never put the attribute on items that already have callers.
+**Dead code between phases.** Items a phase adds that have no non-test caller until a later phase would fail `just lint`. Such a module gets `#![cfg_attr(not(test), allow(dead_code))]` at its top with the comment `// Track P M2: <phase> uses these outside tests.`; P9 removes every attribute M2 added (after P9 clippy must be clean without them). Never put it on a module whose items all have callers. P2 puts it on `crates/server/src/entitlements/mod.rs` (its new `Limits` fields and `Defaults::plan_name` are read only from P9 on), P3 on `meta/entitlements.rs`, P4 on `entitlements/tokens.rs`.
 
 **Generated files.** `crates/server/openapi.json`, `web/src/api/schema.gen.ts`, `fixtures/api/manifest.json` and `fixtures/license/tokens/*` are regenerated (`just openapi`, `just api-examples`, `just license-fixtures`), never hand-merged.
 
@@ -50,16 +50,16 @@ just check
 | P1 | `Move signed tokens into llmobs-token` | `crates/token`, claim types, keys bound to kinds; server, tool and fixtures use it | M1 |
 | P2 | `Add instance entitlement defaults` | `[entitlements.defaults]`, `Feature::RetentionManagement`, `Limits`, defaults layer | P1 |
 | P3 | `Store org entitlement tokens` | migration (`org_entitlements`, `org_window_ends`, drop `orgs.limits`), `meta::entitlements` | P2 |
-| P4 | `Resolve entitlements from org tokens` | `OrgGrant`, load at startup, `of` with tokens, `plan_view`, `retention_window_days` | P3 |
+| P4 | `Resolve entitlements from org tokens` | `OrgGrant`, load at startup, `of` with tokens, `resolve`, `plan_at`, `retention_window_at` | P3 |
 | P5 | `Accept org tokens from the control plane` | `PUT /api/internal/v1/orgs/{org_id}/entitlements` | P4 |
 | P6 | `Add control-plane bearer tokens` | `Principal::ControlPlane`, `Access::ControlPlane { scope }` | P5 |
 | P7 | `Let the control plane create orgs` | `POST /api/internal/v1/orgs`, `insert_org` takes the id, `owner_not_allowed` | P6 |
 | P8 | `Add orgs.user_create` | config, `403` on `POST /api/v1/orgs`, `AuthConfig`, web "New organization" link | P7 |
 | P9 | `Return the plan and limits of an org` | `OrgEntitlements` v2, fixtures, `llmobs admin entitlements show` | P8 |
 | P10 | `Add the org Plan page` | `/$org/settings/plan`; roadmap | P9 |
-| P11 | `Add the cloud signing keys` | `cloud-1`, `cloud-2` in `RELEASE_KEYS`; roadmap | P1; **needs the two public keys** |
+| P11 | `Add the cloud signing keys` | `cloud-1`, `cloud-2` in `RELEASE_KEYS`; roadmap | P10; **needs the two public keys** |
 
-Run P1–P10 in order, one at a time: most phases edit the same files (`config.rs`, `test_support/mod.rs`, `api/openapi.rs` and the generated contract). P11 can run any time after P1, as soon as the keys are known.
+Run P1–P10 in order, one at a time: most phases edit the same files (`config.rs`, `test_support/mod.rs`, `api/openapi.rs` and the generated contract). P11 runs last, after P10, once the keys are known (both edit the roadmap row).
 
 ---
 
@@ -327,7 +327,7 @@ plus a crate-private `fn find(kid: &str) -> Option<(&'static BuiltInKey, Verifyi
 ### Moves and adaptations
 
 - **Delete** `crates/server/src/ee/token.rs` and the `pub(crate) mod token;` line in `ee/mod.rs`; move its tests into `crates/token/src/lib.rs` `#[cfg(test)] mod tests`, adapted: `Verified` has no `payload` field any more, so `round_trip` and `tampering_is_refused` sign a **complete** licence payload (the JSON of `fixtures/license/payloads/active.json`) and compare `verified.claims`; `fixture_tokens_verify` reads each token and payload with `std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/license/…"))` and compares `verified.claims` with `serde_json::from_str::<Claims>(payload)`; the "error texts never quote the token" test iterates all seven `TokenError` variants. The test-only signer in the crate tests builds the dev key from `fixtures/license/dev-1.key` the same way.
-- **Other references** to the removed module: `entitlements/mod.rs` imports `crate::ee::token::TokenError` (use `llmobs_token::TokenError`); `test_support/mod.rs` uses `crate::ee::token::TOKEN_TAG` (use `llmobs_token::TOKEN_TAG` or remove the use with the new `sign_raw`). `grep -rn 'ee::token' crates/` must be empty.
+- **Other references** to the removed module: `entitlements/mod.rs` imports `crate::ee::token::TokenError` (use `llmobs_token::TokenError`); `test_support/mod.rs` uses `crate::ee::token::TOKEN_TAG` (use `llmobs_token::TOKEN_TAG` or remove the use with the new `sign_raw`). `grep -rn 'ee::token' crates/` must be empty. Also update the text that names the old file: `fixtures/license/README.md` ("`DEV_KEYS` in `crates/token/src/keys.rs`"), the module doc of `tools/license/src/main.rs`, and `docs/plans/p-entitlements/00-design.md` § Request paths (`llmobs_token::verify` instead of `ee::token::verify`).
 - **Server, `ee/license.rs`**: parse with `llmobs_token::verify`, then `match verified.claims { Claims::License(claims) => …, _ => return Err(InvalidLicense::Token(TokenError::WrongKind)) }`. `InvalidLicense` becomes two variants: `Token(#[from] llmobs_token::TokenError)` and `Fields` (the customer and date checks stay in the server). Remove the `Kind`/`Claims` structs M1 had there. Update the tests: what was `InvalidLicense::WrongKind` is now `InvalidLicense::Token(TokenError::WrongKind)`, `InvalidLicense::Payload` is `InvalidLicense::Token(TokenError::Payload)`; the admin licence tests that compare `reason` texts use the new `Display` strings above.
 - **Server, `test_support/mod.rs`**: `sign_raw(payload: &[u8])` calls `llmobs_token::sign_raw(&dev_signing_key(), "dev-1", payload)` (`.expect("dev key signs")` is fine in test code); `sign_token` keeps its signature. Add `pub(crate) fn dev_signing_key() -> ed25519_dalek::SigningKey` built from `DEV_SEED` (the server keeps `ed25519-dalek` as a dev-dependency only if the build needs it there; move it from `[dependencies]` to `[dev-dependencies]` when nothing else uses it).
 - **`tools/license/src/main.rs`**: `sign` calls `llmobs_token::sign_raw`; delete its own `TAG` and `valid_kid` copies (map `TokenError::Malformed` to its `BadKid` error).
@@ -409,7 +409,7 @@ impl Default for EntitlementDefaults {
 }
 ```
 
-`EntitlementsConfig` gains `pub defaults: EntitlementDefaults` (it already has `#[serde(deny_unknown_fields, default)]`). `validate_entitlements` also checks:
+`EntitlementsConfig` gains `pub defaults: EntitlementDefaults` (it already has `#[serde(deny_unknown_fields, default)]`). `validate_entitlements` returns early when `upgrade_url` is `None`; restructure it so the `upgrade_url` check (when set) and the defaults checks always both run. It also checks:
 - `plan_name.trim()` is 1–64 characters → else `Invalid { key: "entitlements.defaults.plan_name", reason: "must be 1 to 64 characters" }`; store it trimmed;
 - every name in `features` is a known non-ee feature (`Feature::from_name(name).is_some_and(|f| !f.is_ee())`) → else `Invalid { key: "entitlements.defaults.features", reason: "must list core features only: retention_management" }`.
 
@@ -434,15 +434,6 @@ pub(crate) struct Limits {
     pub(crate) max_active_online_rules: Option<u64>,
 }
 
-/// Where an org's plan and limits come from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Source {
-    /// `[entitlements.defaults]`: no valid org token.
-    Defaults,
-    /// The org's token, until its grace period ends (P4).
-    OrgToken,
-}
-
 /// The instance defaults, resolved from config once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Defaults {
@@ -459,7 +450,7 @@ impl Defaults {
 
 (Drop the `serde::Serialize` derive on `Limits` if nothing serializes it; P9 maps it to the API type.)
 
-`Entitlements` becomes `{ features: FeatureSet, pub(crate) limits: Limits, pub(crate) source: Source }`; replace `with_features` by `pub(crate) fn new(features: FeatureSet, limits: Limits, source: Source) -> Self` and update its callers and tests. `FeatureSet` gains `pub(crate) fn union(self, other: Self) -> Self`.
+`Entitlements` becomes `{ features: FeatureSet, pub(crate) limits: Limits }`; replace `with_features` by `pub(crate) fn new(features: FeatureSet, limits: Limits) -> Self` and update its callers and tests. (Where the plan came from is display only: P4's `PlanView.source`.) `FeatureSet` gains `pub(crate) fn union(self, other: Self) -> Self`.
 
 `EntitlementsState` gains `defaults: Defaults`; `EntitlementsState::new(license, defaults)`; `pub(crate) fn defaults(&self) -> &Defaults`. `serve.rs` and `test_support::open` build `Defaults::from_config(&config.entitlements.defaults)`.
 
@@ -471,7 +462,6 @@ let defaults = state.entitlements.defaults();
 Entitlements::new(
     defaults.features.union(state.entitlements.license().active_features(now)),
     defaults.limits,
-    Source::Defaults,
 )
 ```
 
@@ -479,7 +469,7 @@ Self-hosted without config: every core feature (`retention_management`) and no l
 
 ### Tests (`entitlements::tests`)
 
-- `defaults_grant_every_core_feature`: `TestApp::new()` → `allows(Feature::RetentionManagement)` true, `allows(ProjectRoles)` false, `limits == Limits::default()`, `source == Source::Defaults`.
+- `defaults_grant_every_core_feature`: `TestApp::new()` → `allows(Feature::RetentionManagement)` true, `allows(ProjectRoles)` false, `limits == Limits::default()`.
 - `configured_defaults_apply`: config with `features = Some(vec![])`, `units_cap = Some(100_000)`, `max_seats = Some(1)` → `RetentionManagement` not allowed, those limits set.
 - `licence_adds_ee_features_to_defaults`: `features = Some(vec![])` and `license_key(&["project_roles"])` → `ProjectRoles` allowed, `RetentionManagement` not.
 - Update M1's tests for `Entitlements::new` and the `Feature::ALL` order (`feature_names_round_trip` and `features()` order).
@@ -654,7 +644,7 @@ let now = state.clock.now_ns();
 let license = state.entitlements.license().active_features(now);
 match state.entitlements.grant(org) {
     Some(grant) if now < grant.grace_ends_at => {
-        Entitlements::new(grant.features.union(license), grant.limits, Source::OrgToken)
+        Entitlements::new(grant.features.union(license), grant.limits)
     }
     _ => { /* the defaults, as in P2 */ }
 }
@@ -666,14 +656,28 @@ match state.entitlements.grant(org) {
 impl EntitlementsState {
     /// What `org` may do at `now` (the body of `of`).
     pub(crate) fn resolve(&self, org: OrgId, now: i64) -> Entitlements;
-    /// The plan view at `now` (the body of `plan_view`).
+    /// The plan view at `now` (D-P-32).
     pub(crate) fn plan_at(&self, org: OrgId, now: i64) -> PlanView;
-    /// The largest window of the last 30 days (the body of `retention_window_days`).
+    /// The largest data window (days; `None` = unlimited) that applied to the org during
+    /// the last 30 days (D-P-30): the current one, every recorded end since `now − 30 days`,
+    /// and the held token's window if it expired since then. Track P's M4 passes it to
+    /// retention; P9's admin command shows it.
     pub(crate) async fn retention_window_at(&self, meta: &MetaDb, org: OrgId, now: i64) -> Result<Option<u64>, MetaError>;
 }
 ```
 
-`of`, `plan_view` and `retention_window_days` are one-line callers with `state.clock.now_ns()`.
+`of` is a one-line caller of `resolve` with `state.clock.now_ns()`. Callers that need several values at one instant (P9) read `now` once and call `resolve` and `plan_at` with it. There is no `AppState` wrapper for `plan_at` or `retention_window_at`.
+
+```rust
+/// Where an org's plan and limits come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Source {
+    /// `[entitlements.defaults]`: no valid org token.
+    Defaults,
+    /// The org's token, until its grace period ends.
+    OrgToken,
+}
+```
 
 ```rust
 /// The org's plan as shown to users (D-P-32).
@@ -693,19 +697,11 @@ pub(crate) struct PlanView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TokenStatus { Active, Grace }
 
-pub(crate) fn plan_view(state: &AppState, org: OrgId) -> PlanView;
 ```
 
 An expired token (now ≥ `grace_ends_at`) gives the defaults' view (`source: Defaults`, `status: None`).
 
-```rust
-/// The largest data window (days; `None` = unlimited) that applied to the org during the
-/// last 30 days (D-P-30): the current one, every recorded end since `now − 30 days`, and
-/// the held token's window if it expired since then. Track P's M4 passes it to retention.
-pub(crate) async fn retention_window_days(state: &AppState, org: OrgId) -> Result<Option<u64>, MetaError>;
-```
-
-`None` anywhere in the set wins (unlimited); otherwise the maximum. P9's admin command is its first caller outside tests.
+In `retention_window_at`, `None` anywhere in the set wins (unlimited); otherwise the maximum.
 
 ### Tests (`entitlements::tokens::tests` and `entitlements::tests`)
 
@@ -724,11 +720,11 @@ pub(crate) fn control_plane_token(scope: &str) -> String;
 
 1. `grant_merges_limits_over_defaults`: defaults `max_seats = Some(1)`, `units_cap = Some(100)`; token limits `{"units_cap": null, "data_access_days": 120}` → `units_cap None`, `data_access_days Some(120)`, `max_seats Some(1)`.
 2. `grant_refusals`: wrong audience → `Audience`; a licence token → `Token(WrongKind)`; `grace_ends_at < expires_at` → `Fields`; empty plan name → `Fields`; garbage → `Token(Malformed)`.
-3. `token_applies_until_grace_ends`: put a grant (expires 2026-02-01, grace 2026-03-01); at the manual clock (2026-01-01) `source == OrgToken` and the token's features apply; set the clock to 2026-02-15 → still the token, `plan_view.status == Grace`; to 2026-03-01 → `Source::Defaults`. (Use the manual clock's setter from `crate::clock`; look at how other tests advance it.)
+3. `token_applies_until_grace_ends`: put a grant (expires 2026-02-01, grace 2026-03-01); at the manual clock (2026-01-01) `plan_at(..).source == Source::OrgToken` and the token's features apply; set the clock to 2026-02-15 → still the token, `plan_at(..).status == Some(TokenStatus::Grace)`; to 2026-03-01 → `plan_at(..).source == Source::Defaults` and the defaults' features apply. (Use the manual clock's setter from `crate::clock`; look at how other tests advance it.)
 4. `older_grant_does_not_replace_newer`: `put_grant` with `issued_at` 10 then 5 → the held one has 10.
 5. `ee_features_from_a_token_need_no_licence`: token features `["project_roles"]`, no licence → `allows(ProjectRoles)`.
 6. `load_skips_tokens_that_no_longer_verify`: store (through `meta::entitlements::put_token`) one valid token and one with another audience; `EntitlementsState::load` holds only the valid one; `capture_logs` shows a `warn` with the org id and no token text.
-7. `retention_window_takes_the_largest_of_30_days`: current token `data_access_days 30`; a recorded end 10 days ago of `1825` → `Some(1825)`; an end 40 days ago of `None` is ignored (pruned or older than 30 days) → still `Some(1825)`; an end 5 days ago of `None` → `None`.
+7. `retention_window_takes_the_largest_of_30_days` (through `state.entitlements.retention_window_at(&state.meta, org, now)`): current token `data_access_days 30`; a recorded end 10 days ago of `1825` → `Some(1825)`; an end 40 days ago of `None` is ignored (pruned or older than 30 days) → still `Some(1825)`; an end 5 days ago of `None` → `None`.
 
 ### Done
 
@@ -784,14 +780,14 @@ A new tag `internal` ("Endpoints the cloud control plane calls on a cell"): add 
 
 ### Tests (`routes::entitlements::tests`)
 
-Seed an org (`app.seed()`), make an org token for `seeded.org.id` with the module helper.
-1. `stores_a_token_and_applies_it`: PUT → 204; `entitlements::of` gives `Source::OrgToken`; `meta::entitlements::token_of_tx` has it; the same PUT again → 204 and nothing changes (`received_at` unchanged).
+Seed an org (`app.seed()`), make an org token for `seeded.org_id` with `test_support::org_token`.
+1. `stores_a_token_and_applies_it`: PUT → 204; `state.entitlements.plan_at(org, now).source == Source::OrgToken`; `meta::entitlements::token_of_tx` has it; the same PUT again → 204 and nothing changes (`received_at` unchanged).
 2. `newer_replaces_and_older_conflicts`: issued 10:00 then 11:00 → both 204; then 10:30 → 409; the held grant is 11:00's.
 3. `refusals`: garbage token → 400 detail `the token is malformed`; licence token → 400 `the token is not of the expected kind`; wrong audience → 400 `the token is for another cell`; org mismatch → 400; expired (grace before the clock) → 400 `the token has expired`; unknown org id (a fresh v7 uuid) → 404; a `deny_unknown_fields` body `{"token": "…", "x": 1}` → 400.
 4. `failed_tokens_hit_the_limiter_and_good_ones_do_not`: 6 PUTs with a garbage token from one peer IP (`TestRequest::peer`) → the 6th is 429 with `Retry-After`; then a valid token from the same IP → 204; 10 valid PUTs in a row (fresh tokens with increasing `issued_at`) → all 204.
 5. `window_shrink_is_recorded`: a token with `data_access_days 1825`, then a newer one with `30` → `window_ends_since` has one row with `Some(1825)` at the clock's time; a third with `30` again records nothing more.
 6. `audit_log_has_no_token`: `capture_logs` around a PUT: contains `org entitlements updated` and the org id, not `llmobs1.`.
-7. `expired_token_window_is_kept_after_replacement`: a token with `data_access_days 1825` and grace ending 2025-12-20 stored directly (`meta::entitlements::put_token` + `put_grant`), defaults without a window; PUT a new token with `30` at the clock (2026-01-01) → `window_ends_since` holds `(2025-12-20, Some(1825))` and `(now, None)`; `retention_window_days` is `None` (unlimited, from the defaults that applied since 2025-12-20).
+7. `expired_token_window_is_kept_after_replacement`: a token with `data_access_days 1825` and grace ending 2025-12-20 stored directly (`meta::entitlements::put_token` + `put_grant`), defaults without a window; PUT a new token with `30` at the clock (2026-01-01) → `window_ends_since` holds `(2025-12-20, Some(1825))` and `(now, None)`; `retention_window_at` is `None` (unlimited, from the defaults that applied since 2025-12-20).
 
 The `access_suite` drives documented routes automatically; if it needs an entry for a public PUT with a path parameter, follow how it treats `post_login`.
 
@@ -815,7 +811,7 @@ ControlPlane {
 },
 ```
 
-In `bearer_principal`, before `secret::parse_key`: if `token.starts_with("llmobs1.")` (`format!("{}.", llmobs_token::TOKEN_TAG)`), return `control_plane_principal(state, token, now)`:
+In `bearer_principal`, right after reading the token and before `secret::parse_key` (compute `let now = state.clock.now_ns();` first; it is defined later in the function today, move it up): if `token.starts_with("llmobs1.")` (`format!("{}.", llmobs_token::TOKEN_TAG)`), return `control_plane_principal(state, token, now)`:
 
 ```rust
 fn control_plane_principal(state: &AppState, token: &str, now: i64) -> Result<Principal, ApiError> {
@@ -848,7 +844,7 @@ ControlPlane {
 },
 ```
 
-In `prepare`: `Access::ControlPlane { scope } => match &principal { Principal::ControlPlane { scope: held, .. } if held == scope => {}, Principal::ControlPlane { .. } => return Err(forbidden()), _ => return Err(forbidden()) }`. The other variants refuse a control-plane principal. Two checks in `prepare` are `matches!`, not exhaustive, so the compiler will not point at them: the `Access::User` arm (`if matches!(principal, Principal::ApiKey { .. })`) becomes `if matches!(principal, Principal::ApiKey { .. } | Principal::ControlPlane { .. })` → `forbidden()`, and the early check of the `Access::Org` arm becomes the same pattern → `ApiError::NotFound`. `InstanceAdmin`, `Pat` and `Key` already refuse anything else. `Project`: in `grant_project`, a `ControlPlane` principal → `ApiError::NotFound` (add the arm where it matches on the principal). `route_table_matches_parameters_and_openapi_security`: `Access::ControlPlane { .. }` → `Some(vec![SecurityRequirement::new("bearer", …)])`. `access_suite.rs`: add a caller `Who::ControlPlane` whose credential is `test_support::control_plane_token("orgs")`, and the variant to its `match access`: a `Who::ControlPlane` caller is allowed only on `Access::ControlPlane { scope: "orgs" }` routes, gets 404 on `Access::Org` and `Access::Project` routes, and 403 everywhere else; every other caller gets 403 on `Access::ControlPlane` routes (401 without credentials, as the suite already expects).
+In `prepare`: `Access::ControlPlane { scope } => match &principal { Principal::ControlPlane { scope: held, .. } if held == scope => {}, Principal::ControlPlane { .. } => return Err(forbidden()), _ => return Err(forbidden()) }`. The other variants refuse a control-plane principal. Two checks in `prepare` are `matches!`, not exhaustive, so the compiler will not point at them: the `Access::User` arm (`if matches!(principal, Principal::ApiKey { .. })`) becomes `if matches!(principal, Principal::ApiKey { .. } | Principal::ControlPlane { .. })` → `forbidden()`, and the early check of the `Access::Org` arm becomes the same pattern → `ApiError::NotFound`. `InstanceAdmin`, `Pat` and `Key` already refuse anything else. `Project`: in `grant_project`, a `ControlPlane` principal → `ApiError::NotFound` (add the arm where it matches on the principal). `route_table_matches_parameters_and_openapi_security`: `Access::ControlPlane { .. }` → `Some(vec![SecurityRequirement::new("bearer", …)])`. `access_suite.rs`: add a caller `Who::ControlPlane` whose credential is `test_support::control_plane_token("orgs")`, and the variant to its `match access`: a `Who::ControlPlane` caller is allowed only on `Access::ControlPlane { scope: "orgs" }` routes, gets 404 on `Access::Org` and `Access::Project` routes, and 403 everywhere else; every other caller gets 403 on `Access::ControlPlane` routes (401 without credentials, as the suite already expects). In `access_suite.rs` (in `crates/server/src/http/`) this means: `expected()`'s `Access::User` arm returns 403 for `Who::ControlPlane`; its `Access::Org` arm returns 404 for it before the `session_only` check; its `Access::Project` arm returns 404 for it before the key and role checks; `org_membership` and `project_role` get a `Who::ControlPlane` arm (no membership, no role); `assert_every_route_declares_access` gets the `Access::ControlPlane` arm; and `concrete_path` replaces `{org_id}` with the suite org's id (so P5's PUT is exercised with a real id).
 
 No route uses `Access::ControlPlane` until P7.
 
@@ -917,7 +913,7 @@ pub struct InternalOrg {
 2. Name: the same trimming and length check as `routes/orgs.rs`: make `trimmed_name` and `field_error` in `routes/orgs.rs` `pub(crate)` and reuse them. The owner's `name`, when present: trimmed; empty → `None`; over 100 characters → `field_error("owner.name", …)` with the message `trimmed_name` uses.
 3. Email: `normalize_email` → `field_error("owner.email", "invalid email")`.
 4. One `state.meta.write` transaction:
-   - `orgs::org_by_id_tx(conn, id)` (add this `_tx` variant next to `org_by_id`) → `Some(org)` → outcome `Existing(org)` (whatever its owners; an idempotent retry).
+   - `orgs::org_by_id_tx(conn, id)` (added in P5) → `Some(org)` → outcome `Existing(org)` (whatever its owners; an idempotent retry).
    - `users::user_by_email_tx` → `Some(user)`: if `disabled_at.is_some() || is_instance_admin` → outcome `OwnerNotAllowed`; else reuse it unchanged. `None` → `users::insert_user` with `NewUser { email, name: owner.name (trimmed, empty → None), password_hash: None, email_verified_at: Some(now), is_instance_admin: false }` (check `NewUser`'s fields).
    - `orgs::insert_org_with_derived_slug(conn, OrgId::from_uuid(id), &name, now)`, `add_org_member(conn, org.id, user_id, OrgRole::Owner, now)` → outcome `Created(org)`. No project is created.
 5. `Created` → `201` `InternalOrg`, audit `tracing::info!(target: "audit", org_id = %org.id, actor = "control_plane", token_id = %token_id, "org created")` (the token id from the `Principal::ControlPlane` extension); `Existing` → `200`; `OwnerNotAllowed` → `ApiError::OwnerNotAllowed`.
@@ -1055,7 +1051,7 @@ pub struct OrgLimits {
 }
 ```
 
-`OrgEntitlements` gains `pub plan: OrgPlan` and `pub limits: OrgLimits` (after `features`). Map `Source::Defaults → PlanSource::Defaults`, `Source::OrgToken → PlanSource::Token`, `TokenStatus::Active/Grace → PlanStatus::Active/Grace`, and `Limits` field by field to `OrgLimits`; write these as `From` impls next to the API types. Register the new types in `collect_schemas`. `get_entitlements` fills them from `entitlements::of` and `entitlements::plan_view`. `fixtures/api/static/org-entitlements.json` becomes (pretty JSON, one array element per line, as the canonical check wants):
+`OrgEntitlements` gains `pub plan: OrgPlan` and `pub limits: OrgLimits` (after `features`). Map `Source::Defaults → PlanSource::Defaults`, `Source::OrgToken → PlanSource::Token`, `TokenStatus::Active/Grace → PlanStatus::Active/Grace`, and `Limits` field by field to `OrgLimits`; write these as `From` impls next to the API types. Register the new types in `collect_schemas`. `get_entitlements` reads `let now = state.clock.now_ns();` once and fills the response from `state.entitlements.resolve(org, now)` and `state.entitlements.plan_at(org, now)` (so both use the same instant). `fixtures/api/static/org-entitlements.json` becomes (pretty JSON, one array element per line, as the canonical check wants):
 
 ```json
 {
@@ -1130,7 +1126,7 @@ Tests: `admin::tests::entitlements_show_reads_the_token` (a stored org token →
 
 ## P10 — The org Plan page
 
-- `web/src/components/settings/settings-nav.ts`: `orgSettingsNav` gains `{ to: "/$org/settings/plan", label: "Plan" }` after "General". (There is no `settings-nav.test.ts`; `settings-sidebar` tests, if any list the entries, are updated.)
+- `web/src/components/settings/settings-nav.ts`: `orgSettingsNav` gains `{ to: "/$org/settings/plan", label: "Plan" }` after "General". (`settings-nav.test.ts` tests only `isProjectSettingsPath`; no change there.)
 - `web/src/routes/$org/settings/plan.tsx` (new, MIT): `SettingsPage` titled "Plan", description "What this organization's plan includes." It reads `useOrgEntitlements(org)` (P10 of M1); pending → skeletons; error → throw. Content:
   - the plan name and add-ons joined with " + ", each add-on id with its first letter capitalised (`teams` → `Pro + Teams`); when `plan.source === "defaults"`, the line "Instance defaults apply." under it; when `status === "grace"`, a warning line "This plan expired on {expires date}. It stays in effect until {grace date}." (dates `iso.slice(0, 10)`);
   - "Features": one row per `Feature` in this order (`retention_management`, `project_roles`, `sso_enforcement`), with "Included" or a lock and `featureOffer(feature)`;
