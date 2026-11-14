@@ -426,6 +426,208 @@ fn span_batch(batch: &RecordBatch) -> Result<Vec<SpanSummary>, ConvertError> {
     Ok(out)
 }
 
+/// The columns of one batch, extracted once: a per-row extraction would re-cast every
+/// column for every row (D-G-14).
+struct SpanColumns {
+    trace_id: StringArray,
+    span_id: StringArray,
+    parent_span_id: StringArray,
+    name: StringArray,
+    span_kind: StringArray,
+    start_time: TimestampNanosecondArray,
+    end_time: TimestampNanosecondArray,
+    status: StringArray,
+    status_message: StringArray,
+    service_name: StringArray,
+    session_id: StringArray,
+    user_id: StringArray,
+    environment: StringArray,
+    release: StringArray,
+    tags: ListArray,
+    metadata: MapArray,
+    provider: StringArray,
+    request_model: StringArray,
+    response_model: StringArray,
+    operation: StringArray,
+    input_tokens: Int64Array,
+    output_tokens: Int64Array,
+    cache_read_tokens: Int64Array,
+    cache_write_tokens: Int64Array,
+    reasoning_tokens: Int64Array,
+    total_tokens: Int64Array,
+    cost_input: Float64Array,
+    cost_output: Float64Array,
+    cost_total: Float64Array,
+    cost_source: StringArray,
+    ttft_ns: Int64Array,
+    request_params: StringArray,
+    input: StringArray,
+    input_format: StringArray,
+    output: StringArray,
+    output_format: StringArray,
+    input_preview: StringArray,
+    output_preview: StringArray,
+    system_instructions: StringArray,
+    tool_definitions: StringArray,
+    attributes: MapArray,
+    resource_attributes: MapArray,
+    scope_name: StringArray,
+    scope_version: StringArray,
+    events: ListArray,
+    links: ListArray,
+    media_refs: ListArray,
+    truncated: ListArray,
+    conventions: ListArray,
+    ingest_time: TimestampNanosecondArray,
+    schema_version: UInt16Array,
+}
+
+/// `batch`'s columns, read by name.
+fn span_columns(batch: &RecordBatch) -> Result<SpanColumns, ConvertError> {
+    Ok(SpanColumns {
+        trace_id: strings(batch, spans::TRACE_ID)?,
+        span_id: strings(batch, spans::SPAN_ID)?,
+        parent_span_id: strings(batch, spans::PARENT_SPAN_ID)?,
+        name: strings(batch, spans::NAME)?,
+        span_kind: strings(batch, spans::SPAN_KIND)?,
+        start_time: times(batch, spans::START_TIME)?,
+        end_time: times(batch, spans::END_TIME)?,
+        status: strings(batch, spans::STATUS)?,
+        status_message: strings(batch, spans::STATUS_MESSAGE)?,
+        service_name: strings(batch, spans::SERVICE_NAME)?,
+        session_id: strings(batch, spans::SESSION_ID)?,
+        user_id: strings(batch, spans::USER_ID)?,
+        environment: strings(batch, spans::ENVIRONMENT)?,
+        release: strings(batch, spans::RELEASE)?,
+        tags: lists(batch, spans::TAGS)?,
+        metadata: maps(batch, spans::METADATA)?,
+        provider: strings(batch, spans::PROVIDER)?,
+        request_model: strings(batch, spans::REQUEST_MODEL)?,
+        response_model: strings(batch, spans::RESPONSE_MODEL)?,
+        operation: strings(batch, spans::OPERATION)?,
+        input_tokens: ints(batch, spans::INPUT_TOKENS)?,
+        output_tokens: ints(batch, spans::OUTPUT_TOKENS)?,
+        cache_read_tokens: ints(batch, spans::CACHE_READ_TOKENS)?,
+        cache_write_tokens: ints(batch, spans::CACHE_WRITE_TOKENS)?,
+        reasoning_tokens: ints(batch, spans::REASONING_TOKENS)?,
+        total_tokens: ints(batch, spans::TOTAL_TOKENS)?,
+        cost_input: floats(batch, spans::COST_INPUT)?,
+        cost_output: floats(batch, spans::COST_OUTPUT)?,
+        cost_total: floats(batch, spans::COST_TOTAL)?,
+        cost_source: strings(batch, spans::COST_SOURCE)?,
+        ttft_ns: ints(batch, spans::TTFT_NS)?,
+        request_params: strings(batch, spans::REQUEST_PARAMS)?,
+        input: strings(batch, spans::INPUT)?,
+        input_format: strings(batch, spans::INPUT_FORMAT)?,
+        output: strings(batch, spans::OUTPUT)?,
+        output_format: strings(batch, spans::OUTPUT_FORMAT)?,
+        input_preview: strings(batch, spans::INPUT_PREVIEW)?,
+        output_preview: strings(batch, spans::OUTPUT_PREVIEW)?,
+        system_instructions: strings(batch, spans::SYSTEM_INSTRUCTIONS)?,
+        tool_definitions: strings(batch, spans::TOOL_DEFINITIONS)?,
+        attributes: maps(batch, spans::ATTRIBUTES)?,
+        resource_attributes: maps(batch, spans::RESOURCE_ATTRIBUTES)?,
+        scope_name: strings(batch, spans::SCOPE_NAME)?,
+        scope_version: strings(batch, spans::SCOPE_VERSION)?,
+        events: lists(batch, spans::EVENTS)?,
+        links: lists(batch, spans::LINKS)?,
+        media_refs: lists(batch, spans::MEDIA_REFS)?,
+        truncated: lists(batch, spans::TRUNCATED)?,
+        conventions: lists(batch, spans::CONVENTIONS)?,
+        ingest_time: times(batch, spans::INGEST_TIME)?,
+        schema_version: downcast::<UInt16Array>(
+            &column(batch, spans::SCHEMA_VERSION, &DataType::UInt16)?,
+            spans::SCHEMA_VERSION,
+        )?,
+    })
+}
+
+impl SpanColumns {
+    /// Row `row` as a span. `project_id` comes from the caller.
+    fn row(&self, row: usize, project_id: ProjectId) -> Result<Span, ConvertError> {
+        Ok(Span {
+            project_id,
+            trace_id: req_parsed(&self.trace_id, row, spans::TRACE_ID, TraceId::from_str)?,
+            span_id: req_parsed(&self.span_id, row, spans::SPAN_ID, SpanId::from_str)?,
+            parent_span_id: opt_parsed(
+                &self.parent_span_id,
+                row,
+                spans::PARENT_SPAN_ID,
+                SpanId::from_str,
+            )?,
+            name: req_string(&self.name, row, spans::NAME)?,
+            span_kind: req_parsed(&self.span_kind, row, spans::SPAN_KIND, SpanKind::parse)?,
+            start_time: req_time(&self.start_time, row, spans::START_TIME)?,
+            end_time: req_time(&self.end_time, row, spans::END_TIME)?,
+            status: req_parsed(&self.status, row, spans::STATUS, SpanStatus::parse)?,
+            status_message: opt_string(&self.status_message, row),
+            service_name: opt_string(&self.service_name, row),
+            session_id: opt_string(&self.session_id, row),
+            user_id: opt_string(&self.user_id, row),
+            environment: opt_string(&self.environment, row),
+            release: opt_string(&self.release, row),
+            tags: list_strings(&self.tags, row, spans::TAGS)?,
+            metadata: map_strings(&self.metadata, row, spans::METADATA)?,
+            provider: opt_string(&self.provider, row),
+            request_model: opt_string(&self.request_model, row),
+            response_model: opt_string(&self.response_model, row),
+            operation: opt_string(&self.operation, row),
+            input_tokens: opt_i64(&self.input_tokens, row),
+            output_tokens: opt_i64(&self.output_tokens, row),
+            cache_read_tokens: opt_i64(&self.cache_read_tokens, row),
+            cache_write_tokens: opt_i64(&self.cache_write_tokens, row),
+            reasoning_tokens: opt_i64(&self.reasoning_tokens, row),
+            total_tokens: opt_i64(&self.total_tokens, row),
+            cost_input: opt_f64(&self.cost_input, row),
+            cost_output: opt_f64(&self.cost_output, row),
+            cost_total: opt_f64(&self.cost_total, row),
+            cost_source: opt_parsed(
+                &self.cost_source,
+                row,
+                spans::COST_SOURCE,
+                CostSource::parse,
+            )?,
+            ttft_ns: opt_i64(&self.ttft_ns, row),
+            request_params: opt_string(&self.request_params, row),
+            input: opt_string(&self.input, row),
+            input_format: opt_parsed(
+                &self.input_format,
+                row,
+                spans::INPUT_FORMAT,
+                PayloadFormat::parse,
+            )?,
+            output: opt_string(&self.output, row),
+            output_format: opt_parsed(
+                &self.output_format,
+                row,
+                spans::OUTPUT_FORMAT,
+                PayloadFormat::parse,
+            )?,
+            input_preview: opt_string(&self.input_preview, row),
+            output_preview: opt_string(&self.output_preview, row),
+            system_instructions: opt_string(&self.system_instructions, row),
+            tool_definitions: opt_string(&self.tool_definitions, row),
+            attributes: map_strings(&self.attributes, row, spans::ATTRIBUTES)?,
+            resource_attributes: map_strings(
+                &self.resource_attributes,
+                row,
+                spans::RESOURCE_ATTRIBUTES,
+            )?,
+            scope_name: opt_string(&self.scope_name, row),
+            scope_version: opt_string(&self.scope_version, row),
+            events: span_events(&self.events, row)?,
+            links: span_links(&self.links, row)?,
+            media_refs: list_strings(&self.media_refs, row, spans::MEDIA_REFS)?,
+            truncated: list_strings(&self.truncated, row, spans::TRUNCATED)?,
+            conventions: span_conventions(&self.conventions, row)?,
+            ingest_time: req_time(&self.ingest_time, row, spans::INGEST_TIME)?,
+            schema_version: (!self.schema_version.is_null(row))
+                .then(|| self.schema_version.value(row))
+                .ok_or(ConvertError::Null(spans::SCHEMA_VERSION))?,
+        })
+    }
+}
+
 /// The one span of a `span_detail` batch. `project_id` comes from the caller.
 ///
 /// A batch without rows is `Null(span_id)`. Row 0 is read.
@@ -433,133 +635,24 @@ pub(crate) fn span(batch: &RecordBatch, project_id: ProjectId) -> Result<Span, C
     if batch.num_rows() == 0 {
         return Err(ConvertError::Null(spans::SPAN_ID));
     }
-    let row = 0;
-    let trace_id = strings(batch, spans::TRACE_ID)?;
-    let span_id = strings(batch, spans::SPAN_ID)?;
-    let parent_span_id = strings(batch, spans::PARENT_SPAN_ID)?;
-    let name = strings(batch, spans::NAME)?;
-    let span_kind = strings(batch, spans::SPAN_KIND)?;
-    let start_time = times(batch, spans::START_TIME)?;
-    let end_time = times(batch, spans::END_TIME)?;
-    let status = strings(batch, spans::STATUS)?;
-    let status_message = strings(batch, spans::STATUS_MESSAGE)?;
-    let service_name = strings(batch, spans::SERVICE_NAME)?;
-    let session_id = strings(batch, spans::SESSION_ID)?;
-    let user_id = strings(batch, spans::USER_ID)?;
-    let environment = strings(batch, spans::ENVIRONMENT)?;
-    let release = strings(batch, spans::RELEASE)?;
-    let tags = lists(batch, spans::TAGS)?;
-    let metadata = maps(batch, spans::METADATA)?;
-    let provider = strings(batch, spans::PROVIDER)?;
-    let request_model = strings(batch, spans::REQUEST_MODEL)?;
-    let response_model = strings(batch, spans::RESPONSE_MODEL)?;
-    let operation = strings(batch, spans::OPERATION)?;
-    let input_tokens = ints(batch, spans::INPUT_TOKENS)?;
-    let output_tokens = ints(batch, spans::OUTPUT_TOKENS)?;
-    let cache_read_tokens = ints(batch, spans::CACHE_READ_TOKENS)?;
-    let cache_write_tokens = ints(batch, spans::CACHE_WRITE_TOKENS)?;
-    let reasoning_tokens = ints(batch, spans::REASONING_TOKENS)?;
-    let total_tokens = ints(batch, spans::TOTAL_TOKENS)?;
-    let cost_input = floats(batch, spans::COST_INPUT)?;
-    let cost_output = floats(batch, spans::COST_OUTPUT)?;
-    let cost_total = floats(batch, spans::COST_TOTAL)?;
-    let cost_source = strings(batch, spans::COST_SOURCE)?;
-    let ttft_ns = ints(batch, spans::TTFT_NS)?;
-    let request_params = strings(batch, spans::REQUEST_PARAMS)?;
-    let input = strings(batch, spans::INPUT)?;
-    let input_format = strings(batch, spans::INPUT_FORMAT)?;
-    let output = strings(batch, spans::OUTPUT)?;
-    let output_format = strings(batch, spans::OUTPUT_FORMAT)?;
-    let input_preview = strings(batch, spans::INPUT_PREVIEW)?;
-    let output_preview = strings(batch, spans::OUTPUT_PREVIEW)?;
-    let system_instructions = strings(batch, spans::SYSTEM_INSTRUCTIONS)?;
-    let tool_definitions = strings(batch, spans::TOOL_DEFINITIONS)?;
-    let attributes = maps(batch, spans::ATTRIBUTES)?;
-    let resource_attributes = maps(batch, spans::RESOURCE_ATTRIBUTES)?;
-    let scope_name = strings(batch, spans::SCOPE_NAME)?;
-    let scope_version = strings(batch, spans::SCOPE_VERSION)?;
-    let events = lists(batch, spans::EVENTS)?;
-    let links = lists(batch, spans::LINKS)?;
-    let media_refs = lists(batch, spans::MEDIA_REFS)?;
-    let truncated = lists(batch, spans::TRUNCATED)?;
-    let conventions = lists(batch, spans::CONVENTIONS)?;
-    let ingest_time = times(batch, spans::INGEST_TIME)?;
-    let schema_version = downcast::<UInt16Array>(
-        &column(batch, spans::SCHEMA_VERSION, &DataType::UInt16)?,
-        spans::SCHEMA_VERSION,
-    )?;
+    span_columns(batch)?.row(0, project_id)
+}
 
-    Ok(Span {
-        project_id,
-        trace_id: req_parsed(&trace_id, row, spans::TRACE_ID, TraceId::from_str)?,
-        span_id: req_parsed(&span_id, row, spans::SPAN_ID, SpanId::from_str)?,
-        parent_span_id: opt_parsed(
-            &parent_span_id,
-            row,
-            spans::PARENT_SPAN_ID,
-            SpanId::from_str,
-        )?,
-        name: req_string(&name, row, spans::NAME)?,
-        span_kind: req_parsed(&span_kind, row, spans::SPAN_KIND, SpanKind::parse)?,
-        start_time: req_time(&start_time, row, spans::START_TIME)?,
-        end_time: req_time(&end_time, row, spans::END_TIME)?,
-        status: req_parsed(&status, row, spans::STATUS, SpanStatus::parse)?,
-        status_message: opt_string(&status_message, row),
-        service_name: opt_string(&service_name, row),
-        session_id: opt_string(&session_id, row),
-        user_id: opt_string(&user_id, row),
-        environment: opt_string(&environment, row),
-        release: opt_string(&release, row),
-        tags: list_strings(&tags, row, spans::TAGS)?,
-        metadata: map_strings(&metadata, row, spans::METADATA)?,
-        provider: opt_string(&provider, row),
-        request_model: opt_string(&request_model, row),
-        response_model: opt_string(&response_model, row),
-        operation: opt_string(&operation, row),
-        input_tokens: opt_i64(&input_tokens, row),
-        output_tokens: opt_i64(&output_tokens, row),
-        cache_read_tokens: opt_i64(&cache_read_tokens, row),
-        cache_write_tokens: opt_i64(&cache_write_tokens, row),
-        reasoning_tokens: opt_i64(&reasoning_tokens, row),
-        total_tokens: opt_i64(&total_tokens, row),
-        cost_input: opt_f64(&cost_input, row),
-        cost_output: opt_f64(&cost_output, row),
-        cost_total: opt_f64(&cost_total, row),
-        cost_source: opt_parsed(&cost_source, row, spans::COST_SOURCE, CostSource::parse)?,
-        ttft_ns: opt_i64(&ttft_ns, row),
-        request_params: opt_string(&request_params, row),
-        input: opt_string(&input, row),
-        input_format: opt_parsed(
-            &input_format,
-            row,
-            spans::INPUT_FORMAT,
-            PayloadFormat::parse,
-        )?,
-        output: opt_string(&output, row),
-        output_format: opt_parsed(
-            &output_format,
-            row,
-            spans::OUTPUT_FORMAT,
-            PayloadFormat::parse,
-        )?,
-        input_preview: opt_string(&input_preview, row),
-        output_preview: opt_string(&output_preview, row),
-        system_instructions: opt_string(&system_instructions, row),
-        tool_definitions: opt_string(&tool_definitions, row),
-        attributes: map_strings(&attributes, row, spans::ATTRIBUTES)?,
-        resource_attributes: map_strings(&resource_attributes, row, spans::RESOURCE_ATTRIBUTES)?,
-        scope_name: opt_string(&scope_name, row),
-        scope_version: opt_string(&scope_version, row),
-        events: span_events(&events, row)?,
-        links: span_links(&links, row)?,
-        media_refs: list_strings(&media_refs, row, spans::MEDIA_REFS)?,
-        truncated: list_strings(&truncated, row, spans::TRUNCATED)?,
-        conventions: span_conventions(&conventions, row)?,
-        ingest_time: req_time(&ingest_time, row, spans::INGEST_TIME)?,
-        schema_version: (!schema_version.is_null(row))
-            .then(|| schema_version.value(row))
-            .ok_or(ConvertError::Null(spans::SCHEMA_VERSION))?,
-    })
+/// Every row of `batches`, in order. Batches without rows add nothing. Columns are
+/// extracted once per batch.
+#[allow(dead_code)] // test runs use it from I2.7 on
+pub(crate) fn spans(
+    batches: &[RecordBatch],
+    project_id: ProjectId,
+) -> Result<Vec<Span>, ConvertError> {
+    let mut out = Vec::new();
+    for batch in batches.iter().filter(|batch| batch.num_rows() > 0) {
+        let columns = span_columns(batch)?;
+        for row in 0..batch.num_rows() {
+            out.push(columns.row(row, project_id)?);
+        }
+    }
+    Ok(out)
 }
 
 /// `events` items: `time`, `name` and a nullable `attributes` JSON text.
