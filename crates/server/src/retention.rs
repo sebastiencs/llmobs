@@ -62,6 +62,8 @@ pub(crate) async fn retention_once(state: &AppState) -> Result<RetentionRun, Met
         let Some(days) = effective_days(own, cap) else {
             continue;
         };
+        // A project dropped by storage is a no-op there (`committer::apply_retention` finds it
+        // in `projects`), so a drop that races this list writes nothing.
         match state
             .storage
             .apply_retention(project, keep_from(now, days))
@@ -73,7 +75,7 @@ pub(crate) async fn retention_once(state: &AppState) -> Result<RetentionRun, Met
             }
             Err(error) => {
                 run.failures += 1;
-                tracing::warn!(project = %project, error = %error, "retention failed");
+                tracing::warn!(project_id = %project, error = %error, "retention failed");
             }
         }
     }
@@ -84,7 +86,7 @@ pub(crate) async fn retention_once(state: &AppState) -> Result<RetentionRun, Met
 pub(crate) async fn apply_now(state: &AppState, project: ProjectId, days: u32) {
     let keep = keep_from(state.clock.now_ns(), days);
     if let Err(error) = state.storage.apply_retention(project, keep).await {
-        tracing::warn!(project = %project, error = %error, "retention failed");
+        tracing::warn!(project_id = %project, error = %error, "retention failed");
     }
 }
 

@@ -383,6 +383,7 @@ fn static_files_match_their_types() {
     roundtrip::<SqlQueryResult>("static/sql-result.json");
     roundtrip::<Page<Deletion>>("static/deletions.json");
     roundtrip::<Deletion>("static/deletion.json");
+    roundtrip::<Deletion>("static/deletion-resolving.json");
     roundtrip::<DeletionPreview>("static/deletion-preview.json");
     roundtrip::<Page<Deletion>>("static/org-deletions.json");
     roundtrip::<Deletion>("static/deletion-project.json");

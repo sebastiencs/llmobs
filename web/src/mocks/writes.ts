@@ -2,7 +2,7 @@ import { type HttpHandler, HttpResponse, http } from "msw";
 import adminUserCreatedDocument from "../../../fixtures/api/static/admin-user-created.json";
 import adminUsersDocument from "../../../fixtures/api/static/admin-users.json";
 import apiKeyCreatedDocument from "../../../fixtures/api/static/api-key-created.json";
-import deletionDocument from "../../../fixtures/api/static/deletion.json";
+import deletionResolvingDocument from "../../../fixtures/api/static/deletion-resolving.json";
 import deletionOrgDocument from "../../../fixtures/api/static/deletion-org.json";
 import deletionPreviewDocument from "../../../fixtures/api/static/deletion-preview.json";
 import deletionProjectDocument from "../../../fixtures/api/static/deletion-project.json";
@@ -163,7 +163,7 @@ const RESPONSES: Record<string, Respond> = {
       { status: 201 },
     );
   },
-  create_deletion: () => HttpResponse.json(deletionDocument, { status: 202 }),
+  create_deletion: () => HttpResponse.json(deletionResolvingDocument, { status: 202 }),
   delete_project: () => HttpResponse.json(deletionProjectDocument, { status: 202 }),
   delete_org: () => HttpResponse.json(deletionOrgDocument, { status: 202 }),
   preview_deletion: () => HttpResponse.json(deletionPreviewDocument),

@@ -5,7 +5,7 @@
     "query": {},
     "status": 202,
     "content_type": "application/json",
-    "file": "static/deletion.json"
+    "file": "static/deletion-resolving.json"
   },
   {
     "operation_id": "delete_org",

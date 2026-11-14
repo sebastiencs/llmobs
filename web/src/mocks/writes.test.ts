@@ -139,7 +139,7 @@ it("accepts a deletion", async () => {
     JSON.stringify({ kind: "user", user_id: "user-3" }),
   );
   expect(response.status).toBe(202);
-  expect(response.json?.status).toBe("pending");
+  expect(response.json?.status).toBe("resolving");
 });
 
 it("accepts a project drop", async () => {

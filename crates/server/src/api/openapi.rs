@@ -1067,7 +1067,7 @@ fn project_paths(paths: PathsBuilder) -> PathsBuilder {
     let delete_project = operation(
         "delete_project",
         "projects",
-        "Delete a project (org admins; API keys always get 403)",
+        "Delete a project (org admins; API keys are refused)",
     )
     .description(Some(
         "Answers 202; the project is gone from every route at once and its data is erased in the background.",

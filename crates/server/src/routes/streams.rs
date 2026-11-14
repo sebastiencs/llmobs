@@ -655,6 +655,25 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn a_deletion_resyncs_the_trace_stream() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let mut stream = app
+            .request(axum::http::Method::GET, &stream_path(&seeded, TRACE_1))
+            .header("cookie", &seeded.cookie)
+            .send_stream()
+            .await;
+        assert_eq!(stream.status, StatusCode::OK);
+
+        app.state.live.publish_resync(seeded.project.id);
+        let event = stream
+            .next_non_ping(Duration::from_secs(2))
+            .await
+            .expect("a resync event arrives");
+        assert_eq!(event.event, "resync");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_ping_arrives_within_a_second() {
         let app = TestApp::new().await;
         let seeded = app.seed().await;

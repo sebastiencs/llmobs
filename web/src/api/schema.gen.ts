@@ -669,7 +669,7 @@ export interface paths {
         put?: never;
         post?: never;
         /**
-         * Delete a project (org admins; API keys always get 403)
+         * Delete a project (org admins; API keys are refused)
          * @description Answers 202; the project is gone from every route at once and its data is erased in the background.
          */
         delete: operations["delete_project"];

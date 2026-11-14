@@ -3,9 +3,9 @@
   "kind": "project",
   "status": "pending",
   "org_id": "01900000-0000-7000-8000-000000000010",
-  "project_id": "01900000-0000-7000-8000-000000000002",
-  "name": "Playground",
-  "slug": "playground",
+  "project_id": "01900000-0000-7000-8000-000000000001",
+  "name": "Support bot",
+  "slug": "support-bot",
   "requested_by": {
     "kind": "user",
     "id": "01900000-0000-7000-8000-000000000100"

@@ -223,8 +223,9 @@ async fn drop_project(
     Ok((StatusCode::ACCEPTED, error::Json(deletion_json(&row))))
 }
 
-/// `DELETE /api/v1/orgs/{org}?confirm=<slug>`. Owners only. The org and its projects are
-/// `deleting` from this request on; the worker drops them.
+/// `DELETE /api/v1/orgs/{org}?confirm=<slug>`. Owners only. The org is `deleting` from this
+/// request on; its projects are not marked, they are hidden by the org-state check. The worker
+/// drops them.
 async fn drop_org(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,

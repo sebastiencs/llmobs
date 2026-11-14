@@ -160,7 +160,7 @@ async fn update_project(
         Some(None) => Some(None),
         Some(Some(days)) => Some(Some(checked_retention(days)?)),
     };
-    if matches!(retention_days, Some(Some(_)))
+    if retention_needs_entitlement(retention_days)
         && !may_manage_retention(&state, access.project.org_id)
     {
         return Err(ApiError::PlanRequired {
@@ -230,6 +230,12 @@ fn may_manage_retention(_state: &AppState, _org: OrgId) -> bool {
 
 const RETENTION_PLAN: &str = "data retention management is part of the Pro plan";
 
+/// Whether a `PATCH` sets a retention value, which needs the entitlement (D177). Clearing it
+/// (`Some(None)`) and leaving it alone (`None`) do not.
+fn retention_needs_entitlement(value: Option<Option<u32>>) -> bool {
+    matches!(value, Some(Some(_)))
+}
+
 fn checked_retention(days: u32) -> Result<u32, ApiError> {
     if (1..=36_500).contains(&days) {
         Ok(days)
@@ -275,6 +281,13 @@ mod tests {
     use crate::meta::members::{add_org_member, set_project_override};
     use crate::meta::users::{NewUser, insert_user};
     use crate::test_support::{Seeded, TestApp, capture_logs, dataset_span};
+
+    #[test]
+    fn only_a_set_retention_needs_the_entitlement() {
+        assert!(retention_needs_entitlement(Some(Some(7))));
+        assert!(!retention_needs_entitlement(Some(None)));
+        assert!(!retention_needs_entitlement(None));
+    }
 
     fn cookie_pair(set_cookie: &axum::http::HeaderValue) -> String {
         set_cookie

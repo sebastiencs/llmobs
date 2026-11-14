@@ -547,7 +547,7 @@ async fn generate() -> (BTreeMap<String, String>, Vec<Example>) {
             "application/json",
         ),
         example_status("preview_deletion", "static/deletion-preview.json", 200),
-        example_status("create_deletion", "static/deletion.json", 202),
+        example_status("create_deletion", "static/deletion-resolving.json", 202),
         example(
             "list_org_deletions",
             params(&[("org", "acme")]),
