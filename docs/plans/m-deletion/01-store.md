@@ -13,7 +13,7 @@ Read [README.md](README.md) first.
 
 No `Cargo.toml` change: `serde`, `serde_json`, `uuid` and `sqlx` (with `QueryBuilder`, already used in `meta/users.rs`) are dependencies of `llmobs-server`. At the time of writing the highest migration is `0004_connections.sql`, so `NNNN` is `0005` unless another track merged one first.
 
-One existing test hard-codes the migration count: `admin.rs::schema_mismatch_names_the_versions` inserts a "future" migration with a literal version and asserts the literal message `"this binary expects schema 4, found 5"`. Every new migration breaks it. Make it independent of the count: compute `let expected = crate::meta::expected_version();` (make that function `pub(crate)` in `meta/mod.rs` if it is private), bind `expected + 1` as the inserted version, and assert `format!("this binary expects schema {expected}, found {}", expected + 1)`.
+Two existing tests hard-code the migration count: `meta/mod.rs::open_existing_checks_the_file_and_the_version` and `admin.rs::schema_mismatch_names_the_versions` inserts a "future" migration with a literal version and asserts the literal message `"this binary expects schema 4, found 5"`. Every new migration breaks them. Make both independent of the count (in `meta/mod.rs` the same way, with the local `expected_version()`): compute `let expected = crate::meta::expected_version();` (make that function `pub(crate)` in `meta/mod.rs` if it is private), bind `expected + 1` as the inserted version, and assert `format!("this binary expects schema {expected}, found {}", expected + 1)`.
 
 **Commit:** `Add the deletions store`
 

@@ -36,7 +36,7 @@ pub(crate) async fn all_deletions(pool: &SqlitePool) -> Result<Vec<DeletionRow>,
 ///
 /// The new row keeps `id`, `org_id`, `project_id`, `kind`, `user_id`, `request`, the
 /// actor and `created_at` (the cut-off). Its state:
-/// - `failed` rows: copied as `failed` with their `error` (audit only, nothing to redo);
+/// - `failed` rows: copied as `failed` with their `error`, `trace_count` and `session_count` as in the source, and their scope (audit only, nothing to redo);
 /// - `trace_ids`, `filter`, `user`: `resolving`, with `trace_count` and `session_count`
 ///   as in the source (so a resolved scope is registered as is, and an unresolved one is
 ///   resolved again), `handed_over_at` and `applied_at` NULL;
@@ -80,14 +80,31 @@ pub struct ReapplyReport {
 ///
 /// # Errors
 ///
-/// [`AdminError::NotInitialized`] or [`AdminError::Schema`] for either database (the
-/// source's are reported the same way), [`AdminError::Database`] for a query failure.
+/// [`AdminError::NotInitialized`] / [`AdminError::Schema`] for the target,
+/// [`AdminError::SourceNotInitialized`] / [`AdminError::SourceSchema`] for `--from`,
+/// [`AdminError::Database`] for a query failure.
 pub async fn reapply_deletions(config: &ServerConfig, from: &Path) -> Result<ReapplyReport, AdminError>;
 ```
 
 Body: open both, run a private `async fn copy_all(target: &MetaDb, source: &MetaDb) -> Result<ReapplyReport, MetaError>`, then **always** close both before returning its result (as `list_users` runs its work, closes, then returns):
 1. `let target = open_meta(config).await?;`
-2. `let source = match MetaDb::open_existing(from).await { Ok(db) => db, Err(error) => { target.close().await; return Err(map_meta(error)); } };`
+2. `let source = match MetaDb::open_existing(from).await { Ok(db) => db, Err(error) => { target.close().await; return Err(map_source(error)); } };` where `map_source` maps `MetaError::NotInitialized` → `AdminError::SourceNotInitialized`, `SchemaMismatch { expected, found }` → `AdminError::SourceSchema { expected, found }`, anything else through `map_meta`.
+
+New `AdminError` variants (in `admin.rs`):
+
+```rust
+/// `--from` holds no `meta.db`.
+#[error("no meta.db in the --from directory")]
+SourceNotInitialized,
+/// The `--from` database is at another schema version.
+#[error("the --from meta.db has schema {found}, this binary expects {expected}; run `llmobs serve` on a copy of it first")]
+SourceSchema {
+    /// Migration version embedded in this binary.
+    expected: i64,
+    /// Latest applied migration of the source.
+    found: i64,
+},
+```
 3. `let result = copy_all(&target, &source).await; source.close().await; target.close().await; result.map_err(map_meta)`.
 
 `copy_all`:
@@ -97,6 +114,8 @@ Body: open both, run a private `async fn copy_all(target: &MetaDb, source: &Meta
    - then `target.write(|conn| insert_copy(conn, &row, &traces, &sessions, &projects))`, one transaction per row, so an interrupted run leaves whole rows.
    - Count each row: `false` → `present`; `Failed` → `failed_copied`; otherwise `reopened`.
 3. Return the report.
+
+Against a running server, the copied rows are picked up by the worker's next 2 s tick (the CLI does not wake it); the guard learns their scope only at the next start (acceptable: their cut-offs are old); a project or org set to `deleting` is `404` at once on every route, and API keys cached in the server stop working within 60 s. Reapplied rows go straight to registration, so M8's `eval_jobs` cascade does not run for them; such jobs fail to load their trace and are pruned after 7 days (D-I-28). Scopes are loaded in memory one row at a time; a very large `user` scope is acceptable.
 
 `open_existing` opens the source read-write (WAL), so a source on read-only media fails with `AdminError::Database`; the doc comment of `reapply_deletions` says to copy the old directory somewhere writable first. Pointing `--from` at the current data directory copies nothing (every id is present); no special case.
 
@@ -132,39 +151,42 @@ AdminCommand::ReapplyDeletions { from, config } => {
 }
 ```
 
-Change the `Admin` variant's doc comment from "Manage users in this data directory." to "Admin operations on this data directory.". There is no `--help` snapshot to update.
+Change the `Admin` variant's doc comment from "Manage users and the encryption key in this data directory." to "Admin operations on this data directory (users, encryption key, deletions).". There is no `--help` snapshot to update.
 
-CLI tests, in `crates/cli/src/main.rs`'s test module, modeled on the existing `list_users` missing-database test there: `reapply_deletions_on_a_missing_database_names_serve` (the error text mentions `llmobs serve`), and a parse test that `llmobs admin reapply-deletions` without `--from` is a clap error.
+CLI tests, in `crates/cli/src/main.rs`'s test module:
+- `reapply_deletions_on_a_missing_database_names_serve`: copy `list_users_on_a_missing_database_names_serve` (temp dir plus an `llmobs.toml` with `data_dir`), run the CLI with `["llmobs", "admin", "reapply-deletions", "--from", <another existing temp dir>, "--config", <path>]` the way that test runs it, and assert the `{error:#}` text contains "run `llmobs serve` once to create the database" (the target is opened first);
+- `reapply_deletions_requires_from`: `Cli::try_parse_from(["llmobs", "admin", "reapply-deletions"]).is_err()`, and `["llmobs", "admin", "reapply-deletions", "--from", "/x"]` parses to `Command::Admin { command: AdminCommand::ReapplyDeletions { .. } }`.
 
 ## Tests
 
-In `admin.rs` tests, using `ready_config()` for the target and a second `tempfile::tempdir()` with `MetaDb::open(dir)` for the source. Insert source rows with M1's `insert_deletion`, `insert_traces`, `insert_sessions`, `insert_projects`, `store_counts`, `mark_handed_over`, `mark_applied` and `mark_failed`, then `close()` the source before calling `reapply_deletions`.
+In `admin.rs` tests. The target is `ready_config()`; the source is a second `tempfile::tempdir()` opened with `MetaDb::open(dir)` (migrated). Insert source rows with M1's `insert_deletion`, `insert_traces`, `insert_sessions`, `insert_projects`, `store_counts`, `mark_handed_over`, `mark_applied` and `mark_failed` (`mark_applied` is legal straight from `resolving`), then `close()` the source before calling `reapply_deletions`. Project and org states are read with `SELECT state FROM projects WHERE id = ?` / `orgs` on a re-opened target.
 
-1. `copies_missing_rows_as_open_rows`. Source rows:
-   - (a) `trace_ids`, resolved (`trace_count` 2), handed over and applied, scope `[T1, T2]`;
-   - (b) `user` `u1`, resolved with `trace_count` 1 and `session_count` 1, `pending`, scope `[T3]`, sessions `["s1"]`;
-   - (c) `filter`, still `resolving` (`trace_count` NULL), `request.filter` set;
-   - (d) `project`, applied;
-   - (e) `org`, applied, `deletion_projects` `[P1, P2]`;
-   - (f) `trace_ids`, `failed` (`ResolutionFailed`).
-
-   The report is `{reopened: 5, failed_copied: 1, present: 0}`. In the target:
-   - (a) `resolving`, `trace_count == Some(2)`, `handed_over_at` and `applied_at` `None`, scope `[T1, T2]`;
-   - (b) `resolving` with counts 1/1, scope and sessions copied;
-   - (c) `resolving`, `trace_count` `None`, `request` equal to the source's;
-   - (b) also has `user_id == Some("u1")`, `request` equal to the source's, and `scope_sessions == ["s1"]`;
-   - (d) and (e) `pending`, `handed_over_at` `None`, (e) with `deletion_projects` `[P1, P2]`;
-   - before the copy, insert into the target an org `O` (`insert_org`) with projects `P1`, `P2` (`insert_project`, use these as (e)'s `org_id` and projects), and a project `P0` in another org as (d)'s `project_id`: after the copy, `P0`, `P1`, `P2` and `O` have `state == "deleting"`; (f) being `failed` changes no state;
-   - (f) `failed` with `error == Some(ResolutionFailed)`;
-   - every `created_at` and actor unchanged.
+1. `copies_missing_rows_as_open_rows`. In this order:
+   1. Open the target (`MetaDb::open_existing(&config.data_dir)`) and in one `write`: `insert_org(conn, "O", "o", 1)` → `O`, `insert_project(conn, O.id, "p1", "p1", None, 1)` → `P1`, the same for `P2`, `insert_org(conn, "O2", "o2", 1)` → `O2`, and `insert_project(conn, O2.id, "p0", "p0", None, 1)` → `P0`. Keep their `.id`s; close the target.
+   2. Source rows (org `O.id` unless said otherwise):
+      - (a) `trace_ids` on `P1`, resolved (`trace_count` 2), handed over and applied, scope `[T1, T2]`;
+      - (b) `user` `u1` on `P1`, resolved with `trace_count` 1 and `session_count` 1, `pending`, scope `[T3]`, sessions `["s1"]`;
+      - (c) `filter` on `P1`, still `resolving` (`trace_count` NULL), `request.filter` set;
+      - (d) `project` `P0` (org `O2.id`), applied;
+      - (e) `org` `O`, applied, `deletion_projects` `[P1, P2]`;
+      - (f) `trace_ids` on `P1`, `failed` (`ResolutionFailed`).
+   3. `reapply_deletions` → `{reopened: 5, failed_copied: 1, present: 0}`. In the target:
+      - (a) `resolving`, `trace_count == Some(2)`, `handed_over_at` and `applied_at` `None`, scope `[T1, T2]`;
+      - (b) `resolving`, counts 1/1, `user_id == Some("u1")`, `request` equal to the source's, scope `[T3]`, `scope_sessions == ["s1"]`;
+      - (c) `resolving`, `trace_count` `None`, `request` equal to the source's;
+      - (d) and (e) `pending`, `handed_over_at` `None`; (e) has `deletion_projects` `[P1, P2]`;
+      - (f) `failed` with `error == Some(ResolutionFailed)`;
+      - `P0`, `P1`, `P2` and `O` have `state == "deleting"`; `O2` is still `active`;
+      - every `created_at` and actor unchanged.
 2. `second_run_copies_nothing`: run again → `{reopened: 0, failed_copied: 0, present: 6}`.
-3. `rows_already_present_are_left_alone`: the target already has row (a)'s id as `applied` → it stays `applied`, and the report is `{reopened: 4, failed_copied: 1, present: 1}`.
-4. `missing_source_is_not_initialized`: `from` is an empty temp dir → `AdminError::NotInitialized`.
-5. `source_at_another_schema_is_refused`: a source `meta.db` with an extra future row in `_sqlx_migrations` (as `schema_mismatch_names_the_versions` does, with `expected_version() + 1`) → `AdminError::Schema { .. }`.
+3. `rows_already_present_are_left_alone`: the target already has row (a)'s id as `applied` (insert it with `insert_deletion` + `mark_applied` before the run) → it stays `applied`; the report is `{reopened: 4, failed_copied: 1, present: 1}`.
+4. `missing_source_is_refused`: `from` is an empty temp dir → `AdminError::SourceNotInitialized`.
+5. `source_at_another_schema_is_refused`: in the source, `INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) SELECT MAX(version) + 1, 'future', 1, x'', 0 FROM _sqlx_migrations` → `matches!(error, AdminError::SourceSchema { .. })`.
 6. `copied_rows_are_applied_by_the_worker`:
-   - `let app = TestApp::new().await; let seeded = app.seed().await;`. Commit trace A to the seeded project with `ingest_time = now`, as in M3's tests.
-   - Commit trace A to the seeded project with `ingest_time = app.state.clock.now_ns()` set on the span (M3's tests explain why), then advance the clock 1 s. In a source data dir, insert a `trace_ids` row for the seeded project (`org_id` = `seeded.org_id`, actor any `Uuid::now_v7()`; there are no foreign keys) with scope `[A]`, `store_counts(1)`, `created_at = app.state.clock.now_ns()`, and mark it applied. This is the deletion "done after the backup".
-   - `reapply_deletions(&app.state.config, source_dir)` → `reopened == 1`. This is the target opened while `TestApp` holds it, which `create_user_works_while_the_server_holds_the_directory` shows is fine.
+   - `let app = TestApp::new().await; let seeded = app.seed().await;`.
+   - `let t0 = app.state.clock.now_ns();` Commit trace A to `seeded.project` with `ingest_time = t0` on the span (M3's tests explain why), then `app.state.clock.advance(Duration::from_secs(1))`.
+   - In a source data dir: `insert_deletion` of a `trace_ids` row for `seeded.project.id` (`org_id = seeded.org_id`, actor any `Uuid::now_v7()`; no foreign keys), `created_at = app.state.clock.now_ns()`, then `insert_traces([A])`, `store_counts(1, None)`, `mark_applied`. This is the deletion "done after the backup".
+   - `reapply_deletions(&app.state.config, source_dir)` → `reopened == 1` (the target is opened while `TestApp` holds it, which `create_user_works_while_the_server_holds_the_directory` shows is fine).
    - `crate::deletion::run_once(&app.state)` → the row is `pending`, and `GET` trace A is `404`.
 
 ## Done when

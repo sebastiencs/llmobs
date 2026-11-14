@@ -15,25 +15,32 @@ Read [README.md](README.md) first.
 ## Read first
 
 - `crates/cli/tests/e2e.rs`: `start(dir, extra_config)` (a real server with an admin signed in, org `Acme`, project `Proto`, secret key `INIT_KEY`), `Api::{get, get_raw, post}`, `read_json`, `read_until`, `fixture_request(name, trace)`, `post_otlp_http`, and the test `live_streams_and_every_read_route_work_end_to_end` (the pattern to follow).
-- The SDK fixture `sdk-context` it sends (`fixtures/otlp/…/sdk-context/`): its spans carry a `user_id` and a `session_id`; read their values from the fixture's `expected.json` and use them below.
 
 ## Test
 
-`deletion_end_to_end` in `e2e.rs`, `#[tokio::test(flavor = "multi_thread")]` like its neighbours:
+The fixture `sdk-context` (under `fixtures/otlp/llmobs/`) is the only SDK fixture with an end user: `user_id` `u-17`, session `chat-42`. `sdk-span-manual` has no user; use it for T3.
 
-1. `start(dir, "")`; `project = /api/v1/projects/{proto_id}`.
-2. Send `sdk-context` twice over OTLP/HTTP with `INIT_KEY`, as traces `T1 = format!("{:032x}", 11)` and `T2 = …12` (`fixture_request` rewrites the trace id), and a third trace `T3 = …13` from another fixture with no user (pick one of the SDK fixtures without `user_id`; name it in the report). Check `GET {project}/traces/{T1}` is `200`.
-3. Open the trace-list stream (`get_raw("{project}/traces/stream")`).
-4. `POST {project}/deletions {kind: "user", user_id: <fixture user>}` → `202`, `status` `resolving`.
+Add these helpers next to `Api` (the existing `Api::post`, `Api::get` and `post_otlp_http` assert success, so they cannot check a 404):
+- `Api::get_status(&self, path: &str) -> u16`: like `get`, returns `response.status().as_u16()` without reading the body;
+- `Api::delete(&self, path: &str) -> Value`: a `DELETE` with the cookie and the `origin` header (the CSRF check, as `Api::post` sends it), through `read_json`;
+- `async fn otlp_status(server: &Server, request: &ExportTraceServiceRequest) -> u16`: `server.client.post(format!("{}/v1/traces", server.http))` with `authorization: Bearer {INIT_KEY}`, `content-type: application/x-protobuf` and `request.encode_to_vec()`, returning the status (the same request `post_otlp_http` builds; copy it).
+
+`deletion_end_to_end`, `#[tokio::test(flavor = "multi_thread")]` like its neighbours:
+
+1. `start(dir, "")`; `project = /api/v1/projects/{proto_id}`; assert `GET {project}` has `slug` `proto`.
+2. Send `sdk-context` twice over OTLP/HTTP with `INIT_KEY` (`post_otlp_http`), as traces `T1 = format!("{:032x}", 11)` and `T2 = …12` (`fixture_request` rewrites the trace id), and `sdk-span-manual` as `T3 = …13`. `GET {project}/traces/{T1}` is `200`.
+3. Open the trace-list stream (`get_raw("{project}/traces/stream", &[])`).
+4. `POST {project}/deletions {kind: "user", user_id: "u-17"}` → `202`, `status` `resolving`.
 5. Poll `GET {project}/deletions/{id}` every 100 ms for at most 10 s until `status` is `pending`; then `trace_count` is 2.
 6. `read_until(stream, "event: resync", 5 s)`.
-7. `GET {project}/traces/{T1}` and `{T2}` answer `404` (add an `Api::get_status(path) -> u16` helper, since `get` asserts success); `{T3}` is `200`; `GET {project}/users/<fixture user>` is `404`.
-8. `POST {project}/deletions/preview {from: "2000-01-01T00:00:00Z", to: "2100-01-01T00:00:00Z"}` → `matched_traces` 1 (only `T3` is left).
-9. `DELETE /api/v1/projects/{proto_id}?confirm=proto` → `202` (`kind` `project`). Check the project's slug in `GET {project}` first and use it; the init config names the project `Proto`, so the slug is expected to be `proto`.
-10. `GET {project}` → `404`; an OTLP export with `INIT_KEY` → `404` (the key was used, so it is cached; see M5).
-11. Poll `GET /api/v1/orgs/acme/deletions` (org slug from `GET /api/v1/orgs`) until the project row is `applied` (≤ 10 s); the user row is `applied` too (superseded).
+7. `get_status("{project}/traces/{T1}")` and `{T2}` are `404`; `{T3}` is `200`; `get_status("{project}/users/u-17")` is `404` (`routes/users.rs` answers 404 when the user has no rows; check it, and if it returns an empty `200`, assert instead that `GET {project}/users` lists no `u-17`).
+8. `POST {project}/deletions/preview {from: "2025-12-31T00:00:00Z", to: "2026-01-02T00:00:00Z"}` (the window the existing e2e uses; the SDK fixtures start on 2025-12-31) → `matched_traces` 1 (only `T3` is left).
+9. Right before the drop, send one more `sdk-span-manual` export with `INIT_KEY` and assert `otlp_status` is `200`: this (re)caches the key, whose cache entry lives 60 s from insertion.
+10. `Api::delete("/api/v1/projects/{proto_id}?confirm=proto")` → `kind` `project`.
+11. `get_status(project)` → `404`; `otlp_status` with `INIT_KEY` → `404` (a cached key reaches the project check; only a key not used in the last 60 s would get `401`, which is the one way this step can flake).
+12. Poll `GET /api/v1/orgs/acme/deletions` (the org slug `start` uses) until the project row is `applied` (≤ 10 s); the user row is `applied` too (superseded by the drop).
 
-Reaching `applied` for the user deletion without the drop would need a flush (default `flush.max_age`) and a deletion pass; step 11 gets there through the drop instead. Do not lower timing settings below their minimums (`storage.flush.max_age` ≥ 100 ms) if you add any.
+Reaching `applied` for the user deletion without the drop would need a flush (default `flush.max_age`) and a deletion pass; step 12 gets there through the drop instead. Do not lower timing settings below their minimums (`storage.flush.max_age` ≥ 100 ms) if you add any.
 
 ## Closeout
 

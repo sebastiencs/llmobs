@@ -1,6 +1,6 @@
 # M — Deletion and retention
 
-Implementation plan for track M: GDPR deletion requests (by trace ids, by filter, by end user, by project, by org) and per-project retention, end to end. That covers the API, the background worker that hands requests to storage, the cascades in `meta.db`, the audit trail, re-applying deletions after a backup restore, and the UI. It has 12 sub-phases, M1 to M12. One agent (GLM) does each sub-phase in one go, in order, and nothing outside this README and its own sub-phase file. Each sub-phase ends with `just check` green and one commit.
+Implementation plan for track M: GDPR deletion requests (by trace ids, by filter, by end user, by project, by org) and per-project retention, end to end. That covers the API, the background worker that hands requests to storage, the cascades in `meta.db`, the audit trail, re-applying deletions after a backup restore, and the UI. It has 12 sub-phases, M1 to M12. One agent (Haiku) does each sub-phase in one go, in order, and nothing outside this README and its own sub-phase file. Each sub-phase ends with `just check` green and one commit.
 
 **Why a plan and not a design doc (D-M-1).** Storage already does the hard part (A1 M5):
 - tombstones, so pending rows are hidden;
@@ -80,7 +80,7 @@ Every request is a row in `meta.db` `deletions`. `POST` answers `202` with that 
   - the user's traces and sessions;
   - plus, for every kind, the evaluation traces that target those traces.
 
-  It stores the scope and `trace_count`/`session_count` in one transaction, together with the `meta.db` cascades. Then it calls `Storage::register_deletion`. Rows stay visible while a request is `resolving` (D-M-3).
+  It stores the scope and `trace_count`/`session_count` in one transaction, together with the `meta.db` cascades. Then it calls `Storage::register_deletion`. Rows stay visible while a request is `resolving` (D-M-3, amending D13's "immediately": normally seconds).
 - **`pending`**: `register_deletion` returned, `handed_over_at` is set. Storage hides the covered rows from every read (tombstones). The worker polls `Storage::deletion_status` every tick.
 - **`applied`**: storage reported the deletion applied (spec 03 § 7: bytes gone from Parquet files within `storage.deletion.max_delay`, 24 h by default). `applied_at` is set.
 - **`failed`**: resolution gave up. `error` is `too_many_traces` (a filter matched more than 100,000 traces at resolution time) or `resolution_failed` (5 failed attempts in a row, or an error that cannot succeed on retry). Nothing was hidden or deleted. The caller may submit a new request.
@@ -115,7 +115,7 @@ A judge trace (track I) is a trace in the same project, with environment `llmobs
   - the user ids of `user` deletions, from creation;
   - the trace ids of every deletion, from the moment they are known.
 
-  I's executor asks `guard.blocks(project, target_trace_id, target_user_id, now)` before it commits a judge trace or a score. When blocked, the job ends `skipped` and commits nothing (M8). The guard is loaded from `meta.db` at startup. 24 h is longer than a job can live (D-I-28 expires queued rule jobs after 24 h, and a running job has a timeout of minutes).
+  I's executor asks `guard.blocks(project, target_trace_id, users, newest_ingest, now)` before the judge call and again before it commits a judge trace or a score; `users` are the trace's span user ids and `newest_ingest` its newest span's `ingest_time`. A user entry only blocks a trace whose data was ingested at or before the deletion's cut-off: a user who keeps using the product after an erasure is still evaluated. When blocked, the job ends `skipped` (`deleted`) and commits nothing (M8). The guard is loaded from `meta.db` at startup. 24 h is longer than a job can live (D-I-28 expires queued rule jobs after 24 h, and a running job has a timeout of minutes).
 
 ### Cascades in `meta.db` (D-M-7, D-M-11)
 
@@ -171,7 +171,8 @@ Failures are counted per row in memory (`attempts: HashMap<Uuid, Attempt>`). Aft
 - `RunError::Timeout`, `QueryError::Busy` and `DeletionError::Catalog`/`StorageError` are retried.
 - `trace_ids`, `filter` and `user` rows end `failed` / `resolution_failed`:
   - after 5 consecutive failures;
-  - at once on `RunError::Invalid`, `RunError::InvalidRequest` or `RunError::TooLarge`.
+  - at once on `RunError::Invalid`, `RunError::InvalidRequest`, `RunError::Failed` or `RunError::TooLarge`;
+  - only while no scope is stored (`trace_count` NULL): once the scope and its cascades are stored, the row retries registration until storage takes it, so `failed` always means nothing was hidden or deleted.
 - `project` and `org` rows are retried forever.
 
 Timeouts: `RESOLVE_TIMEOUT = 600 s` for each resolution read; the `POST` count and the preview use `routes::read::READ_TIMEOUT` (30 s).
@@ -181,7 +182,7 @@ Timeouts: `RESOLVE_TIMEOUT = 600 s` for each resolution read; the `POST` count a
 - `retention::retention_once(&AppState)` runs every hour, and once 60 s after startup. For every project with `state = 'active'` in an active org, it computes the **effective retention** `retention::effective_days(project.retention_days, cap)`: the smaller of the two when both are set, the one that is set otherwise, none when neither is (D-M-15). `cap` is the org's retention cap from its plan (D175: data-access window + 30 days). Until track P lands, `retention_once` passes `None`, so effective retention is the project's own. When there is an effective retention, it calls `Storage::apply_retention(project, keep_from)`, where `keep_from = UTC date of now − effective days`. Errors are logged per project and do not stop the loop.
 - `PATCH /api/v1/projects/{project}` that sets `retention_days` to a number calls `apply_retention` for that project right after the commit. An error is logged, and the response is still `200`: the hourly run retries.
 - Setting retention back to null ("keep forever") calls nothing. The storage watermark never moves back.
-- Setting `retention_days` (on `PATCH` or on project creation) passes the entitlement check `may_manage_retention` first (D177, D-M-16). Until P lands it always allows. When it refuses, the answer is `403` with code `plan_required`, and the settings page shows "Data retention management is part of the Pro plan." (M11). GDPR deletions are never gated.
+- Setting `retention_days` to a number (on `PATCH` or on project creation) passes the entitlement check `may_manage_retention` first (D177, D-M-16). Until P lands it always allows. Setting it back to `null` (forever) is never gated. When it refuses, the answer is `403` with code `plan_required`, and the settings page shows "Data retention management is part of the Pro plan." (M11). GDPR deletions are never gated.
 - Retention does not clear the metrics cache or send a live `resync`: dropped days are old data, and the 10 s cache and the next refetch catch up.
 - What it covers:
   - spans, traces and scores: whole days, in storage;
@@ -201,7 +202,8 @@ Timeouts: `RESOLVE_TIMEOUT = 600 s` for each resolution read; the `POST` count a
   - `deletion registered`: `deletion_id`, `trace_count`, `session_count`;
   - `deletion applied`: `deletion_id`;
   - `deletion failed`: `deletion_id`, `error`;
-  - `retention changed`: `project_id`, `actor_id`, `retention_days` (number or `none`).
+  - `retention changed`: `project_id`, `actor_id`, `retention_days` (number or `none`);
+  - `project dropped`: `deletion_id`, `org_id`, `project_id`; `org dropped`: `deletion_id`, `org_id`, `projects` (a count) — both from `deletion::on_dropped` (D-M-17).
 - `llmobs admin reapply-deletions --from <data_dir>` (M7) copies the deletions that the current `meta.db` lacks from another data directory's `meta.db`, with their scope, as open rows. The server then registers or drops them again (D-M-9). This is how a backup restore keeps erasures done after the backup (spec 12 § Backups).
 
 ### Live streams and caches (D-M-11)
@@ -217,8 +219,8 @@ Three call sites for tracks P and Q. Each is one plain function call in M's code
 | Hook | Where (M) | M's behaviour | Who replaces it, with what |
 |---|---|---|---|
 | Retention cap (D175) | `retention::retention_once`: `let cap: Option<u32> = None;` passed to `effective_days` | no cap | P: `state.entitlements.of(org).retention_cap_days()` (plan data-access window + 30 days; `None` without a plan, e.g. self-hosted without a licence) |
-| Retention management (D177) | `routes/projects.rs::may_manage_retention(state, org) -> bool`, called by `create_project` and `update_project` when the body sets `retention_days` | returns `true` | P: the body becomes `state.entitlements.of(org).allows(Feature::RetentionManagement)` (free when self-hosted, Pro on the cloud) |
-| Dropped (D170) | `deletion::on_dropped(state, &Dropped)`, called once by the worker after a project or org drop committed | emits the audit event `org dropped` / `project dropped` | Q: also enqueues a control-plane notification (org → cell mapping cleanup) through Q's own outbox, so a failed call is retried |
+| Retention management (D177) | `routes/projects.rs::may_manage_retention(state, org) -> bool`, called by `create_project` and `update_project` when the body sets `retention_days` to a number | returns `true` | P: the body becomes `state.entitlements.of(org).allows(Feature::RetentionManagement)` (free when self-hosted, Pro on the cloud) |
+| Dropped (D170) | `deletion::on_dropped(state, &Dropped)`, called once by the worker after a project or org drop committed (at most once: a crash right after the commit skips it) | emits the audit event `org dropped` / `project dropped` | Q: also sends the control-plane notification (org → cell mapping cleanup); for durability Q reconciles from `deletions` rows of kind `project`/`org` in status `applied`, which are never deleted |
 
 ### Code layout (end state)
 
@@ -305,13 +307,14 @@ These go to the coordinating session, which forwards them. They are also in the 
   - M8 adds `DeletionGuard::blocks` calls to I's executor and deletes `eval_jobs` rows. I should keep the guard calls when it changes the executor.
   - D-I-28 already deletes jobs of projects that are not `active`.
 - **K (alerts)**: every K table that holds a `project_id` must declare `REFERENCES projects(id) ON DELETE CASCADE`, or reach a table that does, so a project drop removes it. Rows must not copy span payloads (spec 03 § Cascades keeps `alert_events` because they are aggregates). A notification body that quotes a trace id is acceptable; one that quotes span content is not.
-- **H (console)**: `saved_views` already cascades from `projects`. H's MCP `list_projects` must skip projects and orgs whose `state` is not `active`, as the REST routes do (M5 adds the org filter to `orgs_of_user`).
+- **H (console)**: `saved_views` already cascades from `projects`; H's MCP `list_projects` already skips inactive orgs and projects. Nothing to do.
 - **J (datasets)**: dataset items copied from a deleted trace (`source_trace_id` in the scope) must be hard-deleted, all versions (D24). J adds that statement to `deletion::cascade::traces_deleted` (M8), which runs in the scope transaction.
 - **P (plans and entitlements)**:
-  - replace `None` in `retention::retention_once` with the org's retention cap (D175, D-M-15). Once a cap exists, projects without their own `retention_days` are capped too: `retention_once` already lists every active project, not only those with retention;
+  - replace `None` in `retention::retention_once` with the org's retention cap (D175, D-M-15). `retention::apply_now` (the `PATCH` path) stays as is: the hourly run applies the cap. Once a cap exists, projects without their own `retention_days` are capped too: `retention_once` already lists every active project, not only those with retention;
   - replace the body of `routes/projects.rs::may_manage_retention` with the entitlement check, and the matching UI state: the settings page already shows `plan_required` (D177, D-M-16);
-  - P's hidden data-access window is enforced in A2's query time window, not by M.
-- **Q (cloud)**: add the control-plane notification to `deletion::on_dropped` (D170, D-M-17), through an outbox so that it survives a failed call or a restart. `on_dropped` is called exactly once per drop, after the `meta.db` rows are deleted; it receives the org id, the dropped project ids and whether the whole org went.
+  - P's hidden data-access window is enforced in A2's query time window, not by M. It must **not** apply to M's scope reads (`filter_trace_ids`, `user_deletion_scope`, `eval_trace_ids`) or to the deletion preview: an erasure must also cover hidden-but-kept data. P adds a test for that;
+  - ingest's D85 age check uses the project's `retention_days` today; P switches it to `retention::effective_days`, and drops spec 12's `orgs.limits.max_retention_days` in favour of the cap.
+- **Q (cloud)**: add the control-plane notification to `deletion::on_dropped` (D170, D-M-17). `on_dropped` runs after the `meta.db` rows are deleted, at most once per drop; it receives the deletion id, the org id, the dropped project ids and whether the whole org went. For durability Q reconciles from `deletions` rows of kind `project`/`org` in status `applied` (kept forever), so a crash or a failed call is caught up.
 - **N (packaging)**: the backup docs must say to keep the pre-restore data directory, or a copy of its `meta.db`, and to run `llmobs admin reapply-deletions --from <it>` after a restore (D-M-9).
 
 ## API contract gaps

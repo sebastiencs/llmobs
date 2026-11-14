@@ -64,9 +64,11 @@ pub(crate) async fn delete_project(conn: &mut SqliteConnection, id: ProjectId) -
 
 ```rust
 /// Every project id of the org, whatever its state, ordered by id.
-pub(crate) async fn project_ids_of_org(pool: &SqlitePool, org: OrgId) -> Result<Vec<ProjectId>, MetaError>;
+pub(crate) async fn project_ids_of_org<'e, E>(executor: E, org: OrgId) -> Result<Vec<ProjectId>, MetaError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>;
 ```
-`SELECT id FROM projects WHERE org_id = ? ORDER BY id`. A bad id is `Corrupt { table: "projects", column: "id" }`. (M5 uses the same function in its request transaction; there `&mut SqliteConnection` derefs to an executor, so make the function generic over `sqlx::Executor<'_, Database = sqlx::Sqlite>` or write a second `_in(conn, …)` variant, whichever compiles; prefer the generic.)
+`SELECT id FROM projects WHERE org_id = ? ORDER BY id`. A bad id is `Corrupt { table: "projects", column: "id" }`. Callers pass `state.meta.reader()` here and `&mut *conn` inside a transaction (M5).
 
 `meta/orgs.rs`:
 
@@ -105,12 +107,14 @@ pub(crate) fn publish_resync(&self, project_id: ProjectId) {
 
 ```rust
 if event.resync {
-    if tx.send(resync()).await.is_err() {
+    if !send(&tx, resync(), timing.send).await {
         return;
     }
     continue;
 }
 ```
+
+`send` is the stream module's existing timeout helper (`async fn send(tx: &mpsc::Sender<Event>, event: Event, timeout: Duration) -> bool`); every send in these loops goes through it so a stalled client cannot hold the stream.
 
 In `run_trace_stream`, put it after `last_id = event.id;`, and clear `pending` before sending, as the lag branch does. Any other code that builds a `LiveEvent` literal must set `resync: false`. Search the crate for `LiveEvent {`.
 
@@ -162,9 +166,14 @@ impl DeletionGuard {
     pub(crate) fn add_traces(&self, project: ProjectId, traces: &[TraceId], created_at: i64);
     /// Records an end user of `project`.
     pub(crate) fn add_user(&self, project: ProjectId, user_id: &str, created_at: i64);
-    /// Whether a judge result about `trace` (and its end user, when known) must not be
-    /// committed: an entry exists with `created_at > now - GUARD_NS`.
-    pub(crate) fn blocks(&self, project: ProjectId, trace: TraceId, user_id: Option<&str>, now: i64) -> bool;
+    /// Whether a judge run about `trace` must not go on (D-M-6). Only entries with
+    /// `created_at > now - GUARD_NS` count:
+    /// - a trace-id entry for `trace` blocks;
+    /// - a user entry for one of `users` blocks only when `newest_ingest_ns <= entry.created_at`
+    ///   (the trace's data predates that user's deletion; newer data is not covered, spec S5).
+    /// `users` are the distinct user ids of the trace's loaded spans; `newest_ingest_ns` their
+    /// largest `ingest_time`. Callers that know neither pass `&[]` and `0`.
+    pub(crate) fn blocks(&self, project: ProjectId, trace: TraceId, users: &[&str], newest_ingest_ns: i64, now: i64) -> bool;
     /// Removes entries with `created_at <= now - GUARD_NS`, and empty project maps.
     pub(crate) fn prune(&self, now: i64);
     /// Adds `meta::deletions::guard_entries(now - GUARD_NS)`.
@@ -303,7 +312,7 @@ The drop steps return `RetryForever` for every error. So do the data steps for e
 `retry(state, row, now, label, may_fail)`:
 - `let failures = state.deletions.failed(row.id, now);`
 - Log `tracing::warn!(deletion_id = %row.id, kind = row.kind.as_str(), error = label, failures, "deletion step failed")`.
-- If `may_fail`, the kind is a data kind, `row.state == DeletionState::Resolving` and `failures >= MAX_ATTEMPTS`, call `fail(state, row, now, FailReason::ResolutionFailed)`. A `Pending` data row (storage holds it) and every drop keep retrying, once a minute.
+- If `may_fail`, the kind is a data kind, `row.state == DeletionState::Resolving`, `row.trace_count.is_none()` (no scope stored yet, so no cascade ran) and `failures >= MAX_ATTEMPTS`, call `fail(state, row, now, FailReason::ResolutionFailed)`. A row whose scope is stored keeps retrying registration: `failed` must keep meaning "nothing was hidden or deleted". A `Pending` data row (storage holds it) and every drop keep retrying, once a minute.
 
 `fail(state, row, now, reason)`: `meta.write` → `mark_failed(row.id, reason)`.
 - `Ok(true)`: log the audit event `tracing::info!(target: "audit", deletion_id = %row.id, error = reason.as_str(), "deletion failed")`, then `state.deletions.settled(row.id)`.
@@ -507,7 +516,7 @@ To build a span, take `dataset_span(0)`, then set `trace_id`, `span_id`, `parent
    - `run_once` → `handed_over_at == None`. A second `run_once` → `handed_over_at` is set, and `storage.deletion_status == Pending`.
 10. `reaches_applied_after_flush`:
     - `TestApp::with_config(|config| config.storage.flush.max_age = Duration::from_millis(100))` (storage refuses less than 100 ms), one trace A, a `trace_ids` row, `run_once`.
-    - Then loop at most 100 times: `app.state.storage.apply_deletions(app.state.clock.now_ns()).await.unwrap()`, then `run_once`, then stop when the row is `applied`, else sleep 100 ms.
+    - Then loop at most 100 times: `app.state.storage.apply_deletions(wall_now_ns()).await.unwrap()` with the real wall clock (`SystemTime::now()` since the epoch, in ns; storage registers deletions and runs its passes on wall time, not on the server's manual clock), then `run_once`, then stop when the row is `applied`, else sleep 100 ms.
     - The row ends `applied` with `applied_at` set.
     - Check the field path to `flush.max_age` in `config.rs` (`ServerConfig` → `storage: StorageConfig` → `flush: FlushConfig`).
 11. `superseded_when_the_project_is_not_active`: `UPDATE projects SET state = 'deleting'` on the seeded project, then a `user` row → after `run_once`, it is `applied` and `storage.deletion_status(id)` is `NotFound`.
@@ -516,9 +525,9 @@ To build a span, take `dataset_span(0)`, then set `trace_id`, `span_id`, `parent
     - A `project` row (`Pending`, `request.name`/`slug`) → `run_once`.
     - The row is `applied` with `handed_over_at == applied_at == Some(now)`.
     - `project_by_id` is `None`; `SELECT COUNT(*) FROM api_keys WHERE project_id = ?` is 0.
-    - Appending to it fails: `app.state.storage.append_spans(project, batch)` with `batch = llmobs_core::schema::spans_to_record_batch(&[span]).unwrap()` (find the exact path of `spans_to_record_batch` in `crates/core/src/schema.rs`; do not use `commit_spans`, which unwraps) returns `Err(AppendError::ProjectDropped)`.
+    - Appending to it fails: `app.state.storage.append_spans(project, batch)` with `batch = llmobs_core::batch::spans_to_record_batch(&[span]).unwrap()` (as `test_support/mod.rs` imports it; do not use `commit_spans`, which unwraps) returns `Err(AppendError::ProjectDropped)`.
     - The seeded project is untouched: `trace_status(seeded, S) == 200`. (`trace_status(A)` is not checked: the project route is 404 once the row is gone, which proves nothing about storage.)
-13a. `drop_hook_logs_once`: wrap test 12's `run_once` in `capture_logs`; the logs contain `project dropped` exactly once. A second `run_once` adds nothing (the row is applied).
+13a. `drop_hook_logs_once`: wrap test 12's `run_once` in `capture_logs`; exactly one log line contains both `audit` and `project dropped` (storage logs its own non-audit `project dropped` line too; `capture_logs` prints targets, so filter on `audit`). A second `run_once` adds nothing (the row is applied).
 13b. `org_drop_includes_projects_created_late`: an org row whose `deletion_projects` lists only project P1, while the org also has P2 (inserted after the row, as a racing `create_project` would). `run_once` drops both: P2's row is gone and appending to P2 fails with `ProjectDropped`.
 13. `org_drop_removes_the_org_and_its_usage`:
     - Seed. Create a second org with `insert_org` and two projects with `insert_project`, then commit one span to each project and one to the seeded project.
@@ -530,17 +539,18 @@ To build a span, take `dataset_span(0)`, then set `trace_id`, `span_id`, `parent
     - Four more `failed` calls return 2…5. `settled(id)` makes `due(id, 0)` true again.
 15. `audit_logs_carry_no_scope`:
     - A span of `user-secret-7` in trace `a2…ff` with session `session-secret-9`, and a `user` row for it.
-    - `let ((), logs) = capture_logs(run_once(&app.state).map(|r| r.unwrap())).await;` (adapt to `capture_logs`'s signature). Assert `logs.contains("deletion registered")` and that `logs` contains none of `user-secret-7`, `session-secret-9` and the trace hex. A needle that shows up through a dependency's debug event is a real leak: find and fix it.
+    - `let ((), logs) = capture_logs(run_once(&app.state).map(|r| r.unwrap())).await;` (adapt to `capture_logs`'s signature). Assert that some line contains both `audit` and `deletion registered` (storage logs a non-audit `deletion registered` too), and that `logs` contains none of `user-secret-7`, `session-secret-9` and the trace hex. A needle that shows up through a dependency's debug event is a real leak: find and fix it.
 
 `deletion/guard.rs` tests:
 
 16. `blocks_known_traces_and_users_for_a_day`:
     - `add_traces(P, [T], 100)` and `add_user(P, "u", 100)`.
-    - `blocks(P, T, None, 101)` is true. `blocks(P, T2, Some("u"), 101)` is true.
-    - `blocks(P2, T, None, 101)` is false. `blocks(P, T2, None, 101)` is false.
-    - `blocks(P, T, None, 100 + GUARD_NS)` is false: expired.
+    - `blocks(P, T, &[], 0, 101)` is true. `blocks(P, T2, &["u"], 100, 101)` is true (data ingested at the cut-off).
+    - `blocks(P, T2, &["u"], 101, 102)` is false: that trace's data is newer than the deletion.
+    - `blocks(P2, T, &[], 0, 101)` is false. `blocks(P, T2, &[], 0, 101)` is false.
+    - `blocks(P, T, &[], 0, 100 + GUARD_NS)` is false: expired.
 17. `prune_drops_expired_entries`: after `prune(100 + GUARD_NS)`, the internal maps are empty. Check this through `blocks` and a `#[cfg(test)] fn len(&self) -> usize` (total entries).
-18. `load_reads_recent_deletions`: using `TestApp::new()`, insert a `user` row at `now` with scope `[T]` and a `trace_ids` row at `now - GUARD_NS - 1` with scope `[T2]`. `guard.load(&meta, now)` → `blocks(P, T, …)` and `blocks(P, X, Some("user-1"), …)` are true, and `T2` is not blocked.
+18. `load_reads_recent_deletions`: using `TestApp::new()`, insert a `user` row at `now` with scope `[T]` and a `trace_ids` row at `now - GUARD_NS - 1` with scope `[T2]`. `guard.load(&meta, now)` → `blocks(P, T, &[], 0, now)` and `blocks(P, X, &["user-1"], now - 1, now)` are true, and `blocks(P, T2, &[], 0, now)` is false.
 
 Other modules:
 
@@ -556,5 +566,5 @@ Other modules:
 - [ ] `serve.rs` loads the guard and spawns the worker; `TestApp` constructs `Deletions`.
 - [ ] Logs carry no scope value (test 15).
 - [ ] `on_dropped` exists and is called once per drop.
-- [ ] The 23 tests pass; `just check` is green; one commit `Add the deletion worker`.
+- [ ] The 24 tests pass; `just check` is green; one commit `Add the deletion worker`.
 - [ ] Report any deviation from this file.

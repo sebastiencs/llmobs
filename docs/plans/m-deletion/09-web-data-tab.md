@@ -64,7 +64,8 @@ export function TypeToConfirmDialog({
 })
 ```
 
-- Same structure as `ConfirmDialog` (`AlertDialog`, header with title and description, `FormError`, footer with `Cancel` and a `destructive` button), plus an `Input` with a `Label` (`inputLabel`) between the description and the error. `autoComplete="off"`, `spellCheck={false}`.
+- Same structure as `ConfirmDialog` (`AlertDialog`, header with title and description, `FormError`, footer with `Cancel` and a `destructive` button), plus an `Input` (`@/components/ui/input`) with a `Label` (`@/components/ui/label`, `htmlFor` an id from `useId()`) between the description and the error. `autoComplete="off"`, `spellCheck={false}`.
+- `AlertDialogContent` gets `onOpenAutoFocus={(event) => { event.preventDefault(); inputRef.current?.focus(); }}` so the input, not Cancel, has focus when the dialog opens.
 - The confirm button is disabled unless the typed text equals `expected` exactly (no trimming, case-sensitive) and `!pending`.
 - Enter in the input calls `onConfirm` when the button is enabled.
 - The typed text resets to `""` whenever `open` becomes `true` (a `useEffect` on `open`).
@@ -72,7 +73,7 @@ export function TypeToConfirmDialog({
 
 Tests (`type-to-confirm-dialog.test.tsx`, rendering the component alone inside the same providers `confirm-dialog.test.tsx` uses):
 1. the confirm button is disabled until the exact text is typed; a different case (`Support-Bot`) keeps it disabled;
-2. clicking it calls `onConfirm` once; Enter does the same;
+2. clicking it calls `onConfirm` once; typing the text then pressing Enter in the input (`user.type(input, "support-bot{Enter}")`) does the same;
 3. reopening clears the field;
 4. while `pending`, Cancel is disabled and Esc does not call `onOpenChange`.
 
@@ -84,22 +85,32 @@ Tests (`type-to-confirm-dialog.test.tsx`, rendering the component alone inside t
 import type { Schema } from "@/api/types";
 type Deletion = Schema<"Deletion">;
 
-/** "User", "Traces by id", "Traces by filter", "Project", "Organization". */
+/** "User", "Traces by id", "Traces by filter", "Project", "Organization" (a `Record<Deletion["kind"], string>`). */
 export function deletionKindLabel(kind: Deletion["kind"]): string;
-/** "Finding data", "Hidden, erasing", "Erased", "Failed". */
+/** "Finding data", "Hidden, erasing", "Erased", "Failed" (a `Record<Deletion["status"], string>`). */
 export function deletionStatusLabel(status: Deletion["status"]): string;
+/** `count(1, "trace")` → "1 trace", `count(3, "trace")` → "3 traces". */
+export function count(value: number, noun: string): string;
 /** What was deleted, in words:
- *  user → `user <user_id>`; trace_ids → `<requested_traces> trace(s)` (plural rule as `count` in the users page);
- *  filter → the filter text, else `search "<search>"`, else `all traces`, followed by ` (<trace_count> traces)` once known;
- *  project / org → `<name> (<slug>)`. */
+ *  user → `user ${user_id ?? ""}`;
+ *  trace_ids → `count(requested_traces ?? 0, "trace")`;
+ *  filter → `deletion.filter?.filter`, else `search "${deletion.filter?.search}"` when a search is set, else `all traces`;
+ *           then ` (${count(trace_count, "trace")})` when `trace_count` is set;
+ *  project / org → `${name ?? slug ?? "unknown"} (${slug ?? "?"})`. */
 export function deletionSubject(deletion: Deletion): string;
+/** Poll period of the history while a deletion is open; tests lower it. */
+export const DELETION_POLL_MS = 5_000;
+export function deletionPollMs(): number;
+export function setDeletionPollMs(ms: number): void;
 /** "Too many traces matched (over 100,000)" / "Could not find the data to delete". */
 export function deletionErrorLabel(error: NonNullable<Deletion["error"]>): string;
 /** True while the status is `resolving` or `pending`. */
 export function isOpenDeletion(deletion: Deletion): boolean;
 ```
 
-Tests (`deletions.test.ts`): one case per kind for `deletionSubject` (filter with text, with search only, with neither; with and without `trace_count`), every status and error label, `isOpenDeletion` for the four statuses.
+`deletionPollMs`/`setDeletionPollMs` follow `components/onboarding/poll.ts` (a module-level `let` initialised to the constant).
+
+Tests (`deletions.test.ts`): `count` singular and plural; one case per kind for `deletionSubject` (filter with text, with search only, with neither; with and without `trace_count`), every status and error label, `isOpenDeletion` for the four statuses.
 
 ## Queries
 
@@ -117,18 +128,19 @@ export function deletionsKey(org: string, project: string) {
 ## Components
 
 `web/src/components/deletions/deletion-history.tsx` — `export function DeletionHistory()`:
-- `const { org, project } = useProject();` `const list = $api.useQuery("get", "/api/v1/projects/{project}/deletions", deletionsInit(org, project), { refetchInterval: (query) => (query.state.data?.data.some(isOpenDeletion) ? 5000 : false) });`
-- A `<section aria-labelledby=…>` with heading `<h2>Deletion history</h2>`.
+- `const { org, project } = useProject();` `const list = $api.useQuery("get", "/api/v1/projects/{project}/deletions", deletionsInit(org, project), { refetchInterval: (query) => (query.state.data?.data.some(isOpenDeletion) ? deletionPollMs() : false) });`
+- A `<section aria-labelledby={headingId}>` (`const headingId = useId();`) with heading `<h2 id={headingId}>Deletion history</h2>`.
 - Pending: nothing (no spinner). Error: `FormError` with `problemMessage(list.error, "Could not load the deletions.")`. Empty: `EmptyState` titled `No deletions yet`.
-- Otherwise a `Table` (`ui/table.tsx`) with `aria-label="Deletions"` and columns: **Requested** (`TimeText value={created_at} style="datetime"`), **What** (`deletionKindLabel(kind)` then, muted, `deletionSubject`), **Status** (`Badge` with `deletionStatusLabel`; variant `destructive` for `failed`, `secondary` for `applied`, `outline` otherwise; for `failed` also `deletionErrorLabel(error)` below it), **By** (`API key` or `Member`, then `IdText value={requested_by.id}`; check `IdText`'s props), **Erased** (`TimeText` of `applied_at`, or `—`).
+- Otherwise a `Table` (`ui/table.tsx`) with `aria-label="Deletions"` and columns: **Requested** (`TimeText value={created_at} style="datetime"`), **What** (`deletionKindLabel(kind)` then, muted, `deletionSubject`), **Status** (`Badge` with `deletionStatusLabel`; variant `destructive` for `failed`, `secondary` for `applied`, `outline` otherwise; for `failed` also `deletionErrorLabel(error)` below it), **By** (`API key` or `Member`, then `<IdText value={requested_by.id} kind={requested_by.kind === "api_key" ? "API key" : "user"} />`), **Applied** (`TimeText` of `applied_at`, or `—`). The column is "Applied", not "Erased", so its header never collides with the status text in queries.
 - Only the first page (50 rows) is shown; no pager.
 
 `web/src/components/deletions/user-deletion-form.tsx` — `export function UserDeletionForm()`:
-- `<section>` with heading `<h2>Delete a user's data</h2>` and the text: "Removes every span and score of this end user, with their traces, sessions and evaluation traces. The data is hidden within seconds and erased within 24 hours. This cannot be undone."
+- `<section aria-labelledby={useId()…}>` with heading `<h2>Delete a user's data</h2>` and the text: "Removes every span and score of this end user, with their traces, sessions and evaluation traces. The data is hidden within seconds and erased within 24 hours. This cannot be undone."
 - A form (`aria-label="Delete a user's data"`, `noValidate`) with `TextField` `id="deletion-user-id"`, label `User ID`, `required`. Submit button `Delete user data…`: an empty field sets the field error `Enter a user ID.`; a value over 255 bytes (`new TextEncoder().encode(value).length > 255`) sets `Use at most 255 bytes.`; otherwise it opens the dialog. The value is sent as typed (not trimmed: user ids match exactly).
 - `TypeToConfirmDialog`: `title="Delete this user's data?"`, `description` repeats the paragraph above, `expected={userId}`, `inputLabel={`Type the user ID "${userId}" to confirm`}`, `confirmLabel="Delete user data"`.
 - `const mutation = $api.useMutation("post", "/api/v1/projects/{project}/deletions");` with `{ params: { path: { project: ref } }, body: { kind: "user", user_id: userId } }`.
-  - success: close the dialog, clear the field, show `FormSuccess` "Deletion requested. The data is hidden within seconds and erased within 24 hours.", and `invalidateQueries({ queryKey: deletionsKey(org, project) })`;
+  - success: close the dialog, clear the field, show `FormSuccess` "Deletion requested. The data is hidden within seconds and erased within 24 hours.", and `invalidateQueries({ queryKey: deletionsKey(org, project) })`. The success text clears when the field changes or the form is submitted again (as `general.tsx` clears "Saved");
+  - `mutation.reset()` whenever the dialog opens, so an old error does not show;
   - error: `fieldErrors(caught).user_id` → under the field (and close the dialog); status `403` → dialog error "Only project admins can delete data."; status `409` → dialog error `problemMessage(caught, …)` (the server says "too many open deletions"); otherwise `problemMessage(caught, "Could not request the deletion.")` in the dialog.
 
 ## Page
@@ -160,14 +172,14 @@ Check `SettingsPage`'s props in `settings-page.tsx` and `Forbidden`'s in `forbid
 
 ## Tests
 
-`data.test.tsx` (`renderApp("/acme/support-bot/settings/data")`; override endpoints with `server.use(http.…)`; the project fixture's role is `owner`→ admin; use `projectAs(role)` as in `general.test.tsx` for other roles):
+`data.test.tsx` (`renderApp("/acme/support-bot/settings/data")`; override endpoints with `server.use(http.…)`; the project fixture's role is admin). Define the same 4-line `projectAs(role)` helper `general.test.tsx` has (it is file-local there; it imports `../../../../../../fixtures/api/static/project.json`). Error answers use `problemResponse(status, code, { detail?, errors? })` from `@/test/problem`. Every POST must be answered by a `server.use` handler (the test setup fails on unhandled requests). `GET …/deletions` is served by the default mocks from M4's manifest entry:
 
 1. `shows_the_history`: the three fixture rows appear in the `Deletions` table with `Hidden, erasing`, `Erased`, `Failed`, and `user user-3`.
-2. `admins_only`: with `projectAs("member")` the page shows the Forbidden text, and the settings sidebar has no `Data` link.
+2. `admins_only`: with `projectAs("member")` the page shows the Forbidden text, and `within(screen.getByRole("list", { name: "Project settings" }))` has no `Data` link.
 3. `requests_a_user_deletion`: type `user-7`, click `Delete user data…`; the dialog's confirm is disabled; type `user-7` in the dialog; confirm. The captured POST body equals `{kind: "user", user_id: "user-7"}` (D-L-10: assert the body in a `server.use` handler that answers `202` with `deletion.json`); the success text appears; the list is fetched again (count GET calls in a `server.use` handler: 2).
 4. `validates_the_user_id`: empty → `Enter a user ID.`, no dialog; 256 ASCII characters → `Use at most 255 bytes.`.
-5. `shows_server_errors`: POST answers `409` with `problemResponse(409, "conflict", "too many open deletions")` (check `problemResponse`'s signature) → the dialog shows `too many open deletions`; a `400` with `errors: [{field: "user_id", message: "user_id must be 1 to 255 bytes"}]` → that text under the field.
-6. `polls_while_open`: with the default fixture (an open row) the list refetches; use `vi.useFakeTimers({ shouldAdvanceTime: true })`, advance 5 s, and expect a second GET. If fake timers fight React Query in this setup, assert instead that the query's `refetchInterval` option returns 5000 by rendering with a closed-only list (`server.use` returning only `applied` rows) and checking no second GET after advancing; pick the variant that is stable and say which in your report.
+5. `shows_server_errors`: POST answers `problemResponse(409, "conflict", { detail: "too many open deletions" })` → the dialog shows `too many open deletions`; `problemResponse(400, "bad_request", { errors: [{ field: "user_id", message: "user_id must be 1 to 255 bytes" }] })` → that text under the field.
+6. `polls_while_open`: `setDeletionPollMs(20)` before rendering (and `setDeletionPollMs(DELETION_POLL_MS)` in a `finally`/`afterEach`); count GETs in a `server.use` handler that returns the fixture (an open row); `await waitFor(() => expect(gets).toBeGreaterThanOrEqual(2))`. Real timers, no fake timers.
 7. `empty_history`: `server.use` returns `{data: [], next_cursor: null}` → `No deletions yet`.
 
 ## Commands

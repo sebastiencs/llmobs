@@ -41,7 +41,7 @@ Storage already does the work (spec 03 § 8): it obsoletes whole days before the
 use std::time::Duration;
 
 use chrono::{DateTime, Days, NaiveDate};
-use llmobs_core::ids::{OrgId, ProjectId};
+use llmobs_core::ids::ProjectId;
 
 use crate::http::AppState;
 use crate::meta::MetaError;
@@ -89,11 +89,10 @@ pub(crate) struct RetentionRun {
 pub(crate) async fn retention_once(state: &AppState) -> Result<RetentionRun, MetaError> {
     let now = state.clock.now_ns();
     let mut run = RetentionRun::default();
-    for (org, project, own) in crate::meta::projects::projects_for_retention(state.meta.reader()).await? {
+    for (_org, project, own) in crate::meta::projects::projects_for_retention(state.meta.reader()).await? {
         // D175, D-M-15: track P replaces `None` with the org's cap
-        // (`state.entitlements.of(org).retention_cap_days()`: data-access window + 30 days).
+        // (`state.entitlements.of(_org).retention_cap_days()`: data-access window + 30 days).
         let cap: Option<u32> = None;
-        let _ = org;
         let Some(days) = effective_days(own, cap) else {
             continue;
         };
@@ -120,7 +119,7 @@ pub(crate) async fn apply_now(state: &AppState, project: ProjectId, days: u32) {
 }
 ```
 
-`let _ = org;` keeps `org` named at the call site P will use; if clippy flags it (`let_underscore_untyped` is not enabled in this workspace; check `[workspace.lints]`), bind the tuple as `(_org, project, own)` instead and keep the comment. `StorageError`'s `Display` names no payload, so logging `%error` is allowed. `PATCH`'s immediate apply uses the project's own days only: the hourly run applies the cap. In `lib.rs`, add `pub(crate) mod retention;`, alphabetical.
+`_org` stays named at the call site P will use. Every hourly run commits one catalog edit per project with an effective retention, even when the watermark does not move; that is cheap today and accepted (P may add a skip when caps make it every project). `StorageError`'s `Display` names no payload, so logging `%error` is allowed. `PATCH`'s immediate apply uses the project's own days only: the hourly run applies the cap. In `lib.rs`, add `pub(crate) mod retention;`, alphabetical.
 
 `meta/projects.rs`:
 
@@ -172,8 +171,9 @@ fn may_manage_retention(_state: &AppState, _org: OrgId) -> bool {
 const RETENTION_PLAN: &str = "data retention management is part of the Pro plan";
 ```
 
-- `create_project`: when `body.retention_days.is_some()` and `!may_manage_retention(&state, access.org.id)` → `Err(ApiError::PlanRequired { detail: RETENTION_PLAN })`, before the write.
-- `update_project`: when `body.retention_days.is_some()` (a number or `null`) and `!may_manage_retention(&state, access.project.org_id)` → the same, before the write.
+- `create_project`: when `body.retention_days` is a number and `!may_manage_retention(&state, access.org.id)` → `Err(ApiError::PlanRequired { detail: RETENTION_PLAN })`, before the write.
+- `update_project`: when `body.retention_days` is `Some(Some(_))` (a number) and `!may_manage_retention(&state, access.project.org_id)` → the same, before the write. `null` ("keep forever") is never gated (D-M-16).
+- `routes/projects.rs` needs `use llmobs_core::ids::OrgId;` at the top (today only its test module imports it).
 
 The `false` branch cannot be reached until P changes the body; it is tested through `ApiError::PlanRequired`'s mapping (test 9).
 
@@ -220,6 +220,8 @@ fn spawn_retention(state: AppState) -> JoinHandle<()> {
 
 ## Tests
 
+Tests 3, 4, 6, 7 and 8 use `#[tokio::test(flavor = "multi_thread")]`, as the crate's other storage-backed tests do.
+
 Spans: `dataset_span(0)` with `trace_id = "<32 hex>".parse().unwrap()`, `span_id` edited, `parent_span_id = None`, `start_time` as given and `end_time = start_time + 1_000`. `commit_spans` does not run normalization, so an old `start_time` is stored even when the project has retention. A trace is read with `GET /api/v1/projects/{project.id}/traces/{trace_hex}` and the seeded owner's cookie (`seeded.cookie`), which also reaches projects from `add_project` (same org).
 
 Times: `NOW` = `2026-01-01T00:00:00Z` (the manual clock), `DAY = 86_400 * 1_000_000_000`, `HOUR = 3_600 * 1_000_000_000`. Use midday times (`NOW - 3 * DAY + 12 * HOUR`, `NOW - 12 * HOUR`): spec 03 § 8 lets a row next to midnight land differently in the memtable and in a file.
@@ -235,7 +237,7 @@ Times: `NOW` = `2026-01-01T00:00:00Z` (the manual clock), `DAY = 86_400 * 1_000_
    - (a) `add_project(&seeded, "p-del", Some(1))`, then `UPDATE projects SET state = 'deleting' WHERE id = ?`; (b) `add_project(&seeded, "p-ok", Some(1))`.
    - `retention_once` → `projects == 1` (only `p-ok`).
    - Then `UPDATE orgs SET state = 'deleting' WHERE id = ?` on the seeded org → `retention_once` → `projects == 0`.
-5. `projects_for_retention_lists_active_ones` (in `meta/projects.rs` tests, with `test_db()`): one org with projects at `None`, `Some(7)`, `Some(30)`, and one at `Some(1)` in state `deleting` → three rows (the deleting one is left out), with their org id and days, ordered by project id; `None` is included.
+5. `projects_for_retention_lists_active_ones` (in `meta/projects.rs` tests, with `test_db()`): one org with projects at `None`, `Some(7)`, `Some(30)`, and one at `Some(1)` in state `deleting` → three rows (the deleting one is left out), with their org id and days; `None` is included. Build the expected order by sorting the created ids (`ids.sort()`), not by creation order.
 6. `patch_applies_retention_at_once` (in `routes/projects.rs` tests): seeded project, trace A at `NOW - 3 * DAY + 12 * HOUR`; `PATCH {retention_days: 1}` with the owner cookie → `200`; trace A → `404` with no hourly run.
 7. `patch_to_forever_keeps_dropped_data_dropped`: after test 6's steps, `PATCH {retention_days: null}` → `200`; trace A is still `404` (the watermark never moves back).
 8. `patch_logs_the_change`: `capture_logs` around `PATCH {retention_days: 7}` contains `retention changed`, `retention_days=7` and `audit`; around `PATCH {name: "x"}` it contains no `retention changed`.

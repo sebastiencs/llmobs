@@ -64,7 +64,7 @@ No `into_params` attribute: `with_query` places the parameters in the query, as 
 
 Add `Self::ViewDeletions` to the existing arm of `OrgPerm::min_role` that returns `OrgRole::Admin` (it also lists track I's `ManageConnections`), and a new arm `Self::Delete => OrgRole::Owner`. In `ProjectPerm::min_role`, add `Self::Drop` to the arm returning `Role::Admin`; in `ProjectPerm::key_scope`, `Self::Drop => None`.
 
-Extend `permissions_follow_the_spec_table` in `roles.rs`: `OrgPerm::Delete.min_role() == OrgRole::Owner`, `OrgPerm::ViewDeletions.min_role() == OrgRole::Admin`, `ProjectPerm::Drop.min_role() == Role::Admin`, `ProjectPerm::Drop.key_scope() == None`.
+Extend `permissions_follow_the_spec_table` in `roles.rs`: `OrgPerm::Delete.min_role() == OrgRole::Owner`, `OrgPerm::ViewDeletions.min_role() == OrgRole::Admin`, `ProjectPerm::Drop.min_role() == Role::Admin`, `assert!(ProjectPerm::Drop.key_scope().is_none())`; and update its comment "Owner-only rows (delete org, transfer ownership) are not permissions yet" to say only transfer ownership is not a permission yet.
 
 ## Store
 
@@ -74,7 +74,7 @@ Extend `permissions_follow_the_spec_table` in `roles.rs`: `OrgPerm::Delete.min_r
 /// `active` → `deleting`. Returns whether the row changed.
 pub(crate) async fn mark_project_deleting(conn: &mut SqliteConnection, id: ProjectId, now: i64) -> Result<bool, MetaError>;
 ```
-`UPDATE projects SET state = 'deleting', updated_at = ? WHERE id = ? AND state = 'active'`. M3 already added `project_ids_of_org`; call it with `&mut *conn` inside the transaction.
+`UPDATE projects SET state = 'deleting', updated_at = ? WHERE id = ? AND state = 'active'`. M3 already added `project_ids_of_org`; call M3's variant inside the transaction: `project_ids_of_org(&mut *conn, org)` if it is generic over the executor, else its `_in` twin.
 
 `meta/orgs.rs`:
 
@@ -83,7 +83,7 @@ pub(crate) async fn mark_project_deleting(conn: &mut SqliteConnection, id: Proje
 pub(crate) async fn mark_org_deleting(conn: &mut SqliteConnection, id: OrgId, now: i64) -> Result<bool, MetaError>;
 ```
 
-and in `orgs_of_user`, add `AND orgs.state = 'active'` to the `WHERE` clause, so `GET /api/auth/me` stops listing orgs being deleted (`GET /api/v1/orgs` already filters them in `routes/orgs.rs::list_orgs`; leave that filter, it is harmless). Update its doc comment: "Active orgs the user belongs to…". Its only other caller is a test in `meta/members.rs` that uses active orgs.
+and in `orgs_of_user`, add `AND orgs.state = 'active'` to the `WHERE` clause, so `GET /api/auth/me` stops listing orgs being deleted (`GET /api/v1/orgs` already filters them in `routes/orgs.rs::list_orgs`; leave that filter, it is harmless). Update its doc comment: "Active orgs the user belongs to…". Its callers: `routes/auth.rs::me_from` (also in the login, signup and setup answers), `routes/orgs.rs::list_orgs`, `mcp/tools.rs` `list_projects` (already skips inactive orgs; its `mcp/mod.rs` test that marks an org deleting still passes), and a test in `meta/members.rs` that uses active orgs.
 
 Add `meta` tests: `mark_project_deleting` and `mark_org_deleting` return `true` then `false`; `orgs_of_user` omits an org after `mark_org_deleting`.
 
@@ -100,7 +100,7 @@ RouteDef { method: Method::GET, path: "/api/v1/orgs/{org}/deletions",
            access: Access::Org { perm: OrgPerm::ViewDeletions, session_only: false }, documented: true, handler: get(list_org_deletions) },
 ```
 
-`DELETE /api/v1/projects/{project}` shares its path with M4's untouched `GET`/`PATCH` in `routes/projects.rs`; `build_router` merges them. Do the same for `/api/v1/orgs/{org}`.
+`DELETE /api/v1/projects/{project}` shares its path with the `GET`/`PATCH` in `routes/projects.rs`; `build_router` merges them. The same for `/api/v1/orgs/{org}`. `routes/deletions.rs` needs `use axum::routing::delete;`. The `meta.write` closures are `move` and `'static`: copy `user.id`, `access.project.id`, `access.project.org_id` and clone `name`/`slug` into locals before them (`user` borrows `principal`).
 
 ### `drop_project`
 
@@ -157,11 +157,11 @@ Update `crates/server/tests/openapi.rs`: add the three operations to `OPERATIONS
 ## Examples
 
 - `fixtures/api/static/deletion-project.json`: a `Deletion` with:
-  - id `01900000-0000-7000-8000-000000000403`, `kind` `project`, `status` `pending`;
+  - id `01900000-0000-7000-8000-000000000903`, `kind` `project`, `status` `pending`;
   - `org_id` acme, `project_id` the second project `01900000-0000-7000-8000-000000000002`;
   - `name` `Playground`, `slug` `playground`;
   - requested by user `…0100`, `created_at` `2026-01-03T08:00:00.000000000Z`.
-- `fixtures/api/static/deletion-org.json`: id `…0404`, `kind` `org`, `status` `pending`, `org_id` acme, no `project_id`, `name` `Acme`, `slug` `acme`, the same requester, `created_at` `2026-01-03T09:00:00.000000000Z`.
+- `fixtures/api/static/deletion-org.json`: id `…0904`, `kind` `org`, `status` `pending`, `org_id` acme, no `project_id`, `name` `Acme`, `slug` `acme`, the same requester, `created_at` `2026-01-03T09:00:00.000000000Z`.
 - `fixtures/api/static/org-deletions.json`: a `Page<Deletion>` with `deletion-project.json`'s row, then the three rows of `deletions.json`, newest first, `next_cursor` null.
 - `api_examples.rs`, in the static `out.manifest.extend([…])` list:
   - `example("list_org_deletions", params(&[("org", "acme")]), BTreeMap::new(), "static/org-deletions.json", "application/json")`;
@@ -189,7 +189,7 @@ delete_org: () => HttpResponse.json(deletionOrgDocument, { status: 202 }),
 
 ## Tests
 
-In `routes/deletions.rs` tests, reusing M4's helpers (`Auth`, `post`, `get`, `key_with`, `pat`, `member_cookie`, `commit`). "Owner cookie" is the seeded user, who owns `acme`. `app.add_project(&seeded, slug, None)` creates a project whose name equals its slug, with one ingest key; for a key with every scope on it, call `key_with(&app, project.id, vec![Ingest, Read, Write, Feedback])`.
+In `routes/deletions.rs` tests, reusing M4's helpers (`Auth`, `post`, `get`, `key_with`, `commit`) and `test_support`'s `add_member` and `personal_token`. Add `async fn send(app: &TestApp, method: Method, path: &str, auth: &Auth, body: Option<serde_json::Value>) -> TestResponse` for any full path (DELETE, other projects, `/api/v1/orgs/…`, `/api/auth/me`), and make M4's `post`/`get` call it (`TestApp::request` already sets the `Origin` header). Tests that commit spans or run the worker use `#[tokio::test(flavor = "multi_thread")]`. "Owner cookie" is the seeded user, who owns `acme`. `app.add_project(&seeded, slug, None)` creates a project whose name equals its slug, with one ingest key; for a key with every scope on it, call `key_with(&app, project.id, vec![Ingest, Read, Write, Feedback])`.
 
 OTLP with a project's key: `app.request(Method::POST, "/v1/traces").header("authorization", &format!("Bearer {key}")).header("content-type", "application/json").body("{}").send().await`. An empty JSON export is accepted (`200`) for an active project. The key cache matters: a key **never used** before its project became `deleting` is refused at lookup with `401`; a key used once (cached) reaches the project check and gets `404`.
 
@@ -199,7 +199,7 @@ OTLP with a project's key: `app.request(Method::POST, "/v1/traces").header("auth
    - Right away, before the worker:
      - `GET /api/v1/projects/{id}` → `404`;
      - `GET /api/v1/orgs/acme/projects` does not list it;
-     - an OTLP request with its ingest key → `404`. Send one OTLP export with that key **before** the `DELETE` (expect `200`), so the key is cached; a second, unused key of the same project (from `key_with`) gets `401` after the `DELETE`.
+     - an OTLP request with its ingest key → `404`. Send one OTLP export with that key **before** the `DELETE` (expect `200`), so the key is cached; a second key of the same project, minted with `key_with` **before** the `DELETE` and never used before it, gets `401` after the `DELETE`.
    - `run_once`. `GET /api/v1/orgs/acme/deletions` lists the row as `applied`; `project_by_id` is `None`.
 2. `project_drop_confirmation`: `confirm=wrong` → `400`, field `confirm`; a missing `confirm` → `400`; the project is still `active`.
 3. `project_drop_needs_org_admin`:
