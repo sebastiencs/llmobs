@@ -699,10 +699,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List saved views */
+        /**
+         * List saved views
+         * @description Views the caller can see: their own and every shared view. An API key sees shared views. Ordered by id (creation order).
+         */
         get: operations["list_saved_views"];
         put?: never;
-        /** Create a saved view */
+        /**
+         * Create a saved view
+         * @description Creates a view owned by the caller. Sharing needs role member. At most 1,000 views per user and project (409). A session or a read-write personal access token; API keys cannot write saved views.
+         */
         post: operations["create_saved_view"];
         delete?: never;
         options?: never;
@@ -720,11 +726,17 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete a saved view */
+        /**
+         * Delete a saved view
+         * @description The owner deletes their view, at any role. A project admin may also delete another user's shared view.
+         */
         delete: operations["delete_saved_view"];
         options?: never;
         head?: never;
-        /** Update a saved view */
+        /**
+         * Update a saved view
+         * @description The owner changes name, state, shared and is_default; sharing, or editing a shared view, needs role member. A project admin may also unshare another user's shared view. Setting is_default clears the other default of the same scope: the caller's private views of that kind, or the project's shared views of that kind.
+         */
         patch: operations["update_saved_view"];
         trace?: never;
     };
@@ -1280,7 +1292,7 @@ export interface components {
          *     Spec 09 § Observability data.
          */
         CreateSavedView: {
-            /** @description Default view for this kind. Default false. */
+            /** @description The default of its scope: among the owner's private views of this kind ("my default"), or among the project's shared views of this kind ("project default"). Setting it clears the other default of that scope (D-H-6). Default false. */
             is_default?: boolean;
             /** @description Which page the view opens. */
             kind: components["schemas"]["SavedViewKind"];
@@ -1288,7 +1300,7 @@ export interface components {
             name: string;
             /** @description Visible to every member of the project. Default false. */
             shared?: boolean;
-            /** @description Opaque UI state: list-page URL params, or `{query, params}` for SQL. */
+            /** @description Opaque UI state: list-page URL params, or `{query, params, range}` / `{query, params, from, to}` for SQL (D-H-7). */
             state: Record<string, never>;
         };
         /**
@@ -1963,7 +1975,7 @@ export interface components {
              * @description Saved view id.
              */
             id: string;
-            /** @description Default view for this kind when the caller has no view of their own. */
+            /** @description The default of its scope: among the owner's private views of this kind ("my default"), or among the project's shared views of this kind ("project default"). Setting it clears the other default of that scope (D-H-6). */
             is_default: boolean;
             /** @description Which page the view opens. */
             kind: components["schemas"]["SavedViewKind"];
@@ -1976,7 +1988,7 @@ export interface components {
             owner_user_id?: string;
             /** @description Visible to every member of the project. */
             shared: boolean;
-            /** @description Opaque UI state: list-page URL params, or `{query, params}` for SQL. */
+            /** @description Opaque UI state: list-page URL params, or `{query, params, range}` / `{query, params, from, to}` for SQL (D-H-7). */
             state: Record<string, never>;
             /**
              * Format: date-time
@@ -2968,13 +2980,13 @@ export interface components {
          *     Omitted fields are left unchanged. Spec 09 § Observability data.
          */
         UpdateSavedView: {
-            /** @description Default view for this kind. */
+            /** @description The default of its scope: among the owner's private views of this kind ("my default"), or among the project's shared views of this kind ("project default"). Setting it clears the other default of that scope (D-H-6). Omitted: unchanged. */
             is_default?: boolean;
             /** @description Display name. */
             name?: string;
-            /** @description Visible to every member of the project. */
+            /** @description Visible to every member of the project. Omitted: unchanged. */
             shared?: boolean;
-            /** @description Opaque UI state: list-page URL params, or `{query, params}` for SQL. */
+            /** @description Opaque UI state: list-page URL params, or `{query, params, range}` / `{query, params, from, to}` for SQL (D-H-7). */
             state?: Record<string, never>;
         };
         /** @description Media addressed by a URI, including `media://` after extraction. */
@@ -6207,6 +6219,33 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            /** @description The request conflicts with the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request body is larger than the limit. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request body is not JSON. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Too many requests. */
             429: {
                 headers: {
@@ -6238,6 +6277,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
             };
             /** @description No credentials, or the credentials are invalid. */
             401: {
@@ -6333,6 +6381,33 @@ export interface operations {
             };
             /** @description The resource does not exist. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request conflicts with the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request body is larger than the limit. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request body is not JSON. */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };

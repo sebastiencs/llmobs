@@ -48,6 +48,7 @@ use crate::http::{AppInner, AppState, router, router_with, serve_router};
 use crate::meta::api_keys::{self, NewApiKey};
 use crate::meta::members::add_org_member;
 use crate::meta::orgs::insert_org;
+use crate::meta::personal_tokens::{NewToken, insert_token};
 use crate::meta::projects::{ProjectRow, insert_project};
 use crate::meta::users::{self, NewUser, insert_user};
 use crate::meta::{MetaDb, MetaError};
@@ -212,6 +213,8 @@ impl TestApp {
 /// A user (`ada@example.com`, instance admin), an org `acme` they own, a
 /// project `support-bot`, a session cookie, and one `sk` key per scope set.
 pub(crate) struct Seeded {
+    /// `ada@example.com`'s `users.id`.
+    pub(crate) user_id: Uuid,
     pub(crate) org_id: OrgId,
     pub(crate) project: ProjectRow,
     pub(crate) cookie: String,
@@ -269,6 +272,7 @@ impl TestApp {
             .unwrap();
         let cookie = session_cookie(self, user_id).await;
         Seeded {
+            user_id,
             org_id,
             project,
             cookie,
@@ -319,6 +323,86 @@ impl TestApp {
             .await
             .unwrap();
         (project, plaintext)
+    }
+}
+
+/// A user added to `seeded`'s org by [`TestApp::add_member`].
+#[derive(Debug, Clone)]
+pub(crate) struct Member {
+    /// `users.id`.
+    pub(crate) id: Uuid,
+    /// `llmobs_session=…`, ready for a `cookie` header.
+    pub(crate) cookie: String,
+}
+
+impl TestApp {
+    /// A new user `email` with org role `role` in `seeded`'s org (no project override), and a
+    /// session cookie for them.
+    pub(crate) async fn add_member(&self, seeded: &Seeded, email: &str, role: OrgRole) -> Member {
+        let now = self.state.clock.now_ns();
+        let org_id = seeded.org_id;
+        let email = email.to_owned();
+        let id = self
+            .state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    let user = insert_user(
+                        conn,
+                        NewUser {
+                            email,
+                            name: None,
+                            password_hash: None,
+                            email_verified_at: None,
+                            is_instance_admin: false,
+                        },
+                        now,
+                    )
+                    .await?;
+                    add_org_member(conn, org_id, user.id, role, now).await?;
+                    Ok(user.id)
+                })
+            })
+            .await
+            .unwrap();
+        let cookie = session_cookie(self, id).await;
+        Member { id, cookie }
+    }
+
+    /// A personal access token for `user_id`, returned as its plaintext: scope `read`, plus
+    /// `write` when `write` is true.
+    pub(crate) async fn personal_token(&self, user_id: Uuid, write: bool) -> String {
+        let minted = secret::new_key(KeyKind::Personal).unwrap();
+        let plaintext = minted.plaintext.clone();
+        let now = self.state.clock.now_ns();
+        let scopes = if write {
+            vec![KeyScope::Read, KeyScope::Write]
+        } else {
+            vec![KeyScope::Read]
+        };
+        self.state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    insert_token(
+                        conn,
+                        NewToken {
+                            user_id,
+                            name: "test".to_owned(),
+                            prefix: minted.prefix,
+                            hash: minted.hash,
+                            scopes,
+                            expires_at: None,
+                        },
+                        now,
+                    )
+                    .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
+        plaintext
     }
 }
 

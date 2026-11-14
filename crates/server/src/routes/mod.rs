@@ -15,6 +15,7 @@ pub(crate) mod orgs;
 pub(crate) mod otlp;
 pub(crate) mod projects;
 pub(crate) mod read;
+pub(crate) mod saved_views;
 pub(crate) mod schema;
 pub(crate) mod scores;
 pub(crate) mod sessions;

@@ -278,6 +278,18 @@ fn bad_request(detail: String) -> ApiError {
     }
 }
 
+/// One `400 bad_request` field error. The problem has no `detail`.
+pub(crate) fn field_error(field: &str, message: &str) -> ApiError {
+    ApiError::BadRequest {
+        detail: None,
+        errors: vec![FieldError {
+            field: field.to_owned(),
+            message: message.to_owned(),
+            position: None,
+        }],
+    }
+}
+
 fn with_path(sentence: &str, path: Option<String>) -> String {
     match path {
         Some(path) => format!("{sentence} at {path}"),
@@ -450,6 +462,22 @@ mod tests {
     use llmobs_storage::{InvalidQuery, Position};
 
     use super::*;
+
+    #[test]
+    fn field_error_has_no_detail() {
+        let ApiError::BadRequest { detail, errors } = field_error("name", "bad") else {
+            panic!("field_error is a bad request");
+        };
+        assert_eq!(detail, None);
+        assert_eq!(
+            errors,
+            vec![FieldError {
+                field: "name".to_owned(),
+                message: "bad".to_owned(),
+                position: None,
+            }]
+        );
+    }
 
     #[test]
     fn invalid_filter_is_400_with_a_position() {

@@ -3934,6 +3934,7 @@
           "saved_views"
         ],
         "summary": "List saved views",
+        "description": "Views the caller can see: their own and every shared view. An API key sees shared views. Ordered by id (creation order).",
         "operationId": "list_saved_views",
         "parameters": [
           {
@@ -4042,6 +4043,7 @@
           "saved_views"
         ],
         "summary": "Create a saved view",
+        "description": "Creates a view owned by the caller. Sharing needs role member. At most 1,000 views per user and project (409). A session or a read-write personal access token; API keys cannot write saved views.",
         "operationId": "create_saved_view",
         "parameters": [
           {
@@ -4115,6 +4117,36 @@
               }
             }
           },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is larger than the limit.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request body is not JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Too many requests.",
             "content": {
@@ -4134,6 +4166,7 @@
           "saved_views"
         ],
         "summary": "Delete a saved view",
+        "description": "The owner deletes their view, at any role. A project admin may also delete another user's shared view.",
         "operationId": "delete_saved_view",
         "parameters": [
           {
@@ -4159,6 +4192,16 @@
         "responses": {
           "204": {
             "description": "Deleted."
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           },
           "401": {
             "description": "No credentials, or the credentials are invalid.",
@@ -4207,6 +4250,7 @@
           "saved_views"
         ],
         "summary": "Update a saved view",
+        "description": "The owner changes name, state, shared and is_default; sharing, or editing a shared view, needs role member. A project admin may also unshare another user's shared view. Setting is_default clears the other default of the same scope: the caller's private views of that kind, or the project's shared views of that kind.",
         "operationId": "update_saved_view",
         "parameters": [
           {
@@ -4282,6 +4326,36 @@
           },
           "404": {
             "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is larger than the limit.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request body is not JSON.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6968,7 +7042,7 @@
         "properties": {
           "is_default": {
             "type": "boolean",
-            "description": "Default view for this kind. Default false."
+            "description": "The default of its scope: among the owner's private views of this kind (\"my default\"), or among the project's shared views of this kind (\"project default\"). Setting it clears the other default of that scope (D-H-6). Default false."
           },
           "kind": {
             "$ref": "#/components/schemas/SavedViewKind",
@@ -6984,7 +7058,7 @@
           },
           "state": {
             "type": "object",
-            "description": "Opaque UI state: list-page URL params, or `{query, params}` for SQL."
+            "description": "Opaque UI state: list-page URL params, or `{query, params, range}` / `{query, params, from, to}` for SQL (D-H-7)."
           }
         },
         "additionalProperties": false
@@ -8300,7 +8374,7 @@
           },
           "is_default": {
             "type": "boolean",
-            "description": "Default view for this kind when the caller has no view of their own."
+            "description": "The default of its scope: among the owner's private views of this kind (\"my default\"), or among the project's shared views of this kind (\"project default\"). Setting it clears the other default of that scope (D-H-6)."
           },
           "kind": {
             "$ref": "#/components/schemas/SavedViewKind",
@@ -8321,7 +8395,7 @@
           },
           "state": {
             "type": "object",
-            "description": "Opaque UI state: list-page URL params, or `{query, params}` for SQL."
+            "description": "Opaque UI state: list-page URL params, or `{query, params, range}` / `{query, params, from, to}` for SQL (D-H-7)."
           },
           "updated_at": {
             "type": "string",
@@ -10124,7 +10198,7 @@
         "properties": {
           "is_default": {
             "type": "boolean",
-            "description": "Default view for this kind."
+            "description": "The default of its scope: among the owner's private views of this kind (\"my default\"), or among the project's shared views of this kind (\"project default\"). Setting it clears the other default of that scope (D-H-6). Omitted: unchanged."
           },
           "name": {
             "type": "string",
@@ -10132,11 +10206,11 @@
           },
           "shared": {
             "type": "boolean",
-            "description": "Visible to every member of the project."
+            "description": "Visible to every member of the project. Omitted: unchanged."
           },
           "state": {
             "type": "object",
-            "description": "Opaque UI state: list-page URL params, or `{query, params}` for SQL."
+            "description": "Opaque UI state: list-page URL params, or `{query, params, range}` / `{query, params, from, to}` for SQL (D-H-7)."
           }
         },
         "additionalProperties": false
