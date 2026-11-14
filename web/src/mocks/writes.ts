@@ -11,6 +11,7 @@ import orgMembersDocument from "../../../fixtures/api/static/org-members.json";
 import personalTokenCreatedDocument from "../../../fixtures/api/static/personal-token-created.json";
 import projectDocument from "../../../fixtures/api/static/project.json";
 import projectMembersDocument from "../../../fixtures/api/static/project-members.json";
+import scoreDefinitionDocument from "../../../fixtures/api/static/score-definition.json";
 import setupResponseDocument from "../../../fixtures/api/static/setup-response.json";
 import signupResponseDocument from "../../../fixtures/api/static/signup-response.json";
 
@@ -89,6 +90,21 @@ export const WRITE_OPERATIONS: readonly WriteOperation[] = [
     operationId: "delete_project_member",
     method: "delete",
     path: "/api/v1/projects/{project}/members/{user}",
+  },
+  {
+    operationId: "post_score_definition",
+    method: "post",
+    path: "/api/v1/projects/{project}/score-definitions",
+  },
+  {
+    operationId: "patch_score_definition",
+    method: "patch",
+    path: "/api/v1/projects/{project}/score-definitions/{id}",
+  },
+  {
+    operationId: "delete_score_definition",
+    method: "delete",
+    path: "/api/v1/projects/{project}/score-definitions/{id}",
   },
   { operationId: "post_admin_user", method: "post", path: "/api/v1/admin/users" },
   { operationId: "patch_admin_user", method: "patch", path: "/api/v1/admin/users/{id}" },
@@ -260,6 +276,11 @@ const RESPONSES: Record<string, Respond> = {
     });
   },
   delete_project_member: () => noContent(),
+  post_score_definition: ({ body }) =>
+    HttpResponse.json({ ...scoreDefinitionDocument, ...named(body) }, { status: 201 }),
+  patch_score_definition: ({ body }) =>
+    HttpResponse.json({ ...scoreDefinitionDocument, ...named(body) }),
+  delete_score_definition: () => noContent(),
 
   post_admin_user: ({ body }) => {
     const { name: _name, ...unnamedUser } = adminUserCreatedDocument.user;

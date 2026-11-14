@@ -14,9 +14,6 @@ const LATER_TRACKS: string[] = [
   "patch_evaluator",
   "delete_evaluator",
   "post_evaluator_test",
-  "post_score_definition",
-  "patch_score_definition",
-  "delete_score_definition",
 ];
 
 beforeEach(() => {

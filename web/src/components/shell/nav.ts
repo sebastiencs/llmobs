@@ -1,4 +1,12 @@
-import { Database, LayoutDashboard, MessagesSquare, Rows3, Users, Waypoints } from "lucide-react";
+import {
+  Database,
+  Gauge,
+  LayoutDashboard,
+  MessagesSquare,
+  Rows3,
+  Users,
+  Waypoints,
+} from "lucide-react";
 
 /** Project pages that exist. Later sub-phases append their entry here. */
 export const projectNav = [
@@ -8,4 +16,5 @@ export const projectNav = [
   { to: "/$org/$project/sessions", label: "Sessions", icon: MessagesSquare },
   { to: "/$org/$project/users", label: "Users", icon: Users },
   { to: "/$org/$project/sql", label: "SQL", icon: Database },
+  { to: "/$org/$project/evaluators", label: "Evaluators", icon: Gauge },
 ] as const;
