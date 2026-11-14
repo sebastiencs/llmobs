@@ -407,6 +407,7 @@ pub async fn bind(config: ServerConfig, ui: Option<axum::Router>) -> Result<Runn
             spawn_purge(state.clone()),
             spawn_last_used(state.clone()),
             spawn_deletions(state.clone()),
+            spawn_retention(state.clone()),
             spawn_usage(state),
         ],
     })
@@ -498,6 +499,27 @@ fn spawn_deletions(state: AppState) -> JoinHandle<()> {
                 () = state.deletions.wake.notified() => {}
                 () = tokio::time::sleep(crate::deletion::TICK) => {}
             }
+        }
+    })
+}
+
+fn spawn_retention(state: AppState) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        tokio::time::sleep(crate::retention::FIRST_RUN).await;
+        loop {
+            match crate::retention::retention_once(&state).await {
+                Ok(run) if run.files > 0 || run.failures > 0 => {
+                    tracing::info!(
+                        projects = run.projects,
+                        failures = run.failures,
+                        files = run.files,
+                        "retention run"
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => tracing::error!(error = %error, "retention run failed"),
+            }
+            tokio::time::sleep(crate::retention::EVERY).await;
         }
     })
 }
