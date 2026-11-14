@@ -85,8 +85,6 @@ impl fmt::Debug for DefinitionCache {
 /// D-I-26). The types must be equal. A numeric judge's range must lie inside the
 /// definition's bounds, and a categorical judge's labels must all be definition
 /// categories. Checks and webhooks (`judge_output` `None`) need only the equal types.
-// evaluator saves use it from I2.6 on
-#[allow(dead_code)]
 pub(crate) fn fits_definition(
     output: &OutputScore,
     judge_output: Option<&JudgeOutput>,

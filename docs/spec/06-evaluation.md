@@ -75,8 +75,10 @@ Checks compare `output` against `expected` (or the param value).
 ### `webhook`
 
 ```json
-{"url": "https://…", "secret_enc": "…", "timeout_ms": 10000, "headers": {…}}
+{"url": "https://…", "timeout_ms": 10000, "headers": {…}}
 ```
+
+The URL, the headers and the signing secret are sealed in `evaluators.secret_enc`; the stored config and API responses show only `url_host`, `timeout_ms` and the header names (D-I-19).
 
 Request: `POST url` with `Content-Type: application/json`, the configured headers, and JSON `{evaluator: {id, name}, project_id, trace_id, span_id, variables: {…}}`. The signature header is `X-Llmobs-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret, t + "." + body)>` (D165). `timeout_ms` defaults to 10 000 and is at most 60 000. Redirects are not followed. A response body over 64 KiB is an error. A `200` whose JSON object `{value?: number|boolean, label?: string, reason?: string}` fits the output definition is a score. Any other status is classified by D160. A `200` with a body that is not that object is a permanent error.
 

@@ -28,6 +28,7 @@ use crate::http::access::{Access, OrgAccess, RouteDef};
 use crate::http::error::{self, ApiError};
 use crate::meta::MetaError;
 use crate::meta::connections::{self, ConnectionFields, ConnectionRow};
+use crate::meta::evaluators;
 
 use super::orgs::page_named;
 
@@ -343,7 +344,13 @@ async fn delete_llm_connection(
     let went = state
         .meta
         .write(move |conn| {
-            Box::pin(async move { connections::delete_connection(conn, org_id, id).await })
+            Box::pin(async move {
+                // An evaluator that uses the connection keeps it (D-I-19).
+                if evaluators::connection_in_use(conn, id).await? {
+                    return Err(MetaError::Conflict("connection is used by evaluators"));
+                }
+                connections::delete_connection(conn, org_id, id).await
+            })
         })
         .await?;
     if !went {

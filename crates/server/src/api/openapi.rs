@@ -1256,7 +1256,7 @@ fn connection_paths(paths: PathsBuilder) -> PathsBuilder {
         ResponseBuilder::new()
             .description("The connection is deleted.")
             .build(),
-        &[400, 401, 403, 404, 429],
+        &[400, 401, 403, 404, 409, 429],
     ))
     .build();
     let test = operation(

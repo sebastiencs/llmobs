@@ -515,12 +515,12 @@ fn document_lint() {
             expected_errors.extend(["400", "401", "403", "404", "413", "429"]);
         } else if *id == "get_media" {
             expected_errors.extend(["401", "403", "404", "416", "429"]);
-        } else if *id == "post_llm_connection" || *id == "patch_llm_connection" {
-            expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
-        } else if *id == "get_llm_connection"
+        } else if *id == "post_llm_connection"
+            || *id == "patch_llm_connection"
             || *id == "delete_llm_connection"
-            || *id == "post_llm_connection_test"
         {
+            expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
+        } else if *id == "get_llm_connection" || *id == "post_llm_connection_test" {
             expected_errors.extend(["400", "401", "403", "404", "429"]);
         } else if *id == "run_sql" {
             expected_errors.extend(["400", "401", "403", "404", "413", "415", "422", "429"]);
