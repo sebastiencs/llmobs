@@ -532,6 +532,28 @@ pub(crate) async fn mark_applied(
     Ok(result.rows_affected() == 1)
 }
 
+/// A `pending` project or org deletion that ran: `applied`, `handed_over_at = applied_at = now`.
+///
+/// # Errors
+///
+/// Returns [`MetaError::Db`] when the update fails.
+pub(crate) async fn mark_dropped(
+    conn: &mut SqliteConnection,
+    id: Uuid,
+    now: i64,
+) -> Result<bool, MetaError> {
+    let result = sqlx::query(
+        "UPDATE deletions SET status = 'applied', handed_over_at = ?, applied_at = ? \
+         WHERE id = ? AND status = 'pending' AND kind IN ('project', 'org')",
+    )
+    .bind(now)
+    .bind(now)
+    .bind(id.to_string())
+    .execute(&mut *conn)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
 /// `resolving` → `failed` with `reason`.
 ///
 /// # Errors

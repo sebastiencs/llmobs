@@ -68,6 +68,8 @@ pub(crate) struct AppInner {
     pub(crate) metrics_cache: crate::routes::metrics::MetricsCache,
     /// Usage counters, flushed every 10 s (D-G-11).
     pub(crate) usage: crate::usage::Usage,
+    /// Deletion worker state: wake-up, guard, attempts (D-M-3).
+    pub(crate) deletions: crate::deletion::Deletions,
     /// Seals and opens secret columns (D-I-2).
     pub(crate) secrets: crate::crypto::SecretBox,
     /// One egress client for judges, webhooks and connection tests (D-I-29).

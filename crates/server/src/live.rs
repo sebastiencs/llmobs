@@ -21,6 +21,9 @@ pub(crate) struct LiveEvent {
     pub(crate) project_id: ProjectId,
     /// Light rows, in commit order.
     pub(crate) spans: Vec<SpanSummary>,
+    /// `true`: the project's data changed in a way spans cannot express (a deletion); streams send
+    /// `resync`. `spans` is empty.
+    pub(crate) resync: bool,
 }
 
 /// Events the channel holds before a slow receiver lags (D-G-32).
@@ -113,10 +116,28 @@ impl LiveBus {
                 id,
                 project_id,
                 spans: chunk.iter().map(SpanSummary::from).collect(),
+                resync: false,
             };
             // An error only means that no receiver is left.
             let _ = self.sender.send(Arc::new(event));
         }
+    }
+
+    /// Tells the project's open streams to refetch (D-M-11). Builds nothing when no stream is open.
+    pub(crate) fn publish_resync(&self, project_id: ProjectId) {
+        if self.sender.receiver_count() == 0 {
+            return;
+        }
+        let id = self
+            .next_id
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        let _ = self.sender.send(Arc::new(LiveEvent {
+            id,
+            project_id,
+            spans: Vec::new(),
+            resync: true,
+        }));
     }
 
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<Arc<LiveEvent>> {
@@ -241,6 +262,27 @@ mod tests {
         let expected: Vec<String> = (0..1200).map(|index| format!("span-{index}")).collect();
         assert_eq!(names, expected);
         assert_eq!(app.state.live.last_id(), 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn publish_resync_reaches_subscribers() {
+        let bus = LiveBus::new(StreamTiming::TEST);
+        let project = ProjectId::new_v7();
+
+        // Nobody listens: nothing is built, so the counter does not move.
+        bus.publish_resync(project);
+        assert_eq!(bus.last_id(), 0);
+
+        let mut events = bus.subscribe();
+        bus.publish_resync(project);
+        let event = tokio::time::timeout(WAIT, events.recv())
+            .await
+            .expect("an event arrives")
+            .expect("the bus is open");
+        assert!(event.resync);
+        assert!(event.spans.is_empty());
+        assert_eq!(event.project_id, project);
+        assert_eq!(bus.last_id(), 1);
     }
 
     #[test]

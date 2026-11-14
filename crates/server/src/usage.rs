@@ -9,9 +9,26 @@ use std::sync::Mutex;
 
 use chrono::{DateTime, NaiveDate};
 use llmobs_core::ids::{OrgId, ProjectId};
+use sqlx::SqliteConnection;
 
 use crate::meta::MetaDb;
 use crate::meta::MetaError;
+
+/// Deletes every `usage_daily` row of the org (org drop, D-M-7).
+///
+/// # Errors
+///
+/// Returns [`MetaError::Db`] when the delete fails.
+pub(crate) async fn delete_org_usage(
+    conn: &mut SqliteConnection,
+    org: OrgId,
+) -> Result<(), MetaError> {
+    sqlx::query("DELETE FROM usage_daily WHERE org_id = ?")
+        .bind(org.to_string())
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
 
 /// One `usage_daily` row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

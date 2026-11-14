@@ -153,6 +153,12 @@ async fn run_span_stream(stream: SpanStream, tx: mpsc::Sender<Event>) {
                     if event.project_id != project {
                         continue;
                     }
+                    if event.resync {
+                        if !send(&tx, resync(), timing.send).await {
+                            return;
+                        }
+                        continue;
+                    }
                     for span in event.spans.iter().filter(|span| span.trace_id == trace_id) {
                         let Some(message) = json_event("span", event.id, span) else {
                             tracing::warn!("a span event could not be encoded");
@@ -271,6 +277,13 @@ async fn run_trace_stream(stream: TraceStream, tx: mpsc::Sender<Event>) {
                         continue;
                     }
                     last_id = event.id;
+                    if event.resync {
+                        pending.clear();
+                        if !send(&tx, resync(), timing.send).await {
+                            return;
+                        }
+                        continue;
+                    }
                     for span in &event.spans {
                         note(&mut pending, span.trace_id, span.start_time, span.start_time);
                     }
@@ -529,7 +542,7 @@ mod tests {
     use std::time::Duration;
 
     use axum::http::StatusCode;
-    use llmobs_core::ids::{SpanId, TraceId};
+    use llmobs_core::ids::{ProjectId, SpanId, TraceId};
     use serde_json::Value;
 
     use crate::api::traces::{SpanSummary, TraceSummary};
@@ -985,6 +998,38 @@ mod tests {
         .await;
         let trace = next_trace(&mut stream).await;
         assert_eq!(trace.trace_id.to_string(), trace_id(71));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_deletion_resyncs_the_trace_list_stream() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let mut stream = open_traces(&app, &seeded, "").await;
+        assert_eq!(stream.status, StatusCode::OK);
+
+        app.state.live.publish_resync(seeded.project.id);
+        let event = stream
+            .next_non_ping(Duration::from_secs(2))
+            .await
+            .expect("a resync event arrives");
+        assert_eq!(event.event, "resync");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_resync_for_another_project_is_ignored() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let mut stream = open_traces(&app, &seeded, "").await;
+        assert_eq!(stream.status, StatusCode::OK);
+
+        app.state.live.publish_resync(ProjectId::new_v7());
+        assert!(
+            stream
+                .next_non_ping(Duration::from_millis(300))
+                .await
+                .is_none(),
+            "a resync of another project is not sent"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

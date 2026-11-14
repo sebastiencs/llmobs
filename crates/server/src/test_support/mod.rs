@@ -219,6 +219,7 @@ impl TestApp {
             live: crate::live::LiveBus::new(crate::live::StreamTiming::TEST),
             metrics_cache: crate::routes::metrics::MetricsCache::default(),
             usage: crate::usage::Usage::default(),
+            deletions: crate::deletion::Deletions::new(),
             secrets,
             eval_runner,
             connections: crate::eval::connection::ConnectionCache::default(),

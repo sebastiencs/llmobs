@@ -58,6 +58,12 @@ impl MetricsCache {
             .map(|cached| Arc::clone(&cached.response))
     }
 
+    /// Drops every cached answer of `project` (D-M-11).
+    pub(crate) fn clear_project(&self, project: ProjectId) {
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        entries.retain(|key, _| key.project != project);
+    }
+
     /// Stores `response` for `key`, expiring [`TTL_NS`] after `now`.
     fn put(&self, key: MetricsKey, response: MetricsResponse, now: i64) {
         let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
@@ -250,6 +256,37 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["code"], "bad_request");
+    }
+
+    #[test]
+    fn clear_project_drops_only_that_project() {
+        let cache = MetricsCache::default();
+        let key = |project: ProjectId| MetricsKey {
+            project,
+            from: 0,
+            to: 1,
+            bucket: MetricsBucket::Auto,
+            filter: None,
+            group_by: None,
+            include_eval: false,
+            include_experiments: false,
+        };
+        let (p, q) = (ProjectId::new_v7(), ProjectId::new_v7());
+        let response: MetricsResponse = serde_json::from_value(serde_json::json!({
+            "from": "2026-01-01T10:00:00Z",
+            "to": "2026-01-01T11:00:00Z",
+            "bucket_ns": 600_000_000_000_i64,
+            "kpis": [],
+            "series": [],
+            "top_models": [],
+        }))
+        .unwrap();
+        cache.put(key(p), response.clone(), 0);
+        cache.put(key(q), response, 0);
+
+        cache.clear_project(p);
+        assert!(cache.get(&key(p), 1).is_none());
+        assert!(cache.get(&key(q), 1).is_some());
     }
 
     #[tokio::test(flavor = "multi_thread")]

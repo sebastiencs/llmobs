@@ -126,6 +126,51 @@ pub(crate) async fn project_by_id(
     )
 }
 
+/// Deletes the project row; foreign keys cascade to its keys, overrides and every
+/// project-owned table (D-M-7). A missing row is not an error.
+///
+/// # Errors
+///
+/// Returns [`MetaError::Db`] when the delete fails.
+pub(crate) async fn delete_project(
+    conn: &mut SqliteConnection,
+    id: ProjectId,
+) -> Result<(), MetaError> {
+    sqlx::query("DELETE FROM projects WHERE id = ?")
+        .bind(id.to_string())
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
+/// Every project id of the org, whatever its state, ordered by id.
+///
+/// # Errors
+///
+/// Returns [`MetaError`] when the query fails or a stored id does not parse.
+pub(crate) async fn project_ids_of_org<'e, E>(
+    executor: E,
+    org: OrgId,
+) -> Result<Vec<ProjectId>, MetaError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    let texts: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM projects WHERE org_id = ? ORDER BY id")
+            .bind(org.to_string())
+            .fetch_all(executor)
+            .await?;
+    texts
+        .iter()
+        .map(|text| {
+            text.parse::<ProjectId>().map_err(|_| MetaError::Corrupt {
+                table: "projects",
+                column: "id",
+            })
+        })
+        .collect()
+}
+
 /// The project addressed by org slug and project slug.
 ///
 /// # Errors

@@ -168,6 +168,19 @@ pub(crate) async fn insert_org(
     org_row(record)
 }
 
+/// Deletes the org row; foreign keys cascade to members, invites, connections and projects.
+///
+/// # Errors
+///
+/// Returns [`MetaError::Db`] when the delete fails.
+pub(crate) async fn delete_org(conn: &mut SqliteConnection, id: OrgId) -> Result<(), MetaError> {
+    sqlx::query("DELETE FROM orgs WHERE id = ?")
+        .bind(id.to_string())
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 /// Tries [`slug_from_name`], then `-2` … `-99`, in this transaction.
 ///
 /// # Errors
