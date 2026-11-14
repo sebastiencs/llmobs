@@ -23,8 +23,10 @@ pub(crate) const BATCH: i64 = 50;
 pub(crate) const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 /// Attempts before a delivery fails (D-K-7).
 pub(crate) const MAX_ATTEMPTS: i64 = 8;
-/// Response bodies read at most.
-const MAX_RESPONSE_BYTES: usize = 16 * 1024;
+/// Response bodies read at most. Only the status matters, but the egress client fails a
+/// larger body before it exposes the status, so the cap is far above any acknowledgement
+/// page a receiver sends back.
+const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 /// Events and finished deliveries kept (D-K-10).
 pub(crate) const EVENT_RETENTION_NS: i64 = 90 * 86_400_000_000_000;
 pub(crate) const DELIVERY_RETENTION_NS: i64 = 30 * 86_400_000_000_000;

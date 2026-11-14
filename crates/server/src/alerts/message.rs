@@ -138,7 +138,8 @@ pub(crate) fn slack_body(notice: &Notice) -> serde_json::Value {
         .map_or_else(|| "—".to_owned(), |count| count.to_string());
     let text = format!(
         "{} — {value} ({symbol} {threshold}) over {} in {project}",
-        title(notice.kind, &slack_escape(&notice.rule_name)),
+        // Cut the raw name, then escape, so an entity is never split.
+        slack_escape(&title(notice.kind, &notice.rule_name)),
         notice.window.as_str(),
     );
     serde_json::json!({
