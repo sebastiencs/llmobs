@@ -23,17 +23,21 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { LLM_ADAPTER_LABELS } from "@/lib/llm-adapters";
 import { canManageConnections } from "@/lib/roles";
 
 export const Route = createFileRoute("/$org/settings/llm-connections")({
   component: LlmConnectionsPage,
 });
 
-const PROVIDER_LABELS: Record<Schema<"LlmAdapter">, string> = {
-  openai: "OpenAI-compatible",
-  anthropic: "Anthropic",
-  gemini: "Gemini",
-};
+/** `base_url`'s host, or the raw string when it is not a parseable URL. */
+function hostOf(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return baseUrl;
+  }
+}
 
 function LlmConnectionsPage() {
   const { org } = Route.useParams();
@@ -121,10 +125,10 @@ function ConnectionList({
             {rows.map((connection) => (
               <TableRow key={connection.id}>
                 <TableCell>{connection.name}</TableCell>
-                <TableCell>{PROVIDER_LABELS[connection.adapter]}</TableCell>
+                <TableCell>{LLM_ADAPTER_LABELS[connection.adapter]}</TableCell>
                 <TableCell>{connection.default_model ?? "—"}</TableCell>
                 <TableCell>
-                  {connection.base_url ? new URL(connection.base_url).host : "Default"}
+                  {connection.base_url ? hostOf(connection.base_url) : "Default"}
                 </TableCell>
                 <TableCell>
                   {connection.api_key_hint ? `••••${connection.api_key_hint}` : "••••"}

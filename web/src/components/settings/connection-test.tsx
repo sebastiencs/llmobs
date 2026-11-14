@@ -120,7 +120,11 @@ function ConnectionTestForm({
         label="Model"
         value={model}
         disabled={test.isPending}
-        onChange={setModel}
+        onChange={(next) => {
+          setModel(next);
+          // The previous result was for another model.
+          test.reset();
+        }}
         description="Leave empty to use the connection's default model."
       />
       {result ? (

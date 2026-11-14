@@ -80,6 +80,58 @@ it("adds a connection", async () => {
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
 
+it("clears the API key when the add dialog reopens", async () => {
+  server.use(
+    http.post("/api/v1/orgs/:org/llm-connections", () =>
+      HttpResponse.json({ ...CONNECTION, name: "Prod" }, { status: 201 }),
+    ),
+  );
+
+  const { user, dialog } = await openCreateDialog();
+  await user.type(within(dialog).getByLabelText("Name"), "Prod");
+  await user.type(within(dialog).getByLabelText("API key"), "sk-secret");
+  await user.click(within(dialog).getByRole("button", { name: "Add connection" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+  await user.click(screen.getByRole("button", { name: "Add connection" }));
+  const reopened = await screen.findByRole("dialog");
+  expect(within(reopened).getByLabelText("API key")).toHaveValue("");
+});
+
+it("sends one extra header and the picked structured output mode", async () => {
+  let body: unknown;
+  server.use(
+    http.post("/api/v1/orgs/:org/llm-connections", async ({ request }) => {
+      body = await request.json();
+      return HttpResponse.json({ ...CONNECTION, name: "Prod" }, { status: 201 });
+    }),
+  );
+
+  const { user, dialog } = await openCreateDialog();
+  await user.type(within(dialog).getByLabelText("Name"), "Prod");
+  await user.type(within(dialog).getByLabelText("API key"), "sk-secret");
+  await user.click(within(dialog).getByRole("combobox", { name: "Structured output" }));
+  await user.click(await screen.findByRole("option", { name: "Tool call" }));
+  await user.click(within(dialog).getByText("Advanced"));
+  await user.click(within(dialog).getByRole("button", { name: "Add header" }));
+  await user.type(within(dialog).getByLabelText("Header name 1"), "x-a");
+  const headerValue = within(dialog).getByLabelText("Header value 1");
+  expect(headerValue).toHaveAttribute("type", "password");
+  expect(headerValue).toHaveAttribute("autocomplete", "off");
+  await user.type(headerValue, "secret-value");
+  await user.click(within(dialog).getByRole("button", { name: "Add connection" }));
+
+  await waitFor(() =>
+    expect(body).toEqual({
+      name: "Prod",
+      adapter: "openai",
+      api_key: "sk-secret",
+      structured_output: "tool",
+      extra_headers: { "x-a": "secret-value" },
+    }),
+  );
+});
+
 it("refuses an empty key without calling the server", async () => {
   let calls = 0;
   server.use(
@@ -149,6 +201,70 @@ it("shows a server field error under its field", async () => {
   expect(within(dialog).getByLabelText("Base URL")).toHaveAttribute("aria-invalid", "true");
 });
 
+it("shows field errors without a rendered field above the submit button", async () => {
+  server.use(
+    http.post("/api/v1/orgs/:org/llm-connections", () =>
+      problemResponse(400, "bad_request", {
+        errors: [
+          { field: "adapter", message: "unknown adapter" },
+          { field: "structured_output", message: "unknown mode" },
+        ],
+      }),
+    ),
+  );
+
+  const { user, dialog } = await openCreateDialog();
+  await user.type(within(dialog).getByLabelText("Name"), "Prod");
+  await user.type(within(dialog).getByLabelText("API key"), "sk-secret");
+  await user.click(within(dialog).getByRole("button", { name: "Add connection" }));
+
+  expect(await within(dialog).findByText("unknown adapter unknown mode")).toBeInTheDocument();
+});
+
+it("opens the Advanced section when an error lands inside it", async () => {
+  server.use(
+    http.post("/api/v1/orgs/:org/llm-connections", () =>
+      problemResponse(400, "bad_request", {
+        errors: [
+          {
+            field: "requests_per_minute",
+            message: "requests_per_minute must be between 1 and 10000",
+          },
+        ],
+      }),
+    ),
+  );
+
+  const { user, dialog } = await openCreateDialog();
+  await user.type(within(dialog).getByLabelText("Name"), "Prod");
+  await user.type(within(dialog).getByLabelText("API key"), "sk-secret");
+  await user.click(within(dialog).getByRole("button", { name: "Add connection" }));
+
+  expect(
+    await within(dialog).findByText("requests_per_minute must be between 1 and 10000"),
+  ).toBeInTheDocument();
+  expect(within(dialog).getByText("Advanced").closest("details")).toHaveAttribute("open");
+});
+
+it("shows a 409 detail above the submit button", async () => {
+  server.use(
+    http.post("/api/v1/orgs/:org/llm-connections", () =>
+      problemResponse(409, "conflict", {
+        detail: "a connection with this name already exists",
+      }),
+    ),
+  );
+
+  const { user, dialog } = await openCreateDialog();
+  await user.type(within(dialog).getByLabelText("Name"), "Prod");
+  await user.type(within(dialog).getByLabelText("API key"), "sk-secret");
+  await user.click(within(dialog).getByRole("button", { name: "Add connection" }));
+
+  const detail = await within(dialog).findByText("a connection with this name already exists");
+  const submit = within(dialog).getByRole("button", { name: "Add connection" });
+  expect(detail.compareDocumentPosition(submit)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+});
+
 it("tests a connection", async () => {
   let body: unknown;
   server.use(
@@ -187,6 +303,22 @@ it("tests with an empty model sends an empty body", async () => {
   await user.click(within(dialog).getByRole("button", { name: "Run test" }));
 
   await waitFor(() => expect(body).toEqual({}));
+});
+
+it("shows the rate limit message in the test dialog", async () => {
+  server.use(
+    http.post("/api/v1/orgs/:org/llm-connections/:id/test", () =>
+      problemResponse(429, "too_many_requests", { detail: "slow down" }),
+    ),
+  );
+
+  const { user } = await renderApp("/acme/settings/llm-connections");
+  await screen.findByRole("table", { name: "LLM connections" });
+  await user.click(screen.getByRole("button", { name: "Test" }));
+  const dialog = await screen.findByRole("dialog");
+  await user.click(within(dialog).getByRole("button", { name: "Run test" }));
+
+  expect(await within(dialog).findByText("Too many tests. Wait a minute.")).toBeInTheDocument();
 });
 
 it("shows a failed test with its hint", async () => {
@@ -232,6 +364,22 @@ it("shows a failing connection's error", async () => {
   expect(screen.getByText("provider status 401")).toBeInTheDocument();
 });
 
+it("shows a malformed base URL as stored instead of throwing", async () => {
+  server.use(
+    http.get("/api/v1/orgs/:org/llm-connections", () =>
+      HttpResponse.json({
+        data: [{ ...CONNECTION, base_url: "not-a-url" }],
+        next_cursor: null,
+      }),
+    ),
+  );
+
+  await renderApp("/acme/settings/llm-connections");
+
+  const table = await screen.findByRole("table", { name: "LLM connections" });
+  expect(within(table).getByText("not-a-url")).toBeInTheDocument();
+});
+
 it("refuses a header without a value", async () => {
   let calls = 0;
   server.use(
@@ -244,10 +392,33 @@ it("refuses a header without a value", async () => {
   const { user, dialog } = await openEditDialog();
   await user.click(within(dialog).getByText("Advanced"));
   await user.click(within(dialog).getByRole("button", { name: "Add header" }));
-  await user.type(within(dialog).getByLabelText("Header name"), "x-a");
+  await user.type(within(dialog).getByLabelText("Header name 1"), "x-a");
   await user.click(within(dialog).getByRole("button", { name: "Save" }));
 
   expect(await within(dialog).findByText("Enter a value for each header.")).toBeInTheDocument();
+  expect(calls).toBe(0);
+});
+
+it("refuses duplicate header names without calling the server", async () => {
+  let calls = 0;
+  server.use(
+    http.patch("/api/v1/orgs/:org/llm-connections/:id", () => {
+      calls += 1;
+      return HttpResponse.json(CONNECTION);
+    }),
+  );
+
+  const { user, dialog } = await openEditDialog();
+  await user.click(within(dialog).getByText("Advanced"));
+  await user.click(within(dialog).getByRole("button", { name: "Add header" }));
+  await user.click(within(dialog).getByRole("button", { name: "Add header" }));
+  await user.type(within(dialog).getByLabelText("Header name 1"), "x-a");
+  await user.type(within(dialog).getByLabelText("Header value 1"), "1");
+  await user.type(within(dialog).getByLabelText("Header name 2"), "X-A");
+  await user.type(within(dialog).getByLabelText("Header value 2"), "2");
+  await user.click(within(dialog).getByRole("button", { name: "Save" }));
+
+  expect(await within(dialog).findByText("Duplicate header name.")).toBeInTheDocument();
   expect(calls).toBe(0);
 });
 
@@ -267,6 +438,22 @@ it("deletes after confirming", async () => {
   await user.click(within(dialog).getByRole("button", { name: "Delete" }));
 
   await waitFor(() => expect(pathId).toBe(CONNECTION_ID));
+});
+
+it("shows a failed delete error", async () => {
+  server.use(
+    http.delete("/api/v1/orgs/:org/llm-connections/:id", () =>
+      problemResponse(429, "too_many_requests", { detail: "Wait a minute before deleting." }),
+    ),
+  );
+
+  const { user } = await renderApp("/acme/settings/llm-connections");
+  await screen.findByRole("table", { name: "LLM connections" });
+  await user.click(screen.getByRole("button", { name: "Delete" }));
+  const dialog = await screen.findByRole("alertdialog");
+  await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+  expect(await within(dialog).findByText("Wait a minute before deleting.")).toBeInTheDocument();
 });
 
 it("a member sees the list but cannot manage", async () => {

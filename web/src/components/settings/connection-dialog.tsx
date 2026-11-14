@@ -26,18 +26,27 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { LLM_ADAPTER_LABELS } from "@/lib/llm-adapters";
 
-const PROVIDERS: { value: Schema<"LlmAdapter">; label: string }[] = [
-  { value: "openai", label: "OpenAI-compatible" },
-  { value: "anthropic", label: "Anthropic" },
-  { value: "gemini", label: "Gemini" },
-];
+const PROVIDERS = (Object.entries(LLM_ADAPTER_LABELS) as [Schema<"LlmAdapter">, string][]).map(
+  ([value, label]) => ({ value, label }),
+);
 
 const STRUCTURED_OUTPUT_MODES: { value: Schema<"StructuredOutputMode">; label: string }[] = [
   { value: "native", label: "Native (default)" },
   { value: "tool", label: "Tool call" },
   { value: "prompt", label: "Prompt" },
 ];
+
+/** Fields the form renders; only server errors for these are placed under the field. */
+const PLACED_FIELDS = new Set([
+  "name",
+  "api_key",
+  "base_url",
+  "default_model",
+  "max_concurrency",
+  "requests_per_minute",
+]);
 
 function useCreateConnection() {
   // The request holds the API key and the header values: gcTime 0 drops it from the
@@ -177,9 +186,15 @@ function ConnectionForm({
     (connection?.extra_header_names ?? []).map((headerName) => newHeaderRow(headerName)),
   );
   const [headersDirty, setHeadersDirty] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | undefined>();
   const pending = connection === undefined ? create.isPending : patch.isPending;
+  // An error inside the Advanced section forces it open, so it is always visible.
+  const advancedError =
+    errors.max_concurrency !== undefined ||
+    errors.requests_per_minute !== undefined ||
+    errors.headers !== undefined;
 
   function addHeaderRow() {
     setHeadersDirty(true);
@@ -222,12 +237,21 @@ function ConnectionForm({
     }
     const headers = headersDirty ? headerValues() : undefined;
     if (headers !== undefined) {
+      const seen = new Set<string>();
       for (const row of rows) {
         const rowName = row.name.trim();
-        const filled = rowName.length > 0 || row.value.trim().length > 0;
-        if (filled && (rowName.length === 0 || row.value.trim().length === 0)) {
-          nextErrors.headers = "Enter a value for each header.";
-          break;
+        if (rowName.length === 0 && row.value.trim().length === 0) {
+          continue;
+        }
+        if (rowName.length === 0 || row.value.trim().length === 0) {
+          nextErrors.headers ??= "Enter a value for each header.";
+          continue;
+        }
+        const lowered = rowName.toLowerCase();
+        if (seen.has(lowered)) {
+          nextErrors.headers ??= "Duplicate header name.";
+        } else {
+          seen.add(lowered);
         }
       }
     }
@@ -272,11 +296,13 @@ function ConnectionForm({
     if (apiKey.trim().length > 0) {
       body.api_key = apiKey;
     }
-    if (baseUrl !== (connection.base_url ?? "")) {
-      body.base_url = baseUrl;
+    const trimmedBaseUrl = baseUrl.trim();
+    if (trimmedBaseUrl !== (connection.base_url ?? "").trim()) {
+      body.base_url = trimmedBaseUrl;
     }
-    if (defaultModel !== (connection.default_model ?? "")) {
-      body.default_model = defaultModel;
+    const trimmedModel = defaultModel.trim();
+    if (trimmedModel !== (connection.default_model ?? "").trim()) {
+      body.default_model = trimmedModel;
     }
     if (structured !== "" && structured !== connection.structured_output) {
       body.structured_output = structured;
@@ -303,22 +329,23 @@ function ConnectionForm({
 
   function onError(caught: unknown) {
     const next: Record<string, string> = {};
-    let placed = false;
+    const unplaced: string[] = [];
     for (const [field, message] of Object.entries(fieldErrors(caught))) {
-      placed = true;
       if (field.startsWith("extra_headers")) {
-        if (next.headers === undefined) {
-          next.headers = message;
-        }
-      } else {
+        next.headers ??= message;
+      } else if (PLACED_FIELDS.has(field)) {
         next[field] = message;
+      } else {
+        // A field the form does not render: the user still has to see it.
+        unplaced.push(message);
       }
     }
     setErrors(next);
-    if (placed) {
-      return;
+    if (unplaced.length > 0) {
+      setError(unplaced.join(" "));
+    } else if (Object.keys(next).length === 0) {
+      setError(problemMessage(caught, "Could not save the connection."));
     }
-    setError(problemMessage(caught, "Could not save the connection."));
   }
 
   return (
@@ -341,7 +368,11 @@ function ConnectionForm({
           }}
           disabled={pending}
         >
-          <SelectTrigger id="connection-provider" className="w-fit">
+          <SelectTrigger
+            id="connection-provider"
+            aria-describedby="connection-provider-description"
+            className="w-fit"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -352,6 +383,10 @@ function ConnectionForm({
             ))}
           </SelectContent>
         </Select>
+        <p id="connection-provider-description" className="text-xs text-muted-foreground">
+          OpenAI-compatible covers any server with an OpenAI-style API: Azure, vLLM, Ollama,
+          OpenRouter, LiteLLM.
+        </p>
       </div>
       <TextField
         id="connection-api-key"
@@ -390,7 +425,11 @@ function ConnectionForm({
           }}
           disabled={pending}
         >
-          <SelectTrigger id="connection-structured-output" className="w-fit">
+          <SelectTrigger
+            id="connection-structured-output"
+            aria-describedby="connection-structured-output-description"
+            className="w-fit"
+          >
             <SelectValue placeholder="Native (default)" />
           </SelectTrigger>
           <SelectContent>
@@ -401,11 +440,16 @@ function ConnectionForm({
             ))}
           </SelectContent>
         </Select>
-        <p className="text-xs text-muted-foreground">
+        <p id="connection-structured-output-description" className="text-xs text-muted-foreground">
           Use Tool call or Prompt only if the provider rejects native structured output.
         </p>
       </div>
-      <details>
+      <details
+        open={advancedOpen || advancedError}
+        onToggle={(event) => {
+          setAdvancedOpen(event.currentTarget.open);
+        }}
+      >
         <summary className="cursor-pointer text-sm font-medium">Advanced</summary>
         <div className="mt-4 flex flex-col gap-4">
           <div className="flex flex-col gap-4 sm:flex-row">
@@ -430,9 +474,14 @@ function ConnectionForm({
               onChange={setRequestsPerMinute}
             />
           </div>
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <Label>Extra headers</Label>
+          <fieldset className="flex flex-col gap-2">
+            <legend className="text-sm leading-none font-medium">Extra headers</legend>
+            <div className="flex items-center justify-end gap-2">
+              {connection !== undefined ? (
+                <p className="mr-auto text-xs text-muted-foreground">
+                  Values are hidden. Set every header again to change them.
+                </p>
+              ) : null}
               <Button
                 type="button"
                 variant="outline"
@@ -443,21 +492,20 @@ function ConnectionForm({
                 Add header
               </Button>
             </div>
-            {connection !== undefined ? (
-              <p className="text-xs text-muted-foreground">
-                Values are hidden. Set every header again to change them.
-              </p>
-            ) : null}
-            {rows.map((row) => (
+            {rows.map((row, index) => (
               <div key={row.id} className="flex items-center gap-2">
                 <Input
-                  aria-label="Header name"
+                  aria-label={`Header name ${index + 1}`}
+                  aria-invalid={errors.headers ? true : undefined}
                   value={row.name}
                   disabled={pending}
                   onChange={(event) => updateHeaderRow(row.id, { name: event.target.value })}
                 />
                 <Input
-                  aria-label="Header value"
+                  aria-label={`Header value ${index + 1}`}
+                  aria-invalid={errors.headers ? true : undefined}
+                  type="password"
+                  autoComplete="off"
                   value={row.value}
                   disabled={pending}
                   onChange={(event) => updateHeaderRow(row.id, { value: event.target.value })}
@@ -466,7 +514,7 @@ function ConnectionForm({
                   type="button"
                   variant="ghost"
                   size="icon-xs"
-                  aria-label="Remove header"
+                  aria-label={`Remove header ${index + 1}`}
                   disabled={pending}
                   onClick={() => removeHeaderRow(row.id)}
                 >
@@ -474,8 +522,12 @@ function ConnectionForm({
                 </Button>
               </div>
             ))}
-            {errors.headers ? <p className="text-xs text-destructive">{errors.headers}</p> : null}
-          </div>
+            {errors.headers ? (
+              <p role="alert" className="text-xs text-destructive">
+                {errors.headers}
+              </p>
+            ) : null}
+          </fieldset>
         </div>
       </details>
       <FormError message={error} />
