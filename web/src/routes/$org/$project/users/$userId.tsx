@@ -1,12 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, notFound, useNavigate } from "@tanstack/react-router";
-import { MessagesSquare } from "lucide-react";
-import { useMemo } from "react";
+import { MessagesSquare, Trash2 } from "lucide-react";
+import { useMemo, useState } from "react";
 import { problemOf } from "@/api/problem";
 import { userQuery } from "@/api/queries";
 import type { Schema } from "@/api/types";
 import { visibleColumnIds } from "@/components/data-table/column-layout";
 import { DataTable } from "@/components/data-table/data-table";
+import { UserDeletionDialog } from "@/components/deletions/user-deletion-form";
+import { DisabledReason } from "@/components/disabled-reason";
 import { EmptyState } from "@/components/empty-state";
 import { IdText } from "@/components/id-text";
 import {
@@ -16,8 +18,11 @@ import {
 } from "@/components/session-columns";
 import { useProject } from "@/components/shell/project-context";
 import { TimeText } from "@/components/time-text";
+import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { invalidateProjectReads } from "@/lib/deletions";
 import { formatCost, formatTokens } from "@/lib/format";
+import { atLeast } from "@/lib/roles";
 import { parseUserPageSearch, type UserPageSearch } from "@/lib/search/users";
 
 export const Route = createFileRoute("/$org/$project/users/$userId")({
@@ -96,9 +101,47 @@ function UserPage() {
 }
 
 function UserHeader({ user }: { user: Schema<"EndUserSummary"> }) {
+  const { org, project, data } = useProject();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const canDelete = atLeast(data.role, "admin");
+
+  async function afterDelete() {
+    // Navigate first: this page's query would refetch a 404 for the deleted user.
+    await navigate({ to: "/$org/$project/settings/data", params: { org, project } });
+    await invalidateProjectReads(queryClient);
+  }
+
   return (
     <header className="flex shrink-0 flex-col gap-1 border-b px-3 py-1.5 text-xs">
-      <IdText value={user.user_id} kind="user" />
+      <div className="flex items-center gap-2">
+        <IdText value={user.user_id} kind="user" />
+        <div className="ml-auto">
+          <DisabledReason reason={canDelete ? undefined : "Only project admins can delete data"}>
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              disabled={!canDelete}
+              onClick={() => {
+                setDeleteOpen(true);
+              }}
+            >
+              <Trash2 />
+              Delete user data…
+            </Button>
+          </DisabledReason>
+        </div>
+      </div>
+      <UserDeletionDialog
+        userId={user.user_id}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        onDone={() => {
+          void afterDelete();
+        }}
+      />
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
         <span>
           <TimeText value={user.first_seen} style="datetime" />

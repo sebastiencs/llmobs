@@ -1,3 +1,4 @@
+import type { QueryClient } from "@tanstack/react-query";
 import type { Schema } from "@/api/types";
 
 type Deletion = Schema<"Deletion">;
@@ -82,4 +83,17 @@ export function deletionErrorLabel(error: NonNullable<Deletion["error"]>): strin
 /** True while the status is `resolving` or `pending`. */
 export function isOpenDeletion(deletion: Deletion): boolean {
   return deletion.status === "resolving" || deletion.status === "pending";
+}
+
+/**
+ * Marks every read of the project stale after a deletion: traces, spans, sessions,
+ * users and metrics all show deleted data until they refetch.
+ */
+export function invalidateProjectReads(queryClient: QueryClient): Promise<void> {
+  return queryClient.invalidateQueries({
+    predicate: (query) => {
+      const path = query.queryKey[1];
+      return typeof path === "string" && path.startsWith("/api/v1/projects/{project}/");
+    },
+  });
 }

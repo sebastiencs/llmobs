@@ -53,6 +53,14 @@ export function readRecent(org: string, project: string): RecentTrace[] {
   return readStore()[projectKey(org, project)] ?? [];
 }
 
+function writeStore(store: Record<string, RecentTrace[]>): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  } catch {
+    // Private mode can throw. The palette still works for this page.
+  }
+}
+
 /** Remembers an opened trace. Stores the id and name only. */
 export function rememberTrace(org: string, project: string, trace: RecentTrace): void {
   const store = readStore();
@@ -64,11 +72,20 @@ export function rememberTrace(org: string, project: string, trace: RecentTrace):
     0,
     LIMIT,
   );
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
-  } catch {
-    // Private mode can throw. The palette still works for this page.
+  writeStore(store);
+}
+
+/** Drops a deleted trace from every project's list. */
+export function forgetTrace(traceId: string): void {
+  const store = readStore();
+  const next: Record<string, RecentTrace[]> = {};
+  for (const [key, traces] of Object.entries(store)) {
+    const remaining = traces.filter((item) => item.id !== traceId);
+    if (remaining.length > 0) {
+      next[key] = remaining;
+    }
   }
+  writeStore(next);
 }
 
 /** Trace id currently open in the split (`?trace=`) or on the full page. */

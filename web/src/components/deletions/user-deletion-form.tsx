@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useId, useState } from "react";
+import { type FormEvent, useEffect, useId, useState } from "react";
 import { $api } from "@/api/client";
 import { fieldErrors, problemMessage, problemOf } from "@/api/problem";
 import { deletionsKey } from "@/api/queries-settings";
@@ -14,16 +14,87 @@ const EXPLANATION =
 
 const MAX_USER_ID_BYTES = 255;
 
+/** Type-to-confirm, then a user deletion request. Shared by the Data tab and the user page. */
+export function UserDeletionDialog({
+  userId,
+  open,
+  onOpenChange,
+  onDone,
+  onFieldError,
+}: {
+  userId: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Called after a successful request. */
+  onDone: () => void;
+  /** A 400 on `user_id`: the form shows it under its field and closes the dialog. Without it, the dialog shows the message. */
+  onFieldError?: (message: string) => void;
+}) {
+  const { ref } = useProject();
+  const mutation = $api.useMutation("post", "/api/v1/projects/{project}/deletions");
+
+  // A reopened dialog starts without the last request's error.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs once per opening
+  useEffect(() => {
+    if (open) {
+      mutation.reset();
+    }
+  }, [open]);
+
+  function confirm() {
+    mutation.mutate(
+      {
+        params: { path: { project: ref } },
+        body: { kind: "user", user_id: userId },
+      },
+      {
+        onSuccess: () => {
+          onOpenChange(false);
+          onDone();
+        },
+        onError: (caught) => {
+          const message = fieldErrors(caught).user_id;
+          if (message !== undefined && onFieldError) {
+            onFieldError(message);
+            onOpenChange(false);
+          }
+        },
+      },
+    );
+  }
+
+  const dialogError = mutation.error
+    ? problemOf(mutation.error)?.status === 403
+      ? "Only project admins can delete data."
+      : (fieldErrors(mutation.error).user_id ??
+        problemMessage(mutation.error, "Could not request the deletion."))
+    : undefined;
+
+  return (
+    <TypeToConfirmDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Delete this user's data?"
+      description={EXPLANATION}
+      expected={userId}
+      inputLabel={`Type the user ID "${userId}" to confirm`}
+      confirmLabel="Delete user data"
+      pending={mutation.isPending}
+      error={dialogError}
+      onConfirm={confirm}
+    />
+  );
+}
+
 /** Deletes one end user's data after the user types their id to confirm. */
 export function UserDeletionForm() {
-  const { org, project, ref } = useProject();
+  const { org, project } = useProject();
   const headingId = useId();
   const queryClient = useQueryClient();
   const [userId, setUserId] = useState("");
   const [userIdError, setUserIdError] = useState<string | undefined>();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saved, setSaved] = useState(false);
-  const mutation = $api.useMutation("post", "/api/v1/projects/{project}/deletions");
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -37,39 +108,8 @@ export function UserDeletionForm() {
       setUserIdError("Use at most 255 bytes.");
       return;
     }
-    mutation.reset();
     setDialogOpen(true);
   }
-
-  function confirm() {
-    mutation.mutate(
-      {
-        params: { path: { project: ref } },
-        body: { kind: "user", user_id: userId },
-      },
-      {
-        onSuccess: () => {
-          setDialogOpen(false);
-          setUserId("");
-          setSaved(true);
-          void queryClient.invalidateQueries({ queryKey: deletionsKey(org, project) });
-        },
-        onError: (caught) => {
-          const fields = fieldErrors(caught);
-          if (fields.user_id !== undefined) {
-            setUserIdError(fields.user_id);
-            setDialogOpen(false);
-          }
-        },
-      },
-    );
-  }
-
-  const dialogError = mutation.error
-    ? problemOf(mutation.error)?.status === 403
-      ? "Only project admins can delete data."
-      : problemMessage(mutation.error, "Could not request the deletion.")
-    : undefined;
 
   return (
     <section aria-labelledby={headingId} className="flex max-w-md flex-col gap-4">
@@ -110,17 +150,16 @@ export function UserDeletionForm() {
           }
         />
       </form>
-      <TypeToConfirmDialog
+      <UserDeletionDialog
+        userId={userId}
         open={dialogOpen}
         onOpenChange={setDialogOpen}
-        title="Delete this user's data?"
-        description={EXPLANATION}
-        expected={userId}
-        inputLabel={`Type the user ID "${userId}" to confirm`}
-        confirmLabel="Delete user data"
-        pending={mutation.isPending}
-        error={dialogError}
-        onConfirm={confirm}
+        onDone={() => {
+          setUserId("");
+          setSaved(true);
+          void queryClient.invalidateQueries({ queryKey: deletionsKey(org, project) });
+        }}
+        onFieldError={setUserIdError}
       />
     </section>
   );

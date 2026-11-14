@@ -1,5 +1,10 @@
 import { expect, it } from "vitest";
-import { openTraceId, readRecent, rememberTrace } from "@/components/command/recent-traces";
+import {
+  forgetTrace,
+  openTraceId,
+  readRecent,
+  rememberTrace,
+} from "@/components/command/recent-traces";
 import { STORAGE_PREFIX } from "@/product";
 
 it("keeps the last 10 traces per project, ids and names only", () => {
@@ -27,4 +32,19 @@ it("reads a trace id from the split or the full page", () => {
   expect(openTraceId("/acme/support-bot/traces", { trace: "a".repeat(32) })).toBe("a".repeat(32));
   expect(openTraceId(`/acme/support-bot/traces/${"b".repeat(32)}`, {})).toBe("b".repeat(32));
   expect(openTraceId("/acme/support-bot/spans", {})).toBeUndefined();
+});
+
+it("forgets a deleted trace in every project and keeps the rest", () => {
+  const gone = "c".repeat(32);
+  const kept = "d".repeat(32);
+  rememberTrace("acme", "support-bot", { id: gone, name: "gone" });
+  rememberTrace("acme", "support-bot", { id: kept, name: "kept" });
+  rememberTrace("acme", "playground", { id: gone, name: "gone too" });
+  forgetTrace(gone);
+  expect(readRecent("acme", "support-bot")).toEqual([{ id: kept, name: "kept" }]);
+  expect(readRecent("acme", "playground")).toEqual([]);
+  const stored = JSON.parse(
+    localStorage.getItem(`${STORAGE_PREFIX}recent-traces`) ?? "{}",
+  ) as Record<string, unknown>;
+  expect(Object.keys(stored)).toEqual(["acme/support-bot"]);
 });

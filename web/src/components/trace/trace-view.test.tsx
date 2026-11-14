@@ -6,6 +6,8 @@ import { traceIsRecent } from "@/components/trace/trace-view";
 import { server } from "@/mocks/node";
 import { type StreamEmit, spanStreamHandler, traceStreamHandler } from "@/mocks/sse";
 import { renderApp } from "@/test/render";
+import deletionFixture from "../../../../fixtures/api/static/deletion.json";
+import projectFixture from "../../../../fixtures/api/static/project.json";
 
 const TRACE = "a1000000000000000000000000000001";
 const ROOT = "b100000000000011";
@@ -245,4 +247,36 @@ describe("trace header", () => {
     }
     return { ...view, emit };
   }
+});
+
+it("deletes the trace from its header and returns to the list", async () => {
+  let body: unknown;
+  server.use(
+    http.post("/api/v1/projects/:project/deletions", async ({ request }) => {
+      body = await request.json();
+      return HttpResponse.json(deletionFixture, { status: 202 });
+    }),
+  );
+  const { router, user } = await renderApp(`/acme/support-bot/traces/${TRACE}`);
+  const header = await screen.findByRole("region", { name: "Trace" });
+  await user.click(within(header).getByRole("button", { name: "Delete trace" }));
+  const dialog = await screen.findByRole("alertdialog");
+  await user.click(within(dialog).getByRole("button", { name: "Delete trace" }));
+
+  await waitFor(() => expect(router.state.location.pathname).toBe("/acme/support-bot/traces"));
+  expect(body).toEqual({ kind: "trace_ids", trace_ids: [TRACE] });
+});
+
+it("disables the header delete for members, with the reason", async () => {
+  server.use(
+    http.get("/api/v1/projects/:project", () =>
+      HttpResponse.json({ ...projectFixture, role: "member" }),
+    ),
+  );
+  await renderApp(`/acme/support-bot/traces/${TRACE}`);
+  const header = await screen.findByRole("region", { name: "Trace" });
+
+  const button = within(header).getByRole("button", { name: "Delete trace" });
+  expect(button).toBeDisabled();
+  expect(button.parentElement).toHaveAccessibleDescription("Only project admins can delete traces");
 });
