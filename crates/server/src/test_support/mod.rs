@@ -56,6 +56,9 @@ use crate::meta::{MetaDb, MetaError};
 /// `2026-01-01T00:00:00Z`.
 const MANUAL_NOW_NS: i64 = 1_767_225_600_000_000_000;
 
+/// The key every test `SecretBox` is built from (D-I-2).
+pub(crate) const TEST_KEY: [u8; 32] = [7; 32];
+
 /// One process's data directory and router.
 pub(crate) struct TestApp {
     /// Kept so the directory outlives the open files.
@@ -140,6 +143,14 @@ impl TestApp {
             .await
             .expect("storage opens");
         let meta = MetaDb::open(&config.data_dir).await.expect("meta.db opens");
+        let secrets = crate::crypto::SecretBox::new(&TEST_KEY);
+        crate::crypto::verify_or_record(
+            &meta,
+            &secrets,
+            &crate::crypto::key_path(&config.data_dir),
+        )
+        .await
+        .expect("check value");
         let mailer = if stub_mailer {
             let from = format!("{PRODUCT} <noreply@example.com>");
             Some(Arc::new(crate::email::Mailer::stub(&from)))
@@ -181,6 +192,7 @@ impl TestApp {
             live: crate::live::LiveBus::new(crate::live::StreamTiming::TEST),
             metrics_cache: crate::routes::metrics::MetricsCache::default(),
             usage: crate::usage::Usage::default(),
+            secrets,
         });
         let router = if let Some(table) = table {
             serve_router(state.clone(), table)

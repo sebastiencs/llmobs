@@ -68,6 +68,10 @@ pub(crate) struct AppInner {
     pub(crate) metrics_cache: crate::routes::metrics::MetricsCache,
     /// Usage counters, flushed every 10 s (D-G-11).
     pub(crate) usage: crate::usage::Usage,
+    /// Seals and opens secret columns (D-I-2).
+    #[allow(dead_code)]
+    // First read by the connection routes (I1.4); http's cfg_attr covers only non-test builds.
+    pub(crate) secrets: crate::crypto::SecretBox,
 }
 
 impl AppState {

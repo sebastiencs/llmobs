@@ -172,6 +172,7 @@ fn annotate(error: ServeError) -> anyhow::Error {
         ServeError::Config(_) => "loading config",
         ServeError::Storage(_) => "opening storage",
         ServeError::Meta(_) => "opening meta.db",
+        ServeError::Crypto(_) => "loading the encryption key",
         ServeError::Bind { .. } => "binding",
         ServeError::Prices(_) => "building the price table",
         ServeError::Serve(_) => "serving",

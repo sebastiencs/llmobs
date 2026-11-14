@@ -196,6 +196,8 @@ openidconnect = { version = "4.1.0", default-features = false, features = ["reqw
 oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest", "rustls-tls"] }
 # HMAC-SHA256 for webhook signatures (D165) and the OAuth state cookie (P24). RustCrypto 0.13, matching `sha2` 0.11.
 hmac = "0.13.0"
+# AES-256-GCM for sealed columns (D-I-2). Nonces come from the server's own random source, so the `getrandom` feature is not needed.
+aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "alloc"] }
 # Constant-time compare of token hashes.
 subtle = "2.6.1"
 # OpenAPI 3.1 schemas. `uuid` enables the `format: uuid` schema. Do not enable

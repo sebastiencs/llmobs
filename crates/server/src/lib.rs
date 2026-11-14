@@ -12,6 +12,7 @@ pub(crate) mod auth;
 pub(crate) mod bootstrap;
 pub(crate) mod clock;
 pub mod config;
+pub(crate) mod crypto;
 pub(crate) mod email;
 pub(crate) mod http;
 pub(crate) mod ingest;
