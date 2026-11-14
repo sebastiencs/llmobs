@@ -73,21 +73,18 @@ pub(crate) fn resolve_target(
         .as_deref()
         .map(str::trim)
         .filter(|url| !url.is_empty());
-    if let Some(url) = url {
-        credentials::check_server_url(url)?;
-    }
     let token = args
         .token
         .as_ref()
         .filter(|token| !token.expose().is_empty());
     let target = match (url, token) {
         (Some(url), Some(token)) => Target {
-            server: credentials::normalize_server_url(url),
+            server: credentials::server_url(url)?,
             token: token.clone(),
         },
         (None, Some(_)) => bail!("--token needs --url (or LLMOBS_URL)"),
         (Some(url), None) => {
-            let server = credentials::normalize_server_url(url);
+            let server = credentials::server_url(url)?;
             let file = credentials::load(&credentials()?)?;
             let saved = file
                 .servers

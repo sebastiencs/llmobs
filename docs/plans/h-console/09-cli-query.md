@@ -98,12 +98,20 @@ Move these items **unchanged in behaviour** from `login.rs` into `crates/cli/src
 Add next to `normalize_server_url` the one URL check every path to a server URL runs (`resolve_target` below, `login`, and `logout` through `chosen_server`):
 
 ```rust
-/// Refuses a URL that does not parse, whose scheme is not `http`/`https`, or that carries
-/// `user[:password]@` credentials.
+/// Refuses a URL that carries an ASCII control character, does not parse, whose scheme is
+/// not `http`/`https`, or that carries `user[:password]@` credentials.
 pub(crate) fn check_server_url(url: &str) -> anyhow::Result<()>;
 ```
 
-It parses with `reqwest::Url::parse` (reqwest re-exports `Url`; no new dependency): a parse failure or a scheme other than http/https is the error `--url must start with http:// or https://`; a non-empty `username()` or any `password()` is `the server URL must not contain credentials`. Neither message includes the URL, so a refused URL's credentials are not echoed. One parser decides, not a hand-written scan: `http:/<tab>/user:pw@h` parses to `http://user:pw@h` and is refused.
+A control character anywhere in the URL (tab and newline included) is refused with `--url must start with http:// or https://` **before** parsing: the WHATWG parser strips C0 controls and tabs, so `\x01http://h` would pass the check while the control byte survived into the stored and printed URL. The rest parses with `reqwest::Url::parse` (reqwest re-exports `Url`; no new dependency): a parse failure or a scheme other than http/https is the error `--url must start with http:// or https://`; a non-empty `username()` or any `password()` is `the server URL must not contain credentials`. Neither message includes the URL, so a refused URL's credentials are not echoed. One parser decides, not a hand-written scan: `http:/<tab>/user:pw@h` is refused before it is ever parsed.
+
+Next to it, one helper runs the three steps in the same order for every raw URL (flag, `LLMOBS_URL`, `login` argument): trim, `check_server_url`, drop trailing slashes; the result is the stored string. `resolve_target`, `login` and `chosen_server`'s flag path all go through it (a saved key is only checked, it was normalized when stored):
+
+```rust
+pub(crate) fn server_url(raw: &str) -> anyhow::Result<String>;
+```
+
+`logout` still picks its server with `chosen_server`, but a saved key the check refuses (written by an older binary) must stay removable: when the chosen URL fails the check yet names a saved entry exactly (`--url <bad>`), or is the only saved key (plain `logout`), that entry is removed locally — no request is sent to the URL and it is never printed — and `logout` prints `removed a saved server whose URL is not allowed`. `chosen_server` itself keeps refusing such URLs on every normal path.
 
 Move `fn credentials_path() -> anyhow::Result<PathBuf>` from `main.rs` into `credentials.rs` as `pub(crate)`.
 
@@ -283,7 +291,7 @@ pub(crate) fn problem_error(status: reqwest::StatusCode, body: &[u8], server: &s
 | set | absent | `credentials::load(&credentials()?)?`; the entry for the normalized URL, else error ``no saved token for <url>; run `llmobs login --url <url>` `` |
 | absent | absent | `credentials::load(&credentials()?)?`; 0 servers: error ``not logged in; run `llmobs login --url <URL>` or set LLMOBS_URL and LLMOBS_TOKEN``; 1 server: that server and its token; 2 or more: error `more than one saved server; pass --url` |
 
-Then, whatever the row: the flag or `LLMOBS_URL` URL is checked with `credentials::check_server_url` before anything else, and row 4's saved server before its token is read. A URL with embedded credentials is refused with `the server URL must not contain credentials` before any message can print the URL (rows 3 and 4's `no saved token for <url>` included), whatever its source: the flag, `LLMOBS_URL`, a saved key in the credentials file, or `llmobs login --url` (checked before anything is printed, verified or saved). A URL that does not parse, or whose scheme is not `http`/`https` (ASCII case-insensitive; `HTTPS://h` is accepted), is refused with `--url must start with http:// or https://`. A saved token that is empty after trimming counts as absent: rows 3 and 4 answer `no saved token for <url>; run \`llmobs login --url <url>\``. A saved token becomes a `Token` through `Token::from_str` (trimmed). The token is not checked for the `pat-` shape: an `sk` key works for `query` and `traces` on its own project.
+Then, whatever the row: the flag or `LLMOBS_URL` URL goes through `credentials::server_url` (trim, `check_server_url`, trailing slashes dropped) as each row builds its target, before the credentials file is read, and row 4's saved server is checked before its token is read. A URL with embedded credentials is refused with `the server URL must not contain credentials` before any message can print the URL (rows 3 and 4's `no saved token for <url>` included), whatever its source: the flag, `LLMOBS_URL`, a saved key in the credentials file, or `llmobs login --url` (checked before anything is printed, verified or saved). A URL that carries an ASCII control character, does not parse, or whose scheme is not `http`/`https` (ASCII case-insensitive; `HTTPS://h` is accepted), is refused with `--url must start with http:// or https://`. A saved token that is empty after trimming counts as absent: rows 3 and 4 answer `no saved token for <url>; run \`llmobs login --url <url>\``. A saved token becomes a `Token` through `Token::from_str` (trimmed). The token is not checked for the `pat-` shape: an `sk` key works for `query` and `traces` on its own project.
 
 ### `project_segment`
 

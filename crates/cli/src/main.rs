@@ -170,7 +170,12 @@ async fn run_cli(
             .await?;
         }
         Command::Logout { url } => {
-            login::logout(url.as_deref(), &credentials::credentials_path()?).await?;
+            login::logout(
+                url.as_deref(),
+                &credentials::credentials_path()?,
+                &mut io::stdout(),
+            )
+            .await?;
         }
         Command::Query(args) => {
             let stdout = io::stdout();

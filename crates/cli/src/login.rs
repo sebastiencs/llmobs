@@ -18,7 +18,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::credentials::{
-    SavedToken, check_server_url, chosen_server, load, normalize_server_url, save,
+    CredentialsFile, SavedToken, chosen_server, load, normalize_server_url, save, server_url,
 };
 
 const WAIT: Duration = Duration::from_secs(5 * 60);
@@ -30,17 +30,16 @@ const PAGE: &str = "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8
 ///
 /// # Errors
 ///
-/// Returns an error when the server URL is refused by [`check_server_url`], the callback
-/// times out, the token is rejected, or the credentials file cannot be written. The message
-/// does not include the token, and a refused URL is never printed.
+/// Returns an error when the server URL is refused by `credentials::server_url`, the
+/// callback times out, the token is rejected, or the credentials file cannot be written.
+/// The message does not include the token, and a refused URL is never printed.
 pub(crate) async fn login(
-    server_url: &str,
+    raw: &str,
     no_browser: bool,
     credentials: &Path,
     mut output: impl Write + Send,
 ) -> anyhow::Result<()> {
-    let server = normalize_server_url(server_url);
-    check_server_url(&server)?;
+    let server = server_url(raw)?;
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("binding the callback")?;
@@ -64,20 +63,31 @@ pub(crate) async fn login(
     Ok(())
 }
 
-/// `llmobs logout`. Removes the saved server even when the revoke call fails.
+/// `llmobs logout`. Removes the saved server even when the revoke call fails. A saved
+/// server whose URL the check refuses (written by an older binary) is removed without
+/// the server being contacted and without the URL printed; `output` then says so.
 ///
 /// # Errors
 ///
 /// Returns an error when no server can be chosen or the credentials file cannot
 /// be updated. A failed revoke is a warning on stderr and is not an error.
-pub(crate) async fn logout(server_url: Option<&str>, credentials: &Path) -> anyhow::Result<()> {
+pub(crate) async fn logout(
+    raw: Option<&str>,
+    credentials: &Path,
+    mut output: impl Write,
+) -> anyhow::Result<()> {
     let mut file = load(credentials)?;
-    let server = chosen_server(server_url, &file)?;
+    let (server, allowed) = logout_server(raw, &file)?;
     let Some(saved) = file.servers.remove(&server) else {
         anyhow::bail!("no saved token for that server");
     };
-    if let Err(message) = revoke(&server, &saved.token).await {
-        warn(&message);
+    if allowed {
+        if let Err(message) = revoke(&server, &saved.token).await {
+            warn(&message);
+        }
+    } else {
+        writeln!(output, "removed a saved server whose URL is not allowed")
+            .context("printing the logout result")?;
     }
     if file.servers.is_empty() {
         if credentials.exists() {
@@ -86,6 +96,30 @@ pub(crate) async fn logout(server_url: Option<&str>, credentials: &Path) -> anyh
         return Ok(());
     }
     save(credentials, &file)
+}
+
+/// The saved key `logout` removes, and whether the server may be contacted: when the
+/// check refuses the chosen URL but it names a saved entry (written by an older
+/// binary), that entry is removed locally instead.
+fn logout_server(raw: Option<&str>, file: &CredentialsFile) -> anyhow::Result<(String, bool)> {
+    match chosen_server(raw, file) {
+        Ok(server) => Ok((server, true)),
+        Err(error) => match disallowed_saved_key(raw, file) {
+            Some(key) => Ok((key, false)),
+            None => Err(error),
+        },
+    }
+}
+
+/// The saved key the check refuses that `logout` still removes: a `--url` that matches
+/// a saved entry exactly, or the only saved key. `None` when there is none.
+fn disallowed_saved_key(raw: Option<&str>, file: &CredentialsFile) -> Option<String> {
+    let key = match raw {
+        Some(raw) => normalize_server_url(raw),
+        None if file.servers.len() == 1 => file.servers.keys().next()?.to_owned(),
+        None => return None,
+    };
+    file.servers.contains_key(&key).then_some(key)
 }
 
 fn new_state() -> anyhow::Result<String> {
@@ -364,6 +398,78 @@ mod tests {
         assert!(!credentials.exists());
     }
 
+    fn saved_credentials(path: &Path, server: &str) {
+        let mut file = CredentialsFile::default();
+        file.servers.insert(
+            server.to_owned(),
+            SavedToken {
+                token: "pat-x".to_owned(),
+            },
+        );
+        save(path, &file).unwrap();
+    }
+
+    #[tokio::test]
+    async fn logout_url_removes_a_disallowed_saved_key_without_contacting_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let credentials = dir.path().join("llmobs").join("credentials.toml");
+        // The disallowed URL points at a live socket: if `logout` tried to revoke on it,
+        // the listener would see a connection.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let disallowed = format!("http://user:pw@127.0.0.1:{port}");
+        saved_credentials(&credentials, &disallowed);
+
+        let mut printed = Vec::new();
+        logout(Some(&disallowed), &credentials, &mut printed)
+            .await
+            .unwrap();
+        let text = String::from_utf8(printed).unwrap();
+        assert_eq!(text, "removed a saved server whose URL is not allowed\n");
+        assert!(!text.contains(&disallowed));
+        assert!(load(&credentials).unwrap().servers.is_empty());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err()
+        );
+
+        // A disallowed URL with no matching saved entry is still an error, and it is
+        // never printed.
+        let mut quiet = Vec::new();
+        let error = logout(Some(&disallowed), &credentials, &mut quiet)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "the server URL must not contain credentials"
+        );
+        assert!(quiet.is_empty());
+    }
+
+    #[tokio::test]
+    async fn plain_logout_removes_the_only_disallowed_saved_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let credentials = dir.path().join("llmobs").join("credentials.toml");
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let disallowed = format!("http://user:pw@127.0.0.1:{port}");
+        saved_credentials(&credentials, &disallowed);
+
+        let mut printed = Vec::new();
+        logout(None, &credentials, &mut printed).await.unwrap();
+        assert_eq!(
+            String::from_utf8(printed).unwrap(),
+            "removed a saved server whose URL is not allowed\n"
+        );
+        assert!(!credentials.exists());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err()
+        );
+    }
+
     struct LineWriter {
         tx: tokio::sync::mpsc::UnboundedSender<String>,
         buf: Vec<u8>,
@@ -511,7 +617,9 @@ mod tests {
         let saved = load(&credentials).unwrap();
         assert_eq!(saved.servers[&normalize_server_url(&server)].token, secret);
 
-        logout(Some(&server), &credentials).await.unwrap();
+        logout(Some(&server), &credentials, &mut Vec::new())
+            .await
+            .unwrap();
         assert!(
             !credentials.exists()
                 || !load(&credentials)

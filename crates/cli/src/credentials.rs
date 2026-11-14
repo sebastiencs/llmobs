@@ -52,12 +52,28 @@ pub(crate) fn normalize_server_url(url: &str) -> String {
     url
 }
 
+/// Normalizes and checks a raw server URL in one order on every path one arrives (flag,
+/// environment variable, `login` argument): trim, [`check_server_url`], then drop trailing
+/// slashes. The returned string is the stored form; a saved key is only checked, since it
+/// was normalized when it was stored.
+pub(crate) fn server_url(raw: &str) -> anyhow::Result<String> {
+    let trimmed = raw.trim();
+    check_server_url(trimmed)?;
+    Ok(normalize_server_url(trimmed))
+}
+
 /// Whether a server URL is usable, checked by every path a URL can arrive on (flag,
-/// environment variable, credentials file, `login` argument): it must parse as an `http` or
-/// `https` URL and carry no `user[:password]@`. A URL with credentials would be stored,
-/// printed and requested with the password inside, so it is refused instead; the error never
-/// includes the URL.
+/// environment variable, credentials file, `login` argument): it must carry no ASCII
+/// control character, parse as an `http` or `https` URL and carry no `user[:password]@`.
+/// A URL with credentials would be stored, printed and requested with the password
+/// inside, so it is refused instead; the error never includes the URL.
 pub(crate) fn check_server_url(url: &str) -> anyhow::Result<()> {
+    // The URL parser strips C0 controls and tabs anywhere in the string, so they are
+    // refused before parsing: they would otherwise survive into the stored and printed
+    // URL, or hide credentials the parser no longer sees.
+    if url.bytes().any(|byte| byte.is_ascii_control()) {
+        anyhow::bail!("--url must start with http:// or https://");
+    }
     let parsed = reqwest::Url::parse(url)
         .map_err(|_| anyhow::anyhow!("--url must start with http:// or https://"))?;
     if !matches!(parsed.scheme(), "http" | "https") {
@@ -69,14 +85,9 @@ pub(crate) fn check_server_url(url: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(crate) fn chosen_server(
-    server_url: Option<&str>,
-    file: &CredentialsFile,
-) -> anyhow::Result<String> {
-    if let Some(url) = server_url {
-        let server = normalize_server_url(url);
-        check_server_url(&server)?;
-        return Ok(server);
+pub(crate) fn chosen_server(raw: Option<&str>, file: &CredentialsFile) -> anyhow::Result<String> {
+    if let Some(url) = raw {
+        return server_url(url);
     }
     match file.servers.len() {
         0 => anyhow::bail!("no saved server"),
@@ -135,13 +146,26 @@ fn set_dir_mode(_directory: &Path) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_server_url, normalize_server_url};
+    use super::{
+        CredentialsFile, SavedToken, check_server_url, chosen_server, normalize_server_url,
+        server_url,
+    };
 
     #[test]
     fn server_url_loses_trailing_slashes() {
         assert_eq!(
             normalize_server_url(" http://127.0.0.1:8080/ "),
             "http://127.0.0.1:8080"
+        );
+    }
+
+    #[test]
+    fn server_url_trims_checks_then_normalizes() {
+        assert_eq!(server_url("  http://h:1/  ").unwrap(), "http://h:1");
+        let control = server_url("\x01http://h").unwrap_err();
+        assert_eq!(
+            control.to_string(),
+            "--url must start with http:// or https://"
         );
     }
 
@@ -154,8 +178,13 @@ mod tests {
             ("http://h#@", false),
             ("http://h/@path", false),
             ("http://u:p@ss@h", true),
-            // The tab is stripped by the URL parser, leaving http://user:pw@h.
+            // A control character is refused before parsing: the URL parser would strip
+            // it, keeping it in the stored URL or hiding credentials (the tab case).
+            ("\x01http://h", true),
+            ("http://h\x0f", true),
+            ("http://h\n", true),
             ("http:/\t/user:pw@h", true),
+            ("ftp://h", true),
             ("user:pw@h", true),
         ];
         for (url, refused) in cases {
@@ -169,5 +198,40 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn chosen_server_refuses_disallowed_urls_on_normal_paths() {
+        let mut file = CredentialsFile::default();
+        file.servers.insert(
+            "http://h:1".to_owned(),
+            SavedToken {
+                token: "pat".to_owned(),
+            },
+        );
+        let flag = chosen_server(Some("http://user:pw@h:1"), &file).unwrap_err();
+        assert_eq!(
+            flag.to_string(),
+            "the server URL must not contain credentials"
+        );
+
+        let mut saved = CredentialsFile::default();
+        saved.servers.insert(
+            "http://user:pw@h:1".to_owned(),
+            SavedToken {
+                token: "pat".to_owned(),
+            },
+        );
+        let key = chosen_server(None, &saved).unwrap_err();
+        assert_eq!(
+            key.to_string(),
+            "the server URL must not contain credentials"
+        );
+
+        assert_eq!(
+            chosen_server(Some(" http://h:1/ "), &file).unwrap(),
+            "http://h:1"
+        );
+        assert_eq!(chosen_server(None, &file).unwrap(), "http://h:1");
     }
 }
