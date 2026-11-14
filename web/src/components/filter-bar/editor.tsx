@@ -16,7 +16,7 @@ import { completeFilter } from "@/components/filter-bar/logic";
 const errorMark = Decoration.mark({ class: "cm-filter-error" });
 
 /** jsdom ranges have no layout rects. Browsers already implement these. */
-function ensureLayoutRects() {
+export function ensureLayoutRects() {
   const prototypes = [Range.prototype, Element.prototype];
   for (const prototype of prototypes) {
     if (typeof prototype.getClientRects !== "function") {
