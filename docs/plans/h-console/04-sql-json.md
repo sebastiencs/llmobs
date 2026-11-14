@@ -25,6 +25,7 @@ Adds `POST /api/v1/projects/{project}/sql` with JSON results (spec 05 § SQL con
 | `crates/server/src/routes/sql.rs` | new: route, request checks, handler, tests |
 | `crates/server/src/routes/mod.rs` | `pub(crate) mod sql;` (after `sessions`) |
 | `crates/server/src/routes/read.rs` | `open_query_on` takes a window; `open_query_windowed` |
+| `crates/server/src/routes/streams.rs` | the one other caller of `open_query_on` passes `None` for the new window argument |
 | `crates/server/tests/openapi.rs` | tag, operation and expected errors of `run_sql` |
 | `crates/server/src/http/access.rs` | `routes.extend(crate::routes::sql::routes());` after the `saved_views` line |
 | `crates/server/src/api/openapi.rs` | tag `sql`, three schemas, `sql_paths` |

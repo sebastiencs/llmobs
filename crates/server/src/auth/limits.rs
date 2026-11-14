@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::net::IpAddr;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use uuid::Uuid;
@@ -156,6 +156,81 @@ impl Lockout {
     }
 }
 
+/// `POST /mcp` requests one token may make per minute (D-H-10).
+pub(crate) const MCP_PER_MINUTE: u32 = 60;
+/// `POST /mcp` requests one token may have in progress at once (D-H-10).
+pub(crate) const MCP_IN_FLIGHT: u32 = 4;
+
+/// Rate and concurrency of `POST /mcp`, per personal access token id.
+pub(crate) struct McpLimits {
+    rate: KeyedLimiter<Uuid>,
+    /// Requests in progress per token. A token with none has no entry.
+    in_flight: Arc<Mutex<HashMap<Uuid, u32>>>,
+}
+
+impl McpLimits {
+    fn new(max_keys: usize) -> Self {
+        Self {
+            rate: KeyedLimiter::new(
+                Bucket {
+                    capacity: MCP_PER_MINUTE,
+                    per: Duration::from_secs(60),
+                },
+                max_keys,
+            ),
+            in_flight: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Admits one request of `token`. The request counts as in progress until the guard drops.
+    ///
+    /// # Errors
+    ///
+    /// [`RetryAfter`] of 1 s when `token` already has [`MCP_IN_FLIGHT`] requests in progress
+    /// (no rate token is spent), or the rate limiter's [`RetryAfter`].
+    pub(crate) fn admit(&self, token: Uuid, now: i64) -> Result<McpGuard, RetryAfter> {
+        let mut in_flight = lock(&self.in_flight);
+        let current = in_flight.get(&token).copied().unwrap_or(0);
+        if current >= MCP_IN_FLIGHT {
+            return Err(RetryAfter(Duration::from_secs(1)));
+        }
+        self.rate.check(&token, now)?;
+        in_flight.insert(token, current + 1);
+        Ok(McpGuard {
+            in_flight: Arc::clone(&self.in_flight),
+            token,
+        })
+    }
+
+    fn prune(&self, now: i64) {
+        self.rate.prune(now);
+    }
+
+    /// Requests of `token` in progress. Tests only.
+    #[cfg(test)]
+    pub(crate) fn in_flight(&self, token: Uuid) -> u32 {
+        lock(&self.in_flight).get(&token).copied().unwrap_or(0)
+    }
+}
+
+/// One admitted `POST /mcp` request. Dropping it ends the request's in-progress slot.
+pub(crate) struct McpGuard {
+    in_flight: Arc<Mutex<HashMap<Uuid, u32>>>,
+    token: Uuid,
+}
+
+impl Drop for McpGuard {
+    fn drop(&mut self) {
+        let mut in_flight = lock(&self.in_flight);
+        if let Some(count) = in_flight.get_mut(&self.token) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                in_flight.remove(&self.token);
+            }
+        }
+    }
+}
+
 /// The login, form, and mail limiters, plus the password lockout.
 pub(crate) struct Limits {
     /// 10 checks per minute per `(client IP, email)`.
@@ -169,6 +244,8 @@ pub(crate) struct Limits {
     /// 10 connection tests per minute per user (D-I-21). M2's evaluator test
     /// runs share this limiter.
     pub(crate) connection_tests: KeyedLimiter<Uuid>,
+    /// 60 requests per minute and 4 at once per personal access token on `POST /mcp` (D-H-10).
+    pub(crate) mcp: McpLimits,
     /// 20 failures lock password login for 15 minutes.
     pub(crate) lockout: Lockout,
 }
@@ -213,6 +290,7 @@ impl Limits {
                 },
                 MAX_KEYS,
             ),
+            mcp: McpLimits::new(MAX_KEYS),
             lockout: Lockout::new(20, Duration::from_secs(15 * 60), MAX_KEYS),
         }
     }
@@ -224,6 +302,7 @@ impl Limits {
         self.email_mail.prune(now);
         self.feedback.prune(now);
         self.connection_tests.prune(now);
+        self.mcp.prune(now);
         self.lockout.prune(now);
     }
 }
@@ -409,5 +488,36 @@ mod tests {
             .check(&"ada@example.com".to_owned(), 0)
             .unwrap();
         limits.prune(0);
+    }
+
+    #[test]
+    fn mcp_admits_four_at_once_and_sixty_a_minute() {
+        let limits = McpLimits::new(10);
+        let token = Uuid::now_v7();
+        let mut guards: Vec<McpGuard> = (0..MCP_IN_FLIGHT)
+            .map(|_| limits.admit(token, 0).expect("under the in-flight cap"))
+            .collect();
+        let fifth = limits.admit(token, 0);
+        assert!(
+            matches!(fifth.as_ref().err(), Some(RetryAfter(wait)) if *wait == Duration::from_secs(1))
+        );
+        let other = Uuid::now_v7();
+        assert!(limits.admit(other, 0).is_ok());
+        guards.pop();
+        guards.push(limits.admit(token, 0).expect("a slot is free again"));
+        assert_eq!(limits.in_flight(token), MCP_IN_FLIGHT);
+
+        // A fresh limiter: 60 requests in one minute, each finished at once, then a refusal.
+        let limits = McpLimits::new(10);
+        let token = Uuid::now_v7();
+        for _ in 0..MCP_PER_MINUTE {
+            assert!(limits.admit(token, 0).is_ok());
+        }
+        let refused = limits.admit(token, 0);
+        assert!(matches!(refused.as_ref().err(), Some(RetryAfter(wait)) if *wait > Duration::ZERO));
+        let later = limits.admit(token, 1_000_000_000);
+        assert!(later.is_ok());
+        drop(later);
+        assert_eq!(limits.in_flight(token), 0);
     }
 }

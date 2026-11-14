@@ -33,8 +33,10 @@ name = "llmobs"
 path = "src/main.rs"
 
 [dev-dependencies]
+bytes.workspace = true
 insta.workspace = true
 opentelemetry-proto.workspace = true
+parquet.workspace = true
 prost.workspace = true
 tempfile.workspace = true
 tonic.workspace = true

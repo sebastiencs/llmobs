@@ -19,6 +19,7 @@ it("lists every shortcut the help dialog shows", () => {
     "Esc",
     "t",
     "0",
+    "⌘↵",
     "g then t / s / e / u / d",
     "⌘K",
     "?",

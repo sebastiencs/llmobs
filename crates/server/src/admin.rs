@@ -526,7 +526,7 @@ mod tests {
                 sqlx::query(
                     "INSERT INTO _sqlx_migrations \
                      (version, description, success, checksum, execution_time) \
-                     VALUES (4, 'future', 1, ?, 0)",
+                     VALUES (5, 'future', 1, ?, 0)",
                 )
                 .bind(Vec::<u8>::new())
                 .execute(&mut *connection)
@@ -538,7 +538,7 @@ mod tests {
         .unwrap();
         db.close().await;
         let error = list_users(&config).await.unwrap_err();
-        assert_eq!(error.to_string(), "this binary expects schema 3, found 4");
+        assert_eq!(error.to_string(), "this binary expects schema 4, found 5");
     }
 
     #[tokio::test]

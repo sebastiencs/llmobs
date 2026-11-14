@@ -321,7 +321,7 @@ export function SavedViewsMenu({
   );
 }
 
-function NameField({ name, onName }: { name: string; onName: (name: string) => void }) {
+export function NameField({ name, onName }: { name: string; onName: (name: string) => void }) {
   return (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor="view-name">Name</Label>
@@ -335,7 +335,7 @@ function NameField({ name, onName }: { name: string; onName: (name: string) => v
   );
 }
 
-function Flag({
+export function Flag({
   id,
   label,
   checked,

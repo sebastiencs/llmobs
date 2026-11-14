@@ -17,6 +17,7 @@ pub(crate) mod orgs;
 pub(crate) mod password_resets;
 pub(crate) mod personal_tokens;
 pub(crate) mod projects;
+pub(crate) mod saved_views;
 pub(crate) mod users;
 pub(crate) mod web_sessions;
 
@@ -386,7 +387,7 @@ mod tests {
             .fetch_one(db.reader())
             .await
             .unwrap();
-        assert_eq!(count, 3);
+        assert_eq!(count, 4);
         let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
             .fetch_one(db.reader())
             .await
@@ -410,7 +411,7 @@ mod tests {
                 sqlx::query(
                     "INSERT INTO _sqlx_migrations \
                      (version, description, success, checksum, execution_time) \
-                     VALUES (4, 'future', 1, ?, 0)",
+                     VALUES (5, 'future', 1, ?, 0)",
                 )
                 .bind(Vec::<u8>::new())
                 .execute(&mut *connection)
@@ -425,8 +426,8 @@ mod tests {
         let error = MetaDb::open_existing(dir.path()).await.unwrap_err();
         match error {
             MetaError::SchemaMismatch { found, expected } => {
-                assert_eq!(found, 4);
-                assert_eq!(expected, 3);
+                assert_eq!(found, 5);
+                assert_eq!(expected, 4);
             }
             other => panic!("{other}"),
         }

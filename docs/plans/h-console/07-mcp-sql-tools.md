@@ -52,15 +52,18 @@ pub(crate) fn max_chars(given: Option<i64>) -> Result<usize, ApiError> {
     }
 }
 
-/// `text` cut to its first `max` characters followed by `…`, or `None` when it has at most
-/// `max` characters. A cut string therefore has `max + 1` characters. Characters are Unicode
-/// scalar values, so a multibyte character is never split.
+/// `text` cut to at most `max` characters in total: its first `max - 1` characters followed
+/// by `…` (for `max == 0`, the empty string), or `None` when it has at most `max` characters.
+/// A cut string has exactly `max` characters, so cutting it again is a no-op. Characters are
+/// Unicode scalar values, so a multibyte character is never split.
 pub(crate) fn cut(text: &str, max: usize) -> Option<String> {
     if text.chars().count() <= max {
         return None;
     }
-    let mut out: String = text.chars().take(max).collect();
-    out.push('…');
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    if max > 0 {
+        out.push('…');
+    }
     Some(out)
 }
 ```
@@ -321,14 +324,14 @@ Expected column types: `trace_id` and `name` of the `traces` view print as `Utf8
 | `query_sql_windows_every_view` | `from` `"2026-01-01T10:06:00Z"`: (a) `SELECT count(*) AS n FROM scores`; (b) `SELECT count(*) AS n FROM (SELECT * FROM spans) AS s`; (c) `WITH t AS (SELECT trace_id FROM traces) SELECT count(*) AS n FROM t`; and (a) again with `from` `FROM` | (a) `rows` = `[{"n":3}]` (scores created at 10:07, 10:08 and 10:11); (b) `[{"n":6}]` (the spans of T3, T4 and T6); (c) `[{"n":3}]`; (a) over the whole day: `[{"n":6}]` |
 | `query_sql_binds_parameters` | `SELECT count(*) AS n FROM spans WHERE span_kind = {kind:String}`, `params` `{"kind": "llm"}` | `columns` = `[{"name":"n","type":"Int64"}]`; `rows` = `[{"n":7}]` |
 | `query_sql_reports_the_row_cap` | the first query, `limit` 2; then `SELECT trace_id FROM traces ORDER BY start_time LIMIT 2` with `limit` 2; then the first query with `limit` 1000; then `SELECT s.span_id FROM spans s CROSS JOIN spans a CROSS JOIN spans b` (14³ = 2,744 rows) with `limit` 1000 | first: ids `[T1, T5]`, `row_count` 2, `truncated` true, `notes` = `["rows truncated at 2; pass a larger limit (at most 1000) or narrow the query"]`; second: 2 rows, `truncated` false, `notes` `[]`; third: 6 rows, `truncated` false; fourth: `truncated` true, `notes[0]` = `"rows truncated at 1000; narrow the query or the window"` (fitting to 20,000 characters then adds a second note and keeps fewer rows) |
-| `query_sql_cuts_long_strings` | `SELECT concat(input, input, input, input, input, input, input) AS big FROM spans WHERE span_id = 'b100000000000014'` | `rows[0].big` has 2,001 characters (`chars().count()`) and ends with `…`; `truncated` false; `notes` = `["string values longer than 2000 characters were cut"]` (that span's stored input is 359 characters, so the concatenation has 2,513) |
+| `query_sql_cuts_long_strings` | `SELECT concat(input, input, input, input, input, input, input) AS big FROM spans WHERE span_id = 'b100000000000014'` | `rows[0].big` has 2,000 characters (`chars().count()`) and ends with `…`; `truncated` false; `notes` = `["string values longer than 2000 characters were cut"]` (that span's stored input is 359 characters, so the concatenation has 2,513) |
 | `query_sql_orders_its_notes` | `SELECT concat(input, input, input, input, input, input, input) AS big FROM spans WHERE input IS NOT NULL ORDER BY length(input) DESC`, `limit` 1 (the filter keeps a null `input` from sorting first) | `notes` = `["rows truncated at 1; pass a larger limit (at most 1000) or narrow the query", "string values longer than 2000 characters were cut"]` |
 | `query_sql_fits_max_chars` | `SELECT span_id, input FROM spans ORDER BY span_id`, `max_chars` 1000 | `truncated` true; `notes` = `["result cut at 1000 characters; later rows left out"]`; `output::char_len(&output::render(&body))` ≤ 1000; `row_count` = `rows.len()`; `0 < rows.len() < 14`; `rows[0].span_id` = `"b100000000000011"` |
 | `query_sql_validates_arguments` | one call per case | no `to` → error `bad_request` / `from and to are required (RFC 3339, at most 30 days apart)`; `to` = `FROM` → `bad_request` / `from must be before to`; `to` = `"2026-01-31T00:00:01Z"` → `bad_request` / `the window is at most 30 days`; `from` = `"yesterday"` → `bad_request`, message starts with `invalid arguments: expected an RFC 3339 timestamp or epoch milliseconds`; `limit` 0, 1001 and -1 → `bad_request` / `limit must be between 1 and 1000`; `max_chars` 999, 100001 and -5 → `bad_request` / `max_chars must be between 1000 and 100000`; the parameter query with `params` `{}` → `bad_request` / `missing value for parameter kind`; an extra argument `"x": 1` → `bad_request`, message starts with ``invalid arguments: unknown field `x` ``. And `to` = `"2026-01-31T00:00:00Z"` (exactly 30 days) with `SELECT 1 AS one` is not an error, `rows` = `[{"one":1}]` |
 | `query_sql_reports_sql_errors` | (a) `DELETE FROM traces`; (b) `SELEC 1`; (c) `SELECT 1 / 0 AS x` (A2's own test `division_by_zero_is_a_failed_query` shows this is `RunError::Failed`) | (a) error `invalid_filter` / `only SELECT queries are allowed`; (b) `is_error`, `code` `invalid_filter`, a non-empty `message`, and `error.position.line` = 1 with `error.position.column` ≥ 1; (c) `is_error`, `code` `query_failed` |
 | `query_sql_needs_a_visible_project` | `project` `"acme/nope"` | body = `{"error":{"code":"not_found","message":"Not Found"}}` |
 | `query_sql_works_for_a_viewer_with_a_read_token` | `let viewer = app.add_member(&seeded, "viewer@example.com", OrgRole::Viewer).await;` with `app.personal_token(viewer.id, false)`; `SELECT 1 AS one` | not an error; `rows` = `[{"one":1}]` |
-| `run_query_times_out` | no tool call: `let window = required_window(Some(t(FROM)), Some(t(TO))).unwrap();` with `fn t(s: &str) -> TimeParam { serde_json::from_value(Value::String(s.to_owned())).unwrap() }`; `let ctx = open_query_windowed(&app.state, seeded.project.id, Some(window)).await.unwrap();` then `run_query(&ctx, "SELECT count(*) FROM spans", &Map::new(), 10, Duration::from_nanos(1), 20_000).await` | `Err(ApiError::Sql(llmobs_storage::RunError::Timeout))` (match with `matches!`); as a tool error it is code `query_timeout` (`output::failure`, already tested in H6) |
+| `run_query_times_out` | no tool call: `let window = required_window(Some(t(FROM)), Some(t(TO))).unwrap();` with `fn t(s: &str) -> TimeParam { serde_json::from_value(Value::String(s.to_owned())).unwrap() }`; `let ctx = open_query_windowed(&app.state, seeded.project.id, Some(window)).await.unwrap();` then `run_query(&ctx, <a 9-way CROSS JOIN of spans, a … i, with count(*)>, &Map::new(), 10, Duration::from_millis(100), 20_000).await`. The join (14⁹ ≈ 20 billion rows) runs for minutes, so the 100 ms limit always expires first; a tiny limit on a fast query is a race the query can win on its first poll | `Err(ApiError::Sql(llmobs_storage::RunError::Timeout))` (match with `matches!`); as a tool error it is code `query_timeout` (`output::failure`, already tested in H6) |
 
 `503 busy` (admission control) comes from `From<QueryError> for ApiError`, which the HTTP read routes already test; H7 adds no test for it.
 
@@ -366,7 +369,7 @@ Then orphan view 6: `sqlx::query("UPDATE saved_views SET owner_user_id = NULL WH
 | `list_saved_views_errors` | ada: `"kind": "nope"`; `"project": "acme/nope"` | first: `bad_request`, message starts with ``invalid arguments: unknown variant `nope` ``; second: `{"error":{"code":"not_found","message":"Not Found"}}` |
 | `list_saved_views_reports_more_views` | no tool call: `views_body(&app.state, seeded.project.id, &user, None, 2)` where `user` is ada's `AuthUser` (`AuthUser { id: seeded.user_id, is_instance_admin: true, email: "ada@example.com".to_owned() }`) | `views[*].id` = `[<1>, <2>]`; `truncated` true; `notes` = `["more than 2 saved views; only the first 2 are listed"]` |
 | `list_saved_views_fits_its_budget` | insert 300 more ada private `Traces` views named `v000`…`v299`, each with state `{"filter": <150 × "f">}`; list with ada | `truncated` true; the last note is `"result cut at 20000 characters; later views left out"`; `char_len(&render(&body))` ≤ 20,000; `views[0].id` = `<1>` |
-| `list_saved_views_cuts_long_state_values` | insert one more ada view in support-bot, `Traces`, name `Long`, state `{"filter": <2,500 × "a">}`, shared false; list with ada | the `Long` view's `state.filter` has 2,001 characters ending with `…`; `notes` = `["saved-view state values longer than 2000 characters were cut"]` |
+| `list_saved_views_cuts_long_state_values` | insert one more ada view in support-bot, `Traces`, name `Long`, state `{"filter": <2,500 × "a">}`, shared false; list with ada | the `Long` view's `state.filter` has 2,000 characters ending with `…`; `notes` = `["saved-view state values longer than 2000 characters were cut"]` |
 
 **Logs**
 
@@ -376,9 +379,9 @@ Then orphan view 6: `sqlx::query("UPDATE saved_views SET owner_user_id = NULL WH
 
 **Unit tests**
 
-- `output.rs`, `cut_counts_characters`: `cut("héllo", 5)` = `None`; `cut("héllo", 2)` = `Some("hé…")`; `cut("", 0)` = `None`; a string of 2,000 `é` → `cut(…, 2000)` = `None`; of 2,001 `é` → `Some` with 2,001 characters, 2,000 `é` then `…`.
+- `output.rs`, `cut_counts_characters`: `cut("héllo", 5)` = `None`; `cut("héllo", 2)` = `Some("h…")`; `cut("", 0)` = `None`; a string of 2,000 `é` → `cut(…, 2000)` = `None`; of 2,001 `é` → `Some` with 2,000 characters, 1,999 `é` then `…`, and cutting that again is `None`; `cut("x", 0)` = `Some("")`.
 - `output.rs`, `max_chars_bounds`: `max_chars(None)` = `Ok(20_000)`; `Some(1_000)` and `Some(100_000)` are `Ok` with that value; `Some(999)`, `Some(100_001)` and `Some(-1)` are `Err(ApiError::BadRequest { .. })` (`matches!`).
-- `sql.rs`, `cut_cells_cuts_top_level_strings_only`: rows `[{"a": <2,001 × x>, "b": <2,000 × x>, "c": [<3,000 × x>], "d": {"k": <3,000 × x>}, "e": 5}]` → returns `true`; `a` has 2,001 characters ending with `…`; `b` keeps 2,000; `c` and `d` are unchanged; `e` is `5`. A second call returns `false`.
+- `sql.rs`, `cut_cells_cuts_top_level_strings_only`: rows `[{"a": <2,001 × x>, "b": <2,000 × x>, "c": [<3,000 × x>], "d": {"k": <3,000 × x>}, "e": 5}]` → returns `true`; `a` has 2,000 characters ending with `…`; `b` keeps 2,000; `c` and `d` are unchanged; `e` is `5`. A second call returns `false`.
 - `sql.rs`, `required_window_bounds`: `(None, Some(t(TO)))` → `Err(BadRequest)`; `(t(FROM), t(FROM))` → `Err(ApiError::Query(RunError::InvalidRequest(_)))`; 30 days → `Ok`; 30 days and 1 ns (`"2026-01-31T00:00:00.000000001Z"`) → `Err(BadRequest)`.
 
 ## Commands

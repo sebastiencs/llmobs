@@ -68,7 +68,7 @@ The user chose each option marked "(user)" on 2026-11-14. The other decisions fo
 
 ## Scope
 
-**In I:** everything in the decisions above. That means migrations `0003`–`0007` in `meta.db`, the crypto module, connections, evaluators, score definitions, online rules, the queue, the trigger, judge traces, evaluator scores, `usage_daily.judge_*`, backfill, the annotation panel and every page listed in D-I-27.
+**In I:** everything in the decisions above. That means migrations `0004`–`0008` in `meta.db`, the crypto module, connections, evaluators, score definitions, online rules, the queue, the trigger, judge traces, evaluator scores, `usage_daily.judge_*`, backfill, the annotation panel and every page listed in D-I-27.
 
 **Not in I:**
 - datasets, experiments and their server evaluators [J] (J calls the executor, § Interfaces);
@@ -91,7 +91,7 @@ The user chose each option marked "(user)" on 2026-11-14. The other decisions fo
 - Root `Cargo.toml`: `aes-gcm` (M1); `llmobs-eval` becomes a dependency of `llmobs-server` (M1).
 - `crates/core` is not changed.
 
-**Files other tracks, or several I milestones, also edit:** `scores.rs` (M2, M3, M5), the route list in `http/access.rs`, `api/openapi.rs`, `crates/server/openapi.json`, `web/src/api/schema.gen.ts`, `api_examples.rs`, `serve.rs` and `ingest/mod.rs`. G's fix plan (branch `claude/g-fixes-plan`, `F4`) moves `commit` into its own task, so the M4 plan is written after that lands. Migration numbers are the next free ones when a milestone starts. If another track took a number first, renumber yours on rebase; a migration that already merged is never renumbered.
+**Files other tracks, or several I milestones, also edit:** `scores.rs` (M2, M3, M5), the route list in `http/access.rs`, `api/openapi.rs`, `crates/server/openapi.json`, `web/src/api/schema.gen.ts`, `api_examples.rs`, `serve.rs` and `ingest/mod.rs`. G's fix plan (branch `claude/g-fixes-plan`, `F4`) moves `commit` into its own task, so the M4 plan is written after that lands. Migration numbers are the next free ones when a milestone starts (track H took `0003`, so M1's is `0004`). If another track took a number first, renumber yours on rebase; a migration that already merged is never renumbered.
 
 ## Architecture
 
@@ -132,7 +132,7 @@ crates/server/src/
   routes/ same split
 crates/server/src/admin.rs  rotate_encryption_key (M1)
 crates/server/migrations/meta/
-  0003_connections.sql (M1)  0004_evaluators.sql (M2)  0005_eval_queue.sql (M3)  0006_pending_traces.sql (M4)  0007_backfills.sql (M6)
+  0004_connections.sql (M1)  0005_evaluators.sql (M2)  0006_eval_queue.sql (M3)  0007_pending_traces.sql (M4)  0008_backfills.sql (M6)
 ```
 
 Every background loop exposes a `*_once(&AppState)` function that tests call directly, with `Clock::Manual`. The loops themselves only call `*_once` on a tokio interval from `EvalTiming`. The end-to-end test in M6 uses `EvalTiming::TEST` and real time.
@@ -142,7 +142,7 @@ Every background loop exposes a `*_once(&AppState)` function that tests call dir
 Each table comes in the migration of its milestone. Spec 04 is updated with each migration. Text ids are UUIDv7, times are ns, and JSON is `TEXT`. Foreign keys that must not block an org or project cascade use the default `NO ACTION`; the 409s are application checks.
 
 ```sql
--- 0003_connections.sql (M1)
+-- 0004_connections.sql (M1)
 CREATE TABLE instance_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE llm_connections (
   id TEXT PRIMARY KEY,
@@ -158,7 +158,7 @@ CREATE TABLE llm_connections (
   UNIQUE(org_id, name)
 );
 
--- 0004_evaluators.sql (M2)
+-- 0005_evaluators.sql (M2)
 CREATE TABLE evaluators (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -182,7 +182,7 @@ CREATE TABLE score_definitions (
 );
 CREATE UNIQUE INDEX score_definitions_live ON score_definitions(project_id, name) WHERE archived_at IS NULL;
 
--- 0005_eval_queue.sql (M3)
+-- 0006_eval_queue.sql (M3)
 CREATE TABLE online_rules (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -225,7 +225,7 @@ CREATE TABLE rule_spend (
   PRIMARY KEY (rule_id, day)
 );
 
--- 0006_pending_traces.sql (M4)
+-- 0007_pending_traces.sql (M4)
 CREATE TABLE pending_traces (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   trace_id BLOB NOT NULL, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL,
@@ -233,7 +233,7 @@ CREATE TABLE pending_traces (
   PRIMARY KEY (project_id, trace_id)
 );
 
--- 0007_backfills.sql (M6)
+-- 0008_backfills.sql (M6)
 CREATE TABLE backfills (
   id TEXT PRIMARY KEY,
   rule_id TEXT NOT NULL REFERENCES online_rules(id) ON DELETE CASCADE,

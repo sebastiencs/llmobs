@@ -771,10 +771,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List saved views */
+        /**
+         * List saved views
+         * @description Views the caller can see: their own and every shared view. An API key sees shared views. Ordered by id (creation order).
+         */
         get: operations["list_saved_views"];
         put?: never;
-        /** Create a saved view */
+        /**
+         * Create a saved view
+         * @description Creates a view owned by the caller. Sharing needs role member. At most 1,000 views per user and project (409). A session or a read-write personal access token; API keys cannot write saved views.
+         */
         post: operations["create_saved_view"];
         delete?: never;
         options?: never;
@@ -792,11 +798,17 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete a saved view */
+        /**
+         * Delete a saved view
+         * @description The owner deletes their view, at any role. A project admin may also delete another user's shared view.
+         */
         delete: operations["delete_saved_view"];
         options?: never;
         head?: never;
-        /** Update a saved view */
+        /**
+         * Update a saved view
+         * @description The owner changes name, state, shared and is_default; sharing, or editing a shared view, needs role member. A project admin may also unshare another user's shared view. Setting is_default clears the other default of the same scope: the caller's private views of that kind, or the project's shared views of that kind.
+         */
         patch: operations["update_saved_view"];
         trace?: never;
     };
@@ -912,6 +924,26 @@ export interface paths {
         get: operations["list_spans"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project}/sql": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run a SQL query
+         * @description Runs one read-only statement over the project's `spans`, `traces`, `sessions` and `scores` views (spec 05 § SQL console). `from` and `to` window `spans` and `traces` on `start_time` and `scores` on `created_at`. Without them the query reads all history. At most 10,000 rows; `truncated` says when more matched. SQL errors are `invalid_filter` on the `query` field, with a `position` when one is known. Exports stream; an error before the first row is a problem document, a later one cuts the transfer. `timeout_ms` bounds the whole export.
+         */
+        post: operations["run_sql"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1389,7 +1421,7 @@ export interface components {
          *     Spec 09 § Observability data.
          */
         CreateSavedView: {
-            /** @description Default view for this kind. Default false. */
+            /** @description The default of its scope: among the owner's private views of this kind ("my default"), or among the project's shared views of this kind ("project default"). Setting it clears the other default of that scope (D-H-6). Default false. */
             is_default?: boolean;
             /** @description Which page the view opens. */
             kind: components["schemas"]["SavedViewKind"];
@@ -1397,7 +1429,7 @@ export interface components {
             name: string;
             /** @description Visible to every member of the project. Default false. */
             shared?: boolean;
-            /** @description Opaque UI state: list-page URL params, or `{query, params}` for SQL. */
+            /** @description Opaque UI state: list-page URL params, or `{query, params, range}` / `{query, params, from, to}` for SQL (D-H-7). */
             state: Record<string, never>;
         };
         /**
@@ -2170,7 +2202,7 @@ export interface components {
              * @description Saved view id.
              */
             id: string;
-            /** @description Default view for this kind when the caller has no view of their own. */
+            /** @description The default of its scope: among the owner's private views of this kind ("my default"), or among the project's shared views of this kind ("project default"). Setting it clears the other default of that scope (D-H-6). */
             is_default: boolean;
             /** @description Which page the view opens. */
             kind: components["schemas"]["SavedViewKind"];
@@ -2183,7 +2215,7 @@ export interface components {
             owner_user_id?: string;
             /** @description Visible to every member of the project. */
             shared: boolean;
-            /** @description Opaque UI state: list-page URL params, or `{query, params}` for SQL. */
+            /** @description Opaque UI state: list-page URL params, or `{query, params, range}` / `{query, params, from, to}` for SQL (D-H-7). */
             state: Record<string, never>;
             /**
              * Format: date-time
@@ -2908,6 +2940,56 @@ export interface components {
             /** @description End-user id. */
             user_id?: string;
         };
+        /** @description One output column. */
+        SqlColumnInfo: {
+            /** @description Output column name. */
+            name: string;
+            /** @description Arrow type as DataFusion prints it, for example `Int64` or `Utf8`. */
+            type: string;
+        };
+        /**
+         * @description Body of `POST /api/v1/projects/{project}/sql`.
+         *
+         *     Spec 09 § Observability data, D-H-8.
+         */
+        SqlQueryRequest: {
+            /**
+             * Format: date-time
+             * @description Start of the time window, RFC 3339, inclusive. Give both `from` and `to`, or neither.
+             */
+            from?: string;
+            /**
+             * Format: int64
+             * @description Most rows to return as JSON, 1–10,000. Default 10,000. Checked on every request; exports do not use it.
+             */
+            limit?: number;
+            /** @description Values for the placeholders, by name. Default empty. */
+            params?: Record<string, never>;
+            /** @description One statement, with `{name:Type}` placeholders (spec 05 § Parameters). */
+            query: string;
+            /**
+             * Format: int64
+             * @description Time limit in milliseconds, 1,000–60,000. Default 60,000.
+             */
+            timeout_ms?: number;
+            /**
+             * Format: date-time
+             * @description End of the time window, RFC 3339, exclusive.
+             */
+            to?: string;
+        };
+        /** @description JSON answer of `POST …/sql` (D98). */
+        SqlQueryResult: {
+            /** @description Output columns, in order. */
+            columns: components["schemas"]["SqlColumnInfo"][];
+            /**
+             * @description One object per row, keyed by column name. Timestamps are RFC 3339 with 9 fractional
+             *     digits, binary is lowercase hex, maps are objects, NaN and infinities are null.
+             */
+            rows: Record<string, never>[];
+            /** @description More rows matched than `limit`; `rows` holds the first `limit`. */
+            truncated: boolean;
+        };
         /**
          * @description How the provider is asked to fill the answer schema.
          * @enum {string}
@@ -3222,13 +3304,13 @@ export interface components {
          *     Omitted fields are left unchanged. Spec 09 § Observability data.
          */
         UpdateSavedView: {
-            /** @description Default view for this kind. */
+            /** @description The default of its scope: among the owner's private views of this kind ("my default"), or among the project's shared views of this kind ("project default"). Setting it clears the other default of that scope (D-H-6). Omitted: unchanged. */
             is_default?: boolean;
             /** @description Display name. */
             name?: string;
-            /** @description Visible to every member of the project. */
+            /** @description Visible to every member of the project. Omitted: unchanged. */
             shared?: boolean;
-            /** @description Opaque UI state: list-page URL params, or `{query, params}` for SQL. */
+            /** @description Opaque UI state: list-page URL params, or `{query, params, range}` / `{query, params, from, to}` for SQL (D-H-7). */
             state?: Record<string, never>;
         };
         /** @description Media addressed by a URI, including `media://` after extraction. */
@@ -6910,6 +6992,33 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            /** @description The request conflicts with the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request body is larger than the limit. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request body is not JSON. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Too many requests. */
             429: {
                 headers: {
@@ -6941,6 +7050,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
             };
             /** @description No credentials, or the credentials are invalid. */
             401: {
@@ -7036,6 +7154,33 @@ export interface operations {
             };
             /** @description The resource does not exist. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request conflicts with the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request body is larger than the limit. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request body is not JSON. */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7656,6 +7801,117 @@ export interface operations {
             };
             /** @description The resource does not exist. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The query took longer than its time limit or needed more memory than allowed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server is busy or a dependency is unavailable. Retry later. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    run_sql: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SqlQueryRequest"];
+            };
+        };
+        responses: {
+            /** @description Columns and rows as JSON. With `Accept: text/csv`, `application/x-ndjson` or `application/vnd.apache.parquet`, the whole result in that format instead (at most 10,000,000 rows; `limit` is validated but not applied; exports need role member), with `Content-Disposition: attachment`. The first of those types in `Accept`, or `application/json`, decides; anything else is JSON. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SqlQueryResult"];
+                    "text/csv": string;
+                    "application/x-ndjson": string;
+                    "application/vnd.apache.parquet": string;
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request body is larger than the limit. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request body is not JSON. */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };

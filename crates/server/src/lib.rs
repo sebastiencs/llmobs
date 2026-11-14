@@ -18,6 +18,7 @@ pub(crate) mod eval;
 pub(crate) mod http;
 pub(crate) mod ingest;
 pub(crate) mod live;
+pub(crate) mod mcp;
 pub(crate) mod meta;
 pub(crate) mod routes;
 pub(crate) mod scores;

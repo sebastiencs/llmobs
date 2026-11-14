@@ -94,7 +94,7 @@ crates/server/src/
   serve.rs                          open_secrets at startup (I1.2), runner (I1.6)
   test_support/mod.rs               TEST_KEY and AppInner fields (I1.2, I1.6)
   test_support/mock_llm.rs          in-process OpenAI-compatible mock (I1.6)
-crates/server/migrations/meta/0003_connections.sql    (I1.2)
+crates/server/migrations/meta/0004_connections.sql    (I1.2)
 crates/server/tests/openapi.rs, tests/api_examples.rs (I1.4)
 crates/cli/src/main.rs              ServeError label (I1.2), `admin rotate-encryption-key` (I1.3)
 fixtures/api/static/llm-connections.json, llm-connection.json, llm-connection-test.json   (I1.4)
@@ -346,13 +346,13 @@ The existing `mod tests` in `judge/mod.rs` already round-trips both parsers. Add
 
 ## I1.2 — Encryption key, `instance_settings` and the startup check
 
-**Goal:** the server loads or generates its key, records or verifies the check value, finishes an interrupted rotation, and holds a `SecretBox` in `AppInner`. Migration `0003` creates `instance_settings` and `llm_connections`.
+**Goal:** the server loads or generates its key, records or verifies the check value, finishes an interrupted rotation, and holds a `SecretBox` in `AppInner`. Migration `0004` creates `instance_settings` and `llm_connections`.
 
 **Edit only:**
 - `Cargo.toml` (root), `Cargo.lock`, `crates/server/Cargo.toml`;
 - `crates/server/src/crypto.rs` (new), `crates/server/src/lib.rs`;
 - `crates/server/src/meta/instance_settings.rs` (new), `crates/server/src/meta/mod.rs` (module list and tests);
-- `crates/server/migrations/meta/0003_connections.sql` (new);
+- `crates/server/migrations/meta/0004_connections.sql` (new);
 - `crates/server/src/admin.rs` (the test `schema_mismatch_names_the_versions` only);
 - `crates/server/tests/snapshots/meta_schema.snap`;
 - `crates/server/src/http/mod.rs`, `crates/server/src/serve.rs`, `crates/server/src/test_support/mod.rs`;
@@ -361,7 +361,7 @@ The existing `mod tests` in `judge/mod.rs` already round-trips both parsers. Add
 
 **Commit:** `Load the encryption key and verify it at startup`
 
-### Migration `crates/server/migrations/meta/0003_connections.sql`
+### Migration `crates/server/migrations/meta/0004_connections.sql`
 
 ```sql
 CREATE TABLE instance_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -393,8 +393,8 @@ CREATE TABLE llm_connections (
 `llm_connections` is created here so M1 has one migration; I1.3 and I1.4 read it. `sqlx::migrate!` picks the file up with no code change. If `main` already has a `0003_*.sql` when you start, use the next free number, adjust the numbers below by one, and say so in the report.
 
 **Existing tests the new migration changes:**
-- `meta/mod.rs` tests: the migration count assertion (`assert_eq!(count, 2)`, near line 387) becomes 3. In `open_existing_checks_the_file_and_the_version`, the inserted future version becomes `4`, and the expected values become `found == 4`, `expected == 3`.
-- `admin.rs` `schema_mismatch_names_the_versions`: insert version `4`, and expect `"this binary expects schema 3, found 4"`.
+- `meta/mod.rs` tests: the migration count assertion (`assert_eq!(count, 2)`, near line 387) becomes 4 (`0003_saved_views` from track H, then `0004_connections`). In `open_existing_checks_the_file_and_the_version`, the inserted future version becomes `5`, and the expected values become `found == 5`, `expected == 4`.
+- `admin.rs` `schema_mismatch_names_the_versions`: insert version `5`, and expect `"this binary expects schema 4, found 5"`.
 - `crates/server/tests/snapshots/meta_schema.snap` (checked by `schema_matches_the_snapshot` in `meta/mod.rs`): regenerate it with `INSTA_UPDATE=always cargo test -p llmobs-server schema_matches_the_snapshot`. Read the diff: it must add exactly the two tables above and their three automatic indexes (`sqlite_autoindex_instance_settings_1`, `sqlite_autoindex_llm_connections_1`, `sqlite_autoindex_llm_connections_2`), and nothing else.
 
 ### `crates/server/src/meta/instance_settings.rs`
@@ -620,7 +620,7 @@ async fn open_secrets(config: &ServerConfig, meta: &MetaDb) -> Result<SecretBox,
 - `docs/spec/04-metadata-db.md`:
   - § Keys & credentials: replace the `llm_connections` DDL with the migration's DDL above, and add one sentence after it: "Connections belong to the org (D-I-4). `secret_enc` and `extra_headers_enc` are sealed (§ Encryption of secrets); `api_key_hint` and `extra_header_names` are what the API shows."
   - § Encryption of secrets: replace the paragraph with the rules in § Sealing and § Key file above. That covers the key source order, the file format and mode, no generation once a check value exists, the check value key `encryption.check`, the format version byte, the key id, the AAD `table:column:row_id`, AES-256-GCM, the random 96-bit nonce, and rotation finishing at startup. Cite D-I-1, D-I-2 and D-I-3.
-  - § Metering & instance: the `instance_settings` comment line becomes `-- 'encryption.check': hex HMAC-SHA256 check value of the encryption key (D-I-2)`, and "`instance_settings` is created by track E with its first use (D135)." becomes "`instance_settings` is created by track I (migration `0003`, D156)."
+  - § Metering & instance: the `instance_settings` comment line becomes `-- 'encryption.check': hex HMAC-SHA256 check value of the encryption key (D-I-2)`, and "`instance_settings` is created by track E with its first use (D135)." becomes "`instance_settings` is created by track I (migration `0004`, D156)."
 - `docs/spec/12-operations.md` § Process lifecycle: replace "Track E adds: verify encryption key, after `meta.db`." with "After `meta.db`: finish an interrupted key rotation, load or generate the encryption key, and verify its check value (D-I-1, D-I-3)."
 
 ### Tests (`crypto.rs` `mod tests`)

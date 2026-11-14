@@ -416,7 +416,7 @@ CREATE TABLE instance_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 -- 'encryption.check': hex HMAC-SHA256 check value of the encryption key (D-I-2)
 ```
 
-`instance_settings` is created by track I (migration `0003`, D156).
+`instance_settings` is created by track I (migration `0004`, D156).
 
 Usage counters are accumulated in memory and flushed to `usage_daily` every 10 s (upsert-add).
 
