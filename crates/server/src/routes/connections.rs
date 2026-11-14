@@ -16,8 +16,9 @@ use uuid::Uuid;
 
 use crate::api::common::{FieldError, Page, PageParams};
 use crate::api::connections::{
-    ConnectionStatus, CreateLlmConnectionRequest, LlmAdapter, LlmConnection, StructuredOutputMode,
-    UpdateLlmConnectionRequest,
+    ConnectionStatus, CreateLlmConnectionRequest, LlmAdapter, LlmConnection,
+    LlmConnectionTestError, LlmConnectionTestResult, StructuredOutputMode, TestErrorClass,
+    TestLlmConnectionRequest, UpdateLlmConnectionRequest,
 };
 use crate::auth::principal::{self, Principal};
 use crate::auth::roles::OrgPerm;
@@ -34,10 +35,11 @@ use super::orgs::page_named;
 const BASE_URL_MESSAGE: &str = "base_url must be an http or https URL without credentials, fragment or query other than api-version";
 /// At most this many extra headers (D-I-4).
 const MAX_EXTRA_HEADERS: usize = 20;
+/// The prompt of a connection test's one boolean judge call (D-I-5).
+const TEST_PROMPT: &str = "Reply true.";
 
-/// LLM connection routes. Reads need [`OrgPerm::View`]; writes need
+/// LLM connection routes. Reads need [`OrgPerm::View`]; writes and tests need
 /// [`OrgPerm::ManageConnections`] (D-I-24). Not session-only: a PAT works.
-/// The test route comes with the shared runner (I1.6).
 pub(crate) fn routes() -> Vec<RouteDef> {
     vec![
         RouteDef {
@@ -89,6 +91,16 @@ pub(crate) fn routes() -> Vec<RouteDef> {
             },
             documented: true,
             handler: delete(delete_llm_connection),
+        },
+        RouteDef {
+            method: axum::http::Method::POST,
+            path: "/api/v1/orgs/{org}/llm-connections/{id}/test",
+            access: Access::Org {
+                perm: OrgPerm::ManageConnections,
+                session_only: false,
+            },
+            documented: true,
+            handler: post(test_connection),
         },
     ]
 }
@@ -308,6 +320,7 @@ async fn update_llm_connection(
     let Some(row) = updated else {
         return Err(ApiError::NotFound);
     };
+    state.connections.forget(id);
     tracing::info!(
         target: "audit",
         connection_id = %id,
@@ -336,6 +349,7 @@ async fn delete_llm_connection(
     if !went {
         return Err(ApiError::NotFound);
     }
+    state.connections.forget(id);
     tracing::info!(
         target: "audit",
         connection_id = %id,
@@ -344,6 +358,164 @@ async fn delete_llm_connection(
         "llm connection deleted"
     );
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Runs one boolean judge call through the connection's decrypted key and
+/// answers whether it reached the provider (D-I-5). The judge trace is
+/// discarded: a connection belongs to no project.
+async fn test_connection(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Extension(access): Extension<OrgAccess>,
+    error::Path(IdPath { id }): error::Path<IdPath>,
+    error::Json(body): error::Json<TestLlmConnectionRequest>,
+) -> Result<error::Json<LlmConnectionTestResult>, ApiError> {
+    let user = principal::session_user(&principal)?;
+    state
+        .limits
+        .connection_tests
+        .check(&user.id, state.clock.now_ns())
+        .map_err(|retry| ApiError::RateLimited {
+            retry_after_s: retry.0.as_secs().max(1),
+        })?;
+    let row = connections::get_connection(state.meta.reader(), access.org.id, id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let explicit = body
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_owned);
+    let model = explicit
+        .clone()
+        .or_else(|| row.default_model.clone())
+        .ok_or_else(|| ApiError::BadRequest {
+            detail: None,
+            errors: vec![field_error(
+                "model",
+                "model is required when the connection has no default model",
+            )],
+        })?;
+    let connection = state
+        .connections
+        .get(&state.secrets, &row)
+        .map_err(internal)?;
+    let evaluator = llmobs_eval::Evaluator {
+        id: row.id,
+        name: "connection test".to_owned(),
+        config: llmobs_eval::EvaluatorConfig::LlmJudge(llmobs_eval::JudgeConfig {
+            connection_id: row.id,
+            model: model.clone(),
+            prompt: TEST_PROMPT.to_owned(),
+            output: llmobs_eval::JudgeOutput::Boolean,
+            include_reason: false,
+            temperature: None,
+            // Reasoning models spend tokens before answering; 1024 can truncate a working call.
+            max_output_tokens: 4096,
+            timeout_ms: 30_000,
+        }),
+        output: llmobs_eval::OutputScore {
+            name: "connection_test".to_owned(),
+            data_type: llmobs_core::enums::ScoreDataType::Boolean,
+            categories: None,
+        },
+    };
+    let ingest = llmobs_otel::IngestContext {
+        // A connection belongs to no project, and the judge trace is discarded.
+        project_id: llmobs_core::ids::ProjectId::from_uuid(Uuid::nil()),
+        ingest_time: state.clock.now_ns(),
+        retention_days: None,
+        limits: state.config.ingest.limits(&state.config.media),
+    };
+    let prices = state.ingest.prices();
+    let bytes = crate::auth::secret::random_bytes(16).map_err(internal)?;
+    let bytes = <[u8; 16]>::try_from(bytes.as_slice()).map_err(internal)?;
+    let judge_trace_id = llmobs_core::ids::TraceId::from_bytes(bytes).map_err(internal)?; // refuses all-zero bytes only
+    let started = std::time::Instant::now();
+    let run = state
+        .eval_runner
+        .run(llmobs_eval::RunInput {
+            evaluator: &evaluator,
+            variables: &llmobs_eval::Variables::from_map(BTreeMap::new()),
+            connection: Some(connection.as_ref()),
+            webhook_secret: None,
+            target: llmobs_eval::EvalTarget {
+                trace_id: None,
+                span_id: None,
+            },
+            origin: llmobs_eval::EvalOrigin::Test,
+            judge_trace_id,
+            ingest: &ingest,
+            prices: &prices,
+        })
+        .await;
+    let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let mut result = LlmConnectionTestResult {
+        ok: true,
+        model,
+        latency_ms,
+        error: None,
+    };
+    // A pause-class failure says the key, quota or model access was refused.
+    let mut pause_class = false;
+    if let Err(error) = run.outcome {
+        pause_class = error.class() == llmobs_eval::ErrorClass::Pause;
+        result.ok = false;
+        result.error = Some(LlmConnectionTestError {
+            class: match error.class() {
+                llmobs_eval::ErrorClass::Retryable => TestErrorClass::Retryable,
+                llmobs_eval::ErrorClass::Pause => TestErrorClass::Pause,
+                llmobs_eval::ErrorClass::Permanent => TestErrorClass::Permanent,
+            },
+            // The display quotes no payload (D160).
+            message: error.to_string(),
+        });
+    }
+    let now = state.clock.now_ns();
+    if result.ok {
+        if row.status != "ok" {
+            set_status(&state, id, "ok", None, now).await?;
+        }
+    } else if pause_class && explicit.is_none() {
+        // Only a pause on the connection's own default model marks it failing:
+        // a 404 for a typed model name says nothing about the key.
+        let message = result
+            .error
+            .as_ref()
+            .map(|error| error.message.clone())
+            .unwrap_or_default();
+        set_status(&state, id, "failing", Some(message), now).await?;
+    }
+    tracing::info!(
+        target: "audit",
+        connection_id = %row.id,
+        org_id = %access.org.id,
+        user_id = %user.id,
+        ok = result.ok,
+        latency_ms,
+        "llm connection tested"
+    );
+    Ok(error::Json(result))
+}
+
+/// Stores a connection's new `status` without touching `updated_at` (D-I-5).
+async fn set_status(
+    state: &AppState,
+    id: Uuid,
+    status: &'static str,
+    error: Option<String>,
+    now: i64,
+) -> Result<(), ApiError> {
+    state
+        .meta
+        .write(move |conn| {
+            Box::pin(async move {
+                connections::set_connection_status(conn, id, status, error.as_deref(), now).await
+            })
+        })
+        .await?;
+    Ok(())
 }
 
 /// The stored connection as the API shows it, without the sealed values.
@@ -597,7 +769,7 @@ fn field_error(field: &str, message: &str) -> FieldError {
 mod tests {
     use std::time::Duration;
 
-    use axum::http::{Method, header};
+    use axum::http::{HeaderMap, Method, header};
     use llmobs_core::ids::OrgId;
     use serde_json::{Value, json};
     use uuid::Uuid;
@@ -607,6 +779,7 @@ mod tests {
     use crate::auth::session::start_session;
     use crate::meta::members::add_org_member;
     use crate::meta::users::{NewUser, insert_user};
+    use crate::test_support::mock_llm::{MockLlm, Reply, completion};
     use crate::test_support::{TestApp, TestResponse, capture_logs};
 
     fn cookie_pair(set_cookie: &HeaderValue) -> String {
@@ -667,6 +840,17 @@ mod tests {
         (app, seeded.cookie)
     }
 
+    /// [`app`] with private-network egress allowed, so judges can reach the
+    /// mock provider on `127.0.0.1`.
+    async fn egress_app() -> (TestApp, String) {
+        let app = TestApp::with_config(|config| {
+            config.security.allow_private_network_egress = true;
+        })
+        .await;
+        let seeded = app.seed().await;
+        (app, seeded.cookie)
+    }
+
     async fn create(app: &TestApp, cookie: &str, body: &Value) -> TestResponse {
         app.request(Method::POST, "/api/v1/orgs/acme/llm-connections")
             .header(header::COOKIE.as_str(), cookie)
@@ -704,6 +888,43 @@ mod tests {
         .header(header::COOKIE.as_str(), cookie)
         .send()
         .await
+    }
+
+    async fn test(app: &TestApp, cookie: &str, id: Uuid, body: &Value) -> TestResponse {
+        app.request(
+            Method::POST,
+            &format!("/api/v1/orgs/acme/llm-connections/{id}/test"),
+        )
+        .header(header::COOKIE.as_str(), cookie)
+        .json(body)
+        .send()
+        .await
+    }
+
+    /// A connection pointing at `base_url` with the default model `gpt-test`.
+    async fn mocked(app: &TestApp, cookie: &str, mock: &MockLlm) -> Uuid {
+        let created = create(
+            app,
+            cookie,
+            &json!({
+                "name": "Mocked",
+                "adapter": "openai",
+                "api_key": "sk-test-key-0123456789",
+                "base_url": mock.base_url(),
+                "default_model": "gpt-test"
+            }),
+        )
+        .await;
+        assert_eq!(created.status, 201, "{}", text(&created));
+        created_id(&created)
+    }
+
+    /// The header value, when it is one valid string.
+    fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .unwrap()
     }
 
     fn body(name: &str) -> Value {
@@ -1419,5 +1640,272 @@ mod tests {
         .await;
         assert!(!logs.contains(first), "{logs}");
         assert!(!logs.contains(second), "{logs}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_succeeds_and_uses_the_decrypted_key() {
+        let mock = MockLlm::start(vec![completion(r#"{"value": true}"#)]).await;
+        let (app, cookie) = egress_app().await;
+        let created = create(
+            &app,
+            &cookie,
+            &json!({
+                "name": "Mocked",
+                "adapter": "openai",
+                "api_key": "sk-test-key-0123456789",
+                "base_url": mock.base_url(),
+                "default_model": "gpt-test",
+                "extra_headers": { "x-extra": "one" }
+            }),
+        )
+        .await;
+        assert_eq!(created.status, 201, "{}", text(&created));
+        let id = created_id(&created);
+
+        let response = test(&app, &cookie, id, &json!({})).await;
+        assert_eq!(response.status, 200, "{}", text(&response));
+        let result: LlmConnectionTestResult = response.json();
+        assert!(result.ok);
+        assert_eq!(result.model, "gpt-test");
+        assert!(result.error.is_none());
+
+        let requests = mock.requests();
+        assert_eq!(requests.len(), 1);
+        let (headers, body) = &requests[0];
+        assert_eq!(
+            header_value(headers, "authorization"),
+            "Bearer sk-test-key-0123456789"
+        );
+        assert_eq!(header_value(headers, "x-extra"), "one");
+        assert_eq!(body["model"], "gpt-test");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_uses_the_body_model() {
+        let mock = MockLlm::start(vec![completion(r#"{"value": true}"#)]).await;
+        let (app, cookie) = egress_app().await;
+        let id = mocked(&app, &cookie, &mock).await;
+
+        let response = test(&app, &cookie, id, &json!({ "model": "other-model" })).await;
+        assert_eq!(response.status, 200, "{}", text(&response));
+        let result: LlmConnectionTestResult = response.json();
+        assert!(result.ok);
+        assert_eq!(result.model, "other-model");
+        assert_eq!(mock.requests()[0].1["model"], "other-model");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_without_any_model_is_400() {
+        let mock = MockLlm::start(vec![completion(r#"{"value": true}"#)]).await;
+        let (app, cookie) = egress_app().await;
+        let created = create(
+            &app,
+            &cookie,
+            &json!({
+                "name": "No default",
+                "adapter": "openai",
+                "api_key": "sk-test-key-0123456789",
+                "base_url": mock.base_url()
+            }),
+        )
+        .await;
+        assert_eq!(created.status, 201, "{}", text(&created));
+        let id = created_id(&created);
+
+        let response = test(&app, &cookie, id, &json!({})).await;
+        assert_eq!(response.status, 400);
+        let problem = response.problem();
+        assert_eq!(problem.errors.len(), 1);
+        assert_eq!(problem.errors[0].field, "model");
+        assert_eq!(
+            problem.errors[0].message,
+            "model is required when the connection has no default model"
+        );
+        assert!(mock.requests().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_401_marks_the_connection_failing() {
+        let mock = MockLlm::start(vec![
+            Reply {
+                status: 401,
+                body: json!({
+                    "error": {"message": "bad key SECRETPAYLOAD", "type": "invalid_request_error"}
+                }),
+            },
+            completion(r#"{"value": true}"#),
+        ])
+        .await;
+        let (app, cookie) = egress_app().await;
+        let id = mocked(&app, &cookie, &mock).await;
+
+        let failed = test(&app, &cookie, id, &json!({})).await;
+        assert_eq!(failed.status, 200, "{}", text(&failed));
+        let result: LlmConnectionTestResult = failed.json();
+        assert!(!result.ok);
+        let error = result.error.expect("the failure");
+        assert_eq!(error.class, TestErrorClass::Pause);
+        assert!(
+            !error.message.contains("SECRETPAYLOAD"),
+            "{}",
+            error.message
+        );
+
+        let connection: LlmConnection = get(&app, &cookie, id).await.json();
+        assert_eq!(connection.status, ConnectionStatus::Failing);
+        assert!(connection.last_error.is_some());
+
+        let passed = test(&app, &cookie, id, &json!({})).await;
+        assert_eq!(passed.status, 200, "{}", text(&passed));
+        let result: LlmConnectionTestResult = passed.json();
+        assert!(result.ok);
+
+        let connection: LlmConnection = get(&app, &cookie, id).await.json();
+        assert_eq!(connection.status, ConnectionStatus::Ok);
+        assert!(connection.last_error.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_404_on_an_explicit_model_keeps_the_status() {
+        let mock = MockLlm::start(vec![Reply {
+            status: 404,
+            body: json!({ "model": "nope" }),
+        }])
+        .await;
+        let (app, cookie) = egress_app().await;
+        let id = mocked(&app, &cookie, &mock).await;
+
+        let response = test(&app, &cookie, id, &json!({ "model": "nope" })).await;
+        assert_eq!(response.status, 200, "{}", text(&response));
+        let result: LlmConnectionTestResult = response.json();
+        assert!(!result.ok);
+        assert_eq!(
+            result.error.expect("the failure").class,
+            TestErrorClass::Pause
+        );
+
+        // A 404 for a model typed in the test says nothing about the key.
+        let connection: LlmConnection = get(&app, &cookie, id).await.json();
+        assert_eq!(connection.status, ConnectionStatus::Ok);
+        assert!(connection.last_error.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_500_is_retryable_and_keeps_the_status() {
+        let mock = MockLlm::start(vec![Reply {
+            status: 500,
+            body: json!({ "error": { "message": "overloaded" } }),
+        }])
+        .await;
+        let (app, cookie) = egress_app().await;
+        let id = mocked(&app, &cookie, &mock).await;
+
+        let response = test(&app, &cookie, id, &json!({})).await;
+        assert_eq!(response.status, 200, "{}", text(&response));
+        let result: LlmConnectionTestResult = response.json();
+        assert!(!result.ok);
+        assert_eq!(
+            result.error.expect("the failure").class,
+            TestErrorClass::Retryable
+        );
+
+        let connection: LlmConnection = get(&app, &cookie, id).await.json();
+        assert_eq!(connection.status, ConnectionStatus::Ok);
+        assert!(connection.last_error.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_private_address_is_refused_without_the_setting() {
+        let mock = MockLlm::start(vec![completion(r#"{"value": true}"#)]).await;
+        // The default config denies private-network egress.
+        let (app, cookie) = app().await;
+        let id = mocked(&app, &cookie, &mock).await;
+
+        let response = test(&app, &cookie, id, &json!({})).await;
+        assert_eq!(response.status, 200, "{}", text(&response));
+        let result: LlmConnectionTestResult = response.json();
+        assert!(!result.ok);
+        assert_eq!(
+            result.error.expect("the failure").class,
+            TestErrorClass::Permanent
+        );
+        assert!(mock.requests().is_empty(), "the mock saw no request");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_uses_the_patched_key() {
+        let mock = MockLlm::start(vec![
+            completion(r#"{"value": true}"#),
+            completion(r#"{"value": true}"#),
+        ])
+        .await;
+        let (app, cookie) = egress_app().await;
+        let id = mocked(&app, &cookie, &mock).await;
+
+        let first = test(&app, &cookie, id, &json!({})).await;
+        assert_eq!(first.status, 200);
+        assert!(first.json::<LlmConnectionTestResult>().ok);
+
+        let patched = patch(
+            &app,
+            &cookie,
+            id,
+            &json!({ "api_key": "sk-second-key-0123456789" }),
+        )
+        .await;
+        assert_eq!(patched.status, 200, "{}", text(&patched));
+
+        let second = test(&app, &cookie, id, &json!({})).await;
+        assert_eq!(second.status, 200, "{}", text(&second));
+        assert!(second.json::<LlmConnectionTestResult>().ok);
+        let requests = mock.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            header_value(&requests[1].0, "authorization"),
+            "Bearer sk-second-key-0123456789"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_after_delete_is_404() {
+        let mock = MockLlm::start(vec![completion(r#"{"value": true}"#)]).await;
+        let (app, cookie) = egress_app().await;
+        let id = mocked(&app, &cookie, &mock).await;
+        let deleted = delete(&app, &cookie, id).await;
+        assert_eq!(deleted.status, 204);
+        let response = test(&app, &cookie, id, &json!({})).await;
+        assert_eq!(response.status, 404);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn member_cannot_test() {
+        let mock = MockLlm::start(vec![completion(r#"{"value": true}"#)]).await;
+        let (app, cookie) = egress_app().await;
+        let id = mocked(&app, &cookie, &mock).await;
+        let org = crate::meta::orgs::org_by_slug(app.state.meta.reader(), "acme")
+            .await
+            .unwrap()
+            .expect("the seeded org");
+        let (member_id, member) = signed_in(&app, "member@example.com").await;
+        add_member(&app, org.id, member_id, OrgRole::Member).await;
+
+        let response = test(&app, &member, id, &json!({})).await;
+        assert_eq!(response.status, 403);
+        assert!(mock.requests().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_are_rate_limited() {
+        let mock = MockLlm::start(vec![completion(r#"{"value": true}"#)]).await;
+        let (app, cookie) = egress_app().await;
+        let id = mocked(&app, &cookie, &mock).await;
+
+        for _ in 0..10 {
+            let response = test(&app, &cookie, id, &json!({})).await;
+            assert_eq!(response.status, 200, "{}", text(&response));
+        }
+        // The manual clock does not move: the 11th test in the minute is refused.
+        let response = test(&app, &cookie, id, &json!({})).await;
+        assert_eq!(response.status, 429);
     }
 }

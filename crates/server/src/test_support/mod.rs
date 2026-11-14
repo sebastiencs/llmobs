@@ -2,6 +2,7 @@
 #![cfg(test)]
 
 pub(crate) mod mock_idp;
+pub(crate) mod mock_llm;
 
 use std::future::Future;
 use std::io::{self, Write};
@@ -151,6 +152,12 @@ impl TestApp {
         )
         .await
         .expect("check value");
+        let eval_runner = Arc::new(
+            llmobs_eval::EvalRunner::new(llmobs_eval::EgressPolicy {
+                allow_private_network: config.security.allow_private_network_egress,
+            })
+            .expect("eval runner"),
+        );
         let mailer = if stub_mailer {
             let from = format!("{PRODUCT} <noreply@example.com>");
             Some(Arc::new(crate::email::Mailer::stub(&from)))
@@ -193,6 +200,8 @@ impl TestApp {
             metrics_cache: crate::routes::metrics::MetricsCache::default(),
             usage: crate::usage::Usage::default(),
             secrets,
+            eval_runner,
+            connections: crate::eval::connection::ConnectionCache::default(),
         });
         let router = if let Some(table) = table {
             serve_router(state.clone(), table)

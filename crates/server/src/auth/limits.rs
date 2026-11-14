@@ -166,6 +166,9 @@ pub(crate) struct Limits {
     pub(crate) email_mail: KeyedLimiter<String>,
     /// 10 requests per second per (key id, client IP) on public feedback (D-G-16).
     pub(crate) feedback: KeyedLimiter<(Uuid, IpAddr)>,
+    /// 10 connection tests per minute per user (D-I-21). M2's evaluator test
+    /// runs share this limiter.
+    pub(crate) connection_tests: KeyedLimiter<Uuid>,
     /// 20 failures lock password login for 15 minutes.
     pub(crate) lockout: Lockout,
 }
@@ -203,6 +206,13 @@ impl Limits {
                 },
                 MAX_KEYS,
             ),
+            connection_tests: KeyedLimiter::new(
+                Bucket {
+                    capacity: 10,
+                    per: Duration::from_secs(60),
+                },
+                MAX_KEYS,
+            ),
             lockout: Lockout::new(20, Duration::from_secs(15 * 60), MAX_KEYS),
         }
     }
@@ -213,6 +223,7 @@ impl Limits {
         self.ip_forms.prune(now);
         self.email_mail.prune(now);
         self.feedback.prune(now);
+        self.connection_tests.prune(now);
         self.lockout.prune(now);
     }
 }

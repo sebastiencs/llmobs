@@ -213,6 +213,19 @@ pub async fn bind(config: ServerConfig, ui: Option<axum::Router>) -> Result<Runn
             return Err(error.into());
         }
     };
+    let eval_runner = match llmobs_eval::EvalRunner::new(llmobs_eval::EgressPolicy {
+        allow_private_network: config.security.allow_private_network_egress,
+    }) {
+        Ok(runner) => Arc::new(runner),
+        Err(_error) => {
+            release_storage(storage).await;
+            meta.close().await;
+            return Err(ServeError::Config(ConfigError::Invalid {
+                key: "security",
+                reason: "could not build the evaluation HTTP client",
+            }));
+        }
+    };
     let prices = match PriceTable::new(builtin_price_rows()) {
         Ok(prices) => prices,
         Err(error) => {
@@ -287,6 +300,8 @@ pub async fn bind(config: ServerConfig, ui: Option<axum::Router>) -> Result<Runn
         metrics_cache: crate::routes::metrics::MetricsCache::default(),
         usage: crate::usage::Usage::default(),
         secrets,
+        eval_runner,
+        connections: crate::eval::connection::ConnectionCache::default(),
     });
     if let Err(error) = crate::bootstrap::prepare(&state).await {
         release_state(state).await;
@@ -627,7 +642,7 @@ mod tests {
     async fn an_empty_database_logs_the_setup_url_once() {
         let dir = tempfile::tempdir().unwrap();
         let (running, logs) =
-            crate::test_support::capture_logs(bind(config(dir.path()), None)).await;
+            crate::test_support::capture_logs(Box::pin(bind(config(dir.path()), None))).await;
         let running = running.unwrap();
         assert_eq!(
             logs.matches("setup required: open http://localhost:8080/setup?token=")

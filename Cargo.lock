@@ -3351,6 +3351,7 @@ dependencies = [
  "jsonschema",
  "lettre",
  "llmobs-core",
+ "llmobs-eval",
  "llmobs-otel",
  "llmobs-storage",
  "minijinja",
