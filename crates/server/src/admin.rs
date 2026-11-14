@@ -526,7 +526,7 @@ mod tests {
                 sqlx::query(
                     "INSERT INTO _sqlx_migrations \
                      (version, description, success, checksum, execution_time) \
-                     VALUES (5, 'future', 1, ?, 0)",
+                     VALUES (6, 'future', 1, ?, 0)",
                 )
                 .bind(Vec::<u8>::new())
                 .execute(&mut *connection)
@@ -538,7 +538,7 @@ mod tests {
         .unwrap();
         db.close().await;
         let error = list_users(&config).await.unwrap_err();
-        assert_eq!(error.to_string(), "this binary expects schema 4, found 5");
+        assert_eq!(error.to_string(), "this binary expects schema 5, found 6");
     }
 
     #[tokio::test]
@@ -805,6 +805,85 @@ mod tests {
         let check = stored_check(&db).await;
         db.close().await;
         assert_eq!(check, new_box.check_value());
+    }
+
+    #[tokio::test]
+    async fn rotation_reencrypts_evaluator_secrets() {
+        let (dir, config) = ready_config().await;
+        let old = crypto::load_key(None, dir.path(), false).unwrap();
+        let old_box = SecretBox::new(&old.key);
+        let id = Uuid::now_v7();
+        let project = Uuid::now_v7();
+        let plaintext: &[u8] = b"https://hooks.example.com/relevance";
+        {
+            let db = MetaDb::open(&config.data_dir).await.unwrap();
+            crypto::verify_or_record(&db, &old_box, &crypto::key_path(dir.path()))
+                .await
+                .unwrap();
+            seed_org(&db).await;
+            let secret_enc = old_box
+                .seal(
+                    plaintext,
+                    Aad {
+                        table: "evaluators",
+                        column: "secret_enc",
+                        row_id: &id,
+                    },
+                )
+                .unwrap();
+            db.write(move |conn| {
+                Box::pin(async move {
+                    sqlx::query(
+                        "INSERT INTO projects (id, org_id, name, slug, created_at, updated_at) \
+                         VALUES (?, ?, 'Support', 'support', 0, 0)",
+                    )
+                    .bind(project.to_string())
+                    .bind(ORG)
+                    .execute(&mut *conn)
+                    .await?;
+                    sqlx::query(
+                        "INSERT INTO evaluators \
+                         (id, project_id, name, kind, config, output_score, secret_enc, \
+                          created_at, updated_at) \
+                         VALUES (?, ?, 'Hook', 'webhook', '{}', '{}', ?, 0, 0)",
+                    )
+                    .bind(id.to_string())
+                    .bind(project.to_string())
+                    .bind(secret_enc)
+                    .execute(&mut *conn)
+                    .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
+            db.close().await;
+        }
+
+        let rotated = rotate_encryption_key(&config, None).await.unwrap();
+        assert_eq!(rotated.values, 1);
+
+        let new_text = std::fs::read_to_string(crypto::key_path(dir.path())).unwrap();
+        let new_key = crypto::decode_key(new_text.trim(), "test").unwrap();
+        let new_box = SecretBox::new(&new_key);
+        let db = MetaDb::open_existing(&config.data_dir).await.unwrap();
+        let sealed: Vec<u8> = sqlx::query_scalar("SELECT secret_enc FROM evaluators WHERE id = ?")
+            .bind(id.to_string())
+            .fetch_one(db.reader())
+            .await
+            .unwrap();
+        let opened = new_box
+            .open(
+                &sealed,
+                Aad {
+                    table: "evaluators",
+                    column: "secret_enc",
+                    row_id: &id,
+                },
+            )
+            .unwrap();
+        db.close().await;
+        assert_eq!(opened, plaintext);
     }
 
     #[tokio::test]
