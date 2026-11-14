@@ -90,7 +90,7 @@ Deferred to just before release (D38). Placeholder decisions: Prometheus `/metri
 
 ## Backups (documented procedure, D37)
 
-What to back up: `meta.db` and `catalog.db` (taken together, in the same pause), the object store (`objects/` or the bucket), `secret.key` (or the env key). The WAL does not need backing up if the snapshot is taken after a flush.
+What to back up: `meta.db` and `catalog.db` (taken together, in the same pause), the object store (`objects/` or the bucket), `secret.key` (or the env key). Back up `<data_dir>/secret.key` (or keep `LLMOBS_ENCRYPTION_KEY`) with the data. Without it, LLM connection keys and webhook secrets cannot be read, and the server refuses to start (D-I-1). `llmobs admin rotate-encryption-key` replaces the key while the server is stopped (D-I-3). The WAL does not need backing up if the snapshot is taken after a flush.
 
 **Procedure (local disk mode):**
 
