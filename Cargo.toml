@@ -128,6 +128,12 @@ axum = { version = "0.8.9", default-features = false, features = [
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
 # Session cookie parsing (P9). Default features stay off so `axum/tracing` is not enabled (D150).
 axum-extra = { version = "0.12.6", default-features = false, features = ["cookie"] }
+# MCP server (D-H-2): streamable HTTP, stateless, JSON responses. `server` gives
+# `ServerHandler`; no `macros`: the server implements it by hand.
+rmcp = { version = "3.10.0", default-features = false, features = [
+    "server",
+    "transport-streamable-http-server",
+] }
 # Field path of a JSON or query error, without the rejected value (P4).
 serde_path_to_error = "0.1.20"
 # Email normalization: trim, NFC, lowercase (P6, D136).

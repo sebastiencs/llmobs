@@ -917,6 +917,16 @@ pub(crate) async fn assert_logs_clean<T>(needles: &[&str], future: impl Future<O
 
 static ASK_EVERY_TIME: std::sync::Once = std::sync::Once::new();
 
+/// Installs the process-wide [`AskEveryTime`] default, once per process. Every capturing
+/// helper calls this before installing its thread default, so a callsite reached while
+/// another test's capture churns cannot cache `Interest::never` and drop later events.
+pub(crate) fn ask_every_time() {
+    ASK_EVERY_TIME.call_once(|| {
+        // Another global default may exist already; then it decides interest itself.
+        let _ = tracing::dispatcher::set_global_default(tracing::Dispatch::new(AskEveryTime));
+    });
+}
+
 /// Global subscriber of the test process. It records nothing but answers `Interest::sometimes`
 /// for every callsite, so each event asks the current thread's dispatcher. Without it, a
 /// callsite first reached by a test thread with no capture installed can cache
@@ -959,10 +969,7 @@ pub(crate) async fn capture_logs<T>(future: impl Future<Output = T>) -> (T, Stri
         .with_ansi(false)
         .with_target(true);
     let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(layer));
-    ASK_EVERY_TIME.call_once(|| {
-        // Another global default may exist already; then it decides interest itself.
-        let _ = tracing::dispatcher::set_global_default(tracing::Dispatch::new(AskEveryTime));
-    });
+    ask_every_time();
     let value = {
         let _guard = tracing::dispatcher::set_default(&dispatch);
         future.await

@@ -243,8 +243,23 @@ fn annotate(error: ServeError) -> anyhow::Error {
     anyhow::Error::from(error).context(context)
 }
 
+/// The `rmcp` crate logs whole MCP requests and results below `warn`; they can hold prompts
+/// and SQL text, so its level is capped whatever `log.level` says (README § Privacy).
+const RMCP_DIRECTIVE: &str = "rmcp=warn";
+
+/// `log.level` as an `EnvFilter`, with [`RMCP_DIRECTIVE`] added last so it replaces any
+/// `rmcp=…` directive in `level`.
+fn log_filter(level: &str) -> anyhow::Result<EnvFilter> {
+    let directive = RMCP_DIRECTIVE
+        .parse()
+        .context("parsing the rmcp log directive")?;
+    Ok(EnvFilter::try_new(level)
+        .context("loading config")?
+        .add_directive(directive))
+}
+
 fn init_tracing(log: &LogConfig) -> anyhow::Result<()> {
-    let filter = EnvFilter::try_new(&log.level).context("loading config")?;
+    let filter = log_filter(&log.level)?;
     let format = log.format.unwrap_or_else(default_log_format);
     match format {
         LogFormat::Pretty => {
@@ -449,10 +464,61 @@ impl Signals {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use clap::Parser;
 
-    use super::{AdminCommand, Cli, Command, run_cli};
+    use super::{AdminCommand, Cli, Command, log_filter, run_cli};
     use crate::output;
+
+    #[test]
+    fn log_filter_caps_rmcp() {
+        for level in ["info", "trace", "info,rmcp=trace"] {
+            let filter = log_filter(level).unwrap().to_string();
+            assert!(filter.contains("rmcp=warn"), "{level}: {filter}");
+            assert!(!filter.contains("rmcp=trace"), "{level}: {filter}");
+        }
+    }
+
+    /// `log_filter("debug")` admits debug events, but not rmcp's: a subscriber built from it
+    /// drops an rmcp event (rmcp logs whole requests and results at debug) and still emits a
+    /// debug event for another target.
+    #[test]
+    fn a_debug_filter_drops_rmcp_debug_events() {
+        use tracing_subscriber::Layer;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let buffer = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let writer = Arc::clone(&buffer);
+        let layer = tracing_subscriber::fmt::layer()
+            .with_writer(move || Buffer(Arc::clone(&writer)))
+            .with_ansi(false)
+            .with_target(true)
+            .with_filter(log_filter("debug").unwrap());
+        let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(layer));
+        let guard = tracing::dispatcher::set_default(&dispatch);
+        tracing::debug!(target: "rmcp::service", "dropped-canary");
+        tracing::debug!(target: "llmobs::serve", "kept-canary");
+        drop(guard);
+        drop(dispatch);
+        let logs = String::from_utf8_lossy(&buffer.lock().unwrap().clone()).into_owned();
+        assert!(!logs.contains("dropped-canary"), "{logs}");
+        assert!(logs.contains("kept-canary"), "{logs}");
+        assert!(logs.contains("llmobs::serve"), "{logs}");
+    }
+
+    /// `io::Write` over the shared buffer of [`a_debug_filter_drops_rmcp_debug_events`].
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Buffer {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().write(data)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[tokio::test]
     async fn missing_config_exits_with_the_path() {

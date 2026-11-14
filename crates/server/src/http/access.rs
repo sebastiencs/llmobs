@@ -54,11 +54,15 @@ pub(crate) enum Access {
         /// The scope the key must hold.
         scope: KeyScope,
     },
+    /// A personal access token, read or read-write; sessions and API keys get 403.
+    /// No `{org}` or `{project}` in the path: the handler resolves projects itself (D-H-3).
+    Pat,
 }
 
 impl Access {
     /// Whether this request is a read made with POST: a read-only PAT and a `read` key may
     /// call it (D-H-4). Only POST counts; PUT, PATCH and DELETE on the same route stay writes.
+    /// `Pat` is `/mcp`, where every tool reads.
     pub(crate) fn reads_by_post(self, method: &axum::http::Method) -> bool {
         *method == axum::http::Method::POST
             && matches!(
@@ -66,7 +70,7 @@ impl Access {
                 Self::Project {
                     perm: ProjectPerm::Query,
                     ..
-                }
+                } | Self::Pat
             )
     }
 }
@@ -143,6 +147,7 @@ pub(crate) fn routes() -> Vec<RouteDef> {
     routes.extend(crate::routes::metrics::routes());
     routes.extend(crate::routes::media::routes());
     routes.extend(crate::routes::otlp::routes());
+    routes.extend(crate::mcp::routes());
     routes
 }
 
@@ -274,6 +279,11 @@ async fn prepare(state: AppState, access: Access, request: Request) -> Result<Re
             }
             grant_key_only_project(&state, &mut parts, *project_id).await?;
         }
+        Access::Pat => {
+            if !matches!(principal, Principal::Pat { .. }) {
+                return Err(forbidden());
+            }
+        }
     }
     parts.extensions.insert(principal);
     Ok(Request::from_parts(parts, body))
@@ -389,13 +399,20 @@ async fn key_owns_project(
     }
 }
 
-async fn grant_session_project(
+/// The project `key` names, as `user` reaches it with `perm` (D138). `key` is a project UUID
+/// or `org-slug/project-slug`. 404 when the project or its org is missing or not active, when
+/// the user is not in the org, when an override hides it, and for `current` (a key's project);
+/// 403 when the effective role is below `perm.min_role()`.
+///
+/// # Errors
+///
+/// [`ApiError::NotFound`], [`ApiError::Forbidden`], or a `meta.db` failure.
+pub(crate) async fn user_project(
     state: &AppState,
-    parts: &mut Parts,
     user: &crate::auth::principal::AuthUser,
     key: &str,
     perm: ProjectPerm,
-) -> Result<(), ApiError> {
+) -> Result<ProjectAccess, ApiError> {
     if key == "current" {
         return Err(ApiError::NotFound);
     }
@@ -419,10 +436,21 @@ async fn grant_session_project(
     if role < perm.min_role() {
         return Err(forbidden());
     }
-    parts.extensions.insert(ProjectAccess {
+    Ok(ProjectAccess {
         project,
         role: Some(role),
-    });
+    })
+}
+
+async fn grant_session_project(
+    state: &AppState,
+    parts: &mut Parts,
+    user: &crate::auth::principal::AuthUser,
+    key: &str,
+    perm: ProjectPerm,
+) -> Result<(), ApiError> {
+    let access = user_project(state, user, key, perm).await?;
+    parts.extensions.insert(access);
     Ok(())
 }
 
@@ -1576,7 +1604,8 @@ mod tests {
                 | Access::Project {
                     session_only: false,
                     ..
-                } => None,
+                }
+                | Access::Pat => None,
             };
             assert!(
                 operation.security == expected,
