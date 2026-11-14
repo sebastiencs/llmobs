@@ -581,7 +581,8 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        AuthSettings, IngestConfig, InitConfig, LogConfig, MediaConfig, PublicUrl,
+        AuthSettings, EvalConfig, IngestConfig, InitConfig, LogConfig, MediaConfig, PublicUrl,
+        SecurityConfig,
     };
 
     #[tokio::test]
@@ -1104,6 +1105,9 @@ mod tests {
             },
             ingest: IngestConfig::default(),
             media: MediaConfig::default(),
+            eval: EvalConfig::default(),
+            security: SecurityConfig::default(),
+            encryption_key: None,
             auth: AuthSettings::default(),
             smtp_url: None,
             email_from: None,

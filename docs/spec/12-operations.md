@@ -19,7 +19,7 @@ GitHub and Google also accept the split form (`LLMOBS_AUTH__GITHUB__CLIENT_ID`, 
 | `storage.s3.endpoint` | | unset (MinIO, R2, …) |
 | `storage.s3.force_path_style` | | `false` |
 | `storage.s3.allow_http` | | `false` |
-| `encryption_key` | `LLMOBS_ENCRYPTION_KEY` | generated into `secret.key` |
+| `encryption_key` | `LLMOBS_ENCRYPTION_KEY` | unset: read `<data_dir>/secret.key`, generated on the first start of a new data directory (D-I-1) |
 | `smtp_url`, `email_from` | `LLMOBS_SMTP_URL`, `LLMOBS_EMAIL_FROM` | unset (email off) |
 | `auth.*` | see 08 | |
 | `init.admin_email` | `LLMOBS_INIT_ADMIN_EMAIL` | unset |
@@ -46,7 +46,8 @@ GitHub and Google also accept the split form (`LLMOBS_AUTH__GITHUB__CLIENT_ID`, 
 | `storage.deletion.max_delay` | | `"24h"` |
 
 The storage engine's settings form the `[storage]` section, with one sub-table per area (`wal`, `s3`, `flush`, `memtable`, `compaction`, `query`, `gc`, `deletion`, `anchor`); spec 03 names them without the `storage.` prefix. Sizes are strings with a binary unit (`"256MiB"`, `"1GiB"`) and durations are strings with a unit (`"2ms"`, `"120s"`, `"24h"`) (D90). The `[ingest]` and `[media]` sections use the same formats. S3 credentials are the standard `AWS_*` environment variables and are not config keys. The full list, with defaults, is the `StorageConfig` doc in `llmobs-storage`.
-| `eval.workers` | | 16 |
+| `eval.workers` | | `16` (1–256, D-I-6) |
+| `security.allow_private_network_egress` | | `false` (D166) |
 | `log.format` / `log.level` | `LLMOBS_LOG` | `pretty` on TTY else `json` / `info` |
 | `telemetry.enabled` | `LLMOBS_TELEMETRY` | decided with the license (anonymous usage ping, opt-out) |
 
@@ -119,7 +120,7 @@ llmobs admin backup --to /backups/llmobs-$(date +%F)   # online, consistent
 ## Security checklist (MVP)
 
 - All secrets encrypted at rest (04 §Encryption); keys/tokens hashed.
-- Outbound requests (webhooks, LLM connections, OIDC, Slack) go through an HTTP client with an SSRF guard. Unless `security.allow_private_network_egress = true` (needed for local Ollama/vLLM — the setting is shown in the LLM connection form), the client drops every resolved address, and any literal IP in the URL, in these ranges (D166): loopback, RFC 1918, CGNAT `100.64.0.0/10`, link-local, unique local `fc00::/7`, unspecified, multicast, broadcast, `192.0.0.0/24`, `198.18.0.0/15`, documentation ranges, and IPv4-mapped or NAT64 forms of any of these. If none is left, the call fails before connecting. Redirects are never followed. `http` and `https` only. Identity-provider URLs are operator configuration and are not passed through that guard. The OIDC client refuses redirects and times out after 10 seconds.
+- Outbound requests (webhooks, LLM connections, OIDC, Slack) go through an HTTP client with an SSRF guard. Unless `security.allow_private_network_egress = true` (needed for local Ollama/vLLM — the LLM connection form explains the setting; the UI cannot read its value (D-I-4)), the client drops every resolved address, and any literal IP in the URL, in these ranges (D166): loopback, RFC 1918, CGNAT `100.64.0.0/10`, link-local, unique local `fc00::/7`, unspecified, multicast, broadcast, `192.0.0.0/24`, `198.18.0.0/15`, documentation ranges, and IPv4-mapped or NAT64 forms of any of these. If none is left, the call fails before connecting. Redirects are never followed. `http` and `https` only. Identity-provider URLs are operator configuration and are not passed through that guard. The OIDC client refuses redirects and times out after 10 seconds.
 - Request size limits everywhere; JSON depth limit 128.
 - Credentials are never taken from query strings. Request logs carry the matched route template, not the raw URI (D150).
 - Content-Security-Policy on the UI: `default-src 'self'; img-src 'self' blob: data:; media-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'`, with `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`; payloads rendered as text (no HTML injection from trace content).

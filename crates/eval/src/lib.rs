@@ -37,7 +37,7 @@ pub use error::{
     CheckError, ConfigError, EgressError, ErrorClass, EvalError, JudgeError, MappingError,
     TemplateError, WebhookError,
 };
-pub use judge::{Adapter, JudgeConnection, JudgeUsage, StructuredOutput};
+pub use judge::{Adapter, JudgeConnection, JudgeUsage, StructuredOutput, UnknownName};
 pub use mapping::resolve::{ItemData, TraceData, Variables, resolve};
 pub use mapping::{Expr, VariableMapping};
 pub use runner::{EvalOutcome, EvalRun, EvalRunner, RunInput};
