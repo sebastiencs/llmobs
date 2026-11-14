@@ -74,9 +74,12 @@ check-ts: js-install
 # Every check (D79); must pass before every commit
 check: check-rust check-web check-py check-ts
 
-# Run both SDKs against a real llmobs serve (D-G-20)
+# Build the web, run the Rust e2e tests with the UI embedded, then the SDK suites against a real server (D-G-20, D-G-18)
 e2e: js-install
+    pnpm --dir web run build
+    E2E_REQUIRE_UI=1 cargo test --workspace --all-features --test e2e
     bash tools/e2e/run.sh
+    ./target/debug/llmobs version | grep -qx 'ui: embedded'
 
 # Fail if the working tree changed (generated files, snapshot or fixture writes)
 assert-clean:
