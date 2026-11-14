@@ -267,6 +267,114 @@ pub async fn span_detail(
     }
 }
 
+/// One trace's spans for an evaluator (D-I-23).
+#[derive(Debug, Clone, Copy)]
+pub struct TraceSpansRequest<'a> {
+    /// 32 hex digits, either case.
+    pub trace_id: &'a str,
+    /// 16 hex digits, either case. Always returned when stored.
+    pub target_span_id: Option<&'a str>,
+    /// Most spans of the "earliest others" part.
+    pub max_spans: usize,
+    /// Most rows of the required part. The read stops at `max_required + 1` rows, so the caller
+    /// can tell "over the cap" from "exactly at it".
+    pub max_required: usize,
+    /// Time allowed for both queries together.
+    pub timeout: Duration,
+}
+
+/// The spans, every column of the `spans` view, in two parts.
+#[derive(Debug)]
+pub struct TraceSpansData {
+    /// Parentless spans and the target span. May repeat a span of `earliest`.
+    pub required: Vec<RecordBatch>,
+    /// The earliest spans, `start_time ASC, span_id ASC`, at most `max_spans`.
+    pub earliest: Vec<RecordBatch>,
+    /// True when more than `max_spans` spans were stored.
+    pub truncated: bool,
+}
+
+/// Every column of one trace's spans: the required ones and the earliest `max_spans`. No
+/// default exclusion applies. An unknown trace gives two empty parts.
+///
+/// # Errors
+///
+/// [`RunError::InvalidRequest`] for a malformed id, `max_spans == 0` or `max_required == 0`;
+/// [`RunError::Timeout`]; [`RunError::TooLarge`] when the query memory pool is exceeded.
+pub async fn trace_spans(
+    ctx: &QueryContext,
+    request: TraceSpansRequest<'_>,
+) -> Result<TraceSpansData, RunError> {
+    let trace_id = hex_id(request.trace_id, 32, "trace_id")?;
+    let target = request
+        .target_span_id
+        .map(|id| hex_id(id, 16, "span_id"))
+        .transpose()?;
+    if request.max_spans == 0 || request.max_required == 0 {
+        return Err(RunError::InvalidRequest(
+            "max_spans and max_required must be at least 1".to_owned(),
+        ));
+    }
+    let load = load_trace_spans(
+        ctx,
+        &trace_id,
+        target.as_deref(),
+        request.max_spans,
+        request.max_required,
+    );
+    match tokio::time::timeout(request.timeout, load).await {
+        Err(_) => Err(RunError::Timeout),
+        Ok(result) => result,
+    }
+}
+
+async fn load_trace_spans(
+    ctx: &QueryContext,
+    trace_id: &str,
+    target: Option<&str>,
+    max_spans: usize,
+    max_required: usize,
+) -> Result<TraceSpansData, RunError> {
+    let root_or_target = match target {
+        Some(target) => col(spans::PARENT_SPAN_ID)
+            .is_null()
+            .or(col(spans::SPAN_ID).eq(lit(target))),
+        None => col(spans::PARENT_SPAN_ID).is_null(),
+    };
+    let required = ctx
+        .session()
+        .table(SPANS)
+        .await
+        .map_err(classify)?
+        .filter(col(spans::TRACE_ID).eq(lit(trace_id)).and(root_or_target))
+        .map_err(classify)?
+        .limit(0, Some(max_required.saturating_add(1)))
+        .map_err(classify)?;
+    let required = required.collect().await.map_err(|error| ctx.fail(error))?;
+    let earliest = ctx
+        .session()
+        .table(SPANS)
+        .await
+        .map_err(classify)?
+        .filter(col(spans::TRACE_ID).eq(lit(trace_id)))
+        .map_err(classify)?
+        .sort(order_by(
+            spans::START_TIME,
+            &[spans::SPAN_ID],
+            SortOrder::Asc,
+        ))
+        .map_err(classify)?
+        .limit(0, Some(max_spans.saturating_add(1)))
+        .map_err(classify)?;
+    let earliest = earliest.collect().await.map_err(|error| ctx.fail(error))?;
+    let (earliest, truncated) = cap_rows(earliest, max_spans);
+    Ok(TraceSpansData {
+        required,
+        earliest,
+        truncated,
+    })
+}
+
 /// The traces-view rows (every column, no order) of `trace_ids` that pass the default
 /// exclusions, the filter and the search. No time window applies to the traces: the query
 /// scans the project's traces once per call.
@@ -653,13 +761,14 @@ mod tests {
 
     use super::{
         MAX_REFRESH_IDS, SPAN_LIST_COLUMNS, SpanListRequest, SpanSort, TraceListRequest,
-        TraceRefreshRequest, TraceSort, span_detail, span_list, trace_detail, trace_detail_limited,
-        trace_frame, trace_list, trace_refresh,
+        TraceRefreshRequest, TraceSort, TraceSpansRequest, span_detail, span_list, trace_detail,
+        trace_detail_limited, trace_frame, trace_list, trace_refresh, trace_spans,
     };
     use crate::query_error::{Position, RunError};
     use crate::reads::{ListScope, Page, SortOrder};
     use crate::test_support::{
-        dataset_scores, dataset_spans, example_query, live_scores_table, spans_table, traces_table,
+        dataset_scores, dataset_spans, example_query, live_scores_table, span_row, spans_table,
+        traces_table,
     };
     use crate::views::{ProjectQuery, QueryContext, TimeWindow};
 
@@ -1582,5 +1691,110 @@ mod tests {
         .await
         .expect("missing");
         assert!(missing.is_none());
+    }
+
+    fn row_count(batches: &[RecordBatch]) -> usize {
+        batches.iter().map(RecordBatch::num_rows).sum()
+    }
+
+    #[tokio::test]
+    async fn trace_spans_returns_roots_target_and_earliest() {
+        let root = span_row(7, 0, 100, 1);
+        let mut spans = vec![root.clone()];
+        for n in 1..=5_u8 {
+            let mut child = span_row(7, n, 100 + i64::from(n) * 10, 1);
+            child.parent_span_id = Some(root.span_id);
+            spans.push(child);
+        }
+        let trace_id = root.trace_id.to_hex();
+        let target = spans[5].span_id.to_hex();
+        let ctx = context_for(&spans);
+        let data = trace_spans(
+            &ctx,
+            TraceSpansRequest {
+                trace_id: &trace_id,
+                target_span_id: Some(&target),
+                max_spans: 3,
+                max_required: 10,
+                timeout: TIMEOUT,
+            },
+        )
+        .await
+        .expect("trace spans");
+        // The root and the target. The other children are neither parentless nor the target.
+        assert_eq!(row_count(&data.required), 2);
+        assert_eq!(row_count(&data.earliest), 3);
+        assert!(data.truncated);
+    }
+
+    #[tokio::test]
+    async fn trace_spans_caps_the_required_part() {
+        let spans: Vec<Span> = (0..3_u8).map(|n| span_row(7, n, 100, 1)).collect();
+        let trace_id = spans[0].trace_id.to_hex();
+        let ctx = context_for(&spans);
+        let data = trace_spans(
+            &ctx,
+            TraceSpansRequest {
+                trace_id: &trace_id,
+                target_span_id: None,
+                max_spans: 10,
+                max_required: 2,
+                timeout: TIMEOUT,
+            },
+        )
+        .await
+        .expect("trace spans");
+        // max_required + 1 rows are read, so the caller sees the cap was exceeded.
+        assert_eq!(row_count(&data.required), 3);
+        assert!(!data.truncated);
+    }
+
+    #[tokio::test]
+    async fn trace_spans_unknown_trace_is_empty() {
+        let spans = vec![span_row(7, 0, 100, 1)];
+        let unknown = span_row(8, 0, 100, 1).trace_id.to_hex();
+        let ctx = context_for(&spans);
+        let data = trace_spans(
+            &ctx,
+            TraceSpansRequest {
+                trace_id: &unknown,
+                target_span_id: None,
+                max_spans: 10,
+                max_required: 10,
+                timeout: TIMEOUT,
+            },
+        )
+        .await
+        .expect("trace spans");
+        assert_eq!(row_count(&data.required), 0);
+        assert_eq!(row_count(&data.earliest), 0);
+        assert!(!data.truncated);
+    }
+
+    #[tokio::test]
+    async fn trace_spans_rejects_bad_ids() {
+        let spans = vec![span_row(7, 0, 100, 1)];
+        let trace_id = spans[0].trace_id.to_hex();
+        let ctx = context_for(&spans);
+        let short_trace = trace_spans(&ctx, bad_request("abc", None, 10)).await;
+        assert!(matches!(short_trace, Err(RunError::InvalidRequest(_))));
+        let bad_target = trace_spans(&ctx, bad_request(&trace_id, Some("xyz"), 10)).await;
+        assert!(matches!(bad_target, Err(RunError::InvalidRequest(_))));
+        let no_spans = trace_spans(&ctx, bad_request(&trace_id, None, 0)).await;
+        assert!(matches!(no_spans, Err(RunError::InvalidRequest(_))));
+    }
+
+    fn bad_request<'a>(
+        trace_id: &'a str,
+        target_span_id: Option<&'a str>,
+        max_spans: usize,
+    ) -> TraceSpansRequest<'a> {
+        TraceSpansRequest {
+            trace_id,
+            target_span_id,
+            max_spans,
+            max_required: 10,
+            timeout: TIMEOUT,
+        }
     }
 }

@@ -74,6 +74,8 @@ pub(crate) struct AppInner {
     pub(crate) eval_runner: Arc<llmobs_eval::EvalRunner>,
     /// Decrypted connections, keyed by id and `updated_at`.
     pub(crate) connections: crate::eval::connection::ConnectionCache,
+    /// Trace-load permits (D-I-23).
+    pub(crate) trace_loads: crate::eval::trace_load::TraceLoads,
 }
 
 impl AppState {
