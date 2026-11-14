@@ -16,11 +16,12 @@ function SqlPage() {
     <SqlConsole
       key={ref}
       search={search}
-      onSearch={(update) => {
+      onSearch={(update, options) => {
         void navigate({
           to: "/$org/$project/sql",
           params: { org, project },
           search: (previous) => update(previous),
+          replace: options?.replace === true,
         });
       }}
     />

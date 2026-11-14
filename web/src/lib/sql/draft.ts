@@ -3,6 +3,10 @@ import { STORAGE_PREFIX } from "@/product";
 
 export type SqlDraft = {
   query: string;
+  /** Parameter values as typed, by name (D-H-7). */
+  params: Record<string, string>;
+  /** The saved query this draft was loaded from (D-H-13). */
+  view?: string;
 };
 
 /** Changes a draft. Always pass a function so two updates in one event both apply. */
@@ -23,15 +27,24 @@ export function readDraft(projectRef: string): SqlDraft {
   try {
     const raw = localStorage.getItem(draftKey(projectRef));
     if (raw === null) {
-      return { query: DEFAULT_QUERY };
+      return { query: DEFAULT_QUERY, params: {} };
     }
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed) || typeof parsed.query !== "string") {
-      return { query: DEFAULT_QUERY };
+      return { query: DEFAULT_QUERY, params: {} };
     }
-    return { query: parsed.query };
+    const params: Record<string, string> = {};
+    if (isRecord(parsed.params)) {
+      for (const [name, value] of Object.entries(parsed.params)) {
+        if (typeof value === "string") {
+          params[name] = value;
+        }
+      }
+    }
+    const view = typeof parsed.view === "string" ? parsed.view : undefined;
+    return view ? { query: parsed.query, params, view } : { query: parsed.query, params };
   } catch {
-    return { query: DEFAULT_QUERY };
+    return { query: DEFAULT_QUERY, params: {} };
   }
 }
 
