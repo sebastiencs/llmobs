@@ -3,6 +3,8 @@ import adminUserCreatedDocument from "../../../fixtures/api/static/admin-user-cr
 import adminUsersDocument from "../../../fixtures/api/static/admin-users.json";
 import apiKeyCreatedDocument from "../../../fixtures/api/static/api-key-created.json";
 import inviteCreatedDocument from "../../../fixtures/api/static/invite-created.json";
+import llmConnectionDocument from "../../../fixtures/api/static/llm-connection.json";
+import llmConnectionTestDocument from "../../../fixtures/api/static/llm-connection-test.json";
 import meDocument from "../../../fixtures/api/static/me.json";
 import orgDocument from "../../../fixtures/api/static/org.json";
 import orgMembersDocument from "../../../fixtures/api/static/org-members.json";
@@ -50,6 +52,26 @@ export const WRITE_OPERATIONS: readonly WriteOperation[] = [
   { operationId: "delete_org_member", method: "delete", path: "/api/v1/orgs/{org}/members/{user}" },
   { operationId: "post_org_invite", method: "post", path: "/api/v1/orgs/{org}/invites" },
   { operationId: "delete_org_invite", method: "delete", path: "/api/v1/orgs/{org}/invites/{id}" },
+  {
+    operationId: "post_llm_connection",
+    method: "post",
+    path: "/api/v1/orgs/{org}/llm-connections",
+  },
+  {
+    operationId: "patch_llm_connection",
+    method: "patch",
+    path: "/api/v1/orgs/{org}/llm-connections/{id}",
+  },
+  {
+    operationId: "delete_llm_connection",
+    method: "delete",
+    path: "/api/v1/orgs/{org}/llm-connections/{id}",
+  },
+  {
+    operationId: "post_llm_connection_test",
+    method: "post",
+    path: "/api/v1/orgs/{org}/llm-connections/{id}/test",
+  },
   { operationId: "post_project", method: "post", path: "/api/v1/orgs/{org}/projects" },
   { operationId: "patch_project", method: "patch", path: "/api/v1/projects/{project}" },
   { operationId: "post_api_key", method: "post", path: "/api/v1/projects/{project}/api-keys" },
@@ -160,6 +182,12 @@ const RESPONSES: Record<string, Respond> = {
       },
       { status: 201 },
     ),
+  post_llm_connection: ({ body }) =>
+    HttpResponse.json({ ...llmConnectionDocument, ...named(body) }, { status: 201 }),
+  patch_llm_connection: ({ body }) =>
+    HttpResponse.json({ ...llmConnectionDocument, ...named(body) }),
+  delete_llm_connection: () => noContent(),
+  post_llm_connection_test: () => HttpResponse.json(llmConnectionTestDocument),
   post_project: ({ body }) =>
     HttpResponse.json(
       {
@@ -296,6 +324,11 @@ function trimmed(value: unknown): string | undefined {
     return undefined;
   }
   return value.trim();
+}
+
+/** The connection fixture's overrides, with `name` from the body when it is a string. */
+function named(body: Record<string, unknown>): { name: string } | Record<string, never> {
+  return typeof body.name === "string" ? { name: body.name } : {};
 }
 
 const TITLES: Record<400 | 404, string> = { 400: "Bad Request", 404: "Not Found" };
