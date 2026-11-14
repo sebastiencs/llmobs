@@ -11,7 +11,8 @@ use super::{MetaError, unique_or};
 /// A project holds at most this many evaluators.
 const PROJECT_CAP: i64 = 500;
 
-/// One stored evaluator. `Debug` is written by hand and prints `secret_enc`'s length only.
+/// One stored evaluator. `Debug` is written by hand and prints the lengths of `config`,
+/// `output_score` and `secret_enc` only, because a judge config holds the prompt template.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct EvaluatorRow {
     /// UUIDv7, chosen by the caller: the AAD of `secret_enc` needs it before the insert.
@@ -48,8 +49,8 @@ impl fmt::Debug for EvaluatorRow {
             .field("project_id", &self.project_id)
             .field("name", &self.name)
             .field("kind", &self.kind)
-            .field("config", &self.config)
-            .field("output_score", &self.output_score)
+            .field("config_bytes", &self.config.len())
+            .field("output_score_bytes", &self.output_score.len())
             .field("connection_id", &self.connection_id)
             .field("secret_enc", &self.secret_enc.as_deref().map(<[u8]>::len))
             .field("version", &self.version)
@@ -765,11 +766,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn debug_hides_the_sealed_bytes() {
+    async fn debug_hides_the_sealed_bytes_and_the_prompt() {
         let (_dir, db) = crate::meta::test_db().await;
         let acme = org(&db).await;
         let support = project(&db, acme).await;
         let id = Uuid::now_v7();
+        let config = r#"{"prompt":"Grade the answer against the secret rubric"}"#;
         let row = db
             .write(move |conn| {
                 Box::pin(async move {
@@ -779,6 +781,7 @@ mod tests {
                         support,
                         "webhook",
                         EvaluatorFields {
+                            config: config.to_owned(),
                             secret_enc: Some(vec![0xAB; 17]),
                             ..fields("hook")
                         },
@@ -793,5 +796,15 @@ mod tests {
         let text = format!("{row:?}");
         assert!(text.contains("secret_enc: Some(17)"), "{text}");
         assert!(!text.contains("171, 171"), "{text}");
+        assert!(
+            text.contains(&format!("config_bytes: {}", config.len())),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("output_score_bytes: {}", row.output_score.len())),
+            "{text}"
+        );
+        assert!(!text.contains("Grade the answer"), "{text}");
+        assert!(!text.contains("secret rubric"), "{text}");
     }
 }

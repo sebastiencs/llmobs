@@ -59,7 +59,8 @@ impl Default for TraceLoads {
 /// One loaded trace. `Span` holds prompts and answers, so `Debug` prints counts only.
 #[allow(dead_code)] // test runs use it from I2.7 on
 pub(crate) struct LoadedTrace {
-    /// Deduplicated spans: required ones first, then the earliest others, each in start order.
+    /// Deduplicated spans: the target first, then the other parentless spans, then the others,
+    /// each group in start order.
     pub(crate) spans: Vec<Span>,
     /// Spans were left out (the span cap or the byte cap).
     pub(crate) truncated: bool,
@@ -102,6 +103,20 @@ pub(crate) async fn load_trace(
     target_span: Option<SpanId>,
     around: Option<i64>,
 ) -> Result<LoadedTrace, LoadError> {
+    load_trace_capped(state, project, trace_id, target_span, around, MAX_SPANS).await
+}
+
+/// [`load_trace`] with the span cap as a parameter, so a test can reach `truncated` with a few
+/// spans. `load_trace` passes [`MAX_SPANS`].
+#[allow(dead_code)] // test runs use it from I2.7 on
+async fn load_trace_capped(
+    state: &AppState,
+    project: ProjectId,
+    trace_id: TraceId,
+    target_span: Option<SpanId>,
+    around: Option<i64>,
+    max_spans: usize,
+) -> Result<LoadedTrace, LoadError> {
     let _permit = tokio::time::timeout(READ_TIMEOUT, state.trace_loads.semaphore().acquire())
         .await
         .map_err(|_| LoadError::Busy)?
@@ -122,7 +137,7 @@ pub(crate) async fn load_trace(
         TraceSpansRequest {
             trace_id: &trace,
             target_span_id: target.as_deref(),
-            max_spans: MAX_SPANS,
+            max_spans,
             max_required: MAX_REQUIRED,
             timeout: READ_TIMEOUT,
         },
@@ -336,6 +351,30 @@ mod tests {
             "the root first, then the others in start order"
         );
         assert!(!loaded.truncated);
+    }
+
+    #[tokio::test]
+    async fn the_span_cap_sets_truncated() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let now = app.state.clock.now_ns();
+        let root = bare(TRACE, ROOT, None, now - 30);
+        let early = bare(TRACE, EARLY, Some(ROOT), now - 20);
+        let late = bare(TRACE, LATE, Some(ROOT), now - 10);
+        app.commit_spans(&seeded.project, vec![root, early, late])
+            .await;
+
+        let loaded = load_trace_capped(&app.state, seeded.project.id, trace_id(), None, None, 2)
+            .await
+            .expect("loaded");
+        assert_eq!(loaded.spans.len(), 2);
+        assert!(loaded.truncated);
+
+        let whole = load_trace_capped(&app.state, seeded.project.id, trace_id(), None, None, 3)
+            .await
+            .expect("loaded");
+        assert_eq!(whole.spans.len(), 3);
+        assert!(!whole.truncated);
     }
 
     #[tokio::test]

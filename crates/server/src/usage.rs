@@ -87,7 +87,8 @@ impl Usage {
     }
 
     /// Adds one judge call's tokens and cost to the day of `now_ns` (UTC) (D-I-31). A zero call
-    /// changes nothing.
+    /// changes nothing. A NaN, infinite or negative cost counts as 0, so it cannot break the
+    /// `judge_cost_usd` column and every later flush.
     #[allow(dead_code)] // test runs call it from I2.7 on
     pub(crate) fn add_judge(
         &self,
@@ -98,6 +99,11 @@ impl Usage {
         output_tokens: u64,
         cost_usd: f64,
     ) {
+        let cost_usd = if cost_usd.is_finite() && cost_usd > 0.0 {
+            cost_usd
+        } else {
+            0.0
+        };
         if input_tokens == 0 && output_tokens == 0 && cost_usd == 0.0 {
             return;
         }
@@ -333,6 +339,22 @@ mod tests {
             stored(&meta, project).await,
             vec![("2026-01-01".to_owned(), 2, 10, 1)]
         );
+    }
+
+    #[tokio::test]
+    async fn a_non_finite_judge_cost_counts_as_zero() {
+        let (_dir, meta) = test_db().await;
+        let (org, project) = (OrgId::new_v7(), ProjectId::new_v7());
+        let usage = Usage::default();
+        usage.add_judge(org, project, DAY_ONE, 10, 2, f64::NAN);
+        usage.add_judge(org, project, DAY_ONE, 1, 1, f64::INFINITY);
+        usage.add_judge(org, project, DAY_ONE, 1, 1, f64::NEG_INFINITY);
+        usage.add_judge(org, project, DAY_ONE, 1, 1, -0.5);
+        usage.flush(&meta).await.unwrap();
+        let rows = stored_judge(&meta, project).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].0, rows[0].1), (13, 5));
+        assert_eq!(rows[0].2, 0.0, "{rows:?}");
     }
 
     #[tokio::test]
