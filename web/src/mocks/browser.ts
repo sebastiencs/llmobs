@@ -2,6 +2,7 @@ import { setupWorker } from "msw/browser";
 import { STORAGE_PREFIX } from "@/product";
 import { handlers } from "./handlers";
 import { savedViewHandlers, seedSavedViews } from "./saved-views";
+import { sqlHandlers } from "./sql";
 import { fixtureStreamHandlers } from "./sse";
 import { writeHandlers } from "./writes";
 
@@ -10,6 +11,7 @@ export const MOCK_STORAGE_KEY = `${STORAGE_PREFIX}mock`;
 export const worker = setupWorker(
   ...fixtureStreamHandlers(),
   ...savedViewHandlers(seedSavedViews()),
+  ...sqlHandlers,
   ...writeHandlers,
   ...handlers,
 );
