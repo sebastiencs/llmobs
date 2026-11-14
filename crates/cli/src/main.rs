@@ -180,8 +180,23 @@ fn annotate(error: ServeError) -> anyhow::Error {
     anyhow::Error::from(error).context(context)
 }
 
+/// The `rmcp` crate logs whole MCP requests and results below `warn`; they can hold prompts
+/// and SQL text, so its level is capped whatever `log.level` says (README § Privacy).
+const RMCP_DIRECTIVE: &str = "rmcp=warn";
+
+/// `log.level` as an `EnvFilter`, with [`RMCP_DIRECTIVE`] added last so it replaces any
+/// `rmcp=…` directive in `level`.
+fn log_filter(level: &str) -> anyhow::Result<EnvFilter> {
+    let directive = RMCP_DIRECTIVE
+        .parse()
+        .context("parsing the rmcp log directive")?;
+    Ok(EnvFilter::try_new(level)
+        .context("loading config")?
+        .add_directive(directive))
+}
+
 fn init_tracing(log: &LogConfig) -> anyhow::Result<()> {
-    let filter = EnvFilter::try_new(&log.level).context("loading config")?;
+    let filter = log_filter(&log.level)?;
     let format = log.format.unwrap_or_else(default_log_format);
     match format {
         LogFormat::Pretty => {
@@ -405,7 +420,16 @@ impl Signals {
 
 #[cfg(test)]
 mod tests {
-    use super::run_cli;
+    use super::{log_filter, run_cli};
+
+    #[test]
+    fn log_filter_caps_rmcp() {
+        for level in ["info", "trace", "info,rmcp=trace"] {
+            let filter = log_filter(level).unwrap().to_string();
+            assert!(filter.contains("rmcp=warn"), "{level}: {filter}");
+            assert!(!filter.contains("rmcp=trace"), "{level}: {filter}");
+        }
+    }
 
     #[tokio::test]
     async fn missing_config_exits_with_the_path() {

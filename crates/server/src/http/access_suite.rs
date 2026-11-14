@@ -348,11 +348,13 @@ fn cookie_of(callers: &[Caller], who: Who) -> String {
         .unwrap()
 }
 
-/// Documented routes, and every key route (which stays out of the document, D-G-6).
+/// Documented routes, every key route (which stays out of the document, D-G-6) and `/mcp`.
 fn checked_routes() -> Vec<RouteDef> {
     routes()
         .into_iter()
-        .filter(|route| route.documented || matches!(route.access, Access::Key { .. }))
+        .filter(|route| {
+            route.documented || matches!(route.access, Access::Key { .. } | Access::Pat)
+        })
         .collect()
 }
 
@@ -478,6 +480,13 @@ fn expected(access: Access, method: &Method, who: Who) -> Outcome {
                 Outcome::Denied403
             }
         }
+        Access::Pat => {
+            if matches!(who, Who::PatRead | Who::PatWrite) {
+                Outcome::Allowed
+            } else {
+                Outcome::Denied403
+            }
+        }
         Access::Project { perm, session_only } => {
             if is_key(who) {
                 if !key_on_a1(who) {
@@ -587,7 +596,8 @@ fn assert_every_route_declares_access() {
             | Access::InstanceAdmin
             | Access::Org { .. }
             | Access::Project { .. }
-            | Access::Key { .. } => {}
+            | Access::Key { .. }
+            | Access::Pat => {}
         }
         if route.path.contains("{project}") {
             assert!(

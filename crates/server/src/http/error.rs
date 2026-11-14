@@ -105,7 +105,22 @@ pub(crate) enum ApiError {
 }
 
 impl ApiError {
-    fn problem(&self) -> Problem {
+    /// Logs what the caller does not see: an internal source at `error`, a query failure's
+    /// kind at `error` (internal) or `info` (refused). Never a message or the query (D94).
+    pub(crate) fn log(&self) {
+        if let Self::Internal(source) = self {
+            tracing::error!(error = %source, "internal error");
+        }
+        if let Self::Query(error) | Self::Sql(error) = self {
+            if matches!(error, RunError::Internal(_)) {
+                tracing::error!(kind = error.kind(), "query failed");
+            } else {
+                tracing::info!(kind = error.kind(), "query refused");
+            }
+        }
+    }
+
+    pub(crate) fn problem(&self) -> Problem {
         match self {
             Self::PayloadTooLarge { detail } => {
                 Problem::new(ProblemCode::PayloadTooLarge, Some((*detail).to_owned()))
@@ -187,16 +202,7 @@ impl From<QueryError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        if let Self::Internal(source) = &self {
-            tracing::error!(error = %source, "internal error");
-        }
-        if let Self::Query(error) | Self::Sql(error) = &self {
-            if matches!(error, RunError::Internal(_)) {
-                tracing::error!(kind = error.kind(), "query failed");
-            } else {
-                tracing::info!(kind = error.kind(), "query refused");
-            }
-        }
+        self.log();
         let mut headers = HeaderMap::new();
         match self {
             Self::RateLimited { retry_after_s } => {
