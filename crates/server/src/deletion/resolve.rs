@@ -32,13 +32,13 @@ pub(super) async fn resolve(
         .query(project, QueryOptions { around: None })
         .await
         .map_err(|error| super::from_query(&error))?;
-    let ctx = QueryContext::new(source, None).map_err(|error| super::from_run(&error))?;
+    let ctx = QueryContext::new(source, None).map_err(|error| super::from_run(&error, row.kind))?;
 
     let (targets, sessions) = match row.kind {
         DeletionKind::TraceIds => {
             let traces = scope_traces(state.meta.reader(), row.id)
                 .await
-                .map_err(super::from_meta)?;
+                .map_err(|error| super::from_meta(&error))?;
             (traces, Vec::new())
         }
         DeletionKind::Filter => (filter_targets(state, row, &ctx).await?, Vec::new()),
@@ -48,7 +48,7 @@ pub(super) async fn resolve(
             };
             let scope = user_deletion_scope(&ctx, user_id, row.created_at, RESOLVE_TIMEOUT)
                 .await
-                .map_err(|error| super::from_run(&error))?;
+                .map_err(|error| super::from_run(&error, row.kind))?;
             (scope.trace_ids, scope.session_ids)
         }
         DeletionKind::Project | DeletionKind::Org => {
@@ -59,7 +59,7 @@ pub(super) async fn resolve(
     let target_set: HashSet<TraceId> = targets.iter().copied().collect();
     let evaluations = eval_trace_ids(&ctx, &target_set, RESOLVE_TIMEOUT)
         .await
-        .map_err(|error| super::from_run(&error))?;
+        .map_err(|error| super::from_run(&error, row.kind))?;
     let mut scope = targets;
     scope.extend(evaluations);
     scope.sort();
@@ -78,7 +78,7 @@ pub(super) async fn resolve(
             })
         })
         .await
-        .map_err(super::from_meta)?;
+        .map_err(|error| super::from_meta(&error))?;
     Ok(stored)
 }
 
@@ -92,7 +92,7 @@ async fn filter_targets(
     let (Some(from), Some(to)) = (request.from, request.to) else {
         return Err(Step::Fail(FailReason::ResolutionFailed));
     };
-    let window = TimeWindow::new(from, to).map_err(|error| super::from_run(&error))?;
+    let window = TimeWindow::new(from, to).map_err(|error| super::from_run(&error, row.kind))?;
     let cap = state.deletions.filter_cap();
     let ids = filter_trace_ids(
         ctx,
@@ -107,7 +107,7 @@ async fn filter_targets(
         },
     )
     .await
-    .map_err(|error| super::from_run(&error))?;
+    .map_err(|error| super::from_run(&error, row.kind))?;
     if ids.len() > cap {
         return Err(Step::Fail(FailReason::TooManyTraces));
     }

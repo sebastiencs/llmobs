@@ -161,17 +161,17 @@ A read-only PAT is refused on every non-GET route by the existing check in `http
 
 ### Worker (D-M-3, D-M-13)
 
-`deletion::run_once(&AppState)` processes every open row, oldest first. The task `spawn_deletions` (in `serve.rs`) runs it:
+`deletion::run_once(&AppState)` processes every open row: drops (`project`, `org`) first, then rows with a stored scope or `pending`, then `trace_ids` rows, then `filter` and `user` rows still to resolve; oldest first within each group. A row that does not decode is logged and skipped. The task `spawn_deletions` (in `serve.rs`) runs it:
 - when `state.deletions.wake` is notified (every create notifies it);
 - otherwise every 2 s.
 
 Rows are processed one at a time. A large `user` resolution can delay the others, but a project or org being dropped is already hidden.
 
 Failures are counted per row in memory (`attempts: HashMap<Uuid, Attempt>`). After a failure the row is skipped until `now + 60 s`.
-- `RunError::Timeout`, `QueryError::Busy` and `DeletionError::Catalog`/`StorageError` are retried.
+- `RunError::Timeout`, `RunError::TooLarge` (the shared memory pool), `RunError::Failed` on a `trace_ids` or `user` row, `QueryError::Busy` and `DeletionError::Catalog`/`StorageError` are retried.
 - `trace_ids`, `filter` and `user` rows end `failed` / `resolution_failed`:
   - after 5 consecutive failures;
-  - at once on `RunError::Invalid`, `RunError::InvalidRequest`, `RunError::Failed` or `RunError::TooLarge`;
+  - at once on `RunError::Invalid`, `RunError::InvalidRequest`, or `RunError::Failed` on a `filter` row (its text fails at execution);
   - only while no scope is stored (`trace_count` NULL): once the scope and its cascades are stored, the row retries registration until storage takes it, so `failed` always means nothing was hidden or deleted.
 - `project` and `org` rows are retried forever.
 

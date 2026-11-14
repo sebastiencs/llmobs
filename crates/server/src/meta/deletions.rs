@@ -285,6 +285,13 @@ fn corrupt(column: &'static str) -> MetaError {
     }
 }
 
+/// Logs a stored row that does not decode: its id when it parses, and the error. Only the
+/// id and the error kind are logged, never the row's values.
+pub(crate) fn log_undecodable(id: Option<Uuid>, error: &MetaError) {
+    let id = id.map_or_else(|| "unknown".to_owned(), |id| id.to_string());
+    tracing::error!(deletion_id = %id, error = %error, "deletion row does not decode");
+}
+
 fn row_from(record: DeletionRecord) -> Result<DeletionRow, MetaError> {
     let id = Uuid::parse_str(&record.id).map_err(|_| corrupt("id"))?;
     let org_id = record
@@ -620,6 +627,7 @@ pub(crate) async fn deletion_by_id(
     pool: &SqlitePool,
     id: Uuid,
 ) -> Result<Option<DeletionRow>, MetaError> {
+    // The SQL is built only from constants.
     let sql = format!("SELECT {SELECT_COLUMNS} FROM deletions WHERE id = ?");
     let record: Option<DeletionRecord> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .bind(id.to_string())
@@ -638,6 +646,7 @@ pub(crate) async fn deletion_in_project(
     project: ProjectId,
     id: Uuid,
 ) -> Result<Option<DeletionRow>, MetaError> {
+    // The SQL is built only from constants.
     let sql = format!("SELECT {SELECT_COLUMNS} FROM deletions WHERE id = ? AND project_id = ?");
     let record: Option<DeletionRecord> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .bind(id.to_string())
@@ -688,6 +697,7 @@ async fn page(
     } else {
         ""
     };
+    // The SQL is built only from constants (`column` is one of two literals, `cursor` is constant).
     let sql = format!(
         "SELECT {SELECT_COLUMNS} FROM deletions WHERE {column} = ?{cursor} \
          ORDER BY created_at DESC, id DESC LIMIT ?"
@@ -701,11 +711,16 @@ async fn page(
 }
 
 /// Every `resolving` or `pending` row, oldest first (`created_at, id`). The worker's input.
+/// Each row decodes on its own: a row that does not decode is `Err((its id, the error))` and
+/// the others are still listed, so one corrupt row cannot stop the worker.
 ///
 /// # Errors
 ///
-/// Returns [`MetaError`] when the query fails or a stored row does not decode.
-pub(crate) async fn open_deletions(pool: &SqlitePool) -> Result<Vec<DeletionRow>, MetaError> {
+/// Returns [`MetaError`] when the query itself fails.
+pub(crate) async fn open_deletions(
+    pool: &SqlitePool,
+) -> Result<Vec<Result<DeletionRow, (Option<Uuid>, MetaError)>>, MetaError> {
+    // The SQL is built only from constants.
     let sql = format!(
         "SELECT {SELECT_COLUMNS} FROM deletions WHERE status IN ('resolving', 'pending') \
          ORDER BY created_at, id"
@@ -713,7 +728,13 @@ pub(crate) async fn open_deletions(pool: &SqlitePool) -> Result<Vec<DeletionRow>
     let records: Vec<DeletionRecord> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await?;
-    records.into_iter().map(row_from).collect()
+    Ok(records
+        .into_iter()
+        .map(|record| {
+            let id = Uuid::parse_str(&record.id).ok();
+            row_from(record).map_err(|error| (id, error))
+        })
+        .collect())
 }
 
 /// The stored trace scope, ordered by trace id.
@@ -785,16 +806,18 @@ pub(crate) async fn scope_projects(
 /// - users: `user_id` of rows of kind `user`.
 ///
 /// Rows in any status, `failed` included: their entries do no harm and expire.
+/// Each row decodes on its own: a value that does not decode is logged (see
+/// [`log_undecodable`]) and its entry is skipped; the other entries are kept.
 ///
 /// # Errors
 ///
-/// Returns [`MetaError`] when the query fails or a stored value does not decode.
+/// Returns [`MetaError`] when the query itself fails.
 pub(crate) async fn guard_entries(
     pool: &SqlitePool,
     since: i64,
 ) -> Result<GuardEntries, MetaError> {
-    let trace_rows: Vec<(Option<String>, Vec<u8>, i64)> = sqlx::query_as(
-        "SELECT d.project_id, t.trace_id, d.created_at \
+    let trace_rows: Vec<(String, Option<String>, Vec<u8>, i64)> = sqlx::query_as(
+        "SELECT d.id, d.project_id, t.trace_id, d.created_at \
          FROM deletions d JOIN deletion_traces t ON t.deletion_id = d.id \
          WHERE d.created_at >= ? AND d.kind IN ('trace_ids', 'filter', 'user') \
          ORDER BY d.created_at, d.id, t.trace_id",
@@ -803,29 +826,48 @@ pub(crate) async fn guard_entries(
     .fetch_all(pool)
     .await?;
     let mut traces = Vec::with_capacity(trace_rows.len());
-    for (project, blob, created_at) in trace_rows {
-        let project = guard_project(project)?;
-        let trace = TraceId::from_slice(&blob).map_err(|_| MetaError::Corrupt {
-            table: "deletion_traces",
-            column: "trace_id",
-        })?;
-        traces.push((project, trace, created_at));
+    for (id, project, blob, created_at) in trace_rows {
+        match guard_trace(project, &blob) {
+            Ok((project, trace)) => traces.push((project, trace, created_at)),
+            Err(error) => log_undecodable(Uuid::parse_str(&id).ok(), &error),
+        }
     }
 
-    let user_rows: Vec<(Option<String>, Option<String>, i64)> = sqlx::query_as(
-        "SELECT project_id, user_id, created_at FROM deletions \
+    let user_rows: Vec<(String, Option<String>, Option<String>, i64)> = sqlx::query_as(
+        "SELECT id, project_id, user_id, created_at FROM deletions \
          WHERE created_at >= ? AND kind = 'user' ORDER BY created_at, id",
     )
     .bind(since)
     .fetch_all(pool)
     .await?;
     let mut users = Vec::with_capacity(user_rows.len());
-    for (project, user, created_at) in user_rows {
-        let project = guard_project(project)?;
-        let user = user.ok_or_else(|| corrupt("user_id"))?;
-        users.push((project, user, created_at));
+    for (id, project, user, created_at) in user_rows {
+        match guard_user(project, user) {
+            Ok((project, user)) => users.push((project, user, created_at)),
+            Err(error) => log_undecodable(Uuid::parse_str(&id).ok(), &error),
+        }
     }
     Ok(GuardEntries { traces, users })
+}
+
+/// The project and trace of one guard trace entry.
+fn guard_trace(project: Option<String>, blob: &[u8]) -> Result<(ProjectId, TraceId), MetaError> {
+    let project = guard_project(project)?;
+    let trace = TraceId::from_slice(blob).map_err(|_| MetaError::Corrupt {
+        table: "deletion_traces",
+        column: "trace_id",
+    })?;
+    Ok((project, trace))
+}
+
+/// The project and end user of one guard user entry.
+fn guard_user(
+    project: Option<String>,
+    user: Option<String>,
+) -> Result<(ProjectId, String), MetaError> {
+    let project = guard_project(project)?;
+    let user = user.ok_or_else(|| corrupt("user_id"))?;
+    Ok((project, user))
 }
 
 fn guard_project(text: Option<String>) -> Result<ProjectId, MetaError> {
@@ -1232,8 +1274,27 @@ mod tests {
         assert!(failed(&db, Uuid::from_u128(4), FailReason::ResolutionFailed).await);
 
         let open = open_deletions(db.reader()).await.unwrap();
-        let ids: Vec<Uuid> = open.iter().map(|row| row.id).collect();
+        let ids: Vec<Uuid> = open.iter().map(|row| row.as_ref().unwrap().id).collect();
         assert_eq!(ids, vec![Uuid::from_u128(2), Uuid::from_u128(1)]);
+    }
+
+    #[tokio::test]
+    async fn open_deletions_keep_going_past_a_corrupt_row() {
+        let (_dir, db) = test_db().await;
+        insert(&db, new(1, DeletionKind::TraceIds, project_a(), 10)).await;
+        insert(&db, new(2, DeletionKind::TraceIds, project_a(), 20)).await;
+        raw(
+            &db,
+            format!("UPDATE deletions SET request = '{{\"bogus\":1}}' WHERE id = '{ROW1}'"),
+        )
+        .await;
+
+        let mut open = open_deletions(db.reader()).await.unwrap();
+        assert_eq!(open.len(), 2);
+        let (id, error) = open.remove(0).unwrap_err();
+        assert_eq!(id, Some(Uuid::from_u128(1)));
+        assert_eq!(corrupt_of(Err::<(), _>(error)), ("deletions", "request"));
+        assert_eq!(open[0].as_ref().unwrap().id, Uuid::from_u128(2));
     }
 
     #[tokio::test]
@@ -1475,16 +1536,35 @@ mod tests {
         .await;
         let result = scope_projects(db.reader(), Uuid::from_u128(1)).await;
         assert_eq!(corrupt_of(result), ("deletion_projects", "project_id"));
+    }
 
-        // The guard reads user rows without decoding them through `row_from`.
+    #[tokio::test]
+    async fn guard_entries_skip_corrupt_rows() {
         let (_dir, db) = test_db().await;
+        // A user row with no user id, and a trace row whose project is gone.
         insert(&db, new(1, DeletionKind::User, project_a(), 10)).await;
         raw(
             &db,
             format!("UPDATE deletions SET user_id = NULL WHERE id = '{ROW1}'"),
         )
         .await;
-        let result = guard_entries(db.reader(), 0).await;
-        assert_eq!(corrupt_of(result.map(|_| ())), ("deletions", "user_id"));
+        insert(&db, new(2, DeletionKind::TraceIds, project_a(), 20)).await;
+        add_traces(&db, Uuid::from_u128(2), vec![trace(5)]).await;
+        raw(
+            &db,
+            format!(
+                "UPDATE deletions SET project_id = NULL WHERE id = '{}'",
+                Uuid::from_u128(2)
+            ),
+        )
+        .await;
+        // The good rows, which the guard keeps.
+        insert(&db, new(3, DeletionKind::User, project_a(), 30)).await;
+        insert(&db, new(4, DeletionKind::TraceIds, project_b(), 40)).await;
+        add_traces(&db, Uuid::from_u128(4), vec![trace(6)]).await;
+
+        let entries = guard_entries(db.reader(), 0).await.unwrap();
+        assert_eq!(entries.traces, vec![(project_b(), trace(6), 40)]);
+        assert_eq!(entries.users, vec![(project_a(), "user-1".to_owned(), 30)]);
     }
 }

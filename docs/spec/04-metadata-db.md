@@ -158,18 +158,18 @@ CREATE TABLE deletions (
     id TEXT PRIMARY KEY,
     org_id TEXT NOT NULL,
     project_id TEXT,
-    kind TEXT NOT NULL,
+    kind TEXT NOT NULL,                 -- 'trace_ids' | 'filter' | 'user' | 'project' | 'org'
     user_id TEXT,
-    request TEXT NOT NULL,
-    requested_by_kind TEXT NOT NULL,
+    request TEXT NOT NULL,              -- JSON: the filter selection, or the dropped project or org name and slug
+    requested_by_kind TEXT NOT NULL,    -- 'user' | 'api_key'
     requested_by TEXT NOT NULL,
-    status TEXT NOT NULL,
-    trace_count INTEGER,
+    status TEXT NOT NULL,               -- 'resolving' | 'pending' | 'applied' | 'failed'
+    trace_count INTEGER,                -- NULL until the scope is stored
     session_count INTEGER,
-    created_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,        -- the cut-off, ns
     handed_over_at INTEGER,
     applied_at INTEGER,
-    error TEXT
+    error TEXT                          -- 'too_many_traces' | 'resolution_failed'; NULL unless failed
 );
 
 CREATE INDEX deletions_project ON deletions(project_id, created_at, id);
