@@ -5,6 +5,7 @@ pub(crate) mod body;
 pub(crate) mod environment;
 #[cfg(test)]
 mod fixtures_tests;
+pub(crate) mod grpc;
 pub(crate) mod otlp;
 
 use std::sync::{Arc, PoisonError, RwLock};
@@ -841,7 +842,10 @@ mod tests {
             .commit(
                 &app.state.storage,
                 &app.state.usage,
-                target(&app, &seeded.project),
+                CommitTarget {
+                    request_bytes: 7,
+                    ..target(&app, &seeded.project)
+                },
                 normalized,
             )
             .await
@@ -851,6 +855,16 @@ mod tests {
             "{error:?}"
         );
         assert_eq!(stored_spans(&app, seeded.project.id).await, 0);
+        app.state
+            .usage
+            .flush(&app.state.meta)
+            .await
+            .expect("usage flushes");
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM usage_daily")
+            .fetch_one(app.state.meta.reader())
+            .await
+            .expect("count");
+        assert_eq!(rows, 0, "a failed commit counts nothing");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -893,7 +907,10 @@ mod tests {
             .commit(
                 &app.state.storage,
                 &app.state.usage,
-                target(&app, &seeded.project),
+                CommitTarget {
+                    request_bytes: 7,
+                    ..target(&app, &seeded.project)
+                },
                 Normalized {
                     spans: Vec::new(),
                     media: Vec::new(),
@@ -910,6 +927,18 @@ mod tests {
             }
         );
         assert_eq!(stored_spans(&app, seeded.project.id).await, 0);
+        app.state
+            .usage
+            .flush(&app.state.meta)
+            .await
+            .expect("usage flushes");
+        let counted: (i64, i64) =
+            sqlx::query_as("SELECT spans, bytes FROM usage_daily WHERE project_id = ?")
+                .bind(seeded.project.id.to_string())
+                .fetch_one(app.state.meta.reader())
+                .await
+                .expect("one usage row for the day");
+        assert_eq!(counted, (0, 7));
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -460,6 +460,19 @@ async fn grant_key_only_project(
     parts: &mut Parts,
     project_id: ProjectId,
 ) -> Result<(), ApiError> {
+    let project = key_only_project(state, project_id).await?;
+    parts.extensions.insert(ProjectAccess {
+        project,
+        role: None,
+    });
+    Ok(())
+}
+
+/// The active project `project_id` in an active org, shared by HTTP and gRPC ingest.
+pub(crate) async fn key_only_project(
+    state: &AppState,
+    project_id: ProjectId,
+) -> Result<ProjectRow, ApiError> {
     let Some(project) = project_by_id(state.meta.reader(), project_id).await? else {
         return Err(ApiError::NotFound);
     };
@@ -472,11 +485,7 @@ async fn grant_key_only_project(
     if org.state != "active" {
         return Err(ApiError::NotFound);
     }
-    parts.extensions.insert(ProjectAccess {
-        project,
-        role: None,
-    });
-    Ok(())
+    Ok(project)
 }
 
 async fn load_project(state: &AppState, key: &str) -> Result<Option<ProjectRow>, ApiError> {
