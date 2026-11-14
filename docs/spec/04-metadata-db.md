@@ -207,16 +207,17 @@ CREATE TABLE saved_views (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   kind TEXT NOT NULL,                 -- 'traces' | 'spans' | 'sessions' | 'users' | 'sql'
   name TEXT NOT NULL,
-  state TEXT NOT NULL,                -- JSON owned by the UI: the list page's search params (range|from+to, filter, search, sort, order, eval, exp, cols) or {query, params} for SQL
+  state TEXT NOT NULL,                -- JSON owned by the UI: the list page's search params (range|from+to, filter, search, sort, order, eval, exp, cols) or {query, params, range|from+to} for SQL (D-H-7)
   owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   shared INTEGER NOT NULL DEFAULT 0,  -- 1 = visible to the whole project
-  is_default INTEGER NOT NULL DEFAULT 0,  -- per (project, kind, owner); a shared default applies to users without their own
+  is_default INTEGER NOT NULL DEFAULT 0,  -- one per (project, kind, owner) among private views, one per (project, kind) among shared views (D-H-6)
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
 CREATE INDEX saved_views_lookup ON saved_views(project_id, kind);
+CREATE INDEX saved_views_owner ON saved_views(project_id, owner_user_id);   -- the per-owner cap (D-H-6)
 ```
 
-Preset ranges are stored relative (`range: "24h"`). A view whose filter no longer validates (column removed) still loads; the filter shows as a raw chip with the error.
+Names are not unique: several visible views may share a name. Visibility, sharing, moderation, the two default scopes and the limits (names 1–200 characters, state ≤ 64 KiB, 1,000 views per project and owner) are D-H-6. Preset ranges are stored relative (`range: "24h"`). A view whose filter no longer validates (column removed) still loads; the filter shows as a raw chip with the error.
 
 ## Datasets & experiments
 
