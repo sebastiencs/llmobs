@@ -17,7 +17,9 @@ use rand::TryRng;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::credentials::{SavedToken, chosen_server, load, normalize_server_url, save};
+use crate::credentials::{
+    SavedToken, check_server_url, chosen_server, load, normalize_server_url, save,
+};
 
 const WAIT: Duration = Duration::from_secs(5 * 60);
 const READ_LIMIT: usize = 8192;
@@ -28,14 +30,17 @@ const PAGE: &str = "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8
 ///
 /// # Errors
 ///
-/// Returns an error when the callback times out, the token is rejected, or the
-/// credentials file cannot be written. The message does not include the token.
+/// Returns an error when the server URL is refused by [`check_server_url`], the callback
+/// times out, the token is rejected, or the credentials file cannot be written. The message
+/// does not include the token, and a refused URL is never printed.
 pub(crate) async fn login(
     server_url: &str,
     no_browser: bool,
     credentials: &Path,
     mut output: impl Write + Send,
 ) -> anyhow::Result<()> {
+    let server = normalize_server_url(server_url);
+    check_server_url(&server)?;
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("binding the callback")?;
@@ -44,7 +49,6 @@ pub(crate) async fn login(
         .context("binding the callback")?
         .port();
     let state = new_state().context("generating state")?;
-    let server = normalize_server_url(server_url);
     let browser = format!("{server}/cli-auth?port={port}&state={state}");
     writeln!(output, "{browser}").context("printing the login url")?;
     output.flush().context("printing the login url")?;
@@ -343,6 +347,21 @@ mod tests {
             "sk-{}-{tail}",
             llmobs_core::names::PRODUCT
         )));
+    }
+
+    #[tokio::test]
+    async fn login_refuses_a_url_with_credentials_before_printing() {
+        let dir = tempfile::tempdir().unwrap();
+        let credentials = dir.path().join("llmobs").join("credentials.toml");
+        let mut printed = Vec::new();
+        let error = login("http://user:pw@h", true, &credentials, &mut printed)
+            .await
+            .unwrap_err();
+        let text = error.to_string();
+        assert_eq!(text, "the server URL must not contain credentials");
+        assert!(!text.contains("user") && !text.contains("pw"));
+        assert!(printed.is_empty());
+        assert!(!credentials.exists());
     }
 
     struct LineWriter {

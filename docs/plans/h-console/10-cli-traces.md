@@ -354,7 +354,7 @@ pub(crate) async fn run(command: &ProjectsCommand, credentials: impl FnOnce() ->
 
 1. Resolve the target and build the client.
 2. Orgs: `client.get_json("/api/v1/orgs", &[("limit", "1000".to_owned())], Duration::from_secs(60))`, then, while `next_cursor` is `Some(c)`, the same with `("cursor", c.clone())` appended after `limit`. Deserialize each page as `Page<OrgMembership>` (error `the server sent an invalid response`).
-3. For each org in the order received, its projects: `client.get_json(&format!("/api/v1/orgs/{}/projects", client::project_segment(&org.slug)), &[("limit", "1000".to_owned())], Duration::from_secs(60))`, paging the same way, each page as `Page<Project>`.
+3. For each org in the order received, its projects: `client.get_json(&format!("/api/v1/orgs/{}/projects", client::project_segment(&org.slug)), &[("limit", "1000".to_owned())], Duration::from_secs(60))`, paging the same way, each page as `Page<Project>`. Both walks stop with the error `the server repeated a page cursor` when the server returns a `next_cursor` they have already followed; following it again would loop forever.
 4. One listed project per `Project`, in the order received:
 
    ```rust

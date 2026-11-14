@@ -58,19 +58,9 @@ pub(crate) struct ConnectionArgs {
 /// The server and the token one command uses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Target {
-    /// Normalized: no trailing slash; starts with `http://` or `https://`; carries no credentials.
+    /// Normalized: no trailing slash; accepted by `credentials::check_server_url`.
     pub(crate) server: String,
     pub(crate) token: Token,
-}
-
-/// Whether the URL embeds credentials: `user[:password]@` before the host. Such a URL would be
-/// stored, printed and requested with the password inside, so it is refused instead.
-fn has_userinfo(url: &str) -> bool {
-    let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
-    let authority_end = after_scheme
-        .find(['/', '?', '#'])
-        .unwrap_or(after_scheme.len());
-    after_scheme[..authority_end].contains('@')
 }
 
 /// `credentials` is called only when the credentials file is needed (rows 3 and 4 below).
@@ -83,8 +73,8 @@ pub(crate) fn resolve_target(
         .as_deref()
         .map(str::trim)
         .filter(|url| !url.is_empty());
-    if url.is_some_and(has_userinfo) {
-        bail!("the server URL must not contain credentials");
+    if let Some(url) = url {
+        credentials::check_server_url(url)?;
     }
     let token = args
         .token
@@ -123,9 +113,7 @@ pub(crate) fn resolve_target(
                     "not logged in; run `llmobs login --url <URL>` or set LLMOBS_URL and LLMOBS_TOKEN"
                 );
             };
-            if has_userinfo(server) {
-                bail!("the server URL must not contain credentials");
-            }
+            credentials::check_server_url(server)?;
             if saved.token.trim().is_empty() {
                 bail!("no saved token for {server}; run `llmobs login --url {server}`");
             }
@@ -135,10 +123,6 @@ pub(crate) fn resolve_target(
             }
         }
     };
-    let lower = target.server.to_ascii_lowercase();
-    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
-        bail!("--url must start with http:// or https://");
-    }
     Ok(target)
 }
 

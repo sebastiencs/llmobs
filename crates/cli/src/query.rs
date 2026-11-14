@@ -277,7 +277,7 @@ async fn deliver(
 /// copied and flushed once; a pipe broken at any point stops the command quietly.
 async fn write_stdout(out: &mut dyn Write, body: Body) -> anyhow::Result<bool> {
     match body {
-        Body::Buffered(bytes) => output::write_output(out, &bytes).map_err(anyhow::Error::from),
+        Body::Buffered(bytes) => Ok(output::write_output(out, &bytes)?),
         Body::Streamed(mut response) => match copy_and_flush(&mut response, out).await {
             Err(error) if is_broken_pipe(&error) => Ok(false),
             other => other.map(|()| true),

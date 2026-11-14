@@ -52,12 +52,31 @@ pub(crate) fn normalize_server_url(url: &str) -> String {
     url
 }
 
+/// Whether a server URL is usable, checked by every path a URL can arrive on (flag,
+/// environment variable, credentials file, `login` argument): it must parse as an `http` or
+/// `https` URL and carry no `user[:password]@`. A URL with credentials would be stored,
+/// printed and requested with the password inside, so it is refused instead; the error never
+/// includes the URL.
+pub(crate) fn check_server_url(url: &str) -> anyhow::Result<()> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|_| anyhow::anyhow!("--url must start with http:// or https://"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        anyhow::bail!("--url must start with http:// or https://");
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        anyhow::bail!("the server URL must not contain credentials");
+    }
+    Ok(())
+}
+
 pub(crate) fn chosen_server(
     server_url: Option<&str>,
     file: &CredentialsFile,
 ) -> anyhow::Result<String> {
     if let Some(url) = server_url {
-        return Ok(normalize_server_url(url));
+        let server = normalize_server_url(url);
+        check_server_url(&server)?;
+        return Ok(server);
     }
     match file.servers.len() {
         0 => anyhow::bail!("no saved server"),
@@ -65,6 +84,7 @@ pub(crate) fn chosen_server(
             let Some(server) = file.servers.keys().next() else {
                 anyhow::bail!("no saved server");
             };
+            check_server_url(server)?;
             Ok(server.clone())
         }
         _ => anyhow::bail!("more than one saved server; pass --url"),
@@ -115,7 +135,7 @@ fn set_dir_mode(_directory: &Path) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_server_url;
+    use super::{check_server_url, normalize_server_url};
 
     #[test]
     fn server_url_loses_trailing_slashes() {
@@ -123,5 +143,31 @@ mod tests {
             normalize_server_url(" http://127.0.0.1:8080/ "),
             "http://127.0.0.1:8080"
         );
+    }
+
+    #[test]
+    fn check_server_url_refuses_credentials_and_bad_schemes() {
+        let cases = [
+            ("http://[::1]:8080", false),
+            ("HTTPS://u@h", true),
+            ("http://h?x=a@b", false),
+            ("http://h#@", false),
+            ("http://h/@path", false),
+            ("http://u:p@ss@h", true),
+            // The tab is stripped by the URL parser, leaving http://user:pw@h.
+            ("http:/\t/user:pw@h", true),
+            ("user:pw@h", true),
+        ];
+        for (url, refused) in cases {
+            let checked = check_server_url(url);
+            assert_eq!(checked.is_err(), refused, "{url}");
+            if let Err(error) = checked {
+                let text = error.to_string();
+                assert!(
+                    !text.contains("user") && !text.contains("pw"),
+                    "{url}: {text}"
+                );
+            }
+        }
     }
 }
