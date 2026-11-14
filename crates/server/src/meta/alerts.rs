@@ -9,6 +9,7 @@ use sqlx::{SqliteConnection, SqlitePool};
 use uuid::Uuid;
 
 use super::{MetaError, unique_or};
+use crate::alerts::evaluate::Step;
 use crate::api::alerts::{
     AlertCondition, AlertEventKind, AlertMetric, AlertState, AlertWindow, ChannelKind, Comparator,
     DeliveryStatus,
@@ -768,6 +769,202 @@ pub(crate) async fn deliveries_for_events(
     Ok(rows)
 }
 
+/// Enabled rules of active projects in active orgs whose next evaluation is due at `now`:
+/// never evaluated, or `last_evaluated_at + interval(window) − slack_ns ≤ now`.
+/// Ordered by `last_evaluated_at` (NULL first), then `id`.
+///
+/// # Errors
+///
+/// Returns [`MetaError`] when a query fails or a stored value does not decode.
+pub(crate) async fn due_rules(
+    pool: &SqlitePool,
+    now: i64,
+    slack_ns: i64,
+) -> Result<Vec<RuleRow>, MetaError> {
+    let records: Vec<RuleRecord> = sqlx::query_as(
+        "SELECT r.id, r.project_id, r.name, r.metric, r.config, r.enabled, r.cooldown_s, \
+         r.notify_while_firing, r.state, r.clear_streak, r.last_value, r.last_count, \
+         r.last_evaluated_at, r.last_fired_at, r.last_notified_at, r.last_error, r.created_by, \
+         r.created_at, r.updated_at \
+         FROM alert_rules r \
+         JOIN projects p ON p.id = r.project_id \
+         JOIN orgs o ON o.id = p.org_id \
+         WHERE r.enabled = 1 AND p.state = 'active' AND o.state = 'active'",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut due = Vec::new();
+    for record in records {
+        let rule = rule_from(record, Vec::new())?;
+        let is_due = rule.last_evaluated_at.is_none_or(|at| {
+            at.saturating_add(rule.condition.window.interval_ns())
+                .saturating_sub(slack_ns)
+                <= now
+        });
+        if is_due {
+            due.push(rule);
+        }
+    }
+    due.sort_by_key(|rule| (rule.last_evaluated_at, rule.id));
+    for rule in &mut due {
+        rule.channel_ids = rule_channel_ids(pool, rule.id).await?;
+    }
+    Ok(due)
+}
+
+/// What one evaluation recorded.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Evaluation {
+    /// The query failed. Only `last_evaluated_at` and `last_error` change.
+    Failed { message: String },
+    /// The query answered.
+    Measured {
+        step: Step,
+        count: i64,
+        value: Option<f64>,
+        /// The condition's threshold, copied into the event.
+        threshold: f64,
+        window_from: i64,
+        window_to: i64,
+        details: EventDetails,
+    },
+}
+
+/// What [`record_evaluation`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Recorded {
+    /// The rule changed since it was read; nothing was written.
+    Stale,
+    /// The evaluation was written; no event.
+    Written,
+    /// The evaluation was written with this event and `deliveries` pending deliveries.
+    Event { event_id: Uuid, deliveries: usize },
+}
+
+/// Writes one evaluation of `rule_id`, but only if the rule's `updated_at` is still
+/// `expected_updated_at`; a rule edited meanwhile is left alone. See [`Recorded`].
+///
+/// Runs inside the caller's write transaction. An evaluation never changes `updated_at`.
+///
+/// # Errors
+///
+/// Returns [`MetaError`] when a write fails or a stored channel id does not decode.
+pub(crate) async fn record_evaluation(
+    conn: &mut SqliteConnection,
+    rule_id: Uuid,
+    expected_updated_at: i64,
+    evaluation: Evaluation,
+    now: i64,
+) -> Result<Recorded, MetaError> {
+    match evaluation {
+        Evaluation::Failed { message } => {
+            let result = sqlx::query(
+                "UPDATE alert_rules SET last_evaluated_at = ?, last_error = ? \
+                 WHERE id = ? AND updated_at = ?",
+            )
+            .bind(now)
+            .bind(message)
+            .bind(rule_id.to_string())
+            .bind(expected_updated_at)
+            .execute(&mut *conn)
+            .await?;
+            Ok(if result.rows_affected() == 0 {
+                Recorded::Stale
+            } else {
+                Recorded::Written
+            })
+        }
+        Evaluation::Measured {
+            step,
+            count,
+            value,
+            threshold,
+            window_from,
+            window_to,
+            details,
+        } => {
+            let result = sqlx::query(
+                "UPDATE alert_rules SET state = ?, clear_streak = ?, last_value = ?, \
+                 last_count = ?, last_evaluated_at = ?, last_error = NULL, \
+                 last_fired_at = CASE WHEN ? THEN ? ELSE last_fired_at END, \
+                 last_notified_at = CASE WHEN ? THEN ? ELSE last_notified_at END \
+                 WHERE id = ? AND updated_at = ?",
+            )
+            .bind(step.state.as_str())
+            .bind(step.clear_streak)
+            .bind(value)
+            .bind(count)
+            .bind(now)
+            .bind(step.fired)
+            .bind(now)
+            .bind(step.notified)
+            .bind(now)
+            .bind(rule_id.to_string())
+            .bind(expected_updated_at)
+            .execute(&mut *conn)
+            .await?;
+            if result.rows_affected() == 0 {
+                return Ok(Recorded::Stale);
+            }
+            let Some(kind) = step.event else {
+                return Ok(Recorded::Written);
+            };
+            let event_id = Uuid::now_v7();
+            // EventDetails holds strings and unit enums only; serializing it cannot fail.
+            #[allow(clippy::expect_used)]
+            let details_text = serde_json::to_string(&details).expect("event details serialize");
+            sqlx::query(
+                "INSERT INTO alert_events \
+                 (id, rule_id, kind, value, count, threshold, window_from, window_to, details, \
+                  created_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(event_id.to_string())
+            .bind(rule_id.to_string())
+            .bind(kind.as_str())
+            .bind(value)
+            .bind(count)
+            .bind(threshold)
+            .bind(window_from)
+            .bind(window_to)
+            .bind(details_text)
+            .bind(now)
+            .execute(&mut *conn)
+            .await?;
+            let texts: Vec<String> = sqlx::query_scalar(
+                "SELECT channel_id FROM alert_rule_channels WHERE rule_id = ? ORDER BY channel_id",
+            )
+            .bind(rule_id.to_string())
+            .fetch_all(&mut *conn)
+            .await?;
+            let channels = texts
+                .iter()
+                .map(|text| parse_uuid(text, LINKS, "channel_id"))
+                .collect::<Result<Vec<Uuid>, MetaError>>()?;
+            for channel in &channels {
+                sqlx::query(
+                    "INSERT INTO notification_deliveries \
+                     (id, event_id, channel_id, status, attempts, next_attempt_at, last_error, \
+                      created_at, updated_at) \
+                     VALUES (?, ?, ?, 'pending', 0, ?, NULL, ?, ?)",
+                )
+                .bind(Uuid::now_v7().to_string())
+                .bind(event_id.to_string())
+                .bind(channel.to_string())
+                .bind(now)
+                .bind(now)
+                .bind(now)
+                .execute(&mut *conn)
+                .await?;
+            }
+            Ok(Recorded::Event {
+                event_id,
+                deliveries: channels.len(),
+            })
+        }
+    }
+}
+
 /// The rule `id` of the project on `conn`, with its channel ids.
 async fn rule_on(
     conn: &mut SqliteConnection,
@@ -939,6 +1136,7 @@ fn delivery_from(record: EventDeliveryRecord) -> Result<DeliveryRow, MetaError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alerts::evaluate::DUE_SLACK_NS;
     use crate::meta::orgs::insert_org;
     use crate::meta::projects::insert_project;
     use crate::meta::{MetaDb, test_db};
@@ -1721,5 +1919,197 @@ mod tests {
             matches!(error, MetaError::Conflict(RULE_NAME_TAKEN)),
             "{error}"
         );
+    }
+
+    /// Adds a rule with `window` (and `enabled`) to `project`.
+    fn windowed_rule(
+        project: ProjectId,
+        name: &str,
+        window: AlertWindow,
+        enabled: bool,
+    ) -> NewRule {
+        let mut rule = new_rule(project, name, Vec::new());
+        rule.condition.window = window;
+        rule.enabled = enabled;
+        rule
+    }
+
+    /// The ids of the rules due at `now`, sorted.
+    async fn due_ids(db: &MetaDb, now: i64) -> Vec<Uuid> {
+        let mut ids: Vec<Uuid> = due_rules(db.reader(), now, DUE_SLACK_NS)
+            .await
+            .unwrap()
+            .iter()
+            .map(|rule| rule.id)
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    #[tokio::test]
+    async fn due_rules_respects_interval_and_state() {
+        const SEC: i64 = 1_000_000_000;
+        let (_dir, db) = test_db().await;
+        let (a, b) = two_projects(&db).await;
+        let five = add_rule(&db, windowed_rule(a, "5m", AlertWindow::M5, true))
+            .await
+            .unwrap()
+            .id;
+        let hour = add_rule(&db, windowed_rule(a, "1h", AlertWindow::H1, true))
+            .await
+            .unwrap()
+            .id;
+        let off = add_rule(&db, windowed_rule(a, "off", AlertWindow::M5, false))
+            .await
+            .unwrap()
+            .id;
+        let fresh = add_rule(&db, windowed_rule(a, "fresh", AlertWindow::M5, true))
+            .await
+            .unwrap()
+            .id;
+        let other = add_rule(&db, windowed_rule(b, "other", AlertWindow::M5, true))
+            .await
+            .unwrap()
+            .id;
+        let t = 1_000 * SEC;
+        db.write(move |conn| {
+            Box::pin(async move {
+                for id in [five, hour] {
+                    sqlx::query("UPDATE alert_rules SET last_evaluated_at = ? WHERE id = ?")
+                        .bind(t)
+                        .bind(id.to_string())
+                        .execute(&mut *conn)
+                        .await?;
+                }
+                sqlx::query("UPDATE projects SET state = 'deleting' WHERE id = ?")
+                    .bind(b.to_string())
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+
+        // Never evaluated: due at every step. The 5 m rule is due at t + 55 s (60 s − 5 s slack).
+        assert_eq!(due_ids(&db, t + 54 * SEC).await, sorted([fresh]));
+        assert_eq!(due_ids(&db, t + 55 * SEC).await, sorted([fresh, five]));
+        assert_eq!(
+            due_ids(&db, t + 295 * SEC).await,
+            sorted([fresh, five, hour])
+        );
+        // Disabled rules and rules of a deleting project are never due.
+        assert!(!due_ids(&db, t + 3600 * SEC).await.contains(&off));
+        assert!(!due_ids(&db, t + 3600 * SEC).await.contains(&other));
+    }
+
+    /// `ids` sorted, for comparison with [`due_ids`].
+    fn sorted<const N: usize>(mut ids: [Uuid; N]) -> Vec<Uuid> {
+        ids.sort();
+        ids.to_vec()
+    }
+
+    /// Writes one evaluation of `rule` through [`record_evaluation`].
+    async fn record(
+        db: &MetaDb,
+        rule: Uuid,
+        expected_updated_at: i64,
+        evaluation: Evaluation,
+        now: i64,
+    ) -> Recorded {
+        db.write(move |conn| {
+            Box::pin(async move {
+                record_evaluation(conn, rule, expected_updated_at, evaluation, now).await
+            })
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn record_evaluation_is_fenced() {
+        let (_dir, db) = test_db().await;
+        let (a, _) = two_projects(&db).await;
+        let one = add_channel(&db, new_channel(a, "one")).await.unwrap().id;
+        let two = add_channel(&db, new_channel(a, "two")).await.unwrap().id;
+        let rule = add_rule(&db, new_rule(a, "r", vec![one, two]))
+            .await
+            .unwrap();
+        let measured = |step: Step| Evaluation::Measured {
+            step,
+            count: 3,
+            value: Some(0.66),
+            threshold: 0.1,
+            window_from: 0,
+            window_to: 50,
+            details: EventDetails {
+                rule_name: "r".to_owned(),
+                metric: AlertMetric::ErrorRate,
+                comparator: Comparator::Gt,
+                window: AlertWindow::M5,
+                filter: None,
+            },
+        };
+        let fired = Step {
+            state: AlertState::Firing,
+            clear_streak: 0,
+            event: Some(AlertEventKind::Fired),
+            fired: true,
+            notified: true,
+        };
+
+        // An edit since the read (`updated_at` moved on) leaves the rule alone.
+        let stale = record(&db, rule.id, rule.updated_at + 1, measured(fired), 50).await;
+        assert_eq!(stale, Recorded::Stale);
+        let row = rule_by_id(db.reader(), a, rule.id).await.unwrap().unwrap();
+        assert_eq!(row.state, AlertState::Ok);
+        assert_eq!(row.last_evaluated_at, None);
+
+        let written = record(&db, rule.id, rule.updated_at, measured(fired), 50).await;
+        let Recorded::Event {
+            event_id,
+            deliveries,
+        } = written
+        else {
+            panic!("expected an event, got {written:?}");
+        };
+        assert_eq!(deliveries, 2);
+        let row = rule_by_id(db.reader(), a, rule.id).await.unwrap().unwrap();
+        assert_eq!(row.state, AlertState::Firing);
+        assert_eq!(row.last_fired_at, Some(50));
+        assert_eq!(row.last_notified_at, Some(50));
+        assert_eq!(row.last_error, None);
+        assert_eq!(row.updated_at, rule.updated_at);
+        let rows: Vec<(String, Option<i64>, i64)> = sqlx::query_as(
+            "SELECT status, next_attempt_at, attempts FROM notification_deliveries \
+             WHERE event_id = ?",
+        )
+        .bind(event_id.to_string())
+        .fetch_all(db.reader())
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(
+            rows.iter()
+                .all(|(status, next, attempts)| status == "pending"
+                    && *next == Some(50)
+                    && *attempts == 0)
+        );
+
+        let failed = record(
+            &db,
+            rule.id,
+            rule.updated_at,
+            Evaluation::Failed {
+                message: "x".to_owned(),
+            },
+            60,
+        )
+        .await;
+        assert_eq!(failed, Recorded::Written);
+        let row = rule_by_id(db.reader(), a, rule.id).await.unwrap().unwrap();
+        assert_eq!(row.state, AlertState::Firing);
+        assert_eq!(row.last_error.as_deref(), Some("x"));
+        assert_eq!(row.last_evaluated_at, Some(60));
     }
 }
