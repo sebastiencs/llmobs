@@ -95,6 +95,16 @@ Move these items **unchanged in behaviour** from `login.rs` into `crates/cli/src
 - `fn chosen_server(server_url: Option<&str>, file: &CredentialsFile) -> anyhow::Result<String>`;
 - the private helpers `temporary_path`, `write_private` and both `set_dir_mode` variants (they stay private to `credentials.rs`).
 
+Add next to `normalize_server_url` the one URL check every path to a server URL runs (`resolve_target` below, `login`, and `logout` through `chosen_server`):
+
+```rust
+/// Refuses a URL that does not parse, whose scheme is not `http`/`https`, or that carries
+/// `user[:password]@` credentials.
+pub(crate) fn check_server_url(url: &str) -> anyhow::Result<()>;
+```
+
+It parses with `reqwest::Url::parse` (reqwest re-exports `Url`; no new dependency): a parse failure or a scheme other than http/https is the error `--url must start with http:// or https://`; a non-empty `username()` or any `password()` is `the server URL must not contain credentials`. Neither message includes the URL, so a refused URL's credentials are not echoed. One parser decides, not a hand-written scan: `http:/<tab>/user:pw@h` parses to `http://user:pw@h` and is refused.
+
 Move `fn credentials_path() -> anyhow::Result<PathBuf>` from `main.rs` into `credentials.rs` as `pub(crate)`.
 
 The module's first line is this doc comment:
@@ -273,7 +283,7 @@ pub(crate) fn problem_error(status: reqwest::StatusCode, body: &[u8], server: &s
 | set | absent | `credentials::load(&credentials()?)?`; the entry for the normalized URL, else error ``no saved token for <url>; run `llmobs login --url <url>` `` |
 | absent | absent | `credentials::load(&credentials()?)?`; 0 servers: error ``not logged in; run `llmobs login --url <URL>` or set LLMOBS_URL and LLMOBS_TOKEN``; 1 server: that server and its token; 2 or more: error `more than one saved server; pass --url` |
 
-Then, whatever the row: unless the server URL starts with `http://` or `https://` (ASCII case-insensitive), the error is `--url must start with http:// or https://`. A saved token becomes a `Token` through `Token::from_str` (trimmed). The token is not checked for the `pat-` shape: an `sk` key works for `query` and `traces` on its own project.
+Then, whatever the row: the flag or `LLMOBS_URL` URL is checked with `credentials::check_server_url` before anything else, and row 4's saved server before its token is read. A URL with embedded credentials is refused with `the server URL must not contain credentials` before any message can print the URL (rows 3 and 4's `no saved token for <url>` included), whatever its source: the flag, `LLMOBS_URL`, a saved key in the credentials file, or `llmobs login --url` (checked before anything is printed, verified or saved). A URL that does not parse, or whose scheme is not `http`/`https` (ASCII case-insensitive; `HTTPS://h` is accepted), is refused with `--url must start with http:// or https://`. A saved token that is empty after trimming counts as absent: rows 3 and 4 answer `no saved token for <url>; run \`llmobs login --url <url>\``. A saved token becomes a `Token` through `Token::from_str` (trimmed). The token is not checked for the `pat-` shape: an `sk` key works for `query` and `traces` on its own project.
 
 ### `project_segment`
 
@@ -298,7 +308,7 @@ Percent-encode every byte of `project.as_bytes()` that is not an ASCII letter, d
 - `post_stream` adds `Accept: <accept>` and sets no `RequestBuilder::timeout`. It wraps `request.send()` in `tokio::time::timeout(header_timeout, …)`; when that expires, the error is `could not reach <server>: no answer within <n>s`, where `<n>` is `header_timeout.as_secs()` (rounded down). Once headers have arrived, reading the body has no client-side time limit: the server's own query timeout ends a slow export (D-H-8).
 - A send error (connect refused, DNS, TLS, `post_json`'s timeout) is `anyhow::Error::new(error).context(format!("could not reach {server}"))`. reqwest's error text holds the URL and never the header.
 - A non-2xx status reads at most 64 KiB of the body with `chunk()` (bytes past 64 KiB are dropped; a read error ends the read and keeps what was read), bounded by `read_timeout` and, for `post_json` and `get_json`, by the request's timeout, then returns `problem_error(status, &body, server)`.
-- `post_json` parses a 2xx body with `serde_json::from_slice`; a parse failure is `the server sent an invalid response`.
+- `post_json` parses a 2xx body with `serde_json::from_slice`; a parse failure is `the server sent an invalid response`. Reading the 2xx body can itself fail (the server closes the connection early); that error carries the context `reading the answer from <server>`.
 
 The timeouts (`connect_timeout`, `read_timeout`, the header wait) are constants or derived from flags and are not tested.
 
