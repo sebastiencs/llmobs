@@ -2029,7 +2029,9 @@ fn problem(code: u16) -> Response {
     let description = match code {
         400 => "The request is malformed or a filter is invalid.",
         401 => "No credentials, or the credentials are invalid.",
-        403 => "The credentials do not allow this operation.",
+        403 => {
+            "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required)."
+        }
         404 => "The resource does not exist.",
         409 => "The request conflicts with the current state.",
         413 => "The request body is larger than the limit.",

@@ -5,6 +5,7 @@ use axum::extract::{Extension, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
+use llmobs_core::ids::OrgId;
 
 use crate::api::account::{CreateProjectRequest, OrgRole, Project, UpdateProjectRequest};
 use crate::api::common::{FieldError, Page, PageParams};
@@ -105,6 +106,11 @@ async fn create_project(
         orgs::validate_slug_shape(slug).map_err(slug_error)?;
     }
     let retention = body.retention_days.map(checked_retention).transpose()?;
+    if retention.is_some() && !may_manage_retention(&state, access.org.id) {
+        return Err(ApiError::PlanRequired {
+            detail: RETENTION_PLAN,
+        });
+    }
     let org_id = access.org.id;
     let slug = body.slug;
     let now = state.clock.now_ns();
@@ -140,9 +146,11 @@ async fn get_project(Extension(access): Extension<ProjectAccess>) -> error::Json
 
 async fn update_project(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Extension(access): Extension<ProjectAccess>,
     error::Json(body): error::Json<UpdateProjectRequest>,
 ) -> Result<error::Json<Project>, ApiError> {
+    let actor_id = principal::session_user(&principal)?.id;
     let name = match body.name {
         None => None,
         Some(name) => Some(trimmed_name(&name)?),
@@ -152,9 +160,17 @@ async fn update_project(
         Some(None) => Some(None),
         Some(Some(days)) => Some(Some(checked_retention(days)?)),
     };
+    if matches!(retention_days, Some(Some(_)))
+        && !may_manage_retention(&state, access.project.org_id)
+    {
+        return Err(ApiError::PlanRequired {
+            detail: RETENTION_PLAN,
+        });
+    }
     let id = access.project.id;
     let role = access.role;
     let now = state.clock.now_ns();
+    let retention = retention_days;
     state
         .meta
         .write(move |conn| {
@@ -172,6 +188,13 @@ async fn update_project(
             })
         })
         .await?;
+    if let Some(retention) = retention {
+        let text = retention.map_or_else(|| "none".to_owned(), |days| days.to_string());
+        tracing::info!(target: "audit", project_id = %id, actor_id = %actor_id, retention_days = %text, "retention changed");
+        if let Some(days) = retention {
+            crate::retention::apply_now(&state, id, days).await;
+        }
+    }
     let Some(project) = projects::project_by_id(state.meta.reader(), id).await? else {
         return Err(ApiError::NotFound);
     };
@@ -197,6 +220,15 @@ fn api_role(role: Role) -> OrgRole {
         Role::Viewer => OrgRole::Viewer,
     }
 }
+
+/// Whether the org may set project retention (D177, D-M-16). Free when self-hosted, a Pro
+/// feature on the cloud. Track P replaces the body with
+/// `state.entitlements.of(org).allows(Feature::RetentionManagement)`; until then it allows.
+fn may_manage_retention(_state: &AppState, _org: OrgId) -> bool {
+    true
+}
+
+const RETENTION_PLAN: &str = "data retention management is part of the Pro plan";
 
 fn checked_retention(days: u32) -> Result<u32, ApiError> {
     if (1..=36_500).contains(&days) {
@@ -233,7 +265,6 @@ fn field_error(field: &str, message: &str) -> ApiError {
 #[cfg(test)]
 mod tests {
     use axum::http::{Method, header};
-    use llmobs_core::ids::OrgId;
     use uuid::Uuid;
 
     use super::*;
@@ -243,7 +274,7 @@ mod tests {
     use crate::auth::session::start_session;
     use crate::meta::members::{add_org_member, set_project_override};
     use crate::meta::users::{NewUser, insert_user};
-    use crate::test_support::TestApp;
+    use crate::test_support::{Seeded, TestApp, capture_logs, dataset_span};
 
     fn cookie_pair(set_cookie: &axum::http::HeaderValue) -> String {
         set_cookie
@@ -516,5 +547,126 @@ mod tests {
             .await;
         let still: Project = still.json();
         assert!(still.retention_days.is_none());
+    }
+
+    /// 2026-01-01T00:00:00Z, the manual clock's start.
+    const NOW: i64 = 1_767_225_600_000_000_000;
+    const DAY: i64 = 86_400 * 1_000_000_000;
+    const HOUR: i64 = 3_600 * 1_000_000_000;
+    const TRACE_A: &str = "a4000000000000000000000000000001";
+
+    /// Commits one span of `trace` to `project`, starting at `start_time`.
+    async fn commit_at(app: &TestApp, project: &ProjectRow, trace: &str, start_time: i64) {
+        let mut row = dataset_span(0);
+        row.trace_id = trace.parse::<llmobs_core::ids::TraceId>().unwrap();
+        row.span_id = "b4000000000000aa"
+            .parse::<llmobs_core::ids::SpanId>()
+            .unwrap();
+        row.parent_span_id = None;
+        row.start_time = start_time;
+        row.end_time = start_time + 1_000;
+        row.ingest_time = app.state.clock.now_ns();
+        app.commit_spans(project, vec![row]).await;
+    }
+
+    async fn trace_status(app: &TestApp, seeded: &Seeded, trace: &str) -> StatusCode {
+        app.request(
+            Method::GET,
+            &format!("/api/v1/projects/{}/traces/{trace}", seeded.project.id),
+        )
+        .header(header::COOKIE.as_str(), &seeded.cookie)
+        .send()
+        .await
+        .status
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn patch_applies_retention_at_once() {
+        let app = TestApp::new().await;
+        app.state.clock.set(NOW);
+        let seeded = app.seed().await;
+        commit_at(&app, &seeded.project, TRACE_A, NOW - 3 * DAY + 12 * HOUR).await;
+        assert_eq!(trace_status(&app, &seeded, TRACE_A).await, StatusCode::OK);
+
+        let path = format!("/api/v1/projects/{}", seeded.project.id);
+        let patched = app
+            .request(Method::PATCH, &path)
+            .header(header::COOKIE.as_str(), &seeded.cookie)
+            .json(&serde_json::json!({ "retention_days": 1 }))
+            .send()
+            .await;
+        assert_eq!(patched.status, 200);
+        assert_eq!(
+            trace_status(&app, &seeded, TRACE_A).await,
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn patch_to_forever_keeps_dropped_data_dropped() {
+        let app = TestApp::new().await;
+        app.state.clock.set(NOW);
+        let seeded = app.seed().await;
+        commit_at(&app, &seeded.project, TRACE_A, NOW - 3 * DAY + 12 * HOUR).await;
+        let path = format!("/api/v1/projects/{}", seeded.project.id);
+        let set = app
+            .request(Method::PATCH, &path)
+            .header(header::COOKIE.as_str(), &seeded.cookie)
+            .json(&serde_json::json!({ "retention_days": 1 }))
+            .send()
+            .await;
+        assert_eq!(set.status, 200);
+        assert_eq!(
+            trace_status(&app, &seeded, TRACE_A).await,
+            StatusCode::NOT_FOUND
+        );
+
+        let forever = app
+            .request(Method::PATCH, &path)
+            .header(header::COOKIE.as_str(), &seeded.cookie)
+            .json(&serde_json::json!({ "retention_days": null }))
+            .send()
+            .await;
+        assert_eq!(forever.status, 200);
+        let forever: Project = forever.json();
+        assert!(forever.retention_days.is_none());
+        assert_eq!(
+            trace_status(&app, &seeded, TRACE_A).await,
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn patch_logs_the_change() {
+        let app = TestApp::new().await;
+        app.state.clock.set(NOW);
+        let seeded = app.seed().await;
+        let path = format!("/api/v1/projects/{}", seeded.project.id);
+
+        let (status, logs) = capture_logs(async {
+            app.request(Method::PATCH, &path)
+                .header(header::COOKIE.as_str(), &seeded.cookie)
+                .json(&serde_json::json!({ "retention_days": 7 }))
+                .send()
+                .await
+                .status
+        })
+        .await;
+        assert_eq!(status, 200);
+        assert!(logs.contains("retention changed"), "{logs}");
+        assert!(logs.contains("retention_days=7"), "{logs}");
+        assert!(logs.contains("audit"), "{logs}");
+
+        let (status, logs) = capture_logs(async {
+            app.request(Method::PATCH, &path)
+                .header(header::COOKIE.as_str(), &seeded.cookie)
+                .json(&serde_json::json!({ "name": "x" }))
+                .send()
+                .await
+                .status
+        })
+        .await;
+        assert_eq!(status, 200);
+        assert!(!logs.contains("retention changed"), "{logs}");
     }
 }

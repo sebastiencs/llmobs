@@ -134,6 +134,8 @@ pub enum ProblemCode {
     SsoRequired,
     /// The account has not verified its email.
     EmailNotVerified,
+    /// The organization's plan does not include this feature.
+    PlanRequired,
     /// The resource does not exist.
     NotFound,
     /// The path exists, and this method is not allowed.
@@ -158,7 +160,9 @@ impl ProblemCode {
         match self {
             Self::BadRequest | Self::InvalidFilter | Self::QueryFailed => 400,
             Self::Unauthorized => 401,
-            Self::Forbidden | Self::SsoRequired | Self::EmailNotVerified => 403,
+            Self::Forbidden | Self::SsoRequired | Self::EmailNotVerified | Self::PlanRequired => {
+                403
+            }
             Self::NotFound => 404,
             Self::MethodNotAllowed => 405,
             Self::PayloadTooLarge => 413,
@@ -177,7 +181,9 @@ impl ProblemCode {
         match self {
             Self::BadRequest | Self::InvalidFilter | Self::QueryFailed => "Bad Request",
             Self::Unauthorized => "Unauthorized",
-            Self::Forbidden | Self::SsoRequired | Self::EmailNotVerified => "Forbidden",
+            Self::Forbidden | Self::SsoRequired | Self::EmailNotVerified | Self::PlanRequired => {
+                "Forbidden"
+            }
             Self::NotFound => "Not Found",
             Self::MethodNotAllowed => "Method Not Allowed",
             Self::PayloadTooLarge => "Payload Too Large",

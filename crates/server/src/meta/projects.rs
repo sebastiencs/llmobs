@@ -214,6 +214,39 @@ pub(crate) async fn projects_of_org(
     records.into_iter().map(project_row).collect()
 }
 
+/// `(org, project, retention_days)` of every project with `state = 'active'` in an active
+/// org, ordered by project id. Projects without retention are included: an org cap
+/// (D-M-15) applies to them too.
+///
+/// # Errors
+///
+/// Returns [`MetaError`] when the query fails or a value does not decode.
+pub(crate) async fn projects_for_retention(
+    pool: &SqlitePool,
+) -> Result<Vec<(OrgId, ProjectId, Option<u32>)>, MetaError> {
+    let rows: Vec<(String, String, Option<i64>)> = sqlx::query_as(
+        "SELECT projects.org_id, projects.id, projects.retention_days \
+         FROM projects JOIN orgs ON orgs.id = projects.org_id \
+         WHERE projects.state = 'active' AND orgs.state = 'active' \
+         ORDER BY projects.id",
+    )
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|(org_id, id, days)| {
+            let org_id = org_id.parse().map_err(|_| MetaError::Corrupt {
+                table: "projects",
+                column: "org_id",
+            })?;
+            let id = id.parse().map_err(|_| MetaError::Corrupt {
+                table: "projects",
+                column: "id",
+            })?;
+            Ok((org_id, id, decode_retention(days)?))
+        })
+        .collect()
+}
+
 /// Applies the patch and sets `updated_at`.
 ///
 /// # Errors
@@ -278,6 +311,21 @@ fn encode_retention(days: Option<u32>) -> Result<Option<i64>, MetaError> {
     }
 }
 
+/// Decodes a stored `retention_days`: NULL is `None`, `1..=36_500` is `Some`, anything else is corrupt.
+fn decode_retention(value: Option<i64>) -> Result<Option<u32>, MetaError> {
+    let corrupt = MetaError::Corrupt {
+        table: "projects",
+        column: "retention_days",
+    };
+    match value {
+        None => Ok(None),
+        Some(days) if (1..=36_500).contains(&days) => {
+            Ok(Some(u32::try_from(days).map_err(|_| corrupt)?))
+        }
+        Some(_) => Err(corrupt),
+    }
+}
+
 fn fetch_project(record: Option<ProjectRecord>) -> Result<Option<ProjectRow>, MetaError> {
     record.map(project_row).transpose()
 }
@@ -291,21 +339,7 @@ fn project_row(record: ProjectRecord) -> Result<ProjectRow, MetaError> {
         table: "projects",
         column: "org_id",
     })?;
-    let retention_days = match record.retention_days {
-        None => None,
-        Some(days) if (1..=36_500).contains(&days) => {
-            Some(u32::try_from(days).map_err(|_| MetaError::Corrupt {
-                table: "projects",
-                column: "retention_days",
-            })?)
-        }
-        Some(_) => {
-            return Err(MetaError::Corrupt {
-                table: "projects",
-                column: "retention_days",
-            });
-        }
-    };
+    let retention_days = decode_retention(record.retention_days)?;
     Ok(ProjectRow {
         id,
         org_id,
@@ -417,5 +451,36 @@ mod tests {
             ),
             "{error}"
         );
+    }
+
+    #[tokio::test]
+    async fn projects_for_retention_lists_active_ones() {
+        let (_dir, db) = test_db().await;
+        let (org, ids, deleting) = db
+            .write(|conn| {
+                Box::pin(async move {
+                    let org = insert_org(conn, "Acme", "acme", 1).await?;
+                    let mut ids = Vec::new();
+                    for (slug, days) in [("none", None), ("week", Some(7)), ("month", Some(30))] {
+                        let project = insert_project(conn, org.id, slug, slug, days, 1).await?;
+                        ids.push((project.id, days));
+                    }
+                    let deleting = insert_project(conn, org.id, "gone", "gone", Some(1), 1).await?;
+                    sqlx::query("UPDATE projects SET state = 'deleting' WHERE id = ?")
+                        .bind(deleting.id.to_string())
+                        .execute(&mut *conn)
+                        .await?;
+                    Ok((org, ids, deleting))
+                })
+            })
+            .await
+            .unwrap();
+
+        let mut expected: Vec<(OrgId, ProjectId, Option<u32>)> =
+            ids.iter().map(|(id, days)| (org.id, *id, *days)).collect();
+        expected.sort_by_key(|(_, id, _)| *id);
+        let listed = projects_for_retention(db.reader()).await.unwrap();
+        assert_eq!(listed, expected);
+        assert!(listed.iter().all(|(_, id, _)| *id != deleting.id));
     }
 }

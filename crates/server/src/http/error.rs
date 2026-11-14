@@ -68,6 +68,12 @@ pub(crate) enum ApiError {
         /// Which 403 this is.
         code: ProblemCode,
     },
+    /// The org's plan does not include the feature (D177). `detail` names it.
+    #[error("plan required")]
+    PlanRequired {
+        /// Static text shown as the problem `detail`.
+        detail: &'static str,
+    },
     /// The resource does not exist.
     #[error("not found")]
     NotFound,
@@ -142,6 +148,9 @@ impl ApiError {
             }
             Self::Unauthorized => Problem::new(ProblemCode::Unauthorized, None),
             Self::Forbidden { code } => Problem::new(*code, None),
+            Self::PlanRequired { detail } => {
+                Problem::new(ProblemCode::PlanRequired, Some((*detail).to_owned()))
+            }
             Self::NotFound => not_found_problem(),
             Self::Conflict { detail } => {
                 Problem::new(ProblemCode::Conflict, Some((*detail).to_owned()))
@@ -583,6 +592,14 @@ mod tests {
             .await
             .unwrap();
         (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn plan_required_is_a_403_problem() {
+        let (status, problem) = problem_of(ApiError::PlanRequired { detail: "x" }).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(problem.code, ProblemCode::PlanRequired);
+        assert_eq!(problem.detail.as_deref(), Some("x"));
     }
 
     #[tokio::test]
