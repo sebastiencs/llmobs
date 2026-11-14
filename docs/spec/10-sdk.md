@@ -336,7 +336,7 @@ plus any GenAI / OpenInference / OpenLLMetry instrumentation, and the attribute 
 
 - Unit tests per SDK, against local mock HTTP servers.
 - **Conformance fixtures (D-F-9).** Each SDK scenario has a case `fixtures/otlp/llmobs/sdk-<scenario>/` whose `input.json` is the canonical OTLP both SDKs must emit and whose `expected.json` is the normalized result. Both SDK test suites run the scenario and compare their canonicalized export with `input.json`; the Rust golden test normalizes the same `input.json` (02 § Testing).
-- An integration suite against a real `llmobs serve` is added once the ingest and score routes exist.
+- `just e2e` runs both SDKs against a real `llmobs serve`: each sends one traced function and one score, then reads them back through the API (D-G-20).
 
 ### Canonical form
 

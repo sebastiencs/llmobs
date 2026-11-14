@@ -69,6 +69,10 @@ check-ts: js-install
 # Every check (D79); must pass before every commit
 check: check-rust check-web check-py check-ts
 
+# Run both SDKs against a real llmobs serve (D-G-20)
+e2e: js-install
+    bash tools/e2e/run.sh
+
 # Fail if the working tree changed (generated files, snapshot or fixture writes)
 assert-clean:
     git status --porcelain --untracked-files=all

@@ -97,6 +97,7 @@ fixtures/otlp/               OTLP fixtures shared by Rust golden tests and SDK t
 fixtures/api/                example API responses (UI mocks), checked against the server types (spec 09)
 tools/                       dev tools (fixture capture, benchmarks); not shipped
 tools/capture/               fixture capture: mock provider, OTLP receiver, scenarios (B2)
+tools/e2e/                   run.sh for just e2e: a real llmobs serve and both SDK suites (D-G-20)
 docs/                        decisions, specs, plans, research
 ```
 
@@ -144,6 +145,7 @@ Run everything through `just`:
 | `just capture <group>/<case>` | record an OTLP fixture from a scenario, e.g. `just capture openinference/openai-chat-tool` |
 | `just capture-all` | recapture every scenario |
 | `just check-capture` | lint and type-check the capture scenarios, then recapture every scenario and compare (timing excluded) |
+| `just e2e` | run the Python and TypeScript SDKs against a real `llmobs serve` (D-G-20) |
 
 Required tools:
 - `rustup` (the toolchain is pinned in `rust-toolchain.toml`)
