@@ -6,6 +6,7 @@
 mod output;
 mod sql;
 mod tools;
+mod traces;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -134,6 +135,18 @@ impl ServerHandler for McpServer {
             sql::LIST_SAVED_VIEWS => (
                 sql::LIST_SAVED_VIEWS,
                 sql::list_saved_views(&self.state, &self.user, arguments).await,
+            ),
+            traces::SEARCH_TRACES => (
+                traces::SEARCH_TRACES,
+                traces::search_traces(&self.state, &self.user, arguments).await,
+            ),
+            traces::GET_TRACE => (
+                traces::GET_TRACE,
+                traces::get_trace(&self.state, &self.user, arguments).await,
+            ),
+            traces::GET_SPAN => (
+                traces::GET_SPAN,
+                traces::get_span(&self.state, &self.user, arguments).await,
             ),
             _ => return Err(McpError::invalid_params("unknown tool", None)),
         };
@@ -294,11 +307,14 @@ mod tests {
     use crate::meta::users::{self, NewUser, insert_user};
     use crate::test_support::TestApp;
 
-    const TOOLS: [&str; 4] = [
+    const TOOLS: [&str; 7] = [
         "list_projects",
         "get_schema",
         "query_sql",
         "list_saved_views",
+        "search_traces",
+        "get_trace",
+        "get_span",
     ];
 
     fn init_body(version: &str) -> Value {
@@ -418,6 +434,18 @@ mod tests {
             json!(["project", "query", "from", "to"])
         );
         assert_eq!(tools[3]["inputSchema"]["required"], json!(["project"]));
+        assert_eq!(
+            tools[4]["inputSchema"]["required"],
+            json!(["project", "from", "to"])
+        );
+        assert_eq!(
+            tools[5]["inputSchema"]["required"],
+            json!(["project", "trace_id"])
+        );
+        assert_eq!(
+            tools[6]["inputSchema"]["required"],
+            json!(["project", "trace_id", "span_id"])
+        );
         assert!(body["result"].get("resultType").is_none());
     }
 

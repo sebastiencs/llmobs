@@ -78,6 +78,62 @@ pub(crate) fn tool_list() -> Vec<Tool> {
                 "additionalProperties": false
             }),
         ),
+        tool(
+            super::traces::SEARCH_TRACES,
+            "Search traces",
+            "Traces whose start_time is in [from, to), newest first. `from` and `to` are required and at most 30 days apart. Narrow with `filter` (a SQL boolean expression over the traces view, e.g. status = 'error' AND cost_total > 0.1; get_schema lists the columns), `search` (text in span input, output, name or system instructions), or a saved traces `view` (name or id from list_saved_views): explicit filter, search, include_eval and include_experiments override the view's, and the view's range and sort are ignored. Evaluation and experiment traces are hidden unless include_eval / include_experiments. Long metadata and preview values are cut to 200 characters.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string", "description": PROJECT_ARG},
+                    "from": {"type": "string", "description": "Window start, inclusive: an RFC 3339 timestamp, or epoch milliseconds as a string."},
+                    "to": {"type": "string", "description": "Window end, exclusive: an RFC 3339 timestamp, or epoch milliseconds as a string. At most 30 days after from."},
+                    "view": {"type": "string", "description": "A saved traces view: its id, or its exact name."},
+                    "filter": {"type": "string", "description": "Filter DSL: a SQL boolean expression over the traces view."},
+                    "search": {"type": "string", "description": "Full-text search in span input, output, name and system instructions."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20, "description": "Most traces to return."},
+                    "include_eval": {"type": "boolean", "description": "Include evaluation traces (environment 'llmobs-eval')."},
+                    "include_experiments": {"type": "boolean", "description": "Include experiment traces."},
+                    "max_chars": {"type": "integer", "minimum": 1000, "maximum": 100000, "default": 20000, "description": "Most characters in the result; later traces are left out beyond it."}
+                },
+                "required": ["project", "from", "to"],
+                "additionalProperties": false
+            }),
+        ),
+        tool(
+            super::traces::GET_TRACE,
+            "Get a trace",
+            "One trace: its summary and its spans as a flat pre-order tree (depth, detached, span). Inputs and outputs are left out unless include_payloads, which adds input and output previews cut to 200 characters; get_span returns a span's full input and output.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string", "description": PROJECT_ARG},
+                    "trace_id": {"type": "string", "description": "32 hex digits."},
+                    "around": {"type": "string", "description": "A time near the trace's start (RFC 3339, or epoch milliseconds as a string). Speeds up the lookup."},
+                    "include_payloads": {"type": "boolean", "default": false, "description": "Add input and output previews."},
+                    "max_chars": {"type": "integer", "minimum": 1000, "maximum": 100000, "default": 20000, "description": "Most characters in the result; later spans are left out beyond it."}
+                },
+                "required": ["project", "trace_id"],
+                "additionalProperties": false
+            }),
+        ),
+        tool(
+            super::traces::GET_SPAN,
+            "Get a span",
+            "One span with every field: parsed input and output, system instructions, tool definitions, model, tokens, cost, attributes, events and links. Long metadata and attribute values are cut to 200 characters; when the span is larger than max_chars, its large fields are cut to fit.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string", "description": PROJECT_ARG},
+                    "trace_id": {"type": "string", "description": "32 hex digits."},
+                    "span_id": {"type": "string", "description": "16 hex digits."},
+                    "around": {"type": "string", "description": "A time near the span's start (RFC 3339, or epoch milliseconds as a string). Speeds up the lookup."},
+                    "max_chars": {"type": "integer", "minimum": 1000, "maximum": 100000, "default": 20000, "description": "Most characters in the result; large fields are cut beyond it."}
+                },
+                "required": ["project", "trace_id", "span_id"],
+                "additionalProperties": false
+            }),
+        ),
     ]
 }
 
