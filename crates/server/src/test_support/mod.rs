@@ -82,6 +82,29 @@ pub(crate) fn sign_token(payload: &serde_json::Value) -> String {
     format!("{signed}.{signature}")
 }
 
+/// A `dev-1` licence listing `features`, active from 2025-01-01 to 2099-01-01.
+pub(crate) fn license_key(features: &[&str]) -> String {
+    license_key_until(features, "2099-01-01T00:00:00Z", "2099-01-01T00:00:00Z")
+}
+
+/// A `dev-1` licence listing `features` with the given RFC 3339 `expires_at` and
+/// `grace_ends_at`. The manual clock is `2026-01-01T00:00:00Z`.
+pub(crate) fn license_key_until(
+    features: &[&str],
+    expires_at: &str,
+    grace_ends_at: &str,
+) -> String {
+    sign_token(&serde_json::json!({
+        "kind": "license",
+        "id": "01900000-0000-7000-8000-000000000510",
+        "issued_at": "2025-01-01T00:00:00Z",
+        "customer": "Test Customer",
+        "features": features,
+        "expires_at": expires_at,
+        "grace_ends_at": grace_ends_at,
+    }))
+}
+
 /// One process's data directory and router.
 pub(crate) struct TestApp {
     /// Kept so the directory outlives the open files.
@@ -148,6 +171,15 @@ impl TestApp {
     /// [`Self::with_config`] with the stub mailer.
     pub(crate) async fn with_mailer_config(tweak: impl FnOnce(&mut ServerConfig)) -> Self {
         Self::open(tweak, None, None, true, None, None).await
+    }
+
+    /// An app whose licence lists `features`.
+    pub(crate) async fn with_license(features: &[&str]) -> Self {
+        let key = license_key(features);
+        Self::with_config(move |config| {
+            config.license_key = Some(crate::config::Secret::new(key));
+        })
+        .await
     }
 
     /// [`Self::with_config`] with GitHub's endpoints pointed at `base`.
@@ -221,6 +253,9 @@ impl TestApp {
         let prices = llmobs_otel::PriceTable::new(llmobs_otel::builtin_price_rows())
             .expect("built-in price table");
         let ingest = crate::ingest::Ingest::new(&config.ingest, &config.media, prices);
+        let license = crate::ee::license::LicenseState::from_key(
+            config.license_key.as_ref().map(|key| key.expose().as_str()),
+        );
         let state = AppState::new(AppInner {
             config,
             meta,
@@ -243,6 +278,7 @@ impl TestApp {
             secrets,
             eval_runner,
             connections: crate::eval::connection::ConnectionCache::default(),
+            entitlements: crate::entitlements::EntitlementsState::new(license),
         });
         let router = if let Some(table) = table {
             serve_router(state.clone(), table)
@@ -676,6 +712,7 @@ fn default_config(data_dir: &std::path::Path) -> ServerConfig {
         eval: EvalConfig::default(),
         security: SecurityConfig::default(),
         encryption_key: None,
+        license_key: None,
         auth: AuthSettings::default(),
         smtp_url: None,
         email_from: None,

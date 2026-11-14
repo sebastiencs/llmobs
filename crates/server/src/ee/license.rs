@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Elastic-2.0
 //! Licence keys (D172, D-P-7): claims, the status over time, and the features they grant.
 
-#![cfg_attr(not(test), allow(dead_code))] // P5 wires the licence into AppState.
+#![cfg_attr(not(test), allow(dead_code))] // P6 and P7 use these outside tests.
 
 use serde::Deserialize;
 use uuid::Uuid;

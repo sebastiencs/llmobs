@@ -457,6 +457,7 @@ fn serve_config(data_dir: &Path) -> ServerConfig {
         eval: EvalConfig::default(),
         security: SecurityConfig::default(),
         encryption_key: None,
+        license_key: None,
         auth: AuthSettings::default(),
         smtp_url: None,
         email_from: None,

@@ -3,7 +3,12 @@
 //! M1 has one layer: the instance licence's features, while it is active or in grace.
 //! M2 adds the instance defaults and the org's token.
 
-#![cfg_attr(not(test), allow(dead_code))] // P5 wires the licence into AppState.
+#![cfg_attr(not(test), allow(dead_code))] // P6 and P7 use these outside tests.
+
+use llmobs_core::ids::OrgId;
+
+use crate::ee::license::{LicenseState, LicenseStatus};
+use crate::http::AppState;
 
 pub(crate) use crate::api::entitlements::Feature;
 
@@ -70,9 +75,72 @@ impl Entitlements {
     }
 }
 
+/// Entitlement sources held by the process (D-P-10).
+#[derive(Debug)]
+pub(crate) struct EntitlementsState {
+    license: LicenseState,
+}
+
+impl EntitlementsState {
+    /// From the licence read at startup.
+    pub(crate) fn new(license: LicenseState) -> Self {
+        Self { license }
+    }
+
+    /// The instance licence.
+    pub(crate) fn license(&self) -> &LicenseState {
+        &self.license
+    }
+}
+
+/// What `org` may do now. Synchronous and in memory; call it at every check (D-P-10).
+///
+/// M1: the licence's features while it is active or in grace, for every org. `_org`
+/// is used from M2 on, when the org's own token joins the resolution.
+pub(crate) fn of(state: &AppState, _org: OrgId) -> Entitlements {
+    Entitlements::with_features(
+        state
+            .entitlements
+            .license()
+            .active_features(state.clock.now_ns()),
+    )
+}
+
+/// Logs the licence status once at startup: status, licence id and key id only (D-P-7).
+pub(crate) fn log_license(license: &LicenseState, now_ns: i64) {
+    match (license, license.status(now_ns)) {
+        (LicenseState::Absent, _) => {
+            tracing::info!("no licence key: enterprise features are locked");
+        }
+        (LicenseState::Invalid(reason), _) => tracing::error!(
+            reason = %reason,
+            "the licence key was refused: running without a licence"
+        ),
+        (LicenseState::Valid(license), LicenseStatus::Active) => tracing::info!(
+            license_id = %license.id,
+            kid = %license.kid,
+            "licence active"
+        ),
+        (LicenseState::Valid(license), LicenseStatus::Grace) => tracing::warn!(
+            license_id = %license.id,
+            kid = %license.kid,
+            "licence expired: enterprise features stop at the end of the grace period"
+        ),
+        (LicenseState::Valid(license), _) => tracing::warn!(
+            license_id = %license.id,
+            kid = %license.kid,
+            "licence expired: enterprise features are locked"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Secret;
+    use crate::ee::license::InvalidLicense;
+    use crate::ee::token::TokenError;
+    use crate::test_support::{TestApp, capture_logs, license_key, license_key_until};
 
     #[test]
     fn feature_names_round_trip() {
@@ -106,5 +174,75 @@ mod tests {
             vec![Feature::ProjectRoles, Feature::SsoEnforcement]
         );
         assert!(!Entitlements::with_features(FeatureSet::EMPTY).allows(Feature::ProjectRoles));
+    }
+
+    #[tokio::test]
+    async fn no_license_allows_nothing() {
+        let app = TestApp::new().await;
+        assert!(of(&app.state, OrgId::new_v7()).features().is_empty());
+    }
+
+    #[tokio::test]
+    async fn license_features_apply_to_every_org() {
+        let app = TestApp::with_license(&["project_roles"]).await;
+        for org in [OrgId::new_v7(), OrgId::new_v7()] {
+            let entitlements = of(&app.state, org);
+            assert!(entitlements.allows(Feature::ProjectRoles));
+            assert!(!entitlements.allows(Feature::SsoEnforcement));
+        }
+    }
+
+    #[tokio::test]
+    async fn expired_license_allows_nothing() {
+        let key = license_key_until(
+            &["project_roles"],
+            "2025-12-01T00:00:00Z",
+            "2025-12-31T00:00:00Z",
+        );
+        let app = TestApp::with_config(move |config| {
+            config.license_key = Some(Secret::new(key));
+        })
+        .await;
+        assert!(of(&app.state, OrgId::new_v7()).features().is_empty());
+        assert!(
+            app.state
+                .entitlements
+                .license()
+                .listed_features()
+                .contains(Feature::ProjectRoles)
+        );
+    }
+
+    #[tokio::test]
+    async fn refused_key_runs_without_license() {
+        let app = TestApp::with_config(|config| {
+            config.license_key = Some(Secret::new("garbage".to_owned()));
+        })
+        .await;
+        assert!(matches!(
+            app.state.entitlements.license(),
+            LicenseState::Invalid(InvalidLicense::Token(TokenError::Malformed))
+        ));
+        assert!(of(&app.state, OrgId::new_v7()).features().is_empty());
+    }
+
+    #[tokio::test]
+    async fn log_license_never_prints_the_customer() {
+        let app = TestApp::new().await;
+        let now = app.state.clock.now_ns();
+        let valid = LicenseState::from_key(Some(&license_key(&["project_roles"])));
+        let (_, logs) = capture_logs(async { log_license(&valid, now) }).await;
+        assert!(logs.contains("licence active"), "{logs}");
+        assert!(
+            logs.contains("01900000-0000-7000-8000-000000000510"),
+            "{logs}"
+        );
+        assert!(!logs.contains("Test Customer"), "{logs}");
+        assert!(!logs.contains("llmobs1."), "{logs}");
+
+        let refused = LicenseState::from_key(Some("garbage"));
+        let (_, logs) = capture_logs(async { log_license(&refused, now) }).await;
+        assert!(logs.contains("refused"), "{logs}");
+        assert!(!logs.contains("garbage"), "{logs}");
     }
 }

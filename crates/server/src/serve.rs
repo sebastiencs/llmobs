@@ -279,6 +279,10 @@ pub async fn bind(config: ServerConfig, ui: Option<axum::Router>) -> Result<Runn
             }));
         }
     };
+    let license = crate::ee::license::LicenseState::from_key(
+        config.license_key.as_ref().map(|key| key.expose().as_str()),
+    );
+    crate::entitlements::log_license(&license, Clock::System.now_ns());
     let storage = Arc::new(storage);
     let state = AppState::new(AppInner {
         config,
@@ -302,6 +306,7 @@ pub async fn bind(config: ServerConfig, ui: Option<axum::Router>) -> Result<Runn
         secrets,
         eval_runner,
         connections: crate::eval::connection::ConnectionCache::default(),
+        entitlements: crate::entitlements::EntitlementsState::new(license),
     });
     if let Err(error) = crate::bootstrap::prepare(&state).await {
         release_state(state).await;
@@ -1243,6 +1248,7 @@ mod tests {
             eval: EvalConfig::default(),
             security: SecurityConfig::default(),
             encryption_key: None,
+            license_key: None,
             auth: AuthSettings::default(),
             smtp_url: None,
             email_from: None,

@@ -7,8 +7,6 @@
 //! is never re-serialised. Release builds trust only [`RELEASE_KEYS`]; debug builds also
 //! trust [`DEV_KEYS`] (D-P-6). No config can add a key.
 
-#![cfg_attr(not(test), allow(dead_code))] // P4 and P5 use these outside tests.
-
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, VerifyingKey};

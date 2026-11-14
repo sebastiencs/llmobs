@@ -74,6 +74,8 @@ pub(crate) struct AppInner {
     pub(crate) eval_runner: Arc<llmobs_eval::EvalRunner>,
     /// Decrypted connections, keyed by id and `updated_at`.
     pub(crate) connections: crate::eval::connection::ConnectionCache,
+    /// Licence and (from M2) org entitlements (D179, D-P-10).
+    pub(crate) entitlements: crate::entitlements::EntitlementsState,
 }
 
 impl AppState {
