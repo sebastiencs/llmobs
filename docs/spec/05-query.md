@@ -65,7 +65,7 @@ The filter text is the truth (D129, spec 11 § Filter bar). One editor holds the
 
 ### Saved views
 
-All list-page state lives in URL search params; a **saved view** stores those params under a name (`saved_views`, 04): private or shared with the project, with an optional default per page. The SQL console saves queries the same way (`kind = 'sql'`, with `{name:Type}` parameters). Saved views are also exposed to the MCP server (`list_saved_views`, and `search_traces` accepts `view`).
+All list-page state lives in URL search params; a **saved view** stores those params under a name (`saved_views`, 04): private or shared with the project, with an optional default per page. The SQL console saves queries the same way (`kind = 'sql'`, state `{query, params, range | from+to}`, D-H-7). Visibility and who may share, edit or moderate: D-H-6. Saved views are also exposed to the MCP server (`list_saved_views`, and `search_traces` accepts `view`).
 
 ## Full-text search
 
@@ -97,7 +97,7 @@ Later (post-MVP): Tantivy index per partition built at compaction.
 5. The planned statement is checked again with DataFusion's `SQLOptions` (no DDL, DML or statements).
 6. Session config: per-query runtime from storage (memory cap), `batch_size = 8192`, `target_partitions` from storage. Timeout: `tokio::time::timeout` around planning and execution; dropping the stream cancels it.
 7. Time window (D101): an optional `[from, to)` written into the `spans` and `traces` views (on `start_time`) and the `scores` view (on `created_at`); `sessions` follows from `traces`; the SQLite views are not windowed. Every scan of a view carries it, in joins, subqueries and CTEs too. Without a window the query reads all history.
-8. Results (D98): `{columns: [{name, type}], rows: [{column: value}], truncated}`. Output column names must be unique. Timestamps are RFC 3339 with 9 fractional digits, `Z` for UTC (D64). Binary is lowercase hex, maps are objects, NaN and ±inf are null. `type` is the Arrow type as DataFusion prints it. At most 10,000 rows (`limit` 1–10,000, default 10,000), with `truncated: true` when more exist. CSV, NDJSON and Parquet exports stream up to 10M rows and stop there.
+8. Results (D98): `{columns: [{name, type}], rows: [{column: value}], truncated}`. Output column names must be unique. Timestamps are RFC 3339 with 9 fractional digits, `Z` for UTC (D64). Binary is lowercase hex, maps are objects, NaN and ±inf are null. `type` is the Arrow type as DataFusion prints it. At most 10,000 rows (`limit` 1–10,000, default 10,000), with `truncated: true` when more exist. CSV, NDJSON and Parquet exports stream up to 10M rows and stop there; a failure after the first byte aborts the response body (D-H-8).
 
 ### Parameters
 

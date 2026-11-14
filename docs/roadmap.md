@@ -41,12 +41,12 @@ Plans: [`plans/phase-0/`](plans/phase-0/). Decisions D52–D82; D1–D51 are the
 
 ## Wave 2 — integration (proposed)
 
-G and L are planned so far. Each other track still gets the usual choice of one plan or a design doc first. The split puts one serial track first, G, which connects ingest, storage, the read API and the UI, and settles the wiring every other track extends: the server's app state and route table, `openapi.json`, the `fixtures/api` manifest and the web router. The feature tracks then add routes and pages in parallel.
+G, H and L are planned so far. Each other track still gets the usual choice of one plan or a design doc first. The split puts one serial track first, G, which connects ingest, storage, the read API and the UI, and settles the wiring every other track extends: the server's app state and route table, `openapi.json`, the `fixtures/api` manifest and the web router. The feature tracks then add routes and pages in parallel.
 
 | Track | Scope | Specs | Depends on | Plan | Status | Decisions |
 |---|---|---|---|---|---|---|
 | **G** Spine | OTLP HTTP and gRPC ingest (`sk`/`pk` keys, ingest-only scope, 413 limits, normalizer → storage append, media blobs, usage counters); read handlers for traces, spans, sessions, users, scores, metrics, schema and media; score writes and the public feedback endpoint; SSE; `llmobs serve` serving the embedded UI; the existing pages moved from mocks to the API; one end-to-end test from SDK to UI API | 02, 03, 05, 09, 11, 12 | A1 M1–M3, A2, B1, C, D | [`plans/g-spine/`](plans/g-spine/): design doc, then one plan per milestone (M1–M5 written) | **Done** on branches: M1 #43, M2 #52, M3 `claude/g-m3-impl`, M4 `claude/g-m4-impl`, M5 `claude/g-m5-impl`. | `D-G-n` |
-| **H** Console and agents | SQL console endpoint, saved SQL queries, saved views on the server, MCP server, CLI query commands | 05, 09 | G | — | Not planned | — |
+| **H** Console and agents | SQL console endpoint and exports, saved views and SQL queries on the server, MCP server (streamable HTTP, PAT, 7 read-only tools), CLI query commands, the SQL console page | 05, 08, 09, 11 | G | [`plans/h-console/`](plans/h-console/) (H1–H13) | **Planned.** | D-H-1–D-H-13 |
 | **I** Online evaluation | LLM connections, secret encryption, evaluators, online rules, the `eval_jobs` queue in `meta.db` with sampling and cost caps, judge traces through the internal ingest path, "run evaluator on this trace", the annotation form, and their UI pages | 04, 06, 11 | G, E | — | Not planned | — |
 | **J** Datasets and experiments | Versioned datasets, CSV/JSONL import, add-from-trace, the experiments API, SDK `evaluate()` (spec 10, second half), the comparison UI | 06, 09, 10, 11 | G, F | — | Not planned | — |
 | **K** Alerts | Rule evaluation over A2's metrics; Slack, webhook and email delivery (D's mailer, E's egress client); the alerts UI | 07, 11 | G | — | Not planned | — |

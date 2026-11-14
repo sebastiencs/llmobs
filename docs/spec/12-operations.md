@@ -2,7 +2,7 @@
 
 ## Configuration
 
-Sources, later overriding earlier: built-in defaults → `llmobs.toml` (`--config` or `LLMOBS_CONFIG`) → env vars (`LLMOBS_` + upper-snake path, e.g. `LLMOBS_STORAGE__OBJECT_STORE` for `storage.object_store`; common ones also have short aliases listed below). Parsed with `figment`; unknown keys are an error. `llmobs admin check` validates config, data dir, encryption key, SMTP and object store connectivity.
+Sources, later overriding earlier: built-in defaults → `llmobs.toml` (`--config` or `LLMOBS_CONFIG`) → env vars (`LLMOBS_` + upper-snake path, e.g. `LLMOBS_STORAGE__OBJECT_STORE` for `storage.object_store`; common ones also have short aliases listed below). Parsed with `figment`; unknown keys are an error. The log filter always caps the `rmcp` target at `warn`, since that crate logs MCP arguments and results at `debug` (D-H-11). `LLMOBS_URL`, `LLMOBS_TOKEN` and `LLMOBS_PROJECT` belong to the CLI's remote commands (D-H-12) and are not config keys. `llmobs admin check` validates config, data dir, encryption key, SMTP and object store connectivity.
 
 GitHub and Google also accept the split form (`LLMOBS_AUTH__GITHUB__CLIENT_ID`, `LLMOBS_AUTH__GOOGLE__CLIENT_SECRET`, and the other scalar fields of those tables). `[[auth.oidc]]` is TOML only; `LLMOBS_AUTH__OIDC__*` is ignored.
 
