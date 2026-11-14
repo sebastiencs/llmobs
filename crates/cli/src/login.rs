@@ -493,7 +493,7 @@ mod tests {
         )
         .unwrap();
         let config = llmobs_server::config::ServerConfig::load(Some(&config_path)).unwrap();
-        let running = llmobs_server::serve::bind(config).await.unwrap();
+        let running = llmobs_server::serve::bind(config, None).await.unwrap();
         let server = format!("http://{}", running.local_addr);
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))

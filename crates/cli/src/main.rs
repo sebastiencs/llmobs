@@ -161,7 +161,9 @@ async fn serve(config_path: Option<&Path>) -> anyhow::Result<()> {
         .context("loading config")?;
     init_tracing(&config.log)?;
     let signals = Signals::install().context("installing signal handlers")?;
-    serve::run(config, signals.wait()).await.map_err(annotate)?;
+    serve::run(config, Some(llmobs_ui::router()), signals.wait())
+        .await
+        .map_err(annotate)?;
     Ok(())
 }
 
@@ -210,7 +212,13 @@ fn default_log_format() -> LogFormat {
 
 fn print_version() -> io::Result<()> {
     let mut stdout = io::stdout().lock();
-    writeln!(stdout, "llmobs {}", env!("CARGO_PKG_VERSION"))
+    writeln!(stdout, "llmobs {}", env!("CARGO_PKG_VERSION"))?;
+    let ui = if llmobs_ui::embedded() {
+        "embedded"
+    } else {
+        "not built"
+    };
+    writeln!(stdout, "ui: {ui}")
 }
 
 async fn admin_command(command: AdminCommand) -> anyhow::Result<()> {

@@ -21,6 +21,7 @@ use axum::extract::{DefaultBodyLimit, MatchedPath, Request};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use llmobs_storage::Storage;
+use tower::ServiceExt;
 
 use crate::auth::Limits;
 use crate::auth::last_used::LastUsed;
@@ -108,21 +109,22 @@ impl AppState {
     }
 }
 
-/// Health probes and the shared layers.
-pub(crate) fn router(state: AppState) -> Router {
-    router_with(state, Router::new())
+/// Health probes and the shared layers. `ui` answers every path that is not an API path.
+pub(crate) fn router(state: AppState, ui: Option<Router>) -> Router {
+    let routed = access::build_router(&state, access::routes());
+    finish(state, routed, ui)
 }
 
 /// [`router`] plus routes that tests add before the body limit and the log.
 pub(crate) fn router_with(state: AppState, extra: Router<AppState>) -> Router {
     let routed = access::build_router(&state, access::routes()).merge(extra);
-    finish(state, routed)
+    finish(state, routed, None)
 }
 
 /// The route table, then the shared layers. Tests pass their own table.
 pub(crate) fn serve_router(state: AppState, routes: Vec<access::RouteDef>) -> Router {
     let routed = access::build_router(&state, routes);
-    finish(state, routed)
+    finish(state, routed, None)
 }
 
 /// The OTLP/HTTP listener's router: `/v1/traces` and nothing else (D-G-21).
@@ -130,17 +132,33 @@ pub(crate) fn otlp_router(state: AppState) -> Router {
     serve_router(state, crate::routes::otlp::routes())
 }
 
-fn finish(state: AppState, routed: Router<AppState>) -> Router {
+fn finish(state: AppState, routed: Router<AppState>, ui: Option<Router>) -> Router {
     // serde_json's default recursion limit is 128, which is spec 12's JSON depth limit.
     // Logging is the outer layer. Authentication runs next, then the origin check (D141).
     routed
-        .fallback(not_found)
+        .fallback(move |request: Request| fallback(ui.clone(), request))
         .method_not_allowed_fallback(method_not_allowed)
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(middleware::from_fn_with_state(state.clone(), csrf::csrf))
         .layer(middleware::from_fn_with_state(state.clone(), authenticate))
         .layer(middleware::from_fn(log_request))
         .with_state(state)
+}
+
+/// Unknown API paths are `404` problems; any other path goes to the UI when there is one.
+async fn fallback(ui: Option<Router>, request: Request) -> Response {
+    let path = request.uri().path();
+    let api = matches!(path, "/api" | "/v1" | "/mcp" | "/healthz" | "/readyz")
+        || path.starts_with("/api/")
+        || path.starts_with("/v1/")
+        || path.starts_with("/mcp/");
+    match ui {
+        Some(ui) if !api => match ui.oneshot(request).await {
+            Ok(response) => response,
+            Err(never) => match never {},
+        },
+        _ => not_found().await,
+    }
 }
 
 async fn not_found() -> Response {

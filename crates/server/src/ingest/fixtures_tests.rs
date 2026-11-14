@@ -530,7 +530,7 @@ async fn shutdown_keeps_every_acknowledged_span() {
     let dir = tempfile::tempdir().expect("temp dir");
     let config = serve_config(dir.path());
     let storage_config = config.storage_config();
-    let running = serve::bind(config).await.expect("server binds");
+    let running = serve::bind(config, None).await.expect("server binds");
     let addr = running.local_addr;
     let now = Clock::System.now_ns();
 

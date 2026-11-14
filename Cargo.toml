@@ -38,6 +38,7 @@ llmobs-eval = { path = "crates/eval" }
 llmobs-otel = { path = "crates/otel" }
 llmobs-storage = { path = "crates/storage" }
 llmobs-server = { path = "crates/server" }
+llmobs-ui = { path = "crates/ui" }
 
 # --- pinned families (must stay mutually compatible) ---
 # datafusion 55.2.0 depends on arrow/parquet 59.2 and object_store 0.13.2.

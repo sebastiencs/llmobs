@@ -186,7 +186,7 @@ impl TestApp {
         } else if let Some(routes) = routes {
             router_with(state.clone(), routes)
         } else {
-            router(state.clone())
+            router(state.clone(), None)
         };
         Self {
             _dir: dir,

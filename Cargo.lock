@@ -3174,6 +3174,7 @@ dependencies = [
  "dirs",
  "llmobs-core",
  "llmobs-server",
+ "llmobs-ui",
  "mimalloc",
  "rand 0.10.3",
  "reqwest",
