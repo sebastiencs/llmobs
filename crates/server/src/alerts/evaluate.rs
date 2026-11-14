@@ -267,12 +267,19 @@ mod tests {
     use llmobs_core::ids::{SpanId, TraceId};
     use llmobs_core::span::Span;
 
+    use axum::http::Method;
+    use llmobs_eval::{Secret, sign_payload};
+    use serde_json::{Value, json};
+
     use super::*;
+    use crate::alerts::deliver::DELIVERY_HEADER;
+    use crate::alerts::{AlertTiming, spawn_loops};
     use crate::api::alerts::{AlertMetric, AlertWindow, ChannelKind, Comparator, DeliveryStatus};
     use crate::meta::alerts::{
         NewChannel, NewRule, RulePatch, deliveries_for_events, insert_channel, insert_rule,
         list_events, rule_by_id, update_rule,
     };
+    use crate::test_support::hook_receiver::HookReceiver;
     use crate::test_support::{TestApp, assert_logs_clean, dataset_span};
 
     const MINUTE: Duration = Duration::from_secs(60);
@@ -831,5 +838,155 @@ mod tests {
             row.last_error.as_deref(),
             Some("the filter is no longer valid")
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rule_to_signed_webhook_end_to_end() {
+        const SECRET: &str = "0123456789abcdef";
+        let app =
+            TestApp::with_config(|config| config.security.allow_private_network_egress = true)
+                .await;
+        let seeded = app.seed().await;
+        let project = seeded.project.id;
+        let receiver = HookReceiver::start(vec![200]).await;
+
+        let channels = format!("/api/v1/projects/{project}/channels");
+        let channel = app
+            .request(Method::POST, &channels)
+            .header("cookie", &seeded.cookie)
+            .json(&json!({
+                "name": "Hook",
+                "kind": "webhook",
+                "url": receiver.url("/hook"),
+                "secret": SECRET,
+            }))
+            .send()
+            .await;
+        assert_eq!(channel.status, 201, "{:?}", channel.body);
+        let channel_id = channel.json::<Value>()["id"]
+            .as_str()
+            .expect("channel id")
+            .to_owned();
+
+        let rules = format!("/api/v1/projects/{project}/alert-rules");
+        let created = app
+            .request(Method::POST, &rules)
+            .header("cookie", &seeded.cookie)
+            .json(&json!({
+                "name": "Errors",
+                "condition": {
+                    "metric": "error_rate",
+                    "window": "1m",
+                    "comparator": "gt",
+                    "threshold": 0.4,
+                    "min_count": 1,
+                },
+                "channel_ids": [channel_id],
+            }))
+            .send()
+            .await;
+        assert_eq!(created.status, 201, "{:?}", created.body);
+        let rule_id = created.json::<Value>()["id"]
+            .as_str()
+            .expect("rule id")
+            .to_owned();
+
+        app.commit_spans(
+            &seeded.project,
+            vec![
+                root_span(&app, 1, Duration::from_secs(10), false),
+                root_span(&app, 2, Duration::from_secs(10), true),
+            ],
+        )
+        .await;
+
+        // The manual clock does not move: the rule is due once (never evaluated), and its
+        // delivery is due at the same `now`.
+        let tasks = spawn_loops(&app.state, AlertTiming::TEST);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while receiver.received().is_empty() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "no webhook was sent"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        // Later passes are not due, so nothing else is sent.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let requests = receiver.received();
+        assert_eq!(requests.len(), 1);
+
+        // The delivery pass may write its `sent` status after the receiver recorded the
+        // request, so poll the history for up to 2 s.
+        let events_path = format!("{rules}/{rule_id}/events");
+        let mut page = Value::Null;
+        for _ in 0..40 {
+            page = app
+                .request(Method::GET, &events_path)
+                .header("cookie", &seeded.cookie)
+                .send()
+                .await
+                .json::<Value>();
+            if page["data"][0]["deliveries"][0]["status"] == "sent" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let events = page["data"].as_array().expect("events");
+        assert_eq!(events.len(), 1, "{page}");
+        assert_eq!(events[0]["kind"], "fired");
+        let deliveries = events[0]["deliveries"].as_array().expect("deliveries");
+        assert_eq!(deliveries.len(), 1, "{page}");
+        assert_eq!(deliveries[0]["status"], "sent");
+        assert_eq!(deliveries[0]["attempts"], 1);
+        let delivery_id: Uuid = deliveries[0]["id"]
+            .as_str()
+            .expect("delivery id")
+            .parse()
+            .expect("uuid");
+
+        let rule = app
+            .request(Method::GET, &format!("{rules}/{rule_id}"))
+            .header("cookie", &seeded.cookie)
+            .send()
+            .await
+            .json::<Value>();
+        assert_eq!(rule["state"], "firing");
+
+        let request = &requests[0];
+        assert_eq!(request.path, "/hook");
+        let body: Value = serde_json::from_slice(&request.body).expect("json body");
+        assert_eq!(body["type"], "alert.fired");
+        assert_eq!(body["rule"]["id"], rule_id.as_str());
+        assert_eq!(body["event_id"], events[0]["id"]);
+        assert_eq!(body["count"], 2);
+        assert_eq!(body["value"], 0.5);
+
+        let signature = request
+            .headers
+            .get("x-llmobs-signature")
+            .and_then(|value| value.to_str().ok())
+            .expect("signature header")
+            .to_owned();
+        let timestamp: i64 = signature
+            .split(',')
+            .find_map(|part| part.strip_prefix("t="))
+            .expect("timestamp")
+            .parse()
+            .expect("timestamp is a number");
+        let expected = sign_payload(&Secret::new(SECRET.to_owned()), timestamp, &request.body);
+        assert_eq!(Some(signature.as_str()), expected.as_deref());
+
+        let delivered = request
+            .headers
+            .get(DELIVERY_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .expect("delivery header");
+        assert_eq!(delivered, delivery_id.to_string());
+
+        for task in tasks {
+            task.abort();
+            let _ = task.await;
+        }
     }
 }

@@ -211,8 +211,8 @@ pub(crate) struct DeliverReport {
 /// Returns [`MetaError`] only when the due deliveries cannot be read.
 pub(crate) async fn deliver_once(state: &AppState, now: i64) -> Result<DeliverReport, MetaError> {
     let dues = due_deliveries(state.meta.reader(), now, BATCH).await?;
-    let outcomes = futures::stream::iter(&dues)
-        .map(|due| Box::pin(deliver_one(state, due, now)))
+    let outcomes = futures::stream::iter(dues)
+        .map(|due| async move { deliver_one(state, &due, now).await })
         .buffer_unordered(CONCURRENCY)
         .collect::<Vec<_>>()
         .await;

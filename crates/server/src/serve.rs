@@ -336,6 +336,16 @@ pub async fn bind(config: ServerConfig, ui: Option<axum::Router>) -> Result<Runn
             }
         },
     };
+    let mut tasks = vec![
+        spawn_prune(state.clone()),
+        spawn_purge(state.clone()),
+        spawn_last_used(state.clone()),
+    ];
+    tasks.extend(crate::alerts::spawn_loops(
+        &state,
+        crate::alerts::AlertTiming::DEFAULT,
+    ));
+    tasks.push(spawn_usage(state.clone()));
     tracing::info!(%local_addr, "listening");
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let app = router(state.clone(), ui).into_make_service_with_connect_info::<SocketAddr>();
@@ -391,13 +401,8 @@ pub async fn bind(config: ServerConfig, ui: Option<axum::Router>) -> Result<Runn
         otlp_shutdown_tx,
         grpc_serve,
         grpc_shutdown_tx,
-        state: Some(state.clone()),
-        tasks: vec![
-            spawn_prune(state.clone()),
-            spawn_purge(state.clone()),
-            spawn_last_used(state.clone()),
-            spawn_usage(state),
-        ],
+        state: Some(state),
+        tasks,
     })
 }
 
