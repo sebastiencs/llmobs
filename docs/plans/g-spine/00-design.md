@@ -4,7 +4,7 @@ Track G connects the Wave 1 areas into a running product: OTLP ingest into stora
 
 This document holds the decisions, the architecture, the interfaces later tracks build on, and the milestones. Each milestone gets its own plan of small sub-phases: [`01-m1-otlp-http-ingest.md`](01-m1-otlp-http-ingest.md), [`02-m2-read-api.md`](02-m2-read-api.md) and [`03-m3-writes-grpc-usage.md`](03-m3-writes-grpc-usage.md) and [`04-m4-live-updates.md`](04-m4-live-updates.md) so far.
 
-**Status.** Design, M1, M2 and M3 plans written. M1 implemented (PR #43), M2 implemented (PR #52), M3 implemented (branch `claude/g-m3-impl`). The A2 fixes M2 needs are merged (PR #48). The C review findings that touch G are in § Review findings, with the milestone each fix must precede.
+**Status.** Design, M1, M2 and M3 plans written. M1 implemented (PR #43), M2 implemented (PR #52), M3 implemented (branch `claude/g-m3-impl`), M4 implemented (branch `claude/g-m4-impl`). The A2 fixes M2 needs are merged (PR #48). The C review findings that touch G are in § Review findings, with the milestone each fix must precede.
 
 **Read first:** `AGENTS.md`; `docs/mvp-decisions.md` (D39–D51, D60, D64, D69–D76, D83–D101, D103, D105, D108, D111, D135–D151, D152–D154, D161, D-F-1, D-F-2, D-F-16, D-A1-6, D-A1-7 and the Track G section); specs 01, 02, 03 §1–2 and §9–10, 05, 08, 09, 11, 12; the research note [`docs/research/spine/competitors-ingest-ui.md`](../../research/spine/competitors-ingest-ui.md).
 
