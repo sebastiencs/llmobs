@@ -7,6 +7,7 @@ export const orgSettingsNav = [
 export const projectSettingsNav = [
   { to: "/$org/$project/settings/general", label: "General", adminOnly: false },
   { to: "/$org/$project/settings/api-keys", label: "API keys", adminOnly: true },
+  { to: "/$org/$project/settings/data", label: "Data", adminOnly: true },
   { to: "/$org/$project/settings/members", label: "Members", adminOnly: false },
 ] as const;
 

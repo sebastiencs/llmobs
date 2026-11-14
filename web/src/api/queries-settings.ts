@@ -54,3 +54,15 @@ export function projectMembersKey(org: string, project: string) {
     projectMembersInit(org, project),
   ).queryKey;
 }
+
+export function deletionsInit(org: string, project: string) {
+  return { params: { path: { project: projectRef(org, project) }, query: { limit: 50 } } };
+}
+
+export function deletionsKey(org: string, project: string) {
+  return $api.queryOptions(
+    "get",
+    "/api/v1/projects/{project}/deletions",
+    deletionsInit(org, project),
+  ).queryKey;
+}
