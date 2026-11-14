@@ -8,6 +8,24 @@
     "file": "static/deletion.json"
   },
   {
+    "operation_id": "delete_org",
+    "path_params": {
+      "org": "acme"
+    },
+    "query": {},
+    "status": 202,
+    "content_type": "application/json",
+    "file": "static/deletion-org.json"
+  },
+  {
+    "operation_id": "delete_project",
+    "path_params": {},
+    "query": {},
+    "status": 202,
+    "content_type": "application/json",
+    "file": "static/deletion-project.json"
+  },
+  {
     "operation_id": "get_admin_settings",
     "path_params": {},
     "query": {},
@@ -417,6 +435,16 @@
     "status": 200,
     "content_type": "application/json",
     "file": "static/llm-connections.json"
+  },
+  {
+    "operation_id": "list_org_deletions",
+    "path_params": {
+      "org": "acme"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/org-deletions.json"
   },
   {
     "operation_id": "list_org_invites",

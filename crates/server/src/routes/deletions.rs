@@ -1,12 +1,13 @@
-//! Project deletion requests: create, preview, list and read (spec 09 § Pricing & GDPR,
-//! D-M-2 to D-M-5). The worker in `crate::deletion` does the rest.
+//! Deletion requests: create, preview, list and read (spec 09 § Pricing & GDPR, D-M-2 to
+//! D-M-5), and project and org drops (D-M-4, D-M-8). The worker in `crate::deletion` does the
+//! rest.
 
 use std::collections::BTreeSet;
 use std::str::FromStr;
 
 use axum::extract::{Extension, State};
 use axum::http::{Method, StatusCode};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use llmobs_core::ids::{ProjectId, TraceId};
 use llmobs_storage::{FilterDeletionRequest, QueryContext, TimeWindow, filter_trace_ids};
 use serde::Deserialize;
@@ -15,15 +16,19 @@ use uuid::Uuid;
 use crate::api::common::{FieldError, Page, PageParams, ProblemCode};
 use crate::api::deletions::{
     CreateDeletion, Deletion, DeletionActor, DeletionActorKind, DeletionFailure, DeletionFilter,
-    DeletionKind, DeletionPreview, DeletionPreviewRequest, DeletionStatus,
+    DeletionKind, DeletionPreview, DeletionPreviewRequest, DeletionStatus, DropParams,
 };
-use crate::auth::principal::Principal;
-use crate::auth::roles::ProjectPerm;
+use crate::auth::OrgRole;
+use crate::auth::principal::{self, Principal};
+use crate::auth::roles::{OrgPerm, ProjectPerm};
 use crate::http::AppState;
-use crate::http::access::{Access, ProjectAccess, RouteDef};
+use crate::http::access::{Access, OrgAccess, ProjectAccess, RouteDef};
 use crate::http::error::{self, ApiError};
 use crate::meta::MetaError;
 use crate::meta::deletions as store;
+use crate::meta::members::org_role;
+use crate::meta::orgs::mark_org_deleting;
+use crate::meta::projects::{mark_project_deleting, project_ids_of_org};
 use crate::routes::read::{self, READ_TIMEOUT};
 use crate::routes::time_cursor::{decode_time_cursor, encode_time_cursor};
 
@@ -42,6 +47,36 @@ pub(crate) fn routes() -> Vec<RouteDef> {
         session_only: false,
     };
     vec![
+        RouteDef {
+            method: Method::DELETE,
+            path: "/api/v1/projects/{project}",
+            access: Access::Project {
+                perm: ProjectPerm::Drop,
+                session_only: false,
+            },
+            documented: true,
+            handler: delete(drop_project),
+        },
+        RouteDef {
+            method: Method::DELETE,
+            path: "/api/v1/orgs/{org}",
+            access: Access::Org {
+                perm: OrgPerm::Delete,
+                session_only: false,
+            },
+            documented: true,
+            handler: delete(drop_org),
+        },
+        RouteDef {
+            method: Method::GET,
+            path: "/api/v1/orgs/{org}/deletions",
+            access: Access::Org {
+                perm: OrgPerm::ViewDeletions,
+                session_only: false,
+            },
+            documented: true,
+            handler: get(list_org_deletions),
+        },
         RouteDef {
             method: Method::GET,
             path: "/api/v1/projects/{project}/deletions",
@@ -83,16 +118,35 @@ async fn list_deletions(
     Extension(access): Extension<ProjectAccess>,
     error::Query(params): error::Query<PageParams>,
 ) -> Result<error::Json<Page<Deletion>>, ApiError> {
-    let after = params
-        .cursor
-        .as_deref()
-        .map(decode_time_cursor)
-        .transpose()?;
+    let after = after_of(&params)?;
     let limit = params.limit.get();
-    let mut rows =
+    let rows =
         store::page_of_project(state.meta.reader(), access.project.id, after, limit + 1).await?;
-    let more = rows.len() > usize::try_from(limit).unwrap_or(usize::MAX);
-    rows.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+    Ok(error::Json(page(rows, limit)?))
+}
+
+/// `GET /api/v1/orgs/{org}/deletions`: every deletion of the org, dropped projects' included.
+async fn list_org_deletions(
+    State(state): State<AppState>,
+    Extension(access): Extension<OrgAccess>,
+    error::Query(params): error::Query<PageParams>,
+) -> Result<error::Json<Page<Deletion>>, ApiError> {
+    let after = after_of(&params)?;
+    let limit = params.limit.get();
+    let rows = store::page_of_org(state.meta.reader(), access.org.id, after, limit + 1).await?;
+    Ok(error::Json(page(rows, limit)?))
+}
+
+/// The keyset position of the requested page, from its cursor.
+fn after_of(params: &PageParams) -> Result<Option<(i64, Uuid)>, ApiError> {
+    params.cursor.as_deref().map(decode_time_cursor).transpose()
+}
+
+/// A page of at most `limit` rows. `rows` holds one extra row when there is a next page.
+fn page(mut rows: Vec<store::DeletionRow>, limit: u32) -> Result<Page<Deletion>, ApiError> {
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    let more = rows.len() > limit;
+    rows.truncate(limit);
     let next_cursor = if more {
         rows.last()
             .map(|row| encode_time_cursor(row.created_at, &row.id.to_string()))
@@ -100,10 +154,136 @@ async fn list_deletions(
     } else {
         None
     };
-    Ok(error::Json(Page {
+    Ok(Page {
         data: rows.iter().map(deletion_json).collect(),
         next_cursor,
-    }))
+    })
+}
+
+/// `DELETE /api/v1/projects/{project}?confirm=<slug>`. Org admins only. The project is
+/// `deleting` from this request on, so every route answers 404 for it; the worker drops it.
+async fn drop_project(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Extension(access): Extension<ProjectAccess>,
+    error::Query(params): error::Query<DropParams>,
+) -> Result<(StatusCode, error::Json<Deletion>), ApiError> {
+    let user_id = principal::session_user(&principal)?.id;
+    let org = access.project.org_id;
+    let role = org_role(state.meta.reader(), org, user_id).await?;
+    if !matches!(role, Some(OrgRole::Owner | OrgRole::Admin)) {
+        return Err(ApiError::Forbidden {
+            code: ProblemCode::Forbidden,
+        });
+    }
+    if params.confirm != access.project.slug {
+        return Err(field_error("confirm", "type the project slug to confirm"));
+    }
+    let id = Uuid::now_v7();
+    let now = state.clock.now_ns();
+    let project = access.project.id;
+    let new = store::NewDeletion {
+        id,
+        org_id: org,
+        project_id: Some(project),
+        kind: store::DeletionKind::Project,
+        user_id: None,
+        request: store::RequestDetails {
+            name: Some(access.project.name.clone()),
+            slug: Some(access.project.slug.clone()),
+            ..Default::default()
+        },
+        actor_kind: store::ActorKind::User,
+        actor_id: user_id,
+        state: store::DeletionState::Pending,
+        created_at: now,
+    };
+    let row = state
+        .meta
+        .write(move |conn| {
+            Box::pin(async move {
+                if !mark_project_deleting(conn, project, now).await? {
+                    return Err(MetaError::Conflict("the project is already being deleted"));
+                }
+                store::insert_deletion(conn, &new).await
+            })
+        })
+        .await?;
+    state.deletions.wake.notify_one();
+    tracing::info!(
+        target: "audit",
+        deletion_id = %id,
+        kind = store::DeletionKind::Project.as_str(),
+        org_id = %org,
+        project_id = %project,
+        actor_kind = store::ActorKind::User.as_str(),
+        actor_id = %user_id,
+        "deletion requested"
+    );
+    Ok((StatusCode::ACCEPTED, error::Json(deletion_json(&row))))
+}
+
+/// `DELETE /api/v1/orgs/{org}?confirm=<slug>`. Owners only. The org and its projects are
+/// `deleting` from this request on; the worker drops them.
+async fn drop_org(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Extension(access): Extension<OrgAccess>,
+    error::Query(params): error::Query<DropParams>,
+) -> Result<(StatusCode, error::Json<Deletion>), ApiError> {
+    let user_id = principal::session_user(&principal)?.id;
+    if params.confirm != access.org.slug {
+        return Err(field_error(
+            "confirm",
+            "type the organization slug to confirm",
+        ));
+    }
+    let id = Uuid::now_v7();
+    let now = state.clock.now_ns();
+    let org = access.org.id;
+    let new = store::NewDeletion {
+        id,
+        org_id: org,
+        project_id: None,
+        kind: store::DeletionKind::Org,
+        user_id: None,
+        request: store::RequestDetails {
+            name: Some(access.org.name.clone()),
+            slug: Some(access.org.slug.clone()),
+            ..Default::default()
+        },
+        actor_kind: store::ActorKind::User,
+        actor_id: user_id,
+        state: store::DeletionState::Pending,
+        created_at: now,
+    };
+    let row = state
+        .meta
+        .write(move |conn| {
+            Box::pin(async move {
+                if !mark_org_deleting(conn, org, now).await? {
+                    return Err(MetaError::Conflict(
+                        "the organization is already being deleted",
+                    ));
+                }
+                let projects = project_ids_of_org(&mut *conn, org).await?;
+                let row = store::insert_deletion(conn, &new).await?;
+                store::insert_projects(conn, id, &projects).await?;
+                Ok(row)
+            })
+        })
+        .await?;
+    state.deletions.wake.notify_one();
+    tracing::info!(
+        target: "audit",
+        deletion_id = %id,
+        kind = store::DeletionKind::Org.as_str(),
+        org_id = %org,
+        actor_kind = store::ActorKind::User.as_str(),
+        actor_id = %user_id,
+        "deletion requested"
+    );
+    Ok((StatusCode::ACCEPTED, error::Json(deletion_json(&row))))
 }
 
 async fn create_deletion(
@@ -427,6 +607,7 @@ mod tests {
 
     use axum::http::header;
     use llmobs_core::ids::{SpanId, TraceId};
+    use llmobs_storage::error::DeletionError;
     use serde_json::{Value, json};
 
     use super::*;
@@ -434,8 +615,9 @@ mod tests {
     use crate::auth::secret::{self, KeyKind};
     use crate::deletion::run_once;
     use crate::meta::api_keys::{self, NewApiKey};
-    use crate::meta::members::set_project_override;
-    use crate::meta::projects::ProjectRow;
+    use crate::meta::members::{add_org_member, set_project_override};
+    use crate::meta::orgs::insert_org;
+    use crate::meta::projects::{ProjectRow, insert_project, project_by_id};
     use crate::test_support::{TestApp, TestRequest, TestResponse, capture_logs, dataset_span};
 
     const A: &str = "a1000000000000000000000000000001";
@@ -459,6 +641,22 @@ mod tests {
         }
     }
 
+    /// One request to any full path, with an optional JSON body.
+    async fn send(
+        app: &TestApp,
+        method: Method,
+        path: &str,
+        auth: &Auth,
+        body: Option<Value>,
+    ) -> TestResponse {
+        let request = app.request(method, path);
+        let request = match body {
+            Some(body) => request.json(&body),
+            None => request,
+        };
+        with_auth(request, auth).send().await
+    }
+
     async fn post(
         app: &TestApp,
         project: ProjectId,
@@ -466,15 +664,40 @@ mod tests {
         body: Value,
         auth: &Auth,
     ) -> TestResponse {
-        let request = app
-            .request(Method::POST, &format!("/api/v1/projects/{project}{suffix}"))
-            .json(&body);
-        with_auth(request, auth).send().await
+        send(
+            app,
+            Method::POST,
+            &format!("/api/v1/projects/{project}{suffix}"),
+            auth,
+            Some(body),
+        )
+        .await
     }
 
     async fn get(app: &TestApp, project: ProjectId, suffix: &str, auth: &Auth) -> TestResponse {
-        let request = app.request(Method::GET, &format!("/api/v1/projects/{project}{suffix}"));
-        with_auth(request, auth).send().await
+        send(
+            app,
+            Method::GET,
+            &format!("/api/v1/projects/{project}{suffix}"),
+            auth,
+            None,
+        )
+        .await
+    }
+
+    /// The drop request of `project`: by id, confirmed with its slug.
+    fn drop_path(project: &ProjectRow) -> String {
+        format!("/api/v1/projects/{}?confirm={}", project.id, project.slug)
+    }
+
+    /// An OTLP export with `key`, as the ingest path sees it.
+    async fn otlp(app: &TestApp, key: &str) -> TestResponse {
+        app.request(Method::POST, "/v1/traces")
+            .header("authorization", &format!("Bearer {key}"))
+            .header("content-type", "application/json")
+            .body("{}")
+            .send()
+            .await
     }
 
     /// Inserts a `sk` key of `project` with `scopes`, created by `created_by`. Returns the key id
@@ -1031,5 +1254,473 @@ mod tests {
         let token = Auth::Bearer(app.personal_token(seeded.user_id, false).await);
         let response = get(&app, seeded.project.id, "/deletions", &token).await;
         assert_eq!(response.status, StatusCode::OK);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn project_drop_hides_and_drops() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let owner = Auth::Cookie(seeded.cookie.clone());
+        let (doomed, used_key) = app.add_project(&seeded, "doomed", None).await;
+        let (_, unused_key) =
+            key_with(&app, doomed.id, seeded.user_id, vec![KeyScope::Ingest]).await;
+        commit(&app, &doomed, A, 1, "x").await;
+        // The export caches the used key, so the drop is seen at the project check.
+        assert_eq!(otlp(&app, &used_key).await.status, StatusCode::OK);
+
+        let response = send(&app, Method::DELETE, &drop_path(&doomed), &owner, None).await;
+        assert_eq!(response.status, StatusCode::ACCEPTED);
+        let created: Value = response.json();
+        assert_eq!(created["kind"], "project");
+        assert_eq!(created["status"], "pending");
+        assert_eq!(created["slug"], "doomed");
+        let id = id_of(&created);
+
+        let project_path = format!("/api/v1/projects/{}", doomed.id);
+        let gone = send(&app, Method::GET, &project_path, &owner, None).await;
+        assert_eq!(gone.status, StatusCode::NOT_FOUND);
+        let projects: Value = send(
+            &app,
+            Method::GET,
+            "/api/v1/orgs/acme/projects",
+            &owner,
+            None,
+        )
+        .await
+        .json();
+        let listed = projects["data"].as_array().unwrap();
+        assert!(listed.iter().all(|row| row["id"] != doomed.id.to_string()));
+        assert_eq!(otlp(&app, &used_key).await.status, StatusCode::NOT_FOUND);
+        assert_eq!(
+            otlp(&app, &unused_key).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+
+        run_once(&app.state).await.unwrap();
+        let history: Value = send(
+            &app,
+            Method::GET,
+            "/api/v1/orgs/acme/deletions",
+            &owner,
+            None,
+        )
+        .await
+        .json();
+        let row = history["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id)
+            .expect("the drop is listed");
+        assert_eq!(row["status"], "applied");
+        assert!(
+            project_by_id(app.state.meta.reader(), doomed.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn project_drop_confirmation() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let owner = Auth::Cookie(seeded.cookie.clone());
+        let (doomed, _) = app.add_project(&seeded, "doomed", None).await;
+        let path = format!("/api/v1/projects/{}", doomed.id);
+
+        let wrong = send(
+            &app,
+            Method::DELETE,
+            &format!("{path}?confirm=wrong"),
+            &owner,
+            None,
+        )
+        .await;
+        assert_eq!(wrong.status, StatusCode::BAD_REQUEST);
+        let problem: Value = wrong.json();
+        assert_eq!(problem["errors"][0]["field"], "confirm");
+
+        let missing = send(&app, Method::DELETE, &path, &owner, None).await;
+        assert_eq!(missing.status, StatusCode::BAD_REQUEST);
+
+        let still = send(&app, Method::GET, &path, &owner, None).await;
+        assert_eq!(still.status, StatusCode::OK);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn project_drop_needs_org_admin() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let owner = Auth::Cookie(seeded.cookie.clone());
+        let member = app
+            .add_member(&seeded, "bob@example.com", OrgRole::Member)
+            .await;
+        let admin = app
+            .add_member(&seeded, "carol@example.com", OrgRole::Admin)
+            .await;
+        let member_auth = Auth::Cookie(member.cookie.clone());
+        let admin_auth = Auth::Cookie(admin.cookie.clone());
+
+        // A member with a project override of admin is still not an org admin.
+        let (overridden, _) = app.add_project(&seeded, "p-override", None).await;
+        let (by_admin, _) = app.add_project(&seeded, "p-admin", None).await;
+        let (by_key, _) = app.add_project(&seeded, "p-key", None).await;
+        let (by_read_pat, _) = app.add_project(&seeded, "p-read", None).await;
+        let (by_write_pat, _) = app.add_project(&seeded, "p-write", None).await;
+        let member_id = member.id;
+        let override_project = overridden.id;
+        app.state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    set_project_override(conn, override_project, member_id, ProjectOverride::Admin)
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+
+        let member_try = send(
+            &app,
+            Method::DELETE,
+            &drop_path(&overridden),
+            &member_auth,
+            None,
+        )
+        .await;
+        assert_eq!(member_try.status, StatusCode::FORBIDDEN);
+        let admin_try = send(
+            &app,
+            Method::DELETE,
+            &drop_path(&by_admin),
+            &admin_auth,
+            None,
+        )
+        .await;
+        assert_eq!(admin_try.status, StatusCode::ACCEPTED);
+        let (_, all_scopes) = key_with(
+            &app,
+            by_key.id,
+            seeded.user_id,
+            vec![
+                KeyScope::Ingest,
+                KeyScope::Read,
+                KeyScope::Write,
+                KeyScope::Feedback,
+            ],
+        )
+        .await;
+        let key_try = send(
+            &app,
+            Method::DELETE,
+            &drop_path(&by_key),
+            &Auth::Bearer(all_scopes),
+            None,
+        )
+        .await;
+        assert_eq!(key_try.status, StatusCode::FORBIDDEN);
+        let read_only = Auth::Bearer(app.personal_token(seeded.user_id, false).await);
+        let read_try = send(
+            &app,
+            Method::DELETE,
+            &drop_path(&by_read_pat),
+            &read_only,
+            None,
+        )
+        .await;
+        assert_eq!(read_try.status, StatusCode::FORBIDDEN);
+        let read_write = Auth::Bearer(app.personal_token(seeded.user_id, true).await);
+        let write_try = send(
+            &app,
+            Method::DELETE,
+            &drop_path(&by_write_pat),
+            &read_write,
+            None,
+        )
+        .await;
+        assert_eq!(write_try.status, StatusCode::ACCEPTED);
+        // The refused project is still active, so the owner may drop it.
+        let owner_try = send(&app, Method::DELETE, &drop_path(&overridden), &owner, None).await;
+        assert_eq!(owner_try.status, StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn second_drop_is_404() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let owner = Auth::Cookie(seeded.cookie.clone());
+        let (doomed, _) = app.add_project(&seeded, "doomed", None).await;
+        let first = send(&app, Method::DELETE, &drop_path(&doomed), &owner, None).await;
+        assert_eq!(first.status, StatusCode::ACCEPTED);
+        let second = send(&app, Method::DELETE, &drop_path(&doomed), &owner, None).await;
+        assert_eq!(second.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn org_drop_hides_the_org_and_its_projects() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let owner = Auth::Cookie(seeded.cookie.clone());
+        let user_id = seeded.user_id;
+        let now = app.state.clock.now_ns();
+        let (b1, b2) = app
+            .state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    let beta = insert_org(conn, "Beta", "beta", now).await?;
+                    add_org_member(conn, beta.id, user_id, OrgRole::Owner, now).await?;
+                    let b1 = insert_project(conn, beta.id, "b1", "b1", None, now).await?;
+                    let b2 = insert_project(conn, beta.id, "b2", "b2", None, now).await?;
+                    Ok((b1, b2))
+                })
+            })
+            .await
+            .unwrap();
+        commit(&app, &b1, A, 1, "x").await;
+
+        let response = send(
+            &app,
+            Method::DELETE,
+            "/api/v1/orgs/beta?confirm=beta",
+            &owner,
+            None,
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::ACCEPTED);
+        let created: Value = response.json();
+        assert_eq!(created["kind"], "org");
+        let id = Uuid::parse_str(&id_of(&created)).unwrap();
+
+        let gone = send(&app, Method::GET, "/api/v1/orgs/beta", &owner, None).await;
+        assert_eq!(gone.status, StatusCode::NOT_FOUND);
+        let orgs: Value = send(&app, Method::GET, "/api/v1/orgs", &owner, None)
+            .await
+            .json();
+        let slugs: Vec<&str> = orgs["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|org| org["slug"].as_str().unwrap())
+            .collect();
+        assert_eq!(slugs, vec!["acme"]);
+        let me: Value = send(&app, Method::GET, "/api/auth/me", &owner, None)
+            .await
+            .json();
+        let me_slugs: Vec<&str> = me["orgs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|org| org["slug"].as_str().unwrap())
+            .collect();
+        assert_eq!(me_slugs, vec!["acme"]);
+        for project in [&b1, &b2] {
+            let path = format!("/api/v1/projects/{}", project.id);
+            let status = send(&app, Method::GET, &path, &owner, None).await.status;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+        }
+
+        run_once(&app.state).await.unwrap();
+        let row = store::deletion_by_id(app.state.meta.reader(), id)
+            .await
+            .unwrap()
+            .expect("the drop record is kept");
+        assert_eq!(row.state, store::DeletionState::Applied);
+        let projects = store::scope_projects(app.state.meta.reader(), id)
+            .await
+            .unwrap();
+        assert_eq!(
+            projects.into_iter().collect::<BTreeSet<_>>(),
+            BTreeSet::from([b1.id, b2.id])
+        );
+
+        // A dropped project's own drop, and then its org's, both apply.
+        let g1 = app
+            .state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    let gamma = insert_org(conn, "Gamma", "gamma", now).await?;
+                    add_org_member(conn, gamma.id, user_id, OrgRole::Owner, now).await?;
+                    insert_project(conn, gamma.id, "g1", "g1", None, now).await
+                })
+            })
+            .await
+            .unwrap();
+        let project_drop = send(&app, Method::DELETE, &drop_path(&g1), &owner, None).await;
+        assert_eq!(project_drop.status, StatusCode::ACCEPTED);
+        let project_drop_id = Uuid::parse_str(&id_of(&project_drop.json())).unwrap();
+        let org_drop = send(
+            &app,
+            Method::DELETE,
+            "/api/v1/orgs/gamma?confirm=gamma",
+            &owner,
+            None,
+        )
+        .await;
+        assert_eq!(org_drop.status, StatusCode::ACCEPTED);
+        let org_drop_id = Uuid::parse_str(&id_of(&org_drop.json())).unwrap();
+        run_once(&app.state).await.unwrap();
+        for deletion in [project_drop_id, org_drop_id] {
+            let row = store::deletion_by_id(app.state.meta.reader(), deletion)
+                .await
+                .unwrap()
+                .expect("the record is kept");
+            assert_eq!(row.state, store::DeletionState::Applied);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn org_drop_is_owner_only() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let owner = Auth::Cookie(seeded.cookie.clone());
+        let admin = app
+            .add_member(&seeded, "dan@example.com", OrgRole::Admin)
+            .await;
+        let admin_auth = Auth::Cookie(admin.cookie.clone());
+        let (_, key) = key_with(
+            &app,
+            seeded.project.id,
+            seeded.user_id,
+            vec![KeyScope::Write],
+        )
+        .await;
+
+        let path = "/api/v1/orgs/acme?confirm=acme";
+        let by_admin = send(&app, Method::DELETE, path, &admin_auth, None).await;
+        assert_eq!(by_admin.status, StatusCode::FORBIDDEN);
+        let by_key = send(&app, Method::DELETE, path, &Auth::Bearer(key), None).await;
+        assert_eq!(by_key.status, StatusCode::NOT_FOUND);
+        let typo = send(
+            &app,
+            Method::DELETE,
+            "/api/v1/orgs/acme?confirm=acme-typo",
+            &owner,
+            None,
+        )
+        .await;
+        assert_eq!(typo.status, StatusCode::BAD_REQUEST);
+        let problem: Value = typo.json();
+        assert_eq!(problem["errors"][0]["field"], "confirm");
+        let still = send(&app, Method::GET, "/api/v1/orgs/acme", &owner, None).await;
+        assert_eq!(still.status, StatusCode::OK);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn open_data_deletions_of_a_dropped_project_are_superseded() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let owner = Auth::Cookie(seeded.cookie.clone());
+        let (sup, _) = app.add_project(&seeded, "sup", None).await;
+        let created = post(&app, sup.id, "/deletions", user_body("sup-user"), &owner).await;
+        assert_eq!(created.status, StatusCode::ACCEPTED);
+        let user_row = Uuid::parse_str(&id_of(&created.json())).unwrap();
+
+        let dropped = send(&app, Method::DELETE, &drop_path(&sup), &owner, None).await;
+        assert_eq!(dropped.status, StatusCode::ACCEPTED);
+        run_once(&app.state).await.unwrap();
+
+        let row = store::deletion_by_id(app.state.meta.reader(), user_row)
+            .await
+            .unwrap()
+            .expect("the user row is kept");
+        assert_eq!(row.state, store::DeletionState::Applied);
+        assert!(row.trace_count.is_none());
+        assert!(matches!(
+            app.state.storage.deletion_status(user_row).await,
+            Err(DeletionError::NotFound)
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn org_history_pages() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let owner = Auth::Cookie(seeded.cookie.clone());
+        let (first_project, _) = app.add_project(&seeded, "hist-1", None).await;
+        let (second_project, _) = app.add_project(&seeded, "hist-2", None).await;
+        let first = send(
+            &app,
+            Method::DELETE,
+            &drop_path(&first_project),
+            &owner,
+            None,
+        )
+        .await;
+        let first_id = id_of(&first.json());
+        app.state.clock.advance(Duration::from_secs(1));
+        let second = send(
+            &app,
+            Method::DELETE,
+            &drop_path(&second_project),
+            &owner,
+            None,
+        )
+        .await;
+        let second_id = id_of(&second.json());
+
+        let page: Value = send(
+            &app,
+            Method::GET,
+            "/api/v1/orgs/acme/deletions?limit=1",
+            &owner,
+            None,
+        )
+        .await
+        .json();
+        assert_eq!(page["data"][0]["id"], second_id);
+        let cursor = page["next_cursor"].as_str().unwrap().to_owned();
+        let next: Value = send(
+            &app,
+            Method::GET,
+            &format!("/api/v1/orgs/acme/deletions?limit=1&cursor={cursor}"),
+            &owner,
+            None,
+        )
+        .await
+        .json();
+        assert_eq!(next["data"].as_array().unwrap().len(), 1);
+        assert_eq!(next["data"][0]["id"], first_id);
+        assert!(next["next_cursor"].is_null());
+
+        let member = app
+            .add_member(&seeded, "eve@example.com", OrgRole::Member)
+            .await;
+        let denied = send(
+            &app,
+            Method::GET,
+            "/api/v1/orgs/acme/deletions",
+            &Auth::Cookie(member.cookie.clone()),
+            None,
+        )
+        .await;
+        assert_eq!(denied.status, StatusCode::FORBIDDEN);
+        let admin = app
+            .add_member(&seeded, "fay@example.com", OrgRole::Admin)
+            .await;
+        let allowed = send(
+            &app,
+            Method::GET,
+            "/api/v1/orgs/acme/deletions",
+            &Auth::Cookie(admin.cookie.clone()),
+            None,
+        )
+        .await;
+        assert_eq!(allowed.status, StatusCode::OK);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn drop_audit_carries_no_slug() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let owner = Auth::Cookie(seeded.cookie.clone());
+        let (secret, _) = app.add_project(&seeded, "secret-slug-1", None).await;
+        let path = format!("/api/v1/projects/{}?confirm=secret-slug-1", secret.id);
+        let (response, logs) = capture_logs(send(&app, Method::DELETE, &path, &owner, None)).await;
+        assert_eq!(response.status, StatusCode::ACCEPTED);
+        assert!(logs.contains("deletion requested"));
+        assert!(!logs.contains("secret-slug-1"));
     }
 }

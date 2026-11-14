@@ -384,6 +384,9 @@ fn static_files_match_their_types() {
     roundtrip::<Page<Deletion>>("static/deletions.json");
     roundtrip::<Deletion>("static/deletion.json");
     roundtrip::<DeletionPreview>("static/deletion-preview.json");
+    roundtrip::<Page<Deletion>>("static/org-deletions.json");
+    roundtrip::<Deletion>("static/deletion-project.json");
+    roundtrip::<Deletion>("static/deletion-org.json");
 }
 
 #[test]
@@ -470,7 +473,10 @@ fn generated_files_roundtrip() {
             "get_metrics" => roundtrip::<MetricsResponse>(&example.file),
             "run_sql" => roundtrip::<SqlQueryResult>(&example.file),
             "list_deletions" => roundtrip::<Page<Deletion>>(&example.file),
-            "get_deletion" | "create_deletion" => roundtrip::<Deletion>(&example.file),
+            "list_org_deletions" => roundtrip::<Page<Deletion>>(&example.file),
+            "get_deletion" | "create_deletion" | "delete_project" | "delete_org" => {
+                roundtrip::<Deletion>(&example.file);
+            }
             "preview_deletion" => roundtrip::<DeletionPreview>(&example.file),
             "get_auth_config"
             | "get_me"

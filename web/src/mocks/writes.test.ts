@@ -142,6 +142,18 @@ it("accepts a deletion", async () => {
   expect(response.json?.status).toBe("pending");
 });
 
+it("accepts a project drop", async () => {
+  const response = await send("DELETE", `${PROJECT}?confirm=support-bot`);
+  expect(response.status).toBe(202);
+  expect(response.json?.kind).toBe("project");
+});
+
+it("accepts an org drop", async () => {
+  const response = await send("DELETE", "/api/v1/orgs/acme?confirm=acme");
+  expect(response.status).toBe(202);
+  expect(response.json?.kind).toBe("org");
+});
+
 it("answers 204 for deletes", async () => {
   expect((await send("DELETE", `/api/v1/me/tokens/${TOKEN_ID}`)).status).toBe(204);
   expect((await send("DELETE", "/api/v1/me/tokens/current")).status).toBe(204);

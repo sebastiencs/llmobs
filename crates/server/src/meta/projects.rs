@@ -143,6 +143,27 @@ pub(crate) async fn delete_project(
     Ok(())
 }
 
+/// `active` → `deleting`. Returns whether the row changed.
+///
+/// # Errors
+///
+/// Returns [`MetaError::Db`] when the update fails.
+pub(crate) async fn mark_project_deleting(
+    conn: &mut SqliteConnection,
+    id: ProjectId,
+    now: i64,
+) -> Result<bool, MetaError> {
+    let changed = sqlx::query(
+        "UPDATE projects SET state = 'deleting', updated_at = ? WHERE id = ? AND state = 'active'",
+    )
+    .bind(now)
+    .bind(id.to_string())
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    Ok(changed == 1)
+}
+
 /// Every project id of the org, whatever its state, ordered by id.
 ///
 /// # Errors
@@ -451,6 +472,29 @@ mod tests {
             ),
             "{error}"
         );
+    }
+
+    #[tokio::test]
+    async fn mark_project_deleting_changes_an_active_row_once() {
+        let (_dir, db) = test_db().await;
+        let (project, changed) = db
+            .write(|conn| {
+                Box::pin(async move {
+                    let org = insert_org(conn, "Acme", "acme", 1).await?;
+                    let project = insert_project(conn, org.id, "p", "p", None, 1).await?;
+                    let first = mark_project_deleting(conn, project.id, 2).await?;
+                    let second = mark_project_deleting(conn, project.id, 3).await?;
+                    Ok((project, (first, second)))
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(changed, (true, false));
+        let row = project_by_id(db.reader(), project.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.state, "deleting");
     }
 
     #[tokio::test]

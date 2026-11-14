@@ -3,7 +3,7 @@
 use llmobs_core::ids::{OrgId, ProjectId};
 use llmobs_core::time_serde;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::common::TimeParam;
@@ -190,6 +190,14 @@ pub struct DeletionPreviewRequest {
     pub include_eval: bool,
     #[serde(default)]
     pub include_experiments: bool,
+}
+
+/// Query of `DELETE /api/v1/projects/{project}` and `DELETE /api/v1/orgs/{org}`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams)]
+#[serde(deny_unknown_fields)]
+pub struct DropParams {
+    /// The slug of the project or organization being deleted, typed to confirm.
+    pub confirm: String,
 }
 
 /// How many traces a filter deletion would cover.

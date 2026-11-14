@@ -181,6 +181,27 @@ pub(crate) async fn delete_org(conn: &mut SqliteConnection, id: OrgId) -> Result
     Ok(())
 }
 
+/// `active` → `deleting`. Returns whether the row changed.
+///
+/// # Errors
+///
+/// Returns [`MetaError::Db`] when the update fails.
+pub(crate) async fn mark_org_deleting(
+    conn: &mut SqliteConnection,
+    id: OrgId,
+    now: i64,
+) -> Result<bool, MetaError> {
+    let changed = sqlx::query(
+        "UPDATE orgs SET state = 'deleting', updated_at = ? WHERE id = ? AND state = 'active'",
+    )
+    .bind(now)
+    .bind(id.to_string())
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    Ok(changed == 1)
+}
+
 /// Tries [`slug_from_name`], then `-2` … `-99`, in this transaction.
 ///
 /// # Errors
@@ -256,7 +277,8 @@ pub(crate) async fn rename_org(
     Ok(())
 }
 
-/// Orgs the user belongs to, with that membership's role, ordered by name.
+/// Active orgs the user belongs to, with that membership's role, ordered by name. Orgs being
+/// deleted are left out.
 ///
 /// # Errors
 ///
@@ -268,7 +290,7 @@ pub(crate) async fn orgs_of_user(
     let records: Vec<MembershipRecord> = sqlx::query_as(
         "SELECT orgs.id, orgs.name, orgs.slug, orgs.state, orgs.created_at, orgs.updated_at, \
          org_members.role FROM org_members JOIN orgs ON orgs.id = org_members.org_id \
-         WHERE org_members.user_id = ? ORDER BY orgs.name, orgs.id",
+         WHERE org_members.user_id = ? AND orgs.state = 'active' ORDER BY orgs.name, orgs.id",
     )
     .bind(user_id.to_string())
     .fetch_all(pool)
@@ -331,7 +353,9 @@ fn org_row(record: OrgRecord) -> Result<OrgRow, MetaError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::meta::members::add_org_member;
     use crate::meta::test_db;
+    use crate::meta::users::{NewUser, insert_user};
 
     #[test]
     fn slugs_match_the_shape_and_the_reserved_list() {
@@ -346,6 +370,48 @@ mod tests {
         assert_eq!(slug_from_name("Admin"), "admin-1");
         assert_eq!(project_slug_from_name("!!!"), "project");
         assert!(validate_slug_shape("login").is_ok());
+    }
+
+    #[tokio::test]
+    async fn mark_org_deleting_changes_an_active_row_once_and_hides_it() {
+        let (_dir, db) = test_db().await;
+        let user = db
+            .write(|conn| {
+                Box::pin(async move {
+                    let user = insert_user(
+                        conn,
+                        NewUser {
+                            email: "ada@example.com".to_owned(),
+                            name: None,
+                            password_hash: None,
+                            email_verified_at: None,
+                            is_instance_admin: false,
+                        },
+                        1,
+                    )
+                    .await?;
+                    let org = insert_org(conn, "Acme", "acme", 1).await?;
+                    add_org_member(conn, org.id, user.id, OrgRole::Owner, 1).await?;
+                    Ok(user)
+                })
+            })
+            .await
+            .unwrap();
+        let org = org_by_slug(db.reader(), "acme").await.unwrap().unwrap();
+        assert_eq!(orgs_of_user(db.reader(), user.id).await.unwrap().len(), 1);
+
+        let changed = db
+            .write(move |conn| {
+                Box::pin(async move {
+                    let first = mark_org_deleting(conn, org.id, 2).await?;
+                    let second = mark_org_deleting(conn, org.id, 3).await?;
+                    Ok((first, second))
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(changed, (true, false));
+        assert!(orgs_of_user(db.reader(), user.id).await.unwrap().is_empty());
     }
 
     #[tokio::test]

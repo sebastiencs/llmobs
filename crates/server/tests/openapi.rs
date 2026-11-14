@@ -241,6 +241,9 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
         "/api/v1/projects/{project}/deletions/{id}",
         "get_deletion",
     ),
+    ("delete", "/api/v1/projects/{project}", "delete_project"),
+    ("delete", "/api/v1/orgs/{org}", "delete_org"),
+    ("get", "/api/v1/orgs/{org}/deletions", "list_org_deletions"),
 ];
 
 const QUERY_OR_BODY: &[&str] = &[
@@ -264,6 +267,7 @@ const QUERY_OR_BODY: &[&str] = &[
     "get_metrics",
     "list_deletions",
     "get_deletion",
+    "list_org_deletions",
 ];
 
 /// Read operations with a handler (D-G-23): their errors include 422.
@@ -490,6 +494,8 @@ fn document_lint() {
             expected_errors.extend(["400", "401", "403", "404", "413", "415", "422", "429"]);
         } else if *id == "create_deletion" {
             expected_errors.extend(["400", "401", "403", "404", "409", "422", "429"]);
+        } else if *id == "delete_project" || *id == "delete_org" {
+            expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
         } else if READ_OPERATIONS.contains(id) || *id == "preview_deletion" {
             expected_errors.extend(["400", "401", "403", "404", "422", "429"]);
         } else if *id != "get_auth_config" && QUERY_OR_BODY.contains(id) {

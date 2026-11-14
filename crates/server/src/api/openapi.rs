@@ -39,7 +39,9 @@ use super::connections::{
     LlmConnectionTestError, LlmConnectionTestResult, StructuredOutputMode, TestErrorClass,
     TestLlmConnectionRequest, UpdateLlmConnectionRequest,
 };
-use super::deletions::{CreateDeletion, Deletion, DeletionPreview, DeletionPreviewRequest};
+use super::deletions::{
+    CreateDeletion, Deletion, DeletionPreview, DeletionPreviewRequest, DropParams,
+};
 use super::invites::{CreateInviteRequest, CreatedInvite, Invite, InvitePreview};
 use super::keys::{
     ApiKey as ProjectApiKey, CreateApiKeyRequest, CreatePersonalTokenRequest, CreatedApiKey,
@@ -1043,12 +1045,43 @@ fn project_paths(paths: PathsBuilder) -> PathsBuilder {
         .build();
     let mut orgs = PathItem::new(HttpMethod::Get, list_orgs);
     orgs.post = Some(post_org);
+    let delete_org = operation("delete_org", "orgs", "Delete an organization (owners)")
+        .description(Some(
+            "Answers 202; the organization and all its projects are erased in the background. Its deletion record is then kept in the database and the audit log only.",
+        ))
+        .parameters(Some(with_query::<DropParams>(vec![path_string(
+            "org",
+            "Org UUID or slug.",
+        )])))
+        .responses(responses(
+            "202",
+            json_of::<Deletion>("The deletion, in status pending."),
+            &[400, 401, 403, 404, 409, 429],
+        ))
+        .build();
     let mut org = PathItem::new(HttpMethod::Get, get_org);
     org.patch = Some(patch_org);
+    org.delete = Some(delete_org);
     let mut projects = PathItem::new(HttpMethod::Get, list);
     projects.post = Some(post_project);
+    let delete_project = operation(
+        "delete_project",
+        "projects",
+        "Delete a project (org admins; API keys always get 403)",
+    )
+    .description(Some(
+        "Answers 202; the project is gone from every route at once and its data is erased in the background.",
+    ))
+    .parameters(Some(with_query::<DropParams>(vec![project_param()])))
+    .responses(responses(
+        "202",
+        json_of::<Deletion>("The deletion, in status pending."),
+        &[400, 401, 403, 404, 409, 429],
+    ))
+    .build();
     let mut project = PathItem::new(HttpMethod::Get, get);
     project.patch = Some(patch_project);
+    project.delete = Some(delete_project);
     paths
         .path("/api/v1/orgs", orgs)
         .path("/api/v1/orgs/{org}", org)
@@ -1794,10 +1827,29 @@ fn deletion_paths(paths: PathsBuilder) -> PathsBuilder {
             &[400, 401, 403, 404, 429],
         ))
         .build();
+    let list_org = operation(
+        "list_org_deletions",
+        "deletions",
+        "List an organization's deletions",
+    )
+    .parameters(Some(with_query::<PageParams>(vec![path_string(
+        "org",
+        "Org UUID or slug.",
+    )])))
+    .responses(responses(
+        "200",
+        json_named("DeletionPage", "One page of deletions, newest first."),
+        QUERY_ERRORS,
+    ))
+    .build();
     let mut deletions = PathItem::new(HttpMethod::Get, list);
     deletions.post = Some(create);
     paths
         .path(format!("{PROJECT}/deletions"), deletions)
+        .path(
+            "/api/v1/orgs/{org}/deletions",
+            PathItem::new(HttpMethod::Get, list_org),
+        )
         .path(
             format!("{PROJECT}/deletions/preview"),
             PathItem::new(HttpMethod::Post, preview),
