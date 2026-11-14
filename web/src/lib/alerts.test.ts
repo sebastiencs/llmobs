@@ -141,6 +141,29 @@ it("converts a typed percentage to a fraction without float noise", () => {
   expect(conditionOf(formWith({ threshold: "7" })).threshold).toBe(0.07);
 });
 
+it("types a stored error rate threshold as a percentage", () => {
+  const rule = rules[1];
+  if (!rule) {
+    throw new Error("fixture rule missing");
+  }
+  const form = formFromRule({
+    ...rule,
+    condition: { ...rule.condition, metric: "error_rate", threshold: 0.07 },
+  });
+  expect(form.threshold).toBe("7");
+});
+
+it("rejects a blank threshold as not a number", () => {
+  expect(errorsOf(formWith({ threshold: "  " }))).toEqual({
+    "condition.threshold": "Enter a number.",
+  });
+});
+
+it("accepts 0 and 100 as percentage bounds", () => {
+  expect(conditionOf(formWith({ threshold: "0" })).threshold).toBe(0);
+  expect(conditionOf(formWith({ threshold: "100" })).threshold).toBe(1);
+});
+
 it("omits the filter when it is blank and sends it trimmed otherwise", () => {
   expect(conditionOf(formWith({ filter: "   " })).filter).toBeUndefined();
   expect(conditionOf(formWith({ filter: " error_count > 0 " })).filter).toBe("error_count > 0");
@@ -264,6 +287,12 @@ it("previews over buckets as wide as the window", () => {
   expect(previewParams("1m", now).bucket).toBe("1m");
   expect(previewParams("15m", now).bucket).toBe("15m");
   expect(previewParams("1h", now).bucket).toBe("1h");
+});
+
+it("previews a pass rate score as the average series of the score", () => {
+  expect(
+    previewSeries(formWith({ metric: "score", aggregation: "pass_rate", scoreName: " ok " })),
+  ).toEqual({ metric: "score_avg", group: "ok" });
 });
 
 it("picks the series to preview", () => {

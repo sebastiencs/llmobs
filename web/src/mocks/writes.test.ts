@@ -167,10 +167,12 @@ it("answers the channel and alert rule writes", async () => {
     JSON.stringify({
       name: "Errors",
       condition: { metric: "error_rate", window: "5m", comparator: "gt", threshold: 0.05 },
+      enabled: false,
     }),
   );
   expect(rule.status).toBe(201);
   expect(rule.json?.name).toBe("Errors");
+  expect(rule.json?.enabled).toBe(false);
   expect(rule.json?.state).toBe("ok");
   expect("last_value" in (rule.json ?? {})).toBe(false);
 

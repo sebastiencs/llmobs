@@ -369,6 +369,13 @@ const RESPONSES: Record<string, Respond> = {
         ...rest,
         name: trimmed(body.name) ?? rest.name,
         condition: body.condition ?? rest.condition,
+        channel_ids: Array.isArray(body.channel_ids) ? body.channel_ids : rest.channel_ids,
+        enabled: typeof body.enabled === "boolean" ? body.enabled : rest.enabled,
+        cooldown_s: typeof body.cooldown_s === "number" ? body.cooldown_s : rest.cooldown_s,
+        notify_while_firing:
+          typeof body.notify_while_firing === "boolean"
+            ? body.notify_while_firing
+            : rest.notify_while_firing,
         state: "ok",
       },
       { status: 201 },

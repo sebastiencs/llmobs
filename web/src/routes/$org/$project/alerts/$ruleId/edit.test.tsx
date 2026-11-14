@@ -2,7 +2,7 @@ import { screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
 import { server } from "@/mocks/node";
-import { FIRING_RULE_ID } from "@/test/fixtures";
+import { FIRING_RULE_ID, SLACK_CHANNEL_ID } from "@/test/fixtures";
 import { problemResponse } from "@/test/problem";
 import { renderApp } from "@/test/render";
 import ruleFixture from "../../../../../../../fixtures/api/static/alert-rule.json";
@@ -36,6 +36,35 @@ it("edits the name only", async () => {
 
   await waitFor(() => expect(body).toEqual({ name: "Errors 2" }));
   await waitFor(() => expect(router.state.location.pathname).toBe(RULE_PAGE));
+});
+
+it("sends the channels and reminder interval that changed", async () => {
+  let body: unknown;
+  server.use(
+    http.patch(RULE, async ({ request }) => {
+      body = await request.json();
+      return HttpResponse.json(ruleFixture);
+    }),
+  );
+
+  const { user } = await renderApp(PAGE);
+  await user.click(await screen.findByRole("checkbox", { name: "Pager webhook (Webhook)" }));
+  const minutes = screen.getByRole("textbox", { name: "Remind every (minutes)" });
+  await user.clear(minutes);
+  await user.type(minutes, "90");
+  await user.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => expect(body).toEqual({ channel_ids: [SLACK_CHANNEL_ID], cooldown_s: 5400 }));
+});
+
+it("shows the plan limit from a save", async () => {
+  server.use(http.patch(RULE, () => problemResponse(403, "plan_limit", { detail: "x" })));
+
+  const { user } = await renderApp(PAGE);
+  await user.type(await screen.findByRole("textbox", { name: "Name" }), " 2");
+  await user.click(screen.getByRole("button", { name: "Save" }));
+
+  expect(await screen.findByText("x")).toBeInTheDocument();
 });
 
 it("sends nothing when nothing changed", async () => {

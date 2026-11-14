@@ -168,6 +168,8 @@ export function RuleForm(props: {
     }
     setErrors(found);
     setFormError(undefined);
+    create.reset();
+    update.reset();
     if (!built.ok || Object.keys(found).length > 0) {
       return;
     }
@@ -282,36 +284,28 @@ export function RuleForm(props: {
                   patchForm({ scoreName });
                 }}
               />
-              <div className="flex flex-col gap-1.5">
-                <SelectField
-                  id="rule-aggregation"
-                  label="Aggregation"
-                  value={form.aggregation}
-                  options={AGGREGATION_OPTIONS}
-                  disabled={pending}
-                  onChange={changeAggregation}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Pass rate counts true among boolean scores.
-                </p>
-              </div>
+              <SelectField
+                id="rule-aggregation"
+                label="Aggregation"
+                value={form.aggregation}
+                options={AGGREGATION_OPTIONS}
+                description="Pass rate counts true among boolean scores."
+                disabled={pending}
+                onChange={changeAggregation}
+              />
             </>
           ) : null}
-          <div className="flex flex-col gap-1.5">
-            <SelectField
-              id="rule-window"
-              label="Window"
-              value={form.window}
-              options={WINDOW_OPTIONS}
-              disabled={pending}
-              onChange={(window) => {
-                patchForm({ window });
-              }}
-            />
-            <p className="text-xs text-muted-foreground">
-              Checked every minute for windows up to 15 minutes, every 5 minutes otherwise.
-            </p>
-          </div>
+          <SelectField
+            id="rule-window"
+            label="Window"
+            value={form.window}
+            options={WINDOW_OPTIONS}
+            description="Checked every minute for windows up to 15 minutes, every 5 minutes otherwise."
+            disabled={pending}
+            onChange={(window) => {
+              patchForm({ window });
+            }}
+          />
         </fieldset>
 
         <div className="flex flex-col gap-1.5">
@@ -380,7 +374,10 @@ export function RuleForm(props: {
           ) : null}
         </fieldset>
 
-        <fieldset className="flex flex-col gap-4">
+        <fieldset
+          className="flex flex-col gap-4"
+          aria-describedby={errors.channel_ids ? "rule-channels-error" : undefined}
+        >
           <legend className="text-sm font-medium">Notifications</legend>
           {channels.isPending ? (
             <Skeleton className="h-8 w-full" />
@@ -416,7 +413,9 @@ export function RuleForm(props: {
                 );
               })}
               {errors.channel_ids ? (
-                <p className="text-xs text-destructive">{errors.channel_ids}</p>
+                <p id="rule-channels-error" className="text-xs text-destructive">
+                  {errors.channel_ids}
+                </p>
               ) : null}
             </div>
           )}
@@ -489,6 +488,7 @@ function SelectField<T extends string>({
   label,
   value,
   options,
+  description,
   disabled,
   onChange,
 }: {
@@ -496,9 +496,11 @@ function SelectField<T extends string>({
   label: string;
   value: T;
   options: Option<T>[];
+  description?: string;
   disabled: boolean;
   onChange: (value: T) => void;
 }) {
+  const descriptionId = `${id}-description`;
   return (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={id}>{label}</Label>
@@ -512,7 +514,11 @@ function SelectField<T extends string>({
         }}
         disabled={disabled}
       >
-        <SelectTrigger id={id} className="w-full">
+        <SelectTrigger
+          id={id}
+          className="w-full"
+          aria-describedby={description ? descriptionId : undefined}
+        >
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -523,6 +529,11 @@ function SelectField<T extends string>({
           ))}
         </SelectContent>
       </Select>
+      {description ? (
+        <p id={descriptionId} className="text-xs text-muted-foreground">
+          {description}
+        </p>
+      ) : null}
     </div>
   );
 }

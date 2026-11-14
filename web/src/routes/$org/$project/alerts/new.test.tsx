@@ -137,6 +137,55 @@ it("shows the plan limit with the upgrade line", async () => {
   ).toBeInTheDocument();
 });
 
+it("clears the plan limit hint once a later submit fails client validation", async () => {
+  server.use(
+    http.post(RULES, () =>
+      problemResponse(403, "plan_limit", { detail: "Your plan allows 1 enabled alert rule." }),
+    ),
+  );
+
+  const { user } = await renderApp(PAGE);
+  await user.type(await screen.findByRole("textbox", { name: "Name" }), "Errors");
+  await user.click(screen.getByRole("button", { name: "Create rule" }));
+  expect(
+    await screen.findByText("Upgrade your plan, disable another rule, or save this one disabled."),
+  ).toBeInTheDocument();
+
+  const threshold = screen.getByRole("textbox", { name: "Threshold" });
+  await user.clear(threshold);
+  await user.click(screen.getByRole("button", { name: "Create rule" }));
+
+  expect(await screen.findByText("Enter a number.")).toBeInTheDocument();
+  expect(
+    screen.queryByText("Upgrade your plan, disable another rule, or save this one disabled."),
+  ).toBeNull();
+});
+
+it("creates a rule disabled when Enabled is switched off", async () => {
+  let body: Record<string, unknown> | undefined;
+  server.use(
+    http.post(RULES, async ({ request }) => {
+      body = (await request.json()) as Record<string, unknown>;
+      return HttpResponse.json(ruleFixture, { status: 201 });
+    }),
+  );
+
+  const { user } = await renderApp(PAGE);
+  await user.type(await screen.findByRole("textbox", { name: "Name" }), "Errors");
+  await user.click(screen.getByRole("switch", { name: "Enabled" }));
+  await user.click(screen.getByRole("button", { name: "Create rule" }));
+
+  await waitFor(() => expect(body).toMatchObject({ enabled: false }));
+});
+
+it("shows the preview error when the metrics request fails", async () => {
+  server.use(http.get(METRICS, () => problemResponse(500, "internal")));
+
+  await renderApp(PAGE);
+
+  expect(await screen.findByText("The preview could not be loaded.")).toBeInTheDocument();
+});
+
 it("sends the reminder interval and checks its range", async () => {
   let body: Record<string, unknown> | undefined;
   let posts = 0;
@@ -275,11 +324,11 @@ it("does not preview LLM span latency", async () => {
 
   const { user } = await renderApp(PAGE);
   await screen.findByRole("figure");
+  const before = requests;
   await choose(user, "Metric", "p95 latency");
   await choose(user, "Latency of", "LLM spans");
 
   expect(await screen.findByText(/No preview for LLM span latency/)).toBeInTheDocument();
-  const before = requests;
   expect(requests).toBe(before);
 });
 
@@ -307,8 +356,7 @@ it("shows the preview states", async () => {
     ),
   );
 
-  const { user } = await renderApp(PAGE);
-  await user.type(await screen.findByRole("textbox", { name: "Name" }), "x");
+  await renderApp(PAGE);
   expect(await screen.findByText("The filter is invalid: bad")).toBeInTheDocument();
 });
 
