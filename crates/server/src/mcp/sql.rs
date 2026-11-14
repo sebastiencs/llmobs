@@ -935,33 +935,25 @@ mod tests {
         assert_eq!(body["rows"], json!([{"one": 1}]));
     }
 
-    /// The query must be one that cannot finish on its first poll: `tokio::time::timeout`
-    /// polls the future before the deadline, so a query that runs to completion inline (a
-    /// plain aggregate over the in-memory example data) wins the race however small the
-    /// timeout. The `GROUP BY` plan is executed through a `RepartitionExec`: its partition
-    /// tasks are spawned during the first poll and deliver through a channel, so that poll
-    /// always returns `Pending` — a task spawned microseconds ago cannot have produced a
-    /// batch yet — and the already-elapsed 1 ns deadline then maps to `RunError::Timeout`.
+    /// The query cannot finish within its limit: a 9-way cross join of the 14 example spans
+    /// (14⁹ ≈ 20 billion rows) runs for minutes, so the 100 ms limit always expires first and
+    /// maps to `RunError::Timeout`, whatever the scheduling. Dropping the timed-out future
+    /// cancels the query.
     #[tokio::test(flavor = "multi_thread")]
     async fn run_query_times_out() {
-        // The GROUP BY runs through a RepartitionExec only with more than one partition, so
-        // pin it: on a one-core runner the default would let the query finish on its first poll.
-        let app = TestApp::with_config(|config| {
-            config.storage.query.target_partitions = 4;
-        })
-        .await;
-        let seeded = app.seed().await;
-        app.load_example_dataset(seeded.project.id).await;
+        let (app, seeded, _) = with_dataset().await;
         let window = required_window(Some(t(FROM)), Some(t(TO))).unwrap();
         let ctx = open_query_windowed(&app.state, seeded.project.id, Some(window))
             .await
             .unwrap();
         let result = run_query(
             &ctx,
-            "SELECT span_kind, count(*) AS n FROM spans GROUP BY span_kind",
+            "SELECT count(*) FROM spans a CROSS JOIN spans b CROSS JOIN spans c \
+             CROSS JOIN spans d CROSS JOIN spans e CROSS JOIN spans f \
+             CROSS JOIN spans g CROSS JOIN spans h CROSS JOIN spans i",
             &Map::new(),
             10,
-            Duration::from_nanos(1),
+            Duration::from_millis(100),
             20_000,
         )
         .await;
