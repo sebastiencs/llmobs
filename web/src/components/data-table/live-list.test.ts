@@ -1,10 +1,9 @@
 import { expect, it } from "vitest";
 import type { Schema } from "@/api/types";
 import {
-  belongsAtTop,
   firstPageOnly,
   firstPageWouldExceed,
-  prependLiveTraces,
+  insertLiveTraces,
   pushBuffered,
   replaceLiveTrace,
   type TracePages,
@@ -39,15 +38,33 @@ function list(ids: string[][]): TracePages {
   };
 }
 
-it("prepends onto the first page and replaces a known id wherever it sits", () => {
+function ids(data: TracePages): string[][] {
+  return data.pages.map((page) => page.data.map((row) => row.trace_id));
+}
+
+function at(id: string, start: string): Schema<"TraceSummary"> {
+  return trace(id, `2026-11-11T21:00:${start}.000000000Z`);
+}
+
+function pages(rows: Schema<"TraceSummary">[][], more: boolean): TracePages {
+  return {
+    pages: rows.map((data, index) => ({
+      data,
+      next_cursor: more || index < rows.length - 1 ? `c${index}` : null,
+    })),
+    pageParams: rows.map((_, index) => (index === 0 ? null : `c${index - 1}`)),
+  };
+}
+
+it("puts a newer trace on top and replaces a known id wherever it sits", () => {
   const data = list([["a1000000000000000000000000000001"], ["a1000000000000000000000000000002"]]);
   const added = trace("c1000000000000000000000000000001", "2026-11-11T21:00:00.000000000Z");
-  const prepended = prependLiveTraces(data, [added]);
-  expect(prepended.pages[0]?.data.map((row) => row.trace_id)).toEqual([
-    added.trace_id,
-    "a1000000000000000000000000000001",
+  const result = insertLiveTraces(data, [added]);
+  expect(result.inserted).toEqual([added.trace_id]);
+  expect(ids(result.data)).toEqual([
+    [added.trace_id, "a1000000000000000000000000000001"],
+    ["a1000000000000000000000000000002"],
   ]);
-  expect(prepended.pages[1]?.data).toHaveLength(1);
 
   const row = data.pages[1]?.data[0];
   if (!row) {
@@ -58,14 +75,24 @@ it("prepends onto the first page and replaces a known id wherever it sits", () =
   expect(replaced.pages[0]).toBe(data.pages[0]);
 });
 
-it("treats an empty page as the top and an older trace as not", () => {
+it("puts a trace that finished late at its start-time place", () => {
+  const data = pages([[at("t3", "30"), at("t1", "10")], [at("t0", "00")]], false);
+  const result = insertLiveTraces(data, [at("t2", "20"), at("t4", "40")]);
+  expect(result.inserted).toEqual(["t2", "t4"]);
+  expect(ids(result.data)).toEqual([["t4", "t3", "t2", "t1"], ["t0"]]);
+});
+
+it("appends a trace older than every row only when no page is left to load", () => {
   const empty: TracePages = { pages: [{ data: [], next_cursor: null }], pageParams: [null] };
-  const arriving = trace("c1000000000000000000000000000001", "2026-11-11T21:00:00.000000000Z");
-  expect(belongsAtTop(empty, arriving)).toBe(true);
-  const filled = prependLiveTraces(empty, [arriving]);
-  const older = trace("c1000000000000000000000000000002", "2026-01-01T00:00:00.000000000Z");
-  expect(belongsAtTop(filled, older)).toBe(false);
-  expect(belongsAtTop(filled, arriving)).toBe(true);
+  expect(ids(insertLiveTraces(empty, [at("t1", "10")]).data)).toEqual([["t1"]]);
+
+  const done = pages([[at("t3", "30")], [at("t2", "20")]], false);
+  expect(ids(insertLiveTraces(done, [at("t1", "10")]).data)).toEqual([["t3"], ["t2", "t1"]]);
+
+  const more = pages([[at("t3", "30")], [at("t2", "20")]], true);
+  const skipped = insertLiveTraces(more, [at("t1", "10")]);
+  expect(skipped.inserted).toEqual([]);
+  expect(skipped.data).toBe(more);
 });
 
 it("drops every page after the first on resync", () => {
