@@ -1,5 +1,13 @@
 [
   {
+    "operation_id": "create_deletion",
+    "path_params": {},
+    "query": {},
+    "status": 202,
+    "content_type": "application/json",
+    "file": "static/deletion.json"
+  },
+  {
     "operation_id": "get_admin_settings",
     "path_params": {},
     "query": {},
@@ -14,6 +22,16 @@
     "status": 200,
     "content_type": "application/json",
     "file": "static/auth-config.json"
+  },
+  {
+    "operation_id": "get_deletion",
+    "path_params": {
+      "id": "01900000-0000-7000-8000-000000000902"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/deletion.json"
   },
   {
     "operation_id": "get_invite_preview",
@@ -383,6 +401,14 @@
     "file": "static/api-keys.json"
   },
   {
+    "operation_id": "list_deletions",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/deletions.json"
+  },
+  {
     "operation_id": "list_llm_connections",
     "path_params": {
       "org": "acme"
@@ -602,6 +628,14 @@
     "status": 201,
     "content_type": "application/json",
     "file": "static/signup-response.json"
+  },
+  {
+    "operation_id": "preview_deletion",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/deletion-preview.json"
   },
   {
     "operation_id": "run_sql",

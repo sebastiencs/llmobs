@@ -4,9 +4,7 @@
 use axum::extract::{Extension, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::api::common::{FieldError, Page, PageParams};
@@ -20,6 +18,7 @@ use crate::http::AppState;
 use crate::http::access::{Access, RouteDef};
 use crate::http::error::{self, ApiError};
 use crate::meta::personal_tokens::{self, NewToken, TokenRow};
+use crate::routes::time_cursor::{decode_time_cursor, encode_time_cursor};
 
 /// Ten years of 365 days. An `expires_at` later than this is rejected.
 const TEN_YEARS_NS: i64 = 10 * 365 * 24 * 60 * 60 * 1_000_000_000;
@@ -248,7 +247,8 @@ fn page_tokens(
     let mut rows = match cursor {
         None => rows,
         Some(cursor) => {
-            let (created_at, id) = decode_cursor(cursor)?;
+            let (created_at, id) = decode_time_cursor(cursor)?;
+            let id = id.to_string();
             rows.into_iter()
                 .filter(|row| {
                     let row_id = row.id.to_string();
@@ -263,7 +263,7 @@ fn page_tokens(
         let last = rows.last().ok_or_else(|| {
             ApiError::Internal(Box::new(std::io::Error::other("empty token page")))
         })?;
-        Some(encode_cursor(last.created_at, &last.id.to_string())?)
+        Some(encode_time_cursor(last.created_at, &last.id.to_string())?)
     } else {
         None
     };
@@ -272,35 +272,6 @@ fn page_tokens(
         data.push(token_json(row)?);
     }
     Ok(Page { data, next_cursor })
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TokenCursor {
-    created_at: i64,
-    id: String,
-}
-
-fn encode_cursor(created_at: i64, id: &str) -> Result<String, ApiError> {
-    let bytes = serde_json::to_vec(&TokenCursor {
-        created_at,
-        id: id.to_owned(),
-    })
-    .map_err(|error| ApiError::Internal(Box::new(error)))?;
-    Ok(URL_SAFE_NO_PAD.encode(bytes))
-}
-
-fn decode_cursor(text: &str) -> Result<(i64, String), ApiError> {
-    let bytes = URL_SAFE_NO_PAD.decode(text).map_err(|_| invalid_cursor())?;
-    let cursor: TokenCursor = serde_json::from_slice(&bytes).map_err(|_| invalid_cursor())?;
-    if cursor.id.parse::<Uuid>().is_err() {
-        return Err(invalid_cursor());
-    }
-    Ok((cursor.created_at, cursor.id))
-}
-
-fn invalid_cursor() -> ApiError {
-    field_error("cursor", "invalid cursor")
 }
 
 fn field_error(field: &str, message: &str) -> ApiError {

@@ -3920,6 +3920,432 @@
         ]
       }
     },
+    "/api/v1/projects/{project}/deletions": {
+      "get": {
+        "tags": [
+          "deletions"
+        ],
+        "summary": "List deletions",
+        "operationId": "list_deletions",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return (1–1000, default 50).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Limit",
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of deletions, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "deletions"
+        ],
+        "summary": "Request a deletion",
+        "description": "Kinds `trace_ids` (an `sk` key with `write` may use it), `filter` and `user` (project admins). Answers 202; the deletion is resolved and applied in the background. A filter matching more than 100,000 traces is 422 `too_many_traces`.",
+        "operationId": "create_deletion",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDeletion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The deletion, in status resolving.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deletion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/deletions/preview": {
+      "post": {
+        "tags": [
+          "deletions"
+        ],
+        "summary": "Count a filter deletion",
+        "operationId": "preview_deletion",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeletionPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "How many traces would be deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/deletions/{id}": {
+      "get": {
+        "tags": [
+          "deletions"
+        ],
+        "summary": "Get a deletion",
+        "operationId": "get_deletion",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deletion id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deletion.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deletion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project}/media/{sha256}": {
       "get": {
         "tags": [
@@ -4490,7 +4916,7 @@
             }
           },
           "422": {
-            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "description": "The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5204,7 +5630,7 @@
             }
           },
           "422": {
-            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "description": "The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5596,7 +6022,7 @@
             }
           },
           "422": {
-            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "description": "The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5726,7 +6152,7 @@
             }
           },
           "422": {
-            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "description": "The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5920,7 +6346,7 @@
             }
           },
           "422": {
-            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "description": "The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6069,7 +6495,7 @@
             }
           },
           "422": {
-            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "description": "The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6263,7 +6689,7 @@
             }
           },
           "422": {
-            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "description": "The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6402,7 +6828,7 @@
             }
           },
           "422": {
-            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "description": "The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6523,7 +6949,7 @@
             }
           },
           "422": {
-            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "description": "The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6643,7 +7069,7 @@
             }
           },
           "422": {
-            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "description": "The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6920,7 +7346,7 @@
             }
           },
           "422": {
-            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "description": "The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -7050,7 +7476,7 @@
             }
           },
           "422": {
-            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "description": "The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -7695,6 +8121,88 @@
         },
         "additionalProperties": false
       },
+      "CreateDeletion": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "1 to 1,000 trace ids, 32 hex digits each, either case.",
+            "required": [
+              "trace_ids",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "trace_ids"
+                ]
+              },
+              "trace_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Traces the trace list shows for this filter, search and window (at most 100,000).",
+            "required": [
+              "from",
+              "to",
+              "kind"
+            ],
+            "properties": {
+              "filter": {
+                "type": "string"
+              },
+              "from": {
+                "$ref": "#/components/schemas/TimeParam"
+              },
+              "include_eval": {
+                "type": "boolean"
+              },
+              "include_experiments": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "filter"
+                ]
+              },
+              "search": {
+                "type": "string"
+              },
+              "to": {
+                "$ref": "#/components/schemas/TimeParam"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Every span and score of one end user, with their traces and sessions.",
+            "required": [
+              "user_id",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "user"
+                ]
+              },
+              "user_id": {
+                "type": "string",
+                "description": "1 to 255 bytes, matched exactly."
+              }
+            }
+          }
+        ],
+        "description": "`POST /api/v1/projects/{project}/deletions`."
+      },
       "CreateInviteRequest": {
         "type": "object",
         "description": "`POST /api/v1/orgs/{org}/invites`.",
@@ -7943,6 +8451,262 @@
             "description": "The stored token, without the secret."
           }
         }
+      },
+      "Deletion": {
+        "type": "object",
+        "description": "A deletion request and its progress.",
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "org_id",
+          "requested_by",
+          "created_at"
+        ],
+        "properties": {
+          "applied_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was applied. Omitted before."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was requested; rows ingested later are not deleted. JSON is RFC 3339."
+          },
+          "error": {
+            "$ref": "#/components/schemas/DeletionFailure",
+            "description": "Why it failed (`failed` only)."
+          },
+          "filter": {
+            "$ref": "#/components/schemas/DeletionFilter",
+            "description": "The selection (`filter` only)."
+          },
+          "handed_over_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When storage began hiding the rows. Omitted before."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Deletion id."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DeletionKind"
+          },
+          "name": {
+            "type": "string",
+            "description": "Name of the dropped project or organization (`project`, `org`)."
+          },
+          "org_id": {
+            "$ref": "#/components/schemas/OrgId",
+            "description": "The organization."
+          },
+          "project_id": {
+            "$ref": "#/components/schemas/ProjectId",
+            "description": "The project. Omitted for `org`."
+          },
+          "requested_by": {
+            "$ref": "#/components/schemas/DeletionActor"
+          },
+          "requested_traces": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Distinct trace ids in the request (`trace_ids` only).",
+            "minimum": 0
+          },
+          "session_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sessions covered (`user`). Omitted until resolved.",
+            "minimum": 0
+          },
+          "slug": {
+            "type": "string",
+            "description": "Slug of the dropped project or organization (`project`, `org`)."
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeletionStatus"
+          },
+          "trace_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Traces covered, including evaluation traces. Omitted until resolved.",
+            "minimum": 0
+          },
+          "user_id": {
+            "type": "string",
+            "description": "The end user (`user` only)."
+          }
+        }
+      },
+      "DeletionActor": {
+        "type": "object",
+        "description": "The requester.",
+        "required": [
+          "kind",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The user id or the API key id."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DeletionActorKind",
+            "description": "`user` or `api_key`."
+          }
+        }
+      },
+      "DeletionActorKind": {
+        "type": "string",
+        "description": "Who requested a deletion.",
+        "enum": [
+          "user",
+          "api_key"
+        ]
+      },
+      "DeletionFailure": {
+        "type": "string",
+        "description": "Why a deletion failed.",
+        "enum": [
+          "too_many_traces",
+          "resolution_failed"
+        ]
+      },
+      "DeletionFilter": {
+        "type": "object",
+        "description": "The selection of a `filter` deletion, as requested.",
+        "required": [
+          "from",
+          "to",
+          "include_eval",
+          "include_experiments"
+        ],
+        "properties": {
+          "filter": {
+            "type": "string",
+            "description": "Filter DSL text. Omitted when none was given."
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Window start, inclusive."
+          },
+          "include_eval": {
+            "type": "boolean",
+            "description": "Evaluation traces were included."
+          },
+          "include_experiments": {
+            "type": "boolean",
+            "description": "Experiment traces were included."
+          },
+          "search": {
+            "type": "string",
+            "description": "Full-text search. Omitted when none was given."
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Window end, exclusive."
+          }
+        }
+      },
+      "DeletionKind": {
+        "type": "string",
+        "description": "What a deletion covers.",
+        "enum": [
+          "trace_ids",
+          "filter",
+          "user",
+          "project",
+          "org"
+        ]
+      },
+      "DeletionPage": {
+        "type": "object",
+        "description": "One page of results. `next_cursor` is null when there is no next page.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Deletion"
+            },
+            "description": "Items in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
+      },
+      "DeletionPreview": {
+        "type": "object",
+        "description": "How many traces a filter deletion would cover.",
+        "required": [
+          "matched_traces",
+          "capped"
+        ],
+        "properties": {
+          "capped": {
+            "type": "boolean",
+            "description": "More than 100,000 traces match: the deletion would be refused."
+          },
+          "matched_traces": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Matching traces, at most 100,000.",
+            "minimum": 0
+          }
+        }
+      },
+      "DeletionPreviewRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/projects/{project}/deletions/preview`.",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "filter": {
+            "type": "string"
+          },
+          "from": {
+            "$ref": "#/components/schemas/TimeParam"
+          },
+          "include_eval": {
+            "type": "boolean"
+          },
+          "include_experiments": {
+            "type": "boolean"
+          },
+          "search": {
+            "type": "string"
+          },
+          "to": {
+            "$ref": "#/components/schemas/TimeParam"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DeletionStatus": {
+        "type": "string",
+        "description": "Where a deletion is (D-M-3).",
+        "enum": [
+          "resolving",
+          "pending",
+          "applied",
+          "failed"
+        ]
       },
       "EndUserDetail": {
         "type": "object",
@@ -9129,6 +9893,7 @@
           "query_failed",
           "query_timeout",
           "query_too_large",
+          "too_many_traces",
           "busy",
           "unauthorized",
           "forbidden",
@@ -11582,6 +12347,10 @@
     {
       "name": "media",
       "description": "Extracted media blobs."
+    },
+    {
+      "name": "deletions",
+      "description": "GDPR deletions and their status."
     }
   ]
 }

@@ -19,6 +19,7 @@ use llmobs_server::api::common::Page;
 use llmobs_server::api::connections::{
     CreateLlmConnectionRequest, LlmConnection, LlmConnectionTestResult,
 };
+use llmobs_server::api::deletions::{Deletion, DeletionPreview};
 use llmobs_server::api::invites::{CreatedInvite, Invite, InvitePreview};
 use llmobs_server::api::keys::{ApiKey, CreatedApiKey, CreatedPersonalToken, PersonalToken};
 use llmobs_server::api::members::{OrgMember, ProjectMember};
@@ -380,6 +381,9 @@ fn static_files_match_their_types() {
     roundtrip::<SchemaResponse>("static/schema.json");
     roundtrip::<Page<SavedView>>("static/saved-views.json");
     roundtrip::<SqlQueryResult>("static/sql-result.json");
+    roundtrip::<Page<Deletion>>("static/deletions.json");
+    roundtrip::<Deletion>("static/deletion.json");
+    roundtrip::<DeletionPreview>("static/deletion-preview.json");
 }
 
 #[test]
@@ -465,6 +469,9 @@ fn generated_files_roundtrip() {
             "post_personal_token" => roundtrip::<CreatedPersonalToken>(&example.file),
             "get_metrics" => roundtrip::<MetricsResponse>(&example.file),
             "run_sql" => roundtrip::<SqlQueryResult>(&example.file),
+            "list_deletions" => roundtrip::<Page<Deletion>>(&example.file),
+            "get_deletion" | "create_deletion" => roundtrip::<Deletion>(&example.file),
+            "preview_deletion" => roundtrip::<DeletionPreview>(&example.file),
             "get_auth_config"
             | "get_me"
             | "list_orgs"

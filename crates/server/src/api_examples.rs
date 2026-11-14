@@ -517,6 +517,22 @@ async fn generate() -> (BTreeMap<String, String>, Vec<Example>) {
             "static/saved-views.json",
             "application/json",
         ),
+        example(
+            "list_deletions",
+            BTreeMap::new(),
+            BTreeMap::new(),
+            "static/deletions.json",
+            "application/json",
+        ),
+        example(
+            "get_deletion",
+            params(&[("id", "01900000-0000-7000-8000-000000000902")]),
+            BTreeMap::new(),
+            "static/deletion.json",
+            "application/json",
+        ),
+        example_status("preview_deletion", "static/deletion-preview.json", 200),
+        example_status("create_deletion", "static/deletion.json", 202),
     ]);
     out.manifest.sort_by(|left, right| {
         left.operation_id

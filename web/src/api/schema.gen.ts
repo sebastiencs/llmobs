@@ -689,6 +689,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project}/deletions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List deletions */
+        get: operations["list_deletions"];
+        put?: never;
+        /**
+         * Request a deletion
+         * @description Kinds `trace_ids` (an `sk` key with `write` may use it), `filter` and `user` (project admins). Answers 202; the deletion is resolved and applied in the background. A filter matching more than 100,000 traces is 422 `too_many_traces`.
+         */
+        post: operations["create_deletion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project}/deletions/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Count a filter deletion */
+        post: operations["preview_deletion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project}/deletions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a deletion */
+        get: operations["get_deletion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project}/media/{sha256}": {
         parameters: {
             query?: never;
@@ -1348,6 +1403,26 @@ export interface components {
             /** @description Secret keys default to ingest, read, and write. Public keys default to feedback. */
             scopes?: components["schemas"]["ApiKeyScope"][];
         };
+        /** @description `POST /api/v1/projects/{project}/deletions`. */
+        CreateDeletion: {
+            /** @enum {string} */
+            kind: "trace_ids";
+            trace_ids: string[];
+        } | {
+            filter?: string;
+            from: components["schemas"]["TimeParam"];
+            include_eval?: boolean;
+            include_experiments?: boolean;
+            /** @enum {string} */
+            kind: "filter";
+            search?: string;
+            to: components["schemas"]["TimeParam"];
+        } | {
+            /** @enum {string} */
+            kind: "user";
+            /** @description 1 to 255 bytes, matched exactly. */
+            user_id: string;
+        };
         /** @description `POST /api/v1/orgs/{org}/invites`. */
         CreateInviteRequest: {
             /** @description Address to invite. */
@@ -1468,6 +1543,138 @@ export interface components {
             /** @description The stored token, without the secret. */
             token: components["schemas"]["PersonalToken"];
         };
+        /** @description A deletion request and its progress. */
+        Deletion: {
+            /**
+             * Format: date-time
+             * @description When it was applied. Omitted before.
+             */
+            applied_at?: string;
+            /**
+             * Format: date-time
+             * @description When it was requested; rows ingested later are not deleted. JSON is RFC 3339.
+             */
+            created_at: string;
+            /** @description Why it failed (`failed` only). */
+            error?: components["schemas"]["DeletionFailure"];
+            /** @description The selection (`filter` only). */
+            filter?: components["schemas"]["DeletionFilter"];
+            /**
+             * Format: date-time
+             * @description When storage began hiding the rows. Omitted before.
+             */
+            handed_over_at?: string;
+            /**
+             * Format: uuid
+             * @description Deletion id.
+             */
+            id: string;
+            kind: components["schemas"]["DeletionKind"];
+            /** @description Name of the dropped project or organization (`project`, `org`). */
+            name?: string;
+            /** @description The organization. */
+            org_id: components["schemas"]["OrgId"];
+            /** @description The project. Omitted for `org`. */
+            project_id?: components["schemas"]["ProjectId"];
+            requested_by: components["schemas"]["DeletionActor"];
+            /**
+             * Format: int32
+             * @description Distinct trace ids in the request (`trace_ids` only).
+             */
+            requested_traces?: number;
+            /**
+             * Format: int64
+             * @description Sessions covered (`user`). Omitted until resolved.
+             */
+            session_count?: number;
+            /** @description Slug of the dropped project or organization (`project`, `org`). */
+            slug?: string;
+            status: components["schemas"]["DeletionStatus"];
+            /**
+             * Format: int64
+             * @description Traces covered, including evaluation traces. Omitted until resolved.
+             */
+            trace_count?: number;
+            /** @description The end user (`user` only). */
+            user_id?: string;
+        };
+        /** @description The requester. */
+        DeletionActor: {
+            /**
+             * Format: uuid
+             * @description The user id or the API key id.
+             */
+            id: string;
+            /** @description `user` or `api_key`. */
+            kind: components["schemas"]["DeletionActorKind"];
+        };
+        /**
+         * @description Who requested a deletion.
+         * @enum {string}
+         */
+        DeletionActorKind: "user" | "api_key";
+        /**
+         * @description Why a deletion failed.
+         * @enum {string}
+         */
+        DeletionFailure: "too_many_traces" | "resolution_failed";
+        /** @description The selection of a `filter` deletion, as requested. */
+        DeletionFilter: {
+            /** @description Filter DSL text. Omitted when none was given. */
+            filter?: string;
+            /**
+             * Format: date-time
+             * @description Window start, inclusive.
+             */
+            from: string;
+            /** @description Evaluation traces were included. */
+            include_eval: boolean;
+            /** @description Experiment traces were included. */
+            include_experiments: boolean;
+            /** @description Full-text search. Omitted when none was given. */
+            search?: string;
+            /**
+             * Format: date-time
+             * @description Window end, exclusive.
+             */
+            to: string;
+        };
+        /**
+         * @description What a deletion covers.
+         * @enum {string}
+         */
+        DeletionKind: "trace_ids" | "filter" | "user" | "project" | "org";
+        /** @description One page of results. `next_cursor` is null when there is no next page. */
+        DeletionPage: {
+            /** @description Items in this page. */
+            data: components["schemas"]["Deletion"][];
+            /** @description Opaque cursor for the next page, or null when this is the last page. */
+            next_cursor: string | null;
+        };
+        /** @description How many traces a filter deletion would cover. */
+        DeletionPreview: {
+            /** @description More than 100,000 traces match: the deletion would be refused. */
+            capped: boolean;
+            /**
+             * Format: int64
+             * @description Matching traces, at most 100,000.
+             */
+            matched_traces: number;
+        };
+        /** @description `POST /api/v1/projects/{project}/deletions/preview`. */
+        DeletionPreviewRequest: {
+            filter?: string;
+            from: components["schemas"]["TimeParam"];
+            include_eval?: boolean;
+            include_experiments?: boolean;
+            search?: string;
+            to: components["schemas"]["TimeParam"];
+        };
+        /**
+         * @description Where a deletion is (D-M-3).
+         * @enum {string}
+         */
+        DeletionStatus: "resolving" | "pending" | "applied" | "failed";
         /**
          * @description User summary plus the most recent sessions.
          *
@@ -2091,7 +2298,7 @@ export interface components {
          *     Spec 09 § Conventions. Later endpoints add codes.
          * @enum {string}
          */
-        ProblemCode: "bad_request" | "invalid_filter" | "query_failed" | "query_timeout" | "query_too_large" | "busy" | "unauthorized" | "forbidden" | "sso_required" | "email_not_verified" | "not_found" | "method_not_allowed" | "payload_too_large" | "unsupported_media_type" | "range_not_satisfiable" | "conflict" | "rate_limited" | "internal";
+        ProblemCode: "bad_request" | "invalid_filter" | "query_failed" | "query_timeout" | "query_too_large" | "too_many_traces" | "busy" | "unauthorized" | "forbidden" | "sso_required" | "email_not_verified" | "not_found" | "method_not_allowed" | "payload_too_large" | "unsupported_media_type" | "range_not_satisfiable" | "conflict" | "rate_limited" | "internal";
         /**
          * @description A project the caller can see.
          *
@@ -6447,6 +6654,338 @@ export interface operations {
             };
         };
     };
+    list_deletions: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of items to return (1–1000, default 50). */
+                limit?: components["schemas"]["Limit"];
+                /** @description Opaque cursor from a previous page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of deletions, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionPage"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_deletion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDeletion"];
+            };
+        };
+        responses: {
+            /** @description The deletion, in status resolving. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Deletion"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request conflicts with the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server is busy or a dependency is unavailable. Retry later. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    preview_deletion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeletionPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description How many traces would be deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletionPreview"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server is busy or a dependency is unavailable. Retry later. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_deletion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+                /** @description Deletion id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The deletion. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Deletion"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     get_media: {
         parameters: {
             query?: never;
@@ -6827,7 +7366,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The query took longer than its time limit or needed more memory than allowed. */
+            /** @description The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -7336,7 +7875,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The query took longer than its time limit or needed more memory than allowed. */
+            /** @description The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -7608,7 +8147,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The query took longer than its time limit or needed more memory than allowed. */
+            /** @description The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -7701,7 +8240,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The query took longer than its time limit or needed more memory than allowed. */
+            /** @description The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -7808,7 +8347,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The query took longer than its time limit or needed more memory than allowed. */
+            /** @description The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -7919,7 +8458,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The query took longer than its time limit or needed more memory than allowed. */
+            /** @description The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -8026,7 +8565,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The query took longer than its time limit or needed more memory than allowed. */
+            /** @description The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -8125,7 +8664,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The query took longer than its time limit or needed more memory than allowed. */
+            /** @description The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -8216,7 +8755,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The query took longer than its time limit or needed more memory than allowed. */
+            /** @description The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -8306,7 +8845,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The query took longer than its time limit or needed more memory than allowed. */
+            /** @description The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -8481,7 +9020,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The query took longer than its time limit or needed more memory than allowed. */
+            /** @description The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -8574,7 +9113,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The query took longer than its time limit or needed more memory than allowed. */
+            /** @description The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces. */
             422: {
                 headers: {
                     [name: string]: unknown;

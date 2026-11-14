@@ -99,6 +99,8 @@ pub(crate) enum ProjectPerm {
     /// Read project data through a POST with a body, such as the SQL console (D-H-4).
     /// Same holders as `View`; a read-only PAT and a `read` key may use it on POST.
     Query,
+    /// GDPR deletions of traces and end users, and their history (D-M-4).
+    Delete,
 }
 
 /// Scope on a project API key. Track D enforces [`Self::Read`] (D140).
@@ -195,7 +197,7 @@ impl ProjectPerm {
         match self {
             Self::View | Self::Query => Role::Viewer,
             Self::Annotate => Role::Member,
-            Self::ManageSettings | Self::ManageMembers => Role::Admin,
+            Self::ManageSettings | Self::ManageMembers | Self::Delete => Role::Admin,
         }
     }
 
@@ -203,7 +205,7 @@ impl ProjectPerm {
     pub(crate) fn key_scope(self) -> Option<KeyScope> {
         match self {
             Self::View | Self::Query => Some(KeyScope::Read),
-            Self::Annotate => Some(KeyScope::Write),
+            Self::Annotate | Self::Delete => Some(KeyScope::Write),
             Self::ManageSettings | Self::ManageMembers => None,
         }
     }
@@ -265,6 +267,8 @@ mod tests {
         assert_eq!(ProjectPerm::View.key_scope(), Some(KeyScope::Read));
         assert_eq!(ProjectPerm::Query.min_role(), Role::Viewer);
         assert_eq!(ProjectPerm::Query.key_scope(), Some(KeyScope::Read));
+        assert_eq!(ProjectPerm::Delete.min_role(), Role::Admin);
+        assert_eq!(ProjectPerm::Delete.key_scope(), Some(KeyScope::Write));
         assert!(ProjectPerm::ManageSettings.key_scope().is_none());
         assert!(ProjectPerm::ManageMembers.key_scope().is_none());
         // Score writes: viewer no; member, admin and owner yes.

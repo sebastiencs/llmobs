@@ -39,6 +39,7 @@ use super::connections::{
     LlmConnectionTestError, LlmConnectionTestResult, StructuredOutputMode, TestErrorClass,
     TestLlmConnectionRequest, UpdateLlmConnectionRequest,
 };
+use super::deletions::{CreateDeletion, Deletion, DeletionPreview, DeletionPreviewRequest};
 use super::invites::{CreateInviteRequest, CreatedInvite, Invite, InvitePreview};
 use super::keys::{
     ApiKey as ProjectApiKey, CreateApiKeyRequest, CreatePersonalTokenRequest, CreatedApiKey,
@@ -91,6 +92,11 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<Problem>();
     set.insert::<Limit>();
     set.insert::<TimeParam>();
+    set.insert::<Deletion>();
+    set.insert::<CreateDeletion>();
+    set.insert::<DeletionPreviewRequest>();
+    set.insert::<DeletionPreview>();
+    set.insert_page::<Deletion>("DeletionPage");
     set.insert::<SortOrder>();
     set.insert::<TraceSort>();
     set.insert::<SpanSort>();
@@ -274,6 +280,7 @@ pub fn openapi() -> OpenApi {
             tag("sql", "SQL console over the project's views."),
             tag("metrics", "Dashboard metrics."),
             tag("media", "Extracted media blobs."),
+            tag("deletions", "GDPR deletions and their status."),
         ]))
         .components(Some(components(&schemas)))
         .security(Some([
@@ -551,6 +558,7 @@ fn paths() -> Paths {
     let paths = score_paths(paths);
     let paths = saved_view_paths(paths);
     let paths = sql_paths(paths);
+    let paths = deletion_paths(paths);
     media_paths(paths).build()
 }
 
@@ -1748,6 +1756,58 @@ fn saved_view_paths(paths: PathsBuilder) -> PathsBuilder {
         )
 }
 
+fn deletion_paths(paths: PathsBuilder) -> PathsBuilder {
+    let list = operation("list_deletions", "deletions", "List deletions")
+        .parameters(Some(with_query::<PageParams>(vec![project_param()])))
+        .responses(responses(
+            "200",
+            json_named("DeletionPage", "One page of deletions, newest first."),
+            QUERY_ERRORS,
+        ))
+        .build();
+    let create = operation("create_deletion", "deletions", "Request a deletion")
+        .description(Some(
+            "Kinds `trace_ids` (an `sk` key with `write` may use it), `filter` and `user` (project admins). Answers 202; the deletion is resolved and applied in the background. A filter matching more than 100,000 traces is 422 `too_many_traces`.",
+        ))
+        .parameters(Some(vec![project_param()]))
+        .request_body(Some(json_body("CreateDeletion")))
+        .responses(responses(
+            "202",
+            json_of::<Deletion>("The deletion, in status resolving."),
+            &[400, 401, 403, 404, 409, 422, 429, 503],
+        ))
+        .build();
+    let preview = operation("preview_deletion", "deletions", "Count a filter deletion")
+        .parameters(Some(vec![project_param()]))
+        .request_body(Some(json_body("DeletionPreviewRequest")))
+        .responses(responses(
+            "200",
+            json_of::<DeletionPreview>("How many traces would be deleted."),
+            &[400, 401, 403, 404, 422, 429, 503],
+        ))
+        .build();
+    let get = operation("get_deletion", "deletions", "Get a deletion")
+        .parameters(Some(vec![project_param(), path_uuid("id", "Deletion id.")]))
+        .responses(responses(
+            "200",
+            json_of::<Deletion>("The deletion."),
+            &[400, 401, 403, 404, 429],
+        ))
+        .build();
+    let mut deletions = PathItem::new(HttpMethod::Get, list);
+    deletions.post = Some(create);
+    paths
+        .path(format!("{PROJECT}/deletions"), deletions)
+        .path(
+            format!("{PROJECT}/deletions/preview"),
+            PathItem::new(HttpMethod::Post, preview),
+        )
+        .path(
+            format!("{PROJECT}/deletions/{{id}}"),
+            PathItem::new(HttpMethod::Get, get),
+        )
+}
+
 fn media_paths(paths: PathsBuilder) -> PathsBuilder {
     let media = operation("get_media", "media", "Get a media blob")
         .description(Some(
@@ -1975,7 +2035,9 @@ fn problem(code: u16) -> Response {
         413 => "The request body is larger than the limit.",
         416 => "The Range header does not overlap the blob.",
         415 => "The request body is not JSON.",
-        422 => "The query took longer than its time limit or needed more memory than allowed.",
+        422 => {
+            "The query took longer than its time limit, needed more memory than allowed, or a filter deletion matched more than 100,000 traces."
+        }
         429 => "Too many requests.",
         503 => "The server is busy or a dependency is unavailable. Retry later.",
         _ => "Request failed.",

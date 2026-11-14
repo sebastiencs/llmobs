@@ -60,6 +60,7 @@ it("lists every account and admin write of the contract", () => {
         path.startsWith("/api/v1/orgs") ||
         path === "/api/v1/projects/{project}" ||
         path.startsWith("/api/v1/projects/{project}/api-keys") ||
+        path.startsWith("/api/v1/projects/{project}/deletions") ||
         path.startsWith("/api/v1/projects/{project}/members");
       if (covered && !LATER_TRACKS.includes(operationId)) {
         expected.push({ operationId, method, path });
@@ -129,6 +130,16 @@ it("refuses an override for an owner", async () => {
     JSON.stringify({ role: "viewer" }),
   );
   expect(response.status).toBe(400);
+});
+
+it("accepts a deletion", async () => {
+  const response = await send(
+    "POST",
+    `${PROJECT}/deletions`,
+    JSON.stringify({ kind: "user", user_id: "user-3" }),
+  );
+  expect(response.status).toBe(202);
+  expect(response.json?.status).toBe("pending");
 });
 
 it("answers 204 for deletes", async () => {

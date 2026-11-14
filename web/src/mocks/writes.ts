@@ -2,6 +2,8 @@ import { type HttpHandler, HttpResponse, http } from "msw";
 import adminUserCreatedDocument from "../../../fixtures/api/static/admin-user-created.json";
 import adminUsersDocument from "../../../fixtures/api/static/admin-users.json";
 import apiKeyCreatedDocument from "../../../fixtures/api/static/api-key-created.json";
+import deletionDocument from "../../../fixtures/api/static/deletion.json";
+import deletionPreviewDocument from "../../../fixtures/api/static/deletion-preview.json";
 import inviteCreatedDocument from "../../../fixtures/api/static/invite-created.json";
 import llmConnectionDocument from "../../../fixtures/api/static/llm-connection.json";
 import llmConnectionTestDocument from "../../../fixtures/api/static/llm-connection-test.json";
@@ -81,6 +83,16 @@ export const WRITE_OPERATIONS: readonly WriteOperation[] = [
     path: "/api/v1/projects/{project}/api-keys/{id}",
   },
   {
+    operationId: "create_deletion",
+    method: "post",
+    path: "/api/v1/projects/{project}/deletions",
+  },
+  {
+    operationId: "preview_deletion",
+    method: "post",
+    path: "/api/v1/projects/{project}/deletions/preview",
+  },
+  {
     operationId: "put_project_member",
     method: "put",
     path: "/api/v1/projects/{project}/members/{user}",
@@ -147,6 +159,8 @@ const RESPONSES: Record<string, Respond> = {
       { status: 201 },
     );
   },
+  create_deletion: () => HttpResponse.json(deletionDocument, { status: 202 }),
+  preview_deletion: () => HttpResponse.json(deletionPreviewDocument),
   delete_current_token: () => noContent(),
   delete_personal_token: () => noContent(),
 
