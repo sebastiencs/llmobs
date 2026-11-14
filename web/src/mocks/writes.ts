@@ -3,6 +3,7 @@ import adminUserCreatedDocument from "../../../fixtures/api/static/admin-user-cr
 import adminUsersDocument from "../../../fixtures/api/static/admin-users.json";
 import apiKeyCreatedDocument from "../../../fixtures/api/static/api-key-created.json";
 import evaluatorDocument from "../../../fixtures/api/static/evaluator.json";
+import evaluatorTestResultDocument from "../../../fixtures/api/static/evaluator-test-result.json";
 import inviteCreatedDocument from "../../../fixtures/api/static/invite-created.json";
 import llmConnectionDocument from "../../../fixtures/api/static/llm-connection.json";
 import llmConnectionTestDocument from "../../../fixtures/api/static/llm-connection-test.json";
@@ -106,6 +107,11 @@ export const WRITE_OPERATIONS: readonly WriteOperation[] = [
     operationId: "delete_evaluator",
     method: "delete",
     path: "/api/v1/projects/{project}/evaluators/{id}",
+  },
+  {
+    operationId: "post_evaluator_test",
+    method: "post",
+    path: "/api/v1/projects/{project}/evaluators/test",
   },
   {
     operationId: "post_score_definition",
@@ -296,6 +302,7 @@ const RESPONSES: Record<string, Respond> = {
     HttpResponse.json({ ...evaluatorDocument, ...named(body) }, { status: 201 }),
   patch_evaluator: ({ body }) => HttpResponse.json({ ...evaluatorDocument, ...named(body) }),
   delete_evaluator: () => noContent(),
+  post_evaluator_test: () => HttpResponse.json(evaluatorTestResultDocument),
   post_score_definition: ({ body }) =>
     HttpResponse.json({ ...scoreDefinitionDocument, ...named(body) }, { status: 201 }),
   patch_score_definition: ({ body }) =>
