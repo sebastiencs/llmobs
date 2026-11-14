@@ -258,6 +258,13 @@ async fn update_evaluator(
     // sealing (which needs the key) happens outside the transaction.
     let config_sent = body.config.is_some();
     let secret_sent = body.webhook_secret.is_some();
+    // A new webhook URL must not take the saved signing secret.
+    if kind == EvaluatorKind::Webhook && config_sent && !secret_sent {
+        return Err(bad_request(vec![field_error(
+            "webhook_secret",
+            evaluator::CONFIG_NEEDS_SECRET,
+        )]));
+    }
     let name = body.name.unwrap_or_else(|| expected.name.clone());
     let output = body
         .output_score
@@ -561,6 +568,9 @@ mod tests {
     const WEBHOOK_SECRET: &str = "signing-secret-0123456789";
     const WEBHOOK_URL: &str = "https://hooks.example.com/private/path?token=query-secret";
     const WEBHOOK_HEADER_VALUE: &str = "header-secret-value";
+    const MOVED_SECRET: &str = "moved-signing-secret-456";
+    const MOVED_URL: &str = "https://hooks.example.net/second/route?key=moved-query-secret";
+    const MOVED_HEADER: &str = "moved-header-value";
 
     fn path(project: ProjectId) -> String {
         format!("/api/v1/projects/{project}/evaluators")
@@ -982,6 +992,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rename_of_a_check_keeps_the_version() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let created = create_ok(&app, &seeded, &check_body("Refund")).await;
+        let id = id_of(&created);
+        assert_eq!(created["version"], 1);
+        let renamed = patch_ok(&app, &seeded, &id, &json!({"name": "Refund mention"})).await;
+        assert_eq!(renamed["name"], "Refund mention");
+        assert_eq!(renamed["version"], 1);
+    }
+
+    #[tokio::test]
     async fn kind_cannot_change() {
         let app = TestApp::new().await;
         let seeded = app.seed().await;
@@ -1007,7 +1029,10 @@ mod tests {
             &app,
             &seeded,
             &id,
-            &json!({"config": {"url": "https://hooks.example.net/new", "headers": {"X-Team": "new-value"}}}),
+            &json!({
+                "config": {"url": "https://hooks.example.net/new", "headers": {"X-Team": "new-value"}},
+                "webhook_secret": WEBHOOK_SECRET
+            }),
         )
         .await;
         assert_eq!(moved["version"], 2);
@@ -1028,6 +1053,32 @@ mod tests {
         assert_eq!(opened["signing_secret"], WEBHOOK_SECRET);
         assert_eq!(opened["url"], "https://hooks.example.net/new");
         assert_eq!(opened["headers"]["X-Team"], "new-value");
+    }
+
+    #[tokio::test]
+    async fn patch_config_without_secret_is_400() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let created = create_ok(&app, &seeded, &webhook_body("Hooked")).await;
+        let id = id_of(&created);
+        let uuid = Uuid::from_str(&id).unwrap();
+        let before = stored_secret(&app, uuid).await;
+
+        let response = patch(
+            &app,
+            &seeded,
+            &id,
+            &json!({"config": {"url": "https://hooks.example.net/new"}}),
+        )
+        .await;
+        assert_eq!(
+            field_errors(&response),
+            vec![(
+                "webhook_secret".to_owned(),
+                "webhook_secret is required with config".to_owned()
+            )]
+        );
+        assert_eq!(stored_secret(&app, uuid).await, before);
     }
 
     #[tokio::test]
@@ -1401,18 +1452,34 @@ mod tests {
             let id = id_of(&created.json::<Value>());
             let renamed = patch(&app, &seeded, &id, &json!({"name": "Renamed"})).await;
             assert_eq!(renamed.status, 200);
-            renamed.status
+            let moved = patch(
+                &app,
+                &seeded,
+                &id,
+                &json!({
+                    "config": {"url": MOVED_URL, "headers": {"X-Team": MOVED_HEADER}},
+                    "webhook_secret": MOVED_SECRET
+                }),
+            )
+            .await;
+            assert_eq!(moved.status, 200, "{}", text(&moved));
+            moved.status
         })
         .await;
         assert_eq!(outcome, 200);
         assert!(logs.contains("evaluator created"), "{logs}");
         assert!(logs.contains("evaluator updated"), "{logs}");
         assert!(logs.contains("hooks.example.com"), "{logs}");
+        assert!(logs.contains("hooks.example.net"), "{logs}");
         for sealed in [
             WEBHOOK_SECRET,
             "/private/path",
             "query-secret",
             WEBHOOK_HEADER_VALUE,
+            MOVED_SECRET,
+            "/second/route",
+            "moved-query-secret",
+            MOVED_HEADER,
         ] {
             assert!(!logs.contains(sealed), "logs show {sealed}");
         }

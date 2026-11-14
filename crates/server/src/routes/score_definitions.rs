@@ -1,6 +1,5 @@
 //! Score definition routes (spec 09 § Evaluation & alerts, spec 04 § Scores definitions,
 //! D-I-24, D-I-26). Members and above write; every project reader lists.
-#![cfg_attr(not(test), allow(dead_code))]
 
 use std::collections::HashSet;
 

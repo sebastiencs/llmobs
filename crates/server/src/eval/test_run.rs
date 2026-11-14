@@ -494,7 +494,7 @@ fn evaluator_to_run(
             {
                 errors.push(field_error(
                     "evaluator.webhook_secret",
-                    "webhook_secret is required with config",
+                    evaluator::CONFIG_NEEDS_SECRET,
                 ));
                 return Ok(None);
             }

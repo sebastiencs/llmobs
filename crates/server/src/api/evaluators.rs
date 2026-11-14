@@ -129,21 +129,23 @@ impl fmt::Debug for CreateEvaluatorRequest {
 /// `PATCH /api/v1/projects/{project}/evaluators/{id}` body. Absent means unchanged.
 ///
 /// Its `Debug` prints flags, not the config or the secret.
-#[derive(Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, PartialEq, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateEvaluatorRequest {
     /// Display name, 1 to 128 characters.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub name: Option<String>,
-    /// The kind-specific configuration. For a webhook, replaces the URL, the headers and the timeout together.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The kind-specific configuration. For a webhook, replaces the URL, the headers and the
+    /// timeout together, so it must come with `webhook_secret` (400 otherwise).
+    #[serde(default)]
     #[schema(value_type = Option<Object>)]
     pub config: Option<Value>,
     /// The score the evaluator writes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub output_score: Option<OutputScoreBody>,
-    /// Replaces the signing secret of a webhook. An empty string is refused.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Replaces the signing secret of a webhook, 16 to 256 characters. Required with a webhook
+    /// `config`, so a saved secret never signs requests to a new URL. An empty string is refused.
+    #[serde(default)]
     pub webhook_secret: Option<String>,
 }
 
@@ -230,22 +232,24 @@ pub fn builtin_template_list() -> EvaluatorTemplateList {
 /// An evaluator to test, possibly partial. Absent fields come from the saved evaluator.
 ///
 /// Its `Debug` prints flags, not the config or the secret.
-#[derive(Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, PartialEq, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TestEvaluatorBody {
     /// What the evaluator does. Must match the saved evaluator's kind.
     pub kind: EvaluatorKind,
     /// Display name. Absent: the saved name, or `Test`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub name: Option<String>,
     /// The kind-specific configuration. Absent: the saved configuration, which needs `evaluator_id`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// For a webhook, a present configuration needs `webhook_secret` too.
+    #[serde(default)]
     #[schema(value_type = Option<Object>)]
     pub config: Option<Value>,
     /// The score the evaluator writes.
     pub output_score: OutputScoreBody,
     /// Signing secret of a webhook. Absent: the saved secret, which needs `evaluator_id`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Required with a webhook `config`.
+    #[serde(default)]
     pub webhook_secret: Option<String>,
 }
 

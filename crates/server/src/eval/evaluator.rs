@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use axum::http::HeaderValue;
+use llmobs_core::enums::ScoreDataType;
 use llmobs_eval::{ConfigError, Evaluator, EvaluatorConfig, OutputScore};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -21,6 +22,14 @@ use crate::meta::evaluators::EvaluatorRow;
 
 /// The longest webhook header value, in bytes (spec 06 § Evaluator contract).
 const HEADER_VALUE_MAX: usize = 4096;
+
+/// The longest evaluator name, in Unicode scalar values (`llmobs_eval::Evaluator::validate`).
+const NAME_MAX_CHARS: usize = 128;
+
+/// The `webhook_secret` message of a webhook `config` sent without one: a new URL must never
+/// take the saved signing secret (spec 06 § Evaluator contract). Shared by the PATCH route and
+/// test runs.
+pub(crate) const CONFIG_NEEDS_SECRET: &str = "webhook_secret is required with config";
 
 /// A webhook's sealed values (D-I-19). Stored in `evaluators.secret_enc`.
 #[derive(Serialize, Deserialize)]
@@ -125,7 +134,18 @@ pub(crate) fn prepare(
     let parsed = match EvaluatorConfig::from_parts(kind.as_str(), config) {
         Ok(parsed) => parsed,
         Err(error) => {
+            // The checks that need no parsed config still run, so every error comes back at once.
             errors.push(config_error(prefix, &error));
+            if !(1..=NAME_MAX_CHARS).contains(&name.trim().chars().count()) {
+                errors.push(field_error(prefix, "name", "must be 1 to 128 characters"));
+            }
+            if kind == EvaluatorKind::Webhook && output.data_type == ScoreDataType::Text {
+                errors.push(field_error(
+                    prefix,
+                    "output_score.data_type",
+                    "must be numeric, boolean, or categorical",
+                ));
+            }
             return Err(errors);
         }
     };
@@ -348,4 +368,65 @@ fn field_error(prefix: &str, field: &str, message: &str) -> FieldError {
 fn to_text<T: Serialize>(value: &T, prefix: &str) -> Result<String, Vec<FieldError>> {
     serde_json::to_string(value)
         .map_err(|_| vec![field_error(prefix, "config", "invalid configuration")])
+}
+
+#[cfg(test)]
+mod tests {
+    use llmobs_core::enums::ScoreDataType;
+    use serde_json::json;
+
+    use super::*;
+
+    fn boolean() -> OutputScore {
+        OutputScore {
+            name: "hit".to_owned(),
+            data_type: ScoreDataType::Boolean,
+            categories: None,
+        }
+    }
+
+    #[test]
+    fn a_config_error_and_a_name_error_are_both_reported() {
+        let bad_config = json!({"check": "no_such_check"});
+        let Err(errors) = prepare(
+            Uuid::nil(),
+            "   ",
+            EvaluatorKind::Check,
+            &bad_config,
+            &boolean(),
+            None,
+            "",
+        ) else {
+            panic!("a bad config is accepted");
+        };
+        let fields: Vec<&str> = errors.iter().map(|error| error.field.as_str()).collect();
+        assert_eq!(fields, ["config", "name"]);
+        assert_eq!(errors[1].message, "must be 1 to 128 characters");
+    }
+
+    #[test]
+    fn a_webhook_text_output_is_reported_with_a_config_error() {
+        let text = OutputScore {
+            name: "hit".to_owned(),
+            data_type: ScoreDataType::Text,
+            categories: None,
+        };
+        let secret = "signing-secret-0123456789";
+        let Err(errors) = prepare(
+            Uuid::nil(),
+            "Hook",
+            EvaluatorKind::Webhook,
+            &json!({"timeout_ms": 5}),
+            &text,
+            Some(secret),
+            "evaluator.",
+        ) else {
+            panic!("a bad webhook config is accepted");
+        };
+        let fields: Vec<&str> = errors.iter().map(|error| error.field.as_str()).collect();
+        assert_eq!(
+            fields,
+            ["evaluator.config", "evaluator.output_score.data_type"]
+        );
+    }
 }

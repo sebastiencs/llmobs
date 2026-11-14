@@ -3417,7 +3417,10 @@ export interface components {
          *     Its `Debug` prints flags, not the config or the secret.
          */
         TestEvaluatorBody: {
-            /** @description The kind-specific configuration. Absent: the saved configuration, which needs `evaluator_id`. */
+            /**
+             * @description The kind-specific configuration. Absent: the saved configuration, which needs `evaluator_id`.
+             *     For a webhook, a present configuration needs `webhook_secret` too.
+             */
             config?: Record<string, never>;
             /** @description What the evaluator does. Must match the saved evaluator's kind. */
             kind: components["schemas"]["EvaluatorKind"];
@@ -3425,7 +3428,10 @@ export interface components {
             name?: string;
             /** @description The score the evaluator writes. */
             output_score: components["schemas"]["OutputScoreBody"];
-            /** @description Signing secret of a webhook. Absent: the saved secret, which needs `evaluator_id`. */
+            /**
+             * @description Signing secret of a webhook. Absent: the saved secret, which needs `evaluator_id`.
+             *     Required with a webhook `config`.
+             */
             webhook_secret?: string;
         };
         /** @description `POST /api/v1/orgs/{org}/llm-connections/{id}/test` body. */
@@ -3667,13 +3673,19 @@ export interface components {
          *     Its `Debug` prints flags, not the config or the secret.
          */
         UpdateEvaluatorRequest: {
-            /** @description The kind-specific configuration. For a webhook, replaces the URL, the headers and the timeout together. */
+            /**
+             * @description The kind-specific configuration. For a webhook, replaces the URL, the headers and the
+             *     timeout together, so it must come with `webhook_secret` (400 otherwise).
+             */
             config?: Record<string, never>;
             /** @description Display name, 1 to 128 characters. */
             name?: string;
             /** @description The score the evaluator writes. */
             output_score?: components["schemas"]["OutputScoreBody"];
-            /** @description Replaces the signing secret of a webhook. An empty string is refused. */
+            /**
+             * @description Replaces the signing secret of a webhook, 16 to 256 characters. Required with a webhook
+             *     `config`, so a saved secret never signs requests to a new URL. An empty string is refused.
+             */
             webhook_secret?: string;
         };
         /**
