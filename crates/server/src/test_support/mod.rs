@@ -797,8 +797,22 @@ pub(crate) async fn assert_logs_clean<T>(needles: &[&str], future: impl Future<O
     value
 }
 
+/// Installs a process-wide sink subscriber once.
+///
+/// Callsite interest is cached process-wide, `set_default` does not refresh
+/// it, and the event macros drop an event without consulting any subscriber
+/// when its callsite's cached interest is `never`. With no global subscriber,
+/// callsites that fired outside a capture cache exactly that. This global's
+/// layers answer `sometimes`, so every event reaches the current default,
+/// which on a capturing thread is the capture's subscriber.
+static GLOBAL_ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
 /// The formatted tracing output produced while `future` is polled.
 pub(crate) async fn capture_logs<T>(future: impl Future<Output = T>) -> (T, String) {
+    if GLOBAL_ONCE.set(()).is_ok() {
+        let sink = tracing_subscriber::fmt::layer().with_writer(io::sink);
+        let _ = tracing::subscriber::set_global_default(tracing_subscriber::registry().with(sink));
+    }
     let buffer = Arc::new(Mutex::new(Vec::<u8>::new()));
     let writer = Arc::clone(&buffer);
     let layer = tracing_subscriber::fmt::layer()

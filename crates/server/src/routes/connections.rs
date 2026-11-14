@@ -473,9 +473,13 @@ async fn test_connection(
         });
     }
     let now = state.clock.now_ns();
-    if result.ok {
+    // Best effort: the provider was called, so a failed status write must not
+    // lose the test result.
+    let status_write = if result.ok {
         if row.status != "ok" {
-            set_status(&state, id, "ok", None, now).await?;
+            set_status(&state, id, "ok", None, now).await
+        } else {
+            Ok(())
         }
     } else if pause_class && explicit.is_none() {
         // Only a pause on the connection's own default model marks it failing:
@@ -485,7 +489,18 @@ async fn test_connection(
             .as_ref()
             .map(|error| error.message.clone())
             .unwrap_or_default();
-        set_status(&state, id, "failing", Some(message), now).await?;
+        set_status(&state, id, "failing", Some(message), now).await
+    } else {
+        Ok(())
+    };
+    if let Err(error) = status_write {
+        // The kind only: the text can quote database state, and never carries
+        // anything the provider said.
+        tracing::warn!(
+            connection_id = %row.id,
+            error_kind = meta_error_kind(&error),
+            "could not store the connection status"
+        );
     }
     tracing::info!(
         target: "audit",
@@ -500,13 +515,18 @@ async fn test_connection(
 }
 
 /// Stores a connection's new `status` without touching `updated_at` (D-I-5).
+///
+/// # Errors
+///
+/// Returns [`MetaError`] when the write fails. The caller decides what to do
+/// with it.
 async fn set_status(
     state: &AppState,
     id: Uuid,
     status: &'static str,
     error: Option<String>,
     now: i64,
-) -> Result<(), ApiError> {
+) -> Result<(), MetaError> {
     state
         .meta
         .write(move |conn| {
@@ -514,8 +534,20 @@ async fn set_status(
                 connections::set_connection_status(conn, id, status, error.as_deref(), now).await
             })
         })
-        .await?;
-    Ok(())
+        .await
+}
+
+/// The kind of a [`MetaError`], for logs that carry no error text.
+fn meta_error_kind(error: &MetaError) -> &'static str {
+    match error {
+        MetaError::Open { .. } => "open",
+        MetaError::Migrate { .. } => "migrate",
+        MetaError::NotInitialized => "not initialized",
+        MetaError::SchemaMismatch { .. } => "schema mismatch",
+        MetaError::Db(_) => "db",
+        MetaError::Conflict(_) => "conflict",
+        MetaError::Corrupt { .. } => "corrupt",
+    }
 }
 
 /// The stored connection as the API shows it, without the sealed values.
@@ -1974,6 +2006,52 @@ mod tests {
             TestErrorClass::Retryable
         );
 
+        let connection: LlmConnection = get(&app, &cookie, id).await.json();
+        assert_eq!(connection.status, ConnectionStatus::Ok);
+        assert!(connection.last_error.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_status_write_keeps_the_test_result() {
+        let mock = MockLlm::start(vec![Reply {
+            status: 401,
+            body: json!({
+                "error": {"message": "bad key", "type": "invalid_request_error"}
+            }),
+        }])
+        .await;
+        let (app, cookie) = egress_app().await;
+        let id = mocked(&app, &cookie, &mock).await;
+        // Abort every UPDATE of llm_connections: the status write after the
+        // provider call fails while reads still work. Closing the writer is
+        // not an option here: `MetaDb::close` consumes the database the app
+        // still holds.
+        app.state
+            .meta
+            .write(|conn| {
+                Box::pin(async move {
+                    sqlx::query(
+                        "CREATE TRIGGER block_status_update BEFORE UPDATE ON llm_connections \
+                         BEGIN SELECT RAISE(ABORT, 'blocked'); END",
+                    )
+                    .execute(&mut *conn)
+                    .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
+
+        let failed = test(&app, &cookie, id, &json!({})).await;
+        assert_eq!(failed.status, 200, "{}", text(&failed));
+        let result: LlmConnectionTestResult = failed.json();
+        assert!(!result.ok);
+        assert_eq!(
+            result.error.expect("the failure").class,
+            TestErrorClass::Pause
+        );
+
+        // The failing status never landed.
         let connection: LlmConnection = get(&app, &cookie, id).await.json();
         assert_eq!(connection.status, ConnectionStatus::Ok);
         assert!(connection.last_error.is_none());
