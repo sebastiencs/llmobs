@@ -102,6 +102,8 @@ pub struct AdminSettings {
     pub email_verification_required: bool,
     /// Domains that must use SSO. Empty means SSO is not required.
     pub enforce_sso_domains: Vec<String>,
+    /// Whether `enforce_sso_domains` is applied: it needs a licence listing `sso_enforcement`.
+    pub enforce_sso_applied: bool,
     /// SMTP is configured.
     pub smtp_enabled: bool,
     /// `From` mailbox. Omitted when SMTP is not configured.

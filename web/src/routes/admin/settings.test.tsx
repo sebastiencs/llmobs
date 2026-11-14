@@ -13,6 +13,7 @@ const SETTINGS = {
   password_enabled: true,
   email_verification_required: false,
   enforce_sso_domains: [],
+  enforce_sso_applied: false,
   smtp_enabled: false,
   providers: [
     { id: "github", display_name: "GitHub" },

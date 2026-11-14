@@ -1189,6 +1189,8 @@ export interface components {
             email_from?: string;
             /** @description New accounts must verify their email before signing in. */
             email_verification_required: boolean;
+            /** @description Whether `enforce_sso_domains` is applied: it needs a licence listing `sso_enforcement`. */
+            enforce_sso_applied: boolean;
             /** @description Domains that must use SSO. Empty means SSO is not required. */
             enforce_sso_domains: string[];
             /** @description Password login is enabled. */

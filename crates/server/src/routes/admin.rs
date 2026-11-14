@@ -275,6 +275,7 @@ async fn get_settings(
         password_enabled: !auth.disable_password,
         email_verification_required: auth.require_email_verification,
         enforce_sso_domains: auth.enforce_sso_domains.clone(),
+        enforce_sso_applied: crate::ee::sso_enforcement::applies(&state),
         smtp_enabled: state.mailer.is_some(),
         email_from: state.config.email_from.clone(),
         providers: state.providers.list(),

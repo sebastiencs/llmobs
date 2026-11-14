@@ -3,8 +3,6 @@
 //! M1 has one layer: the instance licence's features, while it is active or in grace.
 //! M2 adds the instance defaults and the org's token.
 
-#![cfg_attr(not(test), allow(dead_code))] // P7 uses these outside tests.
-
 use llmobs_core::ids::OrgId;
 
 use crate::ee::license::{LicenseState, LicenseStatus};

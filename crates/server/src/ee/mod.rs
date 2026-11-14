@@ -4,4 +4,5 @@
 
 pub(crate) mod license;
 pub(crate) mod project_roles;
+pub(crate) mod sso_enforcement;
 pub(crate) mod token;

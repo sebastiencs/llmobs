@@ -308,6 +308,7 @@ pub async fn bind(config: ServerConfig, ui: Option<axum::Router>) -> Result<Runn
         connections: crate::eval::connection::ConnectionCache::default(),
         entitlements: crate::entitlements::EntitlementsState::new(license),
     });
+    crate::ee::sso_enforcement::warn_if_unlicensed(&state);
     if let Err(error) = crate::bootstrap::prepare(&state).await {
         release_state(state).await;
         return Err(serve_bootstrap(error));

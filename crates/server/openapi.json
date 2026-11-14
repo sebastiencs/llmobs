@@ -7388,6 +7388,7 @@
           "password_enabled",
           "email_verification_required",
           "enforce_sso_domains",
+          "enforce_sso_applied",
           "smtp_enabled",
           "providers",
           "trusted_proxies"
@@ -7400,6 +7401,10 @@
           "email_verification_required": {
             "type": "boolean",
             "description": "New accounts must verify their email before signing in."
+          },
+          "enforce_sso_applied": {
+            "type": "boolean",
+            "description": "Whether `enforce_sso_domains` is applied: it needs a licence listing `sso_enforcement`."
           },
           "enforce_sso_domains": {
             "type": "array",
