@@ -15,6 +15,21 @@ use crate::http::error::ApiError;
 /// Time allowed for one read: planning, running and score lookups each get this budget.
 pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Most bytes of `search` text a list or stream accepts (D-G-39).
+pub(crate) const MAX_SEARCH_BYTES: usize = 1024;
+
+/// `400 bad_request` when `search` is longer than [`MAX_SEARCH_BYTES`] (G review m-2). The
+/// message never quotes the text.
+pub(crate) fn check_search(search: Option<&str>) -> Result<(), ApiError> {
+    match search {
+        Some(text) if text.len() > MAX_SEARCH_BYTES => Err(ApiError::BadRequest {
+            detail: Some(format!("search is longer than {MAX_SEARCH_BYTES} bytes")),
+            errors: Vec::new(),
+        }),
+        _ => Ok(()),
+    }
+}
+
 /// Admits a query on `project` and builds A2's context, without a window (D101).
 pub(crate) async fn open_query(
     state: &AppState,

@@ -3,7 +3,7 @@
 Read [README.md](README.md) first. Runs **after F1** (it asserts F1's dotted deep link).
 
 **Goal:**
-- The CI `e2e` job builds the web first, so its server has the UI embedded. The Rust e2e test runs there and must take its "UI embedded" branch (it refuses to pass on the `503` branch when `LLMOBS_E2E_REQUIRE_UI` is set), and the debug binary must report `ui: embedded`. The `rust-test` job keeps running the same test without a web build (the `503` branch), as today.
+- The CI `e2e` job builds the web first, so its server has the UI embedded. The Rust e2e test runs there and must take its "UI embedded" branch (it refuses to pass on the `503` branch when `E2E_REQUIRE_UI` is set; no `LLMOBS_` prefix, because `ServerConfig::load` rejects unknown `LLMOBS_` variables), and the debug binary must report `ui: embedded`. The `rust-test` job keeps running the same test without a web build (the `503` branch), as today.
 - A second Rust e2e test covers what the first does not: both SSE streams over real HTTP (a `trace` event, a `span` event, `resync` for `Last-Event-ID`), and one read each of sessions, users, scores (after a score write), metrics, schema and media.
 - D-G-18 stops saying that release CI checks the UI: the `e2e` job checks the debug build; `check-release` stays track N's (m-10).
 
@@ -52,7 +52,7 @@ Replace the `e2e` recipe with:
 # Build the web, run the Rust e2e tests with the UI embedded, then the SDK suites against a real server (D-G-20, D-G-18)
 e2e: js-install
     pnpm --dir web run build
-    LLMOBS_E2E_REQUIRE_UI=1 cargo test --workspace --all-features --test e2e
+    E2E_REQUIRE_UI=1 cargo test --workspace --all-features --test e2e
     bash tools/e2e/run.sh
     ./target/debug/llmobs version | grep -qx 'ui: embedded'
 ```
@@ -76,21 +76,22 @@ struct Server {
     proto_id: String,
 }
 
-/// Writes the config into `dir`, starts the server with the embedded UI and signs in.
-async fn start(dir: &Path) -> Server { … }
+/// Writes the config plus `extra_config` (appended after the `[init]` table) into `dir`, starts
+/// the server with the embedded UI and signs in.
+async fn start(dir: &Path, extra_config: &str) -> Server { … }
 ```
 
-The body is the existing code, unchanged, in the same order; step 3 (the `GET /` and `/api/v1/nope` checks) stays in the first test, right after `let server = start(dir.path()).await;`. Rewrite the first test to use `server.http`, `server.api`, etc.; its behaviour and its snapshots must not change (`cargo insta test` reports no change). `bind` returns `Result<llmobs_server::serve::Running, ServeError>`.
+The body is the existing code, unchanged, in the same order, except the written TOML ends with `{extra_config}` after the `[init]` table. The first test passes `""`, so its config, behaviour and snapshots stay exactly as before; the second test appends a `[media]` table (step 1). Step 3 (the `GET /` and `/api/v1/nope` checks) stays in the first test, right after `let server = start(dir.path(), "").await;`. Rewrite the first test to use `server.http`, `server.api`, etc.; its behaviour and its snapshots must not change (`cargo insta test` reports no change). `bind` returns `Result<llmobs_server::serve::Running, ServeError>`.
 
 ### 3. `e2e.rs`: require the UI when asked
 
 In the first test, right after `start`, add:
 
 ```rust
-    if std::env::var_os("LLMOBS_E2E_REQUIRE_UI").is_some() {
+    if std::env::var_os("E2E_REQUIRE_UI").is_some() {
         assert!(
             llmobs_ui::embedded(),
-            "LLMOBS_E2E_REQUIRE_UI is set, but web/dist was not embedded: build the web first"
+            "E2E_REQUIRE_UI is set, but web/dist was not embedded: build the web first"
         );
     }
 ```
@@ -136,7 +137,7 @@ and an `Api` method for a cookie-authenticated `GET` whose response the caller r
 
 Then `#[tokio::test(flavor = "multi_thread")] async fn live_streams_and_every_read_route_work_end_to_end()`:
 
-1. `let dir = tempfile::tempdir().unwrap(); let server = start(dir.path()).await;` and `let project = format!("/api/v1/projects/{}", server.proto_id);`.
+1. `let dir = tempfile::tempdir().unwrap(); let server = start(dir.path(), "\n[media]\nmin_bytes = \"1B\"\n").await;` and `let project = format!("/api/v1/projects/{}", server.proto_id);`.
 2. Let `context_trace = format!("{:032x}", 1)` and `media_trace = format!("{:032x}", 2)`.
 3. Open three streams **before** sending anything:
    - `let mut traces = server.api.get_raw(&format!("{project}/traces/stream"), &[]).await;` — assert status `200` and a `content-type` starting with `text/event-stream`;
@@ -153,7 +154,7 @@ Then `#[tokio::test(flavor = "multi_thread")] async fn live_streams_and_every_re
    - `{project}/scores?trace_id={context_trace}`: `data` has an item whose `name` is `e2e`;
    - `{project}/metrics?{window}`: succeeds;
    - `{project}/schema`: succeeds.
-8. Media, through `server.api.get_raw(&format!("{project}/media/497790947d4666760ce38f3c00e852c71fdb66cae849bae8e9ede352719e1581"), &[])`: status `200`, body length `70`.
+8. Media, through `server.api.get_raw(&format!("{project}/media/497790947d4666760ce38f3c00e852c71fdb66cae849bae8e9ede352719e1581"), &[])`: status `200`, body length `70`. This needs the `[media] min_bytes = "1B"` the `start` call passes: the default 4 KiB keeps the 70-byte blob inline, so nothing is stored and the read is a 404.
 9. `drop(server.api); drop(server.client); server.running.shutdown().await.unwrap();` (destructure `server` first if the borrow checker needs it).
 
 If a read answers differently from the facts above (a field name, a default window), stop and report the actual response; do not change the server.

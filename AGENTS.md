@@ -146,7 +146,7 @@ Run everything through `just`:
 | `just capture <group>/<case>` | record an OTLP fixture from a scenario, e.g. `just capture openinference/openai-chat-tool` |
 | `just capture-all` | recapture every scenario |
 | `just check-capture` | lint and type-check the capture scenarios, then recapture every scenario and compare (timing excluded) |
-| `just e2e` | run the Python and TypeScript SDKs against a real `llmobs serve` (D-G-20) |
+| `just e2e` | build the web, run the Rust e2e tests with the UI embedded, then the Python and TypeScript SDK suites against a real `llmobs serve` |
 
 Required tools:
 - `rustup` (the toolchain is pinned in `rust-toolchain.toml`)

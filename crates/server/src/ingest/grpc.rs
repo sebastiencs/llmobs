@@ -17,6 +17,7 @@ use opentelemetry_proto::tonic::collector::trace::v1::{
 use prost::Message;
 use tonic::codec::CompressionEncoding;
 
+use super::commit_in_task;
 use super::otlp::partial_success;
 use super::{Accepted, CommitTarget, IngestError};
 use crate::auth::principal::{Principal, bearer_principal};
@@ -120,18 +121,7 @@ async fn export_request(
         request_bytes: bytes,
         now_ns: now,
     };
-    let receipt = state
-        .ingest
-        .commit(
-            &state.storage,
-            &state.usage,
-            &state.live,
-            target,
-            normalized,
-        )
-        .await?;
-    // The budget covers the spans until they are appended (D-G-5).
-    drop(reservation);
+    let receipt = commit_in_task(state, target, normalized, reservation).await?;
     tracing::info!(
         target: "ingest",
         transport = "grpc",

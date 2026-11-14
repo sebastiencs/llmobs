@@ -282,7 +282,7 @@ pub(crate) mod test_helpers {
     pub(crate) async fn capture_info_logs<T>(future: impl Future<Output = T>) -> (T, String) {
         use tracing_subscriber::Layer;
         use tracing_subscriber::layer::SubscriberExt;
-        crate::test_support::ask_every_time();
+        crate::test_support::ensure_global_subscriber();
         let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
         let writer = std::sync::Arc::clone(&buffer);
         let filter = tracing_subscriber::filter::Targets::new()
