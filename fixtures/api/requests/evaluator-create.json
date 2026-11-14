@@ -1,0 +1,22 @@
+{
+  "name": "Relevance",
+  "kind": "llm_judge",
+  "config": {
+    "connection_id": "01900000-0000-7000-8000-000000000400",
+    "model": "gpt-5-mini",
+    "prompt": "Rate how relevant the answer is to the question.\n\nQuestion: {{ input }}\nAnswer: {{ output }}",
+    "output": {
+      "type": "numeric",
+      "min": 0.0,
+      "max": 1.0
+    },
+    "include_reason": true,
+    "temperature": null,
+    "max_output_tokens": 1024,
+    "timeout_ms": 60000
+  },
+  "output_score": {
+    "name": "relevance",
+    "data_type": "numeric"
+  }
+}

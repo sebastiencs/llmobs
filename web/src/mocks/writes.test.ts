@@ -9,7 +9,15 @@ import { WRITE_OPERATIONS, writeHandlers } from "./writes";
 const PROJECT = "/api/v1/projects/acme%2Fsupport-bot";
 
 /** Writes that later sub-phases add under the covered prefixes. */
-const LATER_TRACKS: string[] = [];
+const LATER_TRACKS: string[] = [
+  "post_evaluator",
+  "patch_evaluator",
+  "delete_evaluator",
+  "post_evaluator_test",
+  "post_score_definition",
+  "patch_score_definition",
+  "delete_score_definition",
+];
 
 beforeEach(() => {
   server.use(...writeHandlers);
@@ -60,7 +68,9 @@ it("lists every account and admin write of the contract", () => {
         path.startsWith("/api/v1/orgs") ||
         path === "/api/v1/projects/{project}" ||
         path.startsWith("/api/v1/projects/{project}/api-keys") ||
-        path.startsWith("/api/v1/projects/{project}/members");
+        path.startsWith("/api/v1/projects/{project}/members") ||
+        path.startsWith("/api/v1/projects/{project}/evaluators") ||
+        path.startsWith("/api/v1/projects/{project}/score-definitions");
       if (covered && !LATER_TRACKS.includes(operationId)) {
         expected.push({ operationId, method, path });
       }

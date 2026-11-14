@@ -16,6 +16,16 @@
     "file": "static/auth-config.json"
   },
   {
+    "operation_id": "get_evaluator",
+    "path_params": {
+      "id": "01900000-0000-7000-8000-000000000500"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/evaluator.json"
+  },
+  {
     "operation_id": "get_invite_preview",
     "path_params": {
       "token": "EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXA"
@@ -383,6 +393,22 @@
     "file": "static/api-keys.json"
   },
   {
+    "operation_id": "list_evaluator_templates",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/evaluator-templates.json"
+  },
+  {
+    "operation_id": "list_evaluators",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/evaluators.json"
+  },
+  {
     "operation_id": "list_llm_connections",
     "path_params": {
       "org": "acme"
@@ -453,6 +479,14 @@
     "status": 200,
     "content_type": "application/json",
     "file": "static/saved-views.json"
+  },
+  {
+    "operation_id": "list_score_definitions",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/score-definitions.json"
   },
   {
     "operation_id": "list_scores",
@@ -541,6 +575,22 @@
     "file": "static/api-key-created.json"
   },
   {
+    "operation_id": "post_evaluator",
+    "path_params": {},
+    "query": {},
+    "status": 201,
+    "content_type": "application/json",
+    "file": "static/evaluator.json"
+  },
+  {
+    "operation_id": "post_evaluator_test",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/evaluator-test-result.json"
+  },
+  {
     "operation_id": "post_llm_connection",
     "path_params": {
       "org": "acme"
@@ -586,6 +636,14 @@
     "status": 201,
     "content_type": "application/json",
     "file": "static/personal-token-created.json"
+  },
+  {
+    "operation_id": "post_score_definition",
+    "path_params": {},
+    "query": {},
+    "status": 201,
+    "content_type": "application/json",
+    "file": "static/score-definition.json"
   },
   {
     "operation_id": "post_setup",

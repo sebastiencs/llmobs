@@ -33,6 +33,9 @@ Do not edit `responses/`, `manifest.json` or `static/sql-result.json` by hand. R
 | Personal token | `01900000-0000-7000-8000-000000000201`, prefix `pat-llmobs-EXAMPL`. `personal-token-created.json` uses the synthetic `pat-llmobs-EXAMPLE0…` secret. It is not a live token |
 | Invitation | `01900000-0000-7000-8000-000000000300` for `guest@example.com`. `invite-created.json` uses the synthetic accept token `EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXA`. It is not a live invitation |
 | LLM connection | `01900000-0000-7000-8000-000000000400`, `OpenAI`. `requests/llm-connection-create.json` holds a synthetic key; it is not a live key |
+| Evaluator | `01900000-0000-7000-8000-000000000500`, `Relevance`, an LLM judge on connection `…0400`, score `relevance` |
+| Score definition | `01900000-0000-7000-8000-000000000600`, `relevance`, numeric from 0 to 1 |
+| Judge trace (test result example) | `e1000000000000000000000000000001`; it is not in the dataset |
 | Created account | `01900000-0000-7000-8000-000000000102`, `new@example.com`. `admin-user-created.json` reuses that synthetic token in the reset link. It is not a live reset |
 | Trace ids | `a1000000000000000000000000000001` through `…0006` |
 | Span ids | `b1000000000000` plus the trace digit and the span digit. Trace 1 span 2 is `b100000000000012` |

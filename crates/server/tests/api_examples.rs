@@ -19,6 +19,10 @@ use llmobs_server::api::common::Page;
 use llmobs_server::api::connections::{
     CreateLlmConnectionRequest, LlmConnection, LlmConnectionTestResult,
 };
+use llmobs_server::api::evaluators::{
+    CreateEvaluatorRequest, Evaluator, EvaluatorTemplateList, EvaluatorTestRequest,
+    EvaluatorTestResult,
+};
 use llmobs_server::api::invites::{CreatedInvite, Invite, InvitePreview};
 use llmobs_server::api::keys::{ApiKey, CreatedApiKey, CreatedPersonalToken, PersonalToken};
 use llmobs_server::api::members::{OrgMember, ProjectMember};
@@ -27,6 +31,7 @@ use llmobs_server::api::openapi::openapi;
 use llmobs_server::api::payload::Payload;
 use llmobs_server::api::saved_views::SavedView;
 use llmobs_server::api::schema::SchemaResponse;
+use llmobs_server::api::score_definitions::{CreateScoreDefinitionRequest, ScoreDefinition};
 use llmobs_server::api::scores::{FeedbackRequest, ScoreBatch};
 use llmobs_server::api::sessions::{SessionDetail, SessionSummary};
 use llmobs_server::api::sql::{SqlQueryRequest, SqlQueryResult};
@@ -380,6 +385,12 @@ fn static_files_match_their_types() {
     roundtrip::<SchemaResponse>("static/schema.json");
     roundtrip::<Page<SavedView>>("static/saved-views.json");
     roundtrip::<SqlQueryResult>("static/sql-result.json");
+    roundtrip::<Page<Evaluator>>("static/evaluators.json");
+    roundtrip::<Evaluator>("static/evaluator.json");
+    roundtrip::<EvaluatorTemplateList>("static/evaluator-templates.json");
+    roundtrip::<EvaluatorTestResult>("static/evaluator-test-result.json");
+    roundtrip::<Page<ScoreDefinition>>("static/score-definitions.json");
+    roundtrip::<ScoreDefinition>("static/score-definition.json");
 }
 
 #[test]
@@ -388,6 +399,12 @@ fn request_examples_match_their_types_and_the_openapi_document() {
     roundtrip::<FeedbackRequest>("requests/feedback.json");
     roundtrip::<CreateLlmConnectionRequest>("requests/llm-connection-create.json");
     roundtrip::<SqlQueryRequest>("requests/sql-query.json");
+    roundtrip::<CreateEvaluatorRequest>("requests/evaluator-create.json");
+    roundtrip::<CreateScoreDefinitionRequest>("requests/score-definition-create.json");
+    let test_text = fs::read_to_string(api_dir().join("requests/evaluator-test.json"))
+        .unwrap_or_else(|error| panic!("{error}"));
+    serde_json::from_str::<EvaluatorTestRequest>(&test_text)
+        .unwrap_or_else(|error| panic!("requests/evaluator-test.json: {error}"));
     let document = read_json::<Value>(&contract_document());
     let registry = jsonschema::Registry::new()
         .add(OPENAPI_URI, document.clone())
@@ -399,6 +416,12 @@ fn request_examples_match_their_types_and_the_openapi_document() {
         ("post_feedback", "requests/feedback.json"),
         ("post_llm_connection", "requests/llm-connection-create.json"),
         ("run_sql", "requests/sql-query.json"),
+        ("post_evaluator", "requests/evaluator-create.json"),
+        ("post_evaluator_test", "requests/evaluator-test.json"),
+        (
+            "post_score_definition",
+            "requests/score-definition-create.json",
+        ),
     ];
     let mut failures = Vec::new();
     for (operation_id, file) in requests {
@@ -489,6 +512,12 @@ fn generated_files_roundtrip() {
                 roundtrip::<LlmConnection>(&example.file);
             }
             "post_llm_connection_test" => roundtrip::<LlmConnectionTestResult>(&example.file),
+            "list_evaluators" => roundtrip::<Page<Evaluator>>(&example.file),
+            "get_evaluator" | "post_evaluator" => roundtrip::<Evaluator>(&example.file),
+            "list_evaluator_templates" => roundtrip::<EvaluatorTemplateList>(&example.file),
+            "post_evaluator_test" => roundtrip::<EvaluatorTestResult>(&example.file),
+            "list_score_definitions" => roundtrip::<Page<ScoreDefinition>>(&example.file),
+            "post_score_definition" => roundtrip::<ScoreDefinition>(&example.file),
             other => panic!("{other} has no round-trip"),
         }
     }

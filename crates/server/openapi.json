@@ -3920,6 +3920,673 @@
         ]
       }
     },
+    "/api/v1/projects/{project}/evaluator-templates": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "List built-in judge templates",
+        "description": "Any project member can read. The list is fixed; the UI copies a template into the editor.",
+        "operationId": "list_evaluator_templates",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The built-in templates, in display order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluatorTemplateList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/evaluators": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "List evaluators",
+        "description": "Any project member can read.",
+        "operationId": "list_evaluators",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return (1–1000, default 50).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Limit",
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of evaluators. Sealed values are not included.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluatorPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Create an evaluator",
+        "description": "Project members and above. API keys cannot call it.",
+        "operationId": "post_evaluator",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEvaluatorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created evaluator.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Evaluator"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/evaluators/test": {
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Run an evaluator once",
+        "description": "Project members and above. API keys cannot call it. Runs synchronously, writes the judge trace (environment `llmobs-eval`) and the judge usage, and writes no score. Shares the 10 per minute per user limit with connection tests.",
+        "operationId": "post_evaluator_test",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluatorTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome. An evaluator failure is ok: false, not an error status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluatorTestResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/evaluators/{id}": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Get an evaluator",
+        "description": "Any project member can read.",
+        "operationId": "get_evaluator",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Evaluator id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The evaluator.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Evaluator"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Delete an evaluator",
+        "description": "Project members and above. API keys cannot call it.",
+        "operationId": "delete_evaluator",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Evaluator id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Update an evaluator",
+        "description": "Project members and above. API keys cannot call it.",
+        "operationId": "patch_evaluator",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Evaluator id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEvaluatorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated evaluator.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Evaluator"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project}/media/{sha256}": {
       "get": {
         "tags": [
@@ -5022,6 +5689,415 @@
           },
           "404": {
             "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/score-definitions": {
+      "get": {
+        "tags": [
+          "score_definitions"
+        ],
+        "summary": "List score definitions",
+        "description": "Any project member can read.",
+        "operationId": "list_score_definitions",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_archived",
+            "in": "query",
+            "description": "Include archived definitions. Default false.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return (1–1000, default 50).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Limit",
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of score definitions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoreDefinitionPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "score_definitions"
+        ],
+        "summary": "Create a score definition",
+        "description": "Project members and above. API keys cannot call it.",
+        "operationId": "post_score_definition",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateScoreDefinitionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created score definition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoreDefinition"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/score-definitions/{id}": {
+      "delete": {
+        "tags": [
+          "score_definitions"
+        ],
+        "summary": "Archive a score definition",
+        "description": "Project members and above. API keys cannot call it. Archives the definition; score writes stop being checked against it.",
+        "operationId": "delete_score_definition",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Score definition id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Archived."
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "score_definitions"
+        ],
+        "summary": "Update or restore a score definition",
+        "description": "Project members and above. API keys cannot call it.",
+        "operationId": "patch_score_definition",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Score definition id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateScoreDefinitionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated score definition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoreDefinition"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -7695,6 +8771,39 @@
         },
         "additionalProperties": false
       },
+      "CreateEvaluatorRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/projects/{project}/evaluators` body.\n\nIts `Debug` prints flags, not the config or the secret.",
+        "required": [
+          "name",
+          "kind",
+          "config",
+          "output_score"
+        ],
+        "properties": {
+          "config": {
+            "type": "object",
+            "description": "The kind-specific configuration. For a webhook, the full `{url, timeout_ms?, headers?}` document."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EvaluatorKind",
+            "description": "What the evaluator does. Immutable once created."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name, 1 to 128 characters."
+          },
+          "output_score": {
+            "$ref": "#/components/schemas/OutputScoreBody",
+            "description": "The score the evaluator writes."
+          },
+          "webhook_secret": {
+            "type": "string",
+            "description": "Signing secret of a webhook, 16 to 256 characters. Write-only, and required for a webhook."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateInviteRequest": {
         "type": "object",
         "description": "`POST /api/v1/orgs/{org}/invites`.",
@@ -7872,6 +8981,46 @@
         },
         "additionalProperties": false
       },
+      "CreateScoreDefinitionRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/projects/{project}/score-definitions` body.",
+        "required": [
+          "name",
+          "data_type"
+        ],
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScoreDefinitionCategory"
+            },
+            "description": "Labels of a categorical score: 1 to 100, unique. Only for categorical scores."
+          },
+          "data_type": {
+            "$ref": "#/components/schemas/ScoreDataType",
+            "description": "Score data type. Immutable once created."
+          },
+          "description": {
+            "type": "string",
+            "description": "What the score means, at most 1 000 characters."
+          },
+          "max_value": {
+            "type": "number",
+            "format": "double",
+            "description": "Highest allowed value. Only for numeric scores, above `min_value`."
+          },
+          "min_value": {
+            "type": "number",
+            "format": "double",
+            "description": "Lowest allowed value. Only for numeric scores."
+          },
+          "name": {
+            "type": "string",
+            "description": "Score name, 1 to 255 bytes after trimming."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreatedAdminUser": {
         "type": "object",
         "description": "`POST /api/v1/admin/users` returns 201.\n\nThe user has no password. `reset_url` is the one-hour link that sets one.",
@@ -8039,6 +9188,306 @@
           "user_id": {
             "type": "string",
             "description": "End-user id."
+          }
+        }
+      },
+      "Evaluator": {
+        "type": "object",
+        "description": "An evaluator. Sealed values (a webhook's signing secret and header values) are not included.",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "config",
+          "output_score",
+          "has_signing_secret",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "config": {
+            "type": "object",
+            "description": "The kind-specific configuration as stored. A webhook keeps only its URL host, timeout and header names."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Creation time. JSON is RFC 3339."
+          },
+          "created_by": {
+            "type": "string",
+            "format": "uuid",
+            "description": "User who created the evaluator. Omitted when that user is unknown."
+          },
+          "has_signing_secret": {
+            "type": "boolean",
+            "description": "Whether a signing secret is stored. True for a webhook."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Evaluator id."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EvaluatorKind",
+            "description": "What the evaluator does."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name, 1 to 128 characters."
+          },
+          "output_score": {
+            "$ref": "#/components/schemas/OutputScoreBody",
+            "description": "The score the evaluator writes."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last change time. JSON is RFC 3339."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Starts at 1 and increases on every change to the config, the output or the sealed values."
+          }
+        }
+      },
+      "EvaluatorKind": {
+        "type": "string",
+        "description": "What an evaluator does. Stored as `evaluators.kind`; `kind` cannot change.",
+        "enum": [
+          "llm_judge",
+          "check",
+          "webhook"
+        ]
+      },
+      "EvaluatorPage": {
+        "type": "object",
+        "description": "One page of results. `next_cursor` is null when there is no next page.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Evaluator"
+            },
+            "description": "Items in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
+      },
+      "EvaluatorTemplate": {
+        "type": "object",
+        "description": "A built-in judge template. The UI copies it into the editor; the server does not create evaluators from it.",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "prompt",
+          "output",
+          "output_score_name",
+          "default_mapping"
+        ],
+        "properties": {
+          "default_mapping": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TemplateMapping"
+            },
+            "description": "The variables of the prompt and the expressions that fill them, in display order."
+          },
+          "description": {
+            "type": "string",
+            "description": "One-line description."
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable id: `hallucination`, `relevance`, `toxicity`, `correctness` or `custom`."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name."
+          },
+          "output": {
+            "type": "object",
+            "description": "The score the judge must produce, as the judge output JSON."
+          },
+          "output_score_name": {
+            "type": "string",
+            "description": "Name of the score the template writes."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "The prompt template."
+          }
+        }
+      },
+      "EvaluatorTemplateList": {
+        "type": "object",
+        "description": "`GET /api/v1/projects/{project}/evaluator-templates` response. The list is fixed.",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvaluatorTemplate"
+            },
+            "description": "The built-in templates, in display order."
+          }
+        }
+      },
+      "EvaluatorTestError": {
+        "type": "object",
+        "description": "Why a test run did not produce a value.",
+        "required": [
+          "class",
+          "message"
+        ],
+        "properties": {
+          "class": {
+            "$ref": "#/components/schemas/TestErrorClass",
+            "description": "What the caller should do with the failure."
+          },
+          "message": {
+            "type": "string",
+            "description": "The error text, without payload content or secrets."
+          }
+        }
+      },
+      "EvaluatorTestRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/projects/{project}/evaluators/test` body.\n\nDeserialize only: `TimeParam` has no `Serialize`. Its `Debug` prints flags and counts, not\nthe variables, the mapping or the evaluator.",
+        "properties": {
+          "evaluator": {
+            "$ref": "#/components/schemas/TestEvaluatorBody",
+            "description": "The evaluator to run. With `evaluator_id` too, it is merged over the saved one."
+          },
+          "evaluator_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The saved evaluator to run. Needed unless `evaluator` is given."
+          },
+          "span_id": {
+            "type": "string",
+            "description": "Span of the trace to target, 16 hex digits."
+          },
+          "trace_id": {
+            "type": "string",
+            "description": "Stored trace to load, 32 hex digits."
+          },
+          "trace_start": {
+            "$ref": "#/components/schemas/TimeParam",
+            "description": "Start of the trace, to narrow the lookup."
+          },
+          "variable_mapping": {
+            "type": "object",
+            "description": "Prompt variable to mapping expression, for a stored trace.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "variables": {
+            "type": "object",
+            "description": "Literal prompt variables, instead of a stored trace. At most 32, 256 KiB in total."
+          }
+        },
+        "additionalProperties": false
+      },
+      "EvaluatorTestResult": {
+        "type": "object",
+        "description": "`POST /api/v1/projects/{project}/evaluators/test` response. Also used when the evaluator failed.",
+        "required": [
+          "ok",
+          "variables",
+          "latency_ms",
+          "trace_truncated"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/EvaluatorTestError",
+            "description": "The failure. Omitted when `ok` is true."
+          },
+          "judge_trace_id": {
+            "$ref": "#/components/schemas/TraceId",
+            "description": "The judge trace the run wrote (environment `llmobs-eval`). Omitted when no judge trace was written."
+          },
+          "latency_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Time the run took, in milliseconds.",
+            "minimum": 0
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "Whether the evaluator produced a value."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "The rendered prompt. Omitted for checks, webhooks and failures before rendering."
+          },
+          "reason": {
+            "type": "string",
+            "description": "The judge's explanation, when it gave one. Omitted otherwise."
+          },
+          "trace_truncated": {
+            "type": "boolean",
+            "description": "Whether the target trace was cut to fit the loading limits. Always false for literal variables."
+          },
+          "usage": {
+            "$ref": "#/components/schemas/EvaluatorTestUsage",
+            "description": "Judge usage. Omitted when the run made no LLM call."
+          },
+          "value": {
+            "$ref": "#/components/schemas/ScoreValue",
+            "description": "The score value. Omitted unless `ok`."
+          },
+          "variables": {
+            "type": "object",
+            "description": "Each prompt variable as rendered, cut to 2 000 characters. Empty when the run failed before rendering.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "EvaluatorTestUsage": {
+        "type": "object",
+        "description": "Judge usage of one test run.",
+        "properties": {
+          "cost_usd": {
+            "type": "number",
+            "format": "double",
+            "description": "Estimated cost in USD. Omitted when no price is known."
+          },
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Input tokens the provider counted. Omitted when unknown.",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Output tokens the provider counted. Omitted when unknown.",
+            "minimum": 0
           }
         }
       },
@@ -8904,6 +10353,32 @@
           "viewer"
         ]
       },
+      "OutputScoreBody": {
+        "type": "object",
+        "description": "The score an evaluator writes. The JSON of `llmobs_eval::OutputScore`.",
+        "required": [
+          "name",
+          "data_type"
+        ],
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Category labels of a categorical score. Omitted otherwise."
+          },
+          "data_type": {
+            "$ref": "#/components/schemas/ScoreDataType",
+            "description": "Score data type."
+          },
+          "name": {
+            "type": "string",
+            "description": "Score name, 1 to 255 bytes."
+          }
+        },
+        "additionalProperties": false
+      },
       "Part": {
         "oneOf": [
           {
@@ -9656,6 +11131,121 @@
           }
         },
         "additionalProperties": false
+      },
+      "ScoreDataType": {
+        "type": "string",
+        "description": "The kind of value a score carries.\n\nSpec 01 § Score `data_type`.",
+        "enum": [
+          "numeric",
+          "boolean",
+          "categorical",
+          "text"
+        ]
+      },
+      "ScoreDefinition": {
+        "type": "object",
+        "description": "A named score shape. Archived definitions are kept but not checked against.",
+        "required": [
+          "id",
+          "name",
+          "data_type",
+          "categories",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "archived_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the definition was archived. Omitted while it is live. JSON is RFC 3339."
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScoreDefinitionCategory"
+            },
+            "description": "Labels of a categorical score. Empty otherwise."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Creation time. JSON is RFC 3339."
+          },
+          "data_type": {
+            "$ref": "#/components/schemas/ScoreDataType",
+            "description": "Score data type. Immutable."
+          },
+          "description": {
+            "type": "string",
+            "description": "What the score means. Omitted when unset."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Definition id."
+          },
+          "max_value": {
+            "type": "number",
+            "format": "double",
+            "description": "Highest allowed value of a numeric score. Omitted when unset."
+          },
+          "min_value": {
+            "type": "number",
+            "format": "double",
+            "description": "Lowest allowed value of a numeric score. Omitted when unset."
+          },
+          "name": {
+            "type": "string",
+            "description": "Score name, unique among live definitions of the project."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last change time. JSON is RFC 3339."
+          }
+        }
+      },
+      "ScoreDefinitionCategory": {
+        "type": "object",
+        "description": "One label of a categorical score definition.",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "The label, 1 to 255 bytes."
+          },
+          "value": {
+            "type": "number",
+            "format": "double",
+            "description": "Numeric value of the label. Omitted when the label has none."
+          }
+        }
+      },
+      "ScoreDefinitionPage": {
+        "type": "object",
+        "description": "One page of results. `next_cursor` is null when there is no next page.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScoreDefinition"
+            },
+            "description": "Items in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
       },
       "ScorePage": {
         "type": "object",
@@ -10831,6 +12421,24 @@
           "prompt"
         ]
       },
+      "TemplateMapping": {
+        "type": "object",
+        "description": "One mapping of a template: the prompt variable and the expression that fills it.",
+        "required": [
+          "variable",
+          "expression"
+        ],
+        "properties": {
+          "expression": {
+            "type": "string",
+            "description": "Mapping expression, such as `trace.input`."
+          },
+          "variable": {
+            "type": "string",
+            "description": "Prompt variable name."
+          }
+        }
+      },
       "TestErrorClass": {
         "type": "string",
         "description": "What the caller should do with a failed connection test.",
@@ -10839,6 +12447,37 @@
           "pause",
           "permanent"
         ]
+      },
+      "TestEvaluatorBody": {
+        "type": "object",
+        "description": "An evaluator to test, possibly partial. Absent fields come from the saved evaluator.\n\nIts `Debug` prints flags, not the config or the secret.",
+        "required": [
+          "kind",
+          "output_score"
+        ],
+        "properties": {
+          "config": {
+            "type": "object",
+            "description": "The kind-specific configuration. Absent: the saved configuration, which needs `evaluator_id`."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EvaluatorKind",
+            "description": "What the evaluator does. Must match the saved evaluator's kind."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name. Absent: the saved name, or `Test`."
+          },
+          "output_score": {
+            "$ref": "#/components/schemas/OutputScoreBody",
+            "description": "The score the evaluator writes."
+          },
+          "webhook_secret": {
+            "type": "string",
+            "description": "Signing secret of a webhook. Absent: the saved secret, which needs `evaluator_id`."
+          }
+        },
+        "additionalProperties": false
       },
       "TestLlmConnectionRequest": {
         "type": "object",
@@ -11238,6 +12877,29 @@
         },
         "additionalProperties": false
       },
+      "UpdateEvaluatorRequest": {
+        "type": "object",
+        "description": "`PATCH /api/v1/projects/{project}/evaluators/{id}` body. Absent means unchanged.\n\nIts `Debug` prints flags, not the config or the secret.",
+        "properties": {
+          "config": {
+            "type": "object",
+            "description": "The kind-specific configuration. For a webhook, replaces the URL, the headers and the timeout together."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name, 1 to 128 characters."
+          },
+          "output_score": {
+            "$ref": "#/components/schemas/OutputScoreBody",
+            "description": "The score the evaluator writes."
+          },
+          "webhook_secret": {
+            "type": "string",
+            "description": "Replaces the signing secret of a webhook. An empty string is refused."
+          }
+        },
+        "additionalProperties": false
+      },
       "UpdateLlmConnectionRequest": {
         "type": "object",
         "description": "`PATCH /api/v1/orgs/{org}/llm-connections/{id}` body. Absent means\nunchanged; an empty body is valid and changes only `updated_at`.",
@@ -11366,6 +13028,42 @@
           "state": {
             "type": "object",
             "description": "Opaque UI state: list-page URL params, or `{query, params, range}` / `{query, params, from, to}` for SQL (D-H-7)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateScoreDefinitionRequest": {
+        "type": "object",
+        "description": "`PATCH /api/v1/projects/{project}/score-definitions/{id}` body. Absent means unchanged.\n\n`min_value` and `max_value` cannot be cleared once set. Archive the definition instead.",
+        "properties": {
+          "archived": {
+            "type": "boolean",
+            "description": "`true` archives the definition; `false` restores it, unless another live one has its name."
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScoreDefinitionCategory"
+            },
+            "description": "Labels of a categorical score: 1 to 100, unique."
+          },
+          "description": {
+            "type": "string",
+            "description": "What the score means. An empty string clears it."
+          },
+          "max_value": {
+            "type": "number",
+            "format": "double",
+            "description": "Highest allowed value. Only for numeric scores, above `min_value`."
+          },
+          "min_value": {
+            "type": "number",
+            "format": "double",
+            "description": "Lowest allowed value. Only for numeric scores."
+          },
+          "name": {
+            "type": "string",
+            "description": "Score name, 1 to 255 bytes after trimming."
           }
         },
         "additionalProperties": false
@@ -11562,6 +13260,14 @@
     {
       "name": "scores",
       "description": "Scores attached to spans, traces, and sessions."
+    },
+    {
+      "name": "evaluation",
+      "description": "Evaluators, built-in templates and test runs."
+    },
+    {
+      "name": "score_definitions",
+      "description": "Named score shapes that score writes and evaluators must fit."
     },
     {
       "name": "schema",

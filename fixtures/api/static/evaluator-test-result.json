@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "value": {
+    "data_type": "numeric",
+    "value": 0.9
+  },
+  "reason": "The answer addresses the question.",
+  "prompt": "Rate how relevant the answer is to the question.\n\nQuestion: What is the refund window?\nAnswer: 30 days.",
+  "variables": {
+    "input": "What is the refund window?",
+    "output": "30 days."
+  },
+  "usage": {
+    "input_tokens": 120,
+    "output_tokens": 18,
+    "cost_usd": 0.00004
+  },
+  "latency_ms": 840,
+  "trace_truncated": false,
+  "judge_trace_id": "e1000000000000000000000000000001"
+}
