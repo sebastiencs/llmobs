@@ -69,7 +69,7 @@ A file lock (`flock` on `<data_dir>/LOCK`) prevents two processes from opening t
 
 ## Process lifecycle
 
-- **Startup:** load config → lock data dir and open storage (`catalog.db`, replay WAL) → open `meta.db` + migrations → (log the setup URL if no user exists) → start background tasks → bind ports → `/readyz` = 200 (D137). After `meta.db`: finish an interrupted key rotation, load or generate the encryption key, and verify its check value (D-I-1, D-I-3).
+- **Startup:** load config → lock data dir and open storage (`catalog.db`, replay WAL) → open `meta.db` + migrations → (log the setup URL if no user exists) → start background tasks (among them the deletion worker, every 2 s and on each request, and the hourly retention task, D-M-3, D-M-10) → bind ports → `/readyz` = 200 (D137). After `meta.db`: finish an interrupted key rotation, load or generate the encryption key, and verify its check value (D-I-1, D-I-3).
 - **Shutdown (SIGTERM/SIGINT):** stop accepting connections, drain in-flight requests (≤ 20 s), flush memtables (best effort ≤ 30 s), stop workers (leases expire and are re-queued), close SQLite.
 - `/healthz`: process alive. `/readyz`: WAL writable, SQLite reachable, object store reachable (cached 10 s), free disk above threshold.
 
@@ -120,7 +120,7 @@ llmobs admin backup --to /backups/llmobs-$(date +%F)   # online, consistent
 
 **Restore:** stop the server, replace `meta.db`, `catalog.db` and objects, start. Objects the restored catalog doesn't list stay in the store; `llmobs admin gc-orphans` lists the object store and deletes them (the regular GC never lists the bucket, 03 §5).
 
-**GDPR and backups:** deleted data persists in backups until they expire; the docs recommend a backup retention ≤ 30 days and, on restore, re-applying the `deletions` recorded after the backup date (`llmobs admin reapply-deletions --since <date>` replays them from the current `deletions` audit table).
+**GDPR and backups:** deleted data persists in backups until they expire; the docs recommend a backup retention ≤ 30 days. Before a restore, keep the current data directory (or a copy of its `meta.db`); after it, start `llmobs serve` once if the backup is from an older version, then run `llmobs admin reapply-deletions --from <kept data_dir>`: it copies every deletion the restored `meta.db` lacks, with its scope, and the server redoes them (D-M-9).
 
 ## Upgrades
 
