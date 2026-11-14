@@ -6,9 +6,15 @@ use std::fmt;
 use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use url::Url;
+use uuid::Uuid;
 
 use crate::api::alerts::ChannelKind;
 use crate::api::common::FieldError;
+use crate::crypto::{Aad, CryptoError, SecretBox};
+
+/// AAD table and column of a channel config.
+const TABLE: &str = "notification_channels";
+const COLUMN: &str = "config_enc";
 
 /// Most extra webhook headers.
 pub(crate) const MAX_HEADERS: usize = 10;
@@ -132,6 +138,53 @@ impl ChannelConfig {
             },
         }
     }
+}
+
+/// Why a stored channel config could not be read. No variant holds config text.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum OpenConfigError {
+    /// The value was sealed with another key, or is corrupt.
+    #[error(transparent)]
+    Crypto(#[from] CryptoError),
+    /// The plaintext is not a `ChannelConfig`.
+    #[error("the channel config is not valid JSON")]
+    Json,
+}
+
+/// Seals `config` for the channel row `id`.
+pub(crate) fn seal_config(
+    secrets: &SecretBox,
+    id: &Uuid,
+    config: &ChannelConfig,
+) -> Result<Vec<u8>, CryptoError> {
+    // Serializing a ChannelConfig cannot fail: it holds only strings, a list and a string map.
+    #[allow(clippy::expect_used)]
+    let json = serde_json::to_vec(config).expect("channel config serializes");
+    secrets.seal(
+        &json,
+        Aad {
+            table: TABLE,
+            column: COLUMN,
+            row_id: id,
+        },
+    )
+}
+
+/// Opens the sealed config of the channel row `id`.
+pub(crate) fn open_config(
+    secrets: &SecretBox,
+    id: &Uuid,
+    sealed: &[u8],
+) -> Result<ChannelConfig, OpenConfigError> {
+    let json = secrets.open(
+        sealed,
+        Aad {
+            table: TABLE,
+            column: COLUMN,
+            row_id: id,
+        },
+    )?;
+    serde_json::from_slice(&json).map_err(|_| OpenConfigError::Json)
 }
 
 /// `true` when `text` is a single email address (`lettre::Address`).
@@ -395,6 +448,29 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn sealed_config_round_trips() {
+        let secrets = SecretBox::new(&[7; 32]);
+        let id = Uuid::now_v7();
+        let config = webhook("https://h.io/hook", &"s".repeat(16), &[("X-Team", "core")]);
+        let sealed = seal_config(&secrets, &id, &config).expect("seals");
+        let opened = open_config(&secrets, &id, &sealed).expect("opens");
+        assert_eq!(opened, config);
+    }
+
+    #[test]
+    fn sealed_config_is_bound_to_its_row() {
+        let secrets = SecretBox::new(&[7; 32]);
+        let id = Uuid::now_v7();
+        let other = Uuid::now_v7();
+        let config = slack("https://hooks.slack.com/services/T/B/abcd");
+        let sealed = seal_config(&secrets, &id, &config).expect("seals");
+        assert!(matches!(
+            open_config(&secrets, &other, &sealed),
+            Err(OpenConfigError::Crypto(_))
+        ));
     }
 
     #[test]
