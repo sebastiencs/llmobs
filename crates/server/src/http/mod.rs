@@ -400,6 +400,7 @@ mod tests {
             }),
             403
         );
+        assert_eq!(status_of(ApiError::PlanRequired { detail: "x" }), 403);
         assert_eq!(status_of(ApiError::NotFound), 404);
         assert_eq!(
             status_of(ApiError::Conflict {

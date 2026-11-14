@@ -63,6 +63,11 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
     ("get", "/api/v1/orgs", "list_orgs"),
     ("post", "/api/v1/orgs", "post_org"),
     ("get", "/api/v1/orgs/{org}", "get_org"),
+    (
+        "get",
+        "/api/v1/orgs/{org}/entitlements",
+        "get_org_entitlements",
+    ),
     ("patch", "/api/v1/orgs/{org}", "patch_org"),
     ("get", "/api/v1/orgs/{org}/members", "list_org_members"),
     (

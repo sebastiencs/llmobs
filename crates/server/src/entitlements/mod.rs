@@ -3,12 +3,13 @@
 //! M1 has one layer: the instance licence's features, while it is active or in grace.
 //! M2 adds the instance defaults and the org's token.
 
-#![cfg_attr(not(test), allow(dead_code))] // P6 and P7 use these outside tests.
+#![cfg_attr(not(test), allow(dead_code))] // P7 uses these outside tests.
 
 use llmobs_core::ids::OrgId;
 
 use crate::ee::license::{LicenseState, LicenseStatus};
 use crate::http::AppState;
+use crate::http::error::ApiError;
 
 pub(crate) use crate::api::entitlements::Feature;
 
@@ -104,6 +105,27 @@ pub(crate) fn of(state: &AppState, _org: OrgId) -> Entitlements {
             .license()
             .active_features(state.clock.now_ns()),
     )
+}
+
+/// Ok when `org` may use `feature`; otherwise the `plan_required` error that names it (D-P-14).
+pub(crate) fn require(state: &AppState, org: OrgId, feature: Feature) -> Result<(), ApiError> {
+    if of(state, org).allows(feature) {
+        Ok(())
+    } else {
+        Err(ApiError::PlanRequired {
+            detail: feature.locked_detail(),
+        })
+    }
+}
+
+/// `entitlements.upgrade_url` for `org`, or `None` when unset (D-P-15).
+pub(crate) fn upgrade_url(state: &AppState, org: OrgId) -> Option<String> {
+    state
+        .config
+        .entitlements
+        .upgrade_url
+        .as_deref()
+        .map(|template| template.replace("{org}", &org.to_string()))
 }
 
 /// Logs the licence status once at startup: status, licence id and key id only (D-P-7).
@@ -224,6 +246,20 @@ mod tests {
             LicenseState::Invalid(InvalidLicense::Token(TokenError::Malformed))
         ));
         assert!(of(&app.state, OrgId::new_v7()).features().is_empty());
+    }
+
+    #[tokio::test]
+    async fn require_maps_to_plan_required() {
+        let app = TestApp::new().await;
+        let org = OrgId::new_v7();
+        assert!(matches!(
+            require(&app.state, org, Feature::ProjectRoles),
+            Err(ApiError::PlanRequired { detail }) if detail == Feature::ProjectRoles.locked_detail()
+        ));
+
+        let app = TestApp::with_license(&["project_roles"]).await;
+        assert!(require(&app.state, org, Feature::ProjectRoles).is_ok());
+        assert!(require(&app.state, org, Feature::SsoEnforcement).is_err());
     }
 
     #[tokio::test]

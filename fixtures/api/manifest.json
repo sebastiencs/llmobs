@@ -73,6 +73,16 @@
     "file": "static/org.json"
   },
   {
+    "operation_id": "get_org_entitlements",
+    "path_params": {
+      "org": "acme"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/org-entitlements.json"
+  },
+  {
     "operation_id": "get_project",
     "path_params": {},
     "query": {},

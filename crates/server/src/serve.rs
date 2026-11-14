@@ -645,8 +645,8 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        AuthSettings, EvalConfig, IngestConfig, InitConfig, LogConfig, MediaConfig, PublicUrl,
-        Secret, SecurityConfig,
+        AuthSettings, EntitlementsConfig, EvalConfig, IngestConfig, InitConfig, LogConfig,
+        MediaConfig, PublicUrl, Secret, SecurityConfig,
     };
     use crate::crypto::{decode_key, encode_key, random_key, write_key_file};
     use crate::meta::instance_settings::put_setting;
@@ -1247,6 +1247,7 @@ mod tests {
             media: MediaConfig::default(),
             eval: EvalConfig::default(),
             security: SecurityConfig::default(),
+            entitlements: EntitlementsConfig::default(),
             encryption_key: None,
             license_key: None,
             auth: AuthSettings::default(),

@@ -497,6 +497,14 @@ pub struct SecurityConfig {
     pub allow_private_network_egress: bool,
 }
 
+/// `[entitlements]` (D-P-15). M2 adds `defaults`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct EntitlementsConfig {
+    /// Where Upgrade buttons go. `{org}` is replaced by the org id. Unset: no button.
+    pub upgrade_url: Option<String>,
+}
+
 /// Everything `llmobs serve` reads from the environment and `llmobs.toml`.
 ///
 /// Keys that spec 12 lists for later work (telemetry, compaction, gc, deletion,
@@ -549,6 +557,9 @@ pub struct ServerConfig {
     /// `[security]` settings.
     #[serde(default)]
     pub security: SecurityConfig,
+    /// `[entitlements]` settings (D-P-15).
+    #[serde(default)]
+    pub entitlements: EntitlementsConfig,
     /// 32 bytes in standard base64. Unset: `<data_dir>/secret.key` (D-I-1).
     #[serde(default)]
     pub encryption_key: Option<Secret<String>>,
@@ -782,6 +793,7 @@ fn validate(config: &mut ServerConfig) -> Result<(), ConfigError> {
         &mut config.auth.enforce_sso_domains,
     )?;
     validate_email(config)?;
+    validate_entitlements(&config.entitlements)?;
     if config
         .license_key
         .as_ref()
@@ -1250,6 +1262,34 @@ fn hex_digit(byte: u8) -> Result<u8, ()> {
         b'a'..=b'f' => Ok(byte - b'a' + 10),
         b'A'..=b'F' => Ok(byte - b'A' + 10),
         _ => Err(()),
+    }
+}
+
+fn validate_entitlements(entitlements: &EntitlementsConfig) -> Result<(), ConfigError> {
+    let Some(template) = entitlements.upgrade_url.as_deref() else {
+        return Ok(());
+    };
+    let invalid = ConfigError::Invalid {
+        key: "entitlements.upgrade_url",
+        reason: "must be an http or https URL; {org} is the only placeholder",
+    };
+    let sample = template.replace("{org}", "00000000-0000-7000-8000-000000000000");
+    if sample.contains('{') || sample.contains('}') {
+        return Err(invalid);
+    }
+    // `url` reads `https:///host` as host `host`; the empty authority is refused here.
+    let has_authority = sample
+        .split_once("://")
+        .is_some_and(|(_, rest)| !rest.starts_with(['/', '\\']));
+    match url::Url::parse(&sample) {
+        Ok(url)
+            if has_authority
+                && matches!(url.scheme(), "http" | "https")
+                && url.host().is_some() =>
+        {
+            Ok(())
+        }
+        _ => Err(invalid),
     }
 }
 
@@ -1982,6 +2022,55 @@ mod tests {
         );
         let text = error.to_string();
         assert!(!text.contains("424242"), "{text}");
+    }
+
+    #[test]
+    fn upgrade_url_accepts_the_org_placeholder() {
+        let config = load_from(
+            Some("[entitlements]\nupgrade_url = \"https://app.example.com/orgs/{org}/billing\"\n"),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            config.entitlements.upgrade_url.as_deref(),
+            Some("https://app.example.com/orgs/{org}/billing")
+        );
+    }
+
+    #[test]
+    fn upgrade_url_rejects_other_placeholders_and_schemes() {
+        for value in [
+            "https://x.example/{plan}",
+            "ftp://x.example",
+            "not a url",
+            "https:///nohost",
+        ] {
+            let toml = format!("[entitlements]\nupgrade_url = \"{value}\"\n");
+            let error = load_from(Some(&toml), &[]).unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    ConfigError::Invalid {
+                        key: "entitlements.upgrade_url",
+                        ..
+                    }
+                ),
+                "{value}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn upgrade_url_from_env() {
+        let config = load_from(
+            None,
+            &[("LLMOBS_ENTITLEMENTS__UPGRADE_URL", "https://example.com/up")],
+        )
+        .unwrap();
+        assert_eq!(
+            config.entitlements.upgrade_url.as_deref(),
+            Some("https://example.com/up")
+        );
     }
 
     #[test]

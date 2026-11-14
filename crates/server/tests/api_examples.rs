@@ -19,6 +19,7 @@ use llmobs_server::api::common::Page;
 use llmobs_server::api::connections::{
     CreateLlmConnectionRequest, LlmConnection, LlmConnectionTestResult,
 };
+use llmobs_server::api::entitlements::OrgEntitlements;
 use llmobs_server::api::invites::{CreatedInvite, Invite, InvitePreview};
 use llmobs_server::api::keys::{ApiKey, CreatedApiKey, CreatedPersonalToken, PersonalToken};
 use llmobs_server::api::members::{OrgMember, ProjectMember};
@@ -360,6 +361,7 @@ fn static_files_match_their_types() {
     roundtrip::<Me>("static/me.json");
     roundtrip::<Page<OrgMembership>>("static/orgs.json");
     roundtrip::<OrgMembership>("static/org.json");
+    roundtrip::<OrgEntitlements>("static/org-entitlements.json");
     roundtrip::<Page<OrgMember>>("static/org-members.json");
     roundtrip::<Page<Invite>>("static/invites.json");
     roundtrip::<Page<AdminUser>>("static/admin-users.json");
@@ -469,6 +471,7 @@ fn generated_files_roundtrip() {
             | "get_me"
             | "list_orgs"
             | "get_org"
+            | "get_org_entitlements"
             | "list_org_members"
             | "list_org_invites"
             | "post_org_invite"

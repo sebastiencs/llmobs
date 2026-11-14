@@ -42,3 +42,13 @@ impl Feature {
         }
     }
 }
+
+/// `GET /api/v1/orgs/{org}/entitlements` (D-P-15). M2 adds the plan and limits; M3 the usage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct OrgEntitlements {
+    /// Features the org may use now, in a fixed order.
+    pub features: Vec<Feature>,
+    /// Where an Upgrade button goes. Omitted when the instance sets none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upgrade_url: Option<String>,
+}
