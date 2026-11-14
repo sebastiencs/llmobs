@@ -29,7 +29,7 @@ enum Command {
         #[arg(long)]
         config: Option<PathBuf>,
     },
-    /// Manage users in this data directory.
+    /// Manage users and the encryption key in this data directory.
     Admin {
         #[command(subcommand)]
         command: AdminCommand,
@@ -87,6 +87,16 @@ enum AdminCommand {
         /// `table` or `json`.
         #[arg(long, value_enum, default_value = "table")]
         format: ListFormat,
+        /// Config file. Overrides `LLMOBS_CONFIG`.
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Re-encrypt stored secrets under a new key. Stop the server first.
+    RotateEncryptionKey {
+        /// Read the new key (32 bytes, standard base64) from one line of stdin. Default:
+        /// generate one, unless the current key comes from `LLMOBS_ENCRYPTION_KEY`.
+        #[arg(long)]
+        new_from_stdin: bool,
         /// Config file. Overrides `LLMOBS_CONFIG`.
         #[arg(long)]
         config: Option<PathBuf>,
@@ -272,6 +282,28 @@ async fn admin_command(command: AdminCommand) -> anyhow::Result<()> {
                 }
             }
         }
+        AdminCommand::RotateEncryptionKey {
+            new_from_stdin,
+            config,
+        } => {
+            let new_key = if new_from_stdin {
+                Some(read_key_line(io::stdin().lock())?)
+            } else {
+                None
+            };
+            let loaded = load_config(config.as_deref())?;
+            let rotated = admin::rotate_encryption_key(&loaded, new_key.as_deref())
+                .await
+                .context("rotating the encryption key")?;
+            let mut stdout = io::stdout().lock();
+            writeln!(stdout, "Re-encrypted {} values.", rotated.values)?;
+            if loaded.encryption_key.is_some() {
+                writeln!(
+                    stdout,
+                    "Set LLMOBS_ENCRYPTION_KEY to the new key before the next start."
+                )?;
+            }
+        }
     }
     Ok(())
 }
@@ -291,6 +323,23 @@ fn read_password_line(mut input: impl BufRead) -> anyhow::Result<String> {
     let read = input.read_line(&mut line).context("reading the password")?;
     if read == 0 {
         anyhow::bail!("expected a password on stdin");
+    }
+    if line.ends_with('\n') {
+        line.pop();
+        if line.ends_with('\r') {
+            line.pop();
+        }
+    }
+    Ok(line)
+}
+
+/// One stdin line, with a trailing `\n` or `\r\n` removed. Leading and trailing
+/// spaces are trimmed where the key is decoded.
+fn read_key_line(mut input: impl BufRead) -> anyhow::Result<String> {
+    let mut line = String::new();
+    let read = input.read_line(&mut line).context("reading the key")?;
+    if read == 0 {
+        anyhow::bail!("expected a key on stdin");
     }
     if line.ends_with('\n') {
         line.pop();
@@ -406,7 +455,30 @@ impl Signals {
 
 #[cfg(test)]
 mod tests {
-    use super::run_cli;
+    use super::{AdminCommand, Cli, Command, run_cli};
+    use clap::Parser;
+
+    #[test]
+    fn rotate_encryption_key_parses() {
+        let cli = Cli::try_parse_from([
+            "llmobs",
+            "admin",
+            "rotate-encryption-key",
+            "--new-from-stdin",
+        ])
+        .unwrap();
+        let Command::Admin {
+            command: AdminCommand::RotateEncryptionKey { new_from_stdin, .. },
+        } = cli.command
+        else {
+            panic!("expected the rotate-encryption-key command");
+        };
+        assert!(new_from_stdin);
+        assert!(
+            Cli::try_parse_from(["llmobs", "admin", "rotate-encryption-key", "--new", "x"])
+                .is_err()
+        );
+    }
 
     #[tokio::test]
     async fn missing_config_exits_with_the_path() {
@@ -428,6 +500,16 @@ mod tests {
         let eof = super::read_password_line("secret".as_bytes()).unwrap();
         assert_eq!(eof, "secret");
         assert!(super::read_password_line("".as_bytes()).is_err());
+    }
+
+    #[test]
+    fn key_line_drops_one_trailing_newline() {
+        let crlf = super::read_key_line("key-line\r\n".as_bytes()).unwrap();
+        assert_eq!(crlf, "key-line");
+        let eof = super::read_key_line("key-line".as_bytes()).unwrap();
+        assert_eq!(eof, "key-line");
+        let error = super::read_key_line("".as_bytes()).unwrap_err();
+        assert_eq!(error.to_string(), "expected a key on stdin");
     }
 
     #[tokio::test]

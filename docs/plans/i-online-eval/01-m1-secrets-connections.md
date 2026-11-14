@@ -30,7 +30,7 @@ When M1 is done:
 |---|---|
 | D-I-1 | Key from `LLMOBS_ENCRYPTION_KEY` (`encryption_key`), else `<data_dir>/secret.key`, else generated into that file (0600), but only while `meta.db` has no check value. A check value in `instance_settings` refuses a different key. |
 | D-I-2 | Sealed value = `0x01` ‖ key id (4 bytes) ‖ nonce (12) ‖ ciphertext and tag. AAD `table:column:row_id`. Key id and check value are HMAC-SHA256 of fixed labels. |
-| D-I-3 | `llmobs admin rotate-encryption-key [--new-from-stdin]`: server stopped (takes `LOCK`), one transaction, `secret.key.new` then rename (finished at startup after a crash), or print the key when it came from the environment. |
+| D-I-3 | `llmobs admin rotate-encryption-key [--new-from-stdin]`: server stopped (takes `LOCK`), one transaction, `secret.key.new` then rename (finished at startup after a crash). With an env key the new key must be given with `--new-from-stdin`; with a file key it may be generated. |
 | D-I-4 | Connections are org-wide. `max_concurrency` 1–64 (default 4), `requests_per_minute` 1–10 000 (default 300). The API key and header values are write-only; `api_key_hint` is the key's last 4 characters when it has at least 16. |
 | D-I-5 | `POST …/llm-connections/{id}/test` with `{model?}` runs one boolean judge call through `EvalRunner` (30 s), answering `200 {ok, model, latency_ms, error?}`. A success sets `status = 'ok'`; a pause-class error sets `'failing'` only when the test used the connection's default model, because a pause-class 404 for a typed model name says nothing about the key. |
 | D-I-24 | `OrgPerm::ManageConnections` (org role `admin`) for writes and tests; `OrgPerm::View` for reads. Not session-only. |
@@ -684,22 +684,19 @@ Add:
 
 ```rust
 /// What `rotate_encryption_key` did.
+#[derive(Debug)]
 pub struct Rotated {
     /// Sealed values re-encrypted.
     pub values: u64,
-    /// The new key in base64, only when the old key came from the environment: the operator
-    /// sets it before the next start. `None` when `secret.key` was replaced.
-    pub new_key_for_env: Option<String>,
 }
 
-impl fmt::Debug for Rotated { /* prints `values` and `new_key_for_env.is_some()` only */ }
-
 /// Re-encrypts every sealed column under a new key (D-I-3). The server must be stopped.
-/// `new_key` is base64 text (from stdin); `None` generates a key.
+/// `new_key` is base64 text (from stdin); `None` generates a key, unless the current key
+/// comes from `LLMOBS_ENCRYPTION_KEY` (step 6).
 pub async fn rotate_encryption_key(config: &ServerConfig, new_key: Option<&str>) -> Result<Rotated, AdminError>;
 ```
 
-Update the module doc of `admin.rs` ("These open the database without migrating and without the data-dir lock, so they work while `llmobs serve` is running (D136).") by adding: "`rotate_encryption_key` is the exception: it takes the lock and needs the server stopped (D-I-3)." Add `use std::fmt;` for `Rotated`'s `Debug`.
+Update the module doc of `admin.rs` ("These open the database without migrating and without the data-dir lock, so they work while `llmobs serve` is running (D136).") by adding: "`rotate_encryption_key` is the exception: it takes the lock and needs the server stopped (D-I-3)."
 
 Steps, in this order:
 0. If `<data_dir>/meta.db` does not exist → `NotInitialized` (as `list_users` answers). This also covers a missing data directory, before any lock file is created.
@@ -708,8 +705,8 @@ Steps, in this order:
 3. Read the stored check (`get_setting(reader, ENCRYPTION_CHECK)`). When the env key is unset, call `crypto::finish_rotation(data_dir, check)` (any error → `Crypto(e.to_string())`).
 4. `crypto::read_key(env, data_dir)`. `Ok(None)` → `Crypto("no encryption key: start the server once first".into())`. An error → `Crypto(e.to_string())`.
 5. The old box is `SecretBox::new(&old.key)`. A missing check, or one that differs (`constant_time_eq`), → `Crypto("the current key does not match this data directory".into())`.
-6. New key: `new_key` decoded with `decode_key(text.trim(), "--new-from-stdin")` (error → `Crypto`), else `random_key()`. Equal to the old key → `SameKey`.
-7. If `old.source == KeySource::File`: remove a stale `secret.key.new`, then `write_key_file(&data_dir.join("secret.key.new"), &new)`.
+6. New key: `new_key` decoded with `decode_key(text.trim(), "--new-from-stdin")` (error → `Crypto`), else `random_key()` — except that when `old.source == KeySource::Env` and `new_key` is `None`, return `Crypto("the key comes from LLMOBS_ENCRYPTION_KEY: pass the new key with --new-from-stdin")` before any write: a generated key would exist only in memory after the commit. Equal to the old key → `SameKey`.
+7. If `old.source == KeySource::File`: remove a stale `secret.key.new`, then `write_key_file(&data_dir.join("secret.key.new"), &new)`. On a `write_key_file` failure, also remove `secret.key.new.tmp`, which the failed write can leave behind (a missing file is ignored).
 8. One `meta.write`. For each `(table, column)` in `ENCRYPTED_COLUMNS`:
    - Select `format!("SELECT id, {column} FROM {table} WHERE {column} IS NOT NULL")`. Add the comment `// table and column come from ENCRYPTED_COLUMNS, never from input`.
    - For each row: parse the id, `open` it with the old box and `Aad { table, column, row_id: &id }`. On any failure return `Err(MetaError::Corrupt { table, column })` from the closure, which rolls the transaction back.
@@ -717,7 +714,7 @@ Steps, in this order:
    Then `put_setting(ENCRYPTION_CHECK, new_check)`, and return the count. Copy the two boxes' needs into the closure first: build the old and new `SecretBox` inside it from copies of the two keys, because the closure must be `Send` and borrow nothing. A `MetaError` after the write maps to `Crypto(e.to_string())`; `MetaError::Corrupt` names only the table and column.
    If the transaction fails, delete `secret.key.new` before returning the error.
 9. If the source is `File`: `std::fs::rename(secret.key.new, secret.key)`, then fsync the directory. If the rename fails, return `Crypto(format!("the database uses the new key, which is in {}; rename it to secret.key", new_path.display()))`. The next server start would also finish it (`finish_rotation`).
-10. Return `Rotated { values, new_key_for_env: (old.source == KeySource::Env).then(|| encode_key(&new)) }`.
+10. Return `Rotated { values }`.
 
 ### CLI (`crates/cli/src/main.rs`)
 
@@ -748,9 +745,8 @@ In `admin_command`:
                 .context("rotating the encryption key")?;
             let mut stdout = io::stdout().lock();
             writeln!(stdout, "Re-encrypted {} values.", rotated.values)?;
-            if let Some(key) = rotated.new_key_for_env {
-                writeln!(stdout, "Set LLMOBS_ENCRYPTION_KEY to this value before the next start:")?;
-                writeln!(stdout, "{key}")?;
+            if loaded.encryption_key.is_some() {
+                writeln!(stdout, "Set LLMOBS_ENCRYPTION_KEY to the new key before the next start.")?;
             }
         }
 ```
@@ -760,7 +756,7 @@ Add `fn read_key_line(input: impl BufRead) -> anyhow::Result<String>` next to `r
 ### Spec
 
 - `docs/spec/09-api.md` § CLI, the `llmobs admin …` row: change its Purpose from "local admin on the data dir (works offline, server may be running)" to "local admin on the data dir (works offline, server may be running, except `rotate-encryption-key [--new-from-stdin]`, which needs the server stopped; D-I-3)".
-- `docs/spec/12-operations.md` § Backups: the section already lists `secret.key` among the files to back up; extend that sentence (do not repeat it) with "Back up `<data_dir>/secret.key` (or keep `LLMOBS_ENCRYPTION_KEY`) with the data. Without it, LLM connection keys and webhook secrets cannot be read, and the server refuses to start (D-I-1). `llmobs admin rotate-encryption-key` replaces the key while the server is stopped (D-I-3)."
+- `docs/spec/12-operations.md` § Backups: the section's file list names `<data_dir>/secret.key` (or `LLMOBS_ENCRYPTION_KEY`) once, followed by "Without it, LLM connection keys and webhook secrets cannot be read, and the server refuses to start (D-I-1). `llmobs admin rotate-encryption-key` replaces the key while the server is stopped (D-I-3). A backup taken before a rotation can only be read with the key that was current then; keep that key with it."
 
 ### Tests (`admin.rs` `mod tests`; reuse its `ready_config()` helper)
 
@@ -769,18 +765,23 @@ Seed with raw SQL. First an org row (`INSERT INTO orgs (id, name, slug, created_
   1. `ready_config()`; generate the key file with `crypto::load_key(None, dir, false)`, and record the check with `verify_or_record`.
   2. Seed two connections, one with `extra_headers_enc` too.
   3. Rotate → `values == 3`.
-  4. `secret.key` holds the new key; each value opens with the new box to the original plaintext; the stored check is the new box's; `secret.key.new` is gone; `new_key_for_env.is_none()`.
+  4. `secret.key` holds the new key; each value opens with the new box to the original plaintext; the stored check is the new box's; `secret.key.new` is gone.
 Seeding the check value: open the database with `MetaDb::open` and call `crypto::verify_or_record(&db, &SecretBox::new(&old), &key_path)`; close it before calling `rotate_encryption_key`.
-- `rotation_with_an_env_key_prints_the_new_key`: seed the check for `old` and one connection; config `encryption_key = Some(Secret::new(encode_key(&old)))`, `new_key = Some(&encode_key(&new))` → `new_key_for_env == Some(encode_key(&new))`, and no `secret.key` exists.
+- `rotation_with_an_env_key_reencrypts_under_a_given_key`: seed the check for `old` and one connection; config `encryption_key = Some(Secret::new(encode_key(&old)))`, `new_key = Some(&format!("  {}\r\n", encode_key(&new)))` (surrounding whitespace is trimmed where the key is decoded) → `values == 1`, no `secret.key` exists, the stored check is the new box's.
+- `rotation_with_an_env_key_leaves_secret_key_alone`: also write a `secret.key`; after the rotation its bytes are unchanged, and no `secret.key.new` exists.
+- `rotation_with_an_env_key_requires_a_new_key`: `new_key = None` → `Crypto("the key comes from LLMOBS_ENCRYPTION_KEY: pass the new key with --new-from-stdin")`, and nothing was written: no key file exists, and the stored check and row are unchanged.
 - `rotation_refuses_while_locked`: open and `try_lock` `<data_dir>/LOCK` in the test → `Locked`, and the stored check is unchanged.
 - `rotation_refuses_a_wrong_current_key`: check of key A stored, config key B → `Crypto(_)`; the database is unchanged.
 - `rotation_refuses_the_same_key` → `SameKey`.
 - `rotation_without_any_key_fails_and_writes_nothing` → `Crypto(_)`, and no `secret.key` exists.
-- `rotation_rolls_back_on_a_corrupt_value`: one row's `secret_enc` sealed with another key → `Crypto(_)`; the other rows still open with the old key; `secret.key` is unchanged; `secret.key.new` does not exist.
+- `rotation_rolls_back_on_a_corrupt_value`: the bad row is seeded first, its `secret_enc` sealed with the old key and its `extra_headers_enc` with another key, so the pass over `secret_enc` writes before the pass over `extra_headers_enc` fails → `Crypto(_)`; the bad row's stored bytes are identical to before the rotation; the good row still opens with the old key; `secret.key` is unchanged; `secret.key.new` does not exist.
+- `rotation_finishes_an_interrupted_rotation_first`: `secret.key.new` holds the key of the stored check, as a rotation that crashed after the commit would leave it → it is renamed over `secret.key` first, and the rotation proceeds on that key.
+- `rotation_deletes_a_stale_new_key`: `secret.key.new` does not match the stored check → it is deleted, and the rotation proceeds on `secret.key`.
+- `rotation_removes_the_tmp_file_when_the_write_fails`: a directory at `secret.key.new` makes `write_key_file` fail → `Crypto(_)`, and `secret.key.new.tmp` does not exist; `secret.key`, the row and the check are unchanged.
 - `rotation_on_a_missing_database_names_serve`: an empty temp dir → `NotInitialized`, and no `LOCK` file was created.
-- `rotated_debug_hides_the_key`.
+- `rotated_debug_prints_only_the_values`.
 
-In `crates/cli/src/main.rs` tests (if it has a clap parsing test module, add to it; otherwise add one): `Cli::try_parse_from(["llmobs", "admin", "rotate-encryption-key", "--new-from-stdin"])` parses to that variant, and `["llmobs", "admin", "rotate-encryption-key", "--new", "x"]` is an error.
+In `crates/cli/src/main.rs` tests (if it has a clap parsing test module, add to it; otherwise add one): `Cli::try_parse_from(["llmobs", "admin", "rotate-encryption-key", "--new-from-stdin"])` parses to that variant, and `["llmobs", "admin", "rotate-encryption-key", "--new", "x"]` is an error. `read_key_line` drops one trailing `\r\n`, accepts a line without a trailing newline, and answers "expected a key on stdin" on empty stdin.
 
 ### Done when
 
