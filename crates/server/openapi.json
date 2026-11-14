@@ -5877,6 +5877,16 @@
               }
             }
           },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No credentials, or the credentials are invalid.",
             "content": {

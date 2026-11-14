@@ -5,6 +5,7 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 
+use axum::body::Bytes;
 use axum::http::{Method, header};
 use llmobs_core::ids::OrgId;
 use serde_json::{Value, json};
@@ -412,6 +413,16 @@ async fn send(
     }
     if let Some(bearer) = bearer {
         request = request.header(header::AUTHORIZATION.as_str(), &format!("Bearer {bearer}"));
+    }
+    // A stream never ends on its own, so only its status and headers are read. Dropping the
+    // stream ends the task at once.
+    if path.ends_with("/stream") {
+        let stream = request.send_stream().await;
+        return TestResponse {
+            status: stream.status,
+            headers: stream.headers,
+            body: Bytes::new(),
+        };
     }
     request.send().await
 }

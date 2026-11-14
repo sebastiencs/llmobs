@@ -201,6 +201,7 @@ const QUERY_OR_BODY: &[&str] = &[
     "list_personal_tokens",
     "list_traces",
     "stream_traces",
+    "stream_trace",
     "get_trace",
     "list_spans",
     "list_sessions",

@@ -7380,6 +7380,15 @@ export interface operations {
                     "text/event-stream": string;
                 };
             };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             /** @description No credentials, or the credentials are invalid. */
             401: {
                 headers: {

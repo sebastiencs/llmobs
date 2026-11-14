@@ -259,10 +259,14 @@ mod tests {
     async fn close_ends_every_waiter_including_late_ones() {
         let bus = LiveBus::new(StreamTiming::TEST);
         let mut early = bus.closed();
+        // The waiter is parked before `close()`, so the close must wake it.
+        let waiting = tokio::spawn(async move { shut(&mut early).await });
+        tokio::time::sleep(Duration::from_millis(20)).await;
         bus.close();
-        tokio::time::timeout(WAIT, shut(&mut early))
+        tokio::time::timeout(Duration::from_secs(1), waiting)
             .await
-            .expect("an early receiver sees the close");
+            .expect("a parked waiter is woken by the close")
+            .expect("the waiter task does not panic");
         tokio::time::timeout(WAIT, shut(&mut bus.closed()))
             .await
             .expect("a receiver taken after the close returns at once");

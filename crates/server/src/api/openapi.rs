@@ -1283,7 +1283,7 @@ fn trace_paths(paths: PathsBuilder) -> PathsBuilder {
         .responses(responses(
             "200",
             sse("Live spans of one trace."),
-            AUTH_ERRORS,
+            QUERY_ERRORS,
         ))
         .build();
     let span = operation("get_span", "spans", "Get a span")

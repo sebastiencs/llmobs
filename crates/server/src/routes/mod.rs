@@ -18,6 +18,7 @@ pub(crate) mod read;
 pub(crate) mod schema;
 pub(crate) mod scores;
 pub(crate) mod sessions;
+pub(crate) mod streams;
 pub(crate) mod tokens;
 pub(crate) mod traces;
 pub(crate) mod users;
