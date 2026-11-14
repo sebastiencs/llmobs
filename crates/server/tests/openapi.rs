@@ -200,7 +200,6 @@ const QUERY_OR_BODY: &[&str] = &[
     "list_api_keys",
     "list_personal_tokens",
     "list_traces",
-    "stream_traces",
     "stream_trace",
     "get_trace",
     "list_spans",
@@ -218,6 +217,7 @@ const QUERY_OR_BODY: &[&str] = &[
 /// Read operations with a handler (D-G-23): their errors include 422.
 const READ_OPERATIONS: &[&str] = &[
     "list_traces",
+    "stream_traces",
     "get_trace",
     "get_span",
     "list_spans",

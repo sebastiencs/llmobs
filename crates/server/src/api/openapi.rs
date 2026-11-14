@@ -1255,7 +1255,7 @@ fn trace_paths(paths: PathsBuilder) -> PathsBuilder {
         .responses(responses(
             "200",
             sse("Live trace summaries."),
-            QUERY_ERRORS,
+            READ_ERRORS,
         ))
         .build();
     let detail = operation("get_trace", "traces", "Get a trace")

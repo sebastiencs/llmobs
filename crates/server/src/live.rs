@@ -1,5 +1,4 @@
 //! In-process live bus for SSE (D-G-12, D-G-32, D-G-34).
-#![cfg_attr(not(test), allow(dead_code))] // no non-test caller until the streams land (G4.3)
 
 use std::collections::HashMap;
 use std::fmt;
