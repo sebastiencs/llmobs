@@ -574,6 +574,8 @@ mod tests {
             in_window(4),
             in_window(5),
             in_window(6),
+            in_window(7),
+            in_window(8),
         ];
         let scores = vec![
             score(1, 0, "helpfulness", ScoreValue::Numeric(0.2)),
@@ -591,6 +593,16 @@ mod tests {
                 },
             ),
             score(7, 6, "other", ScoreValue::Numeric(1.0)),
+            score(8, 7, "ok", ScoreValue::Text("fine".to_owned())),
+            score(
+                9,
+                8,
+                "helpfulness",
+                ScoreValue::Categorical {
+                    label: "neutral".to_owned(),
+                    value: Some(0.5),
+                },
+            ),
         ];
         let ctx = context(&spans, &scores);
         let avg = measure(
@@ -602,7 +614,8 @@ mod tests {
         )
         .await
         .expect("value");
-        assert_eq!(avg.count, 2);
+        // 0.2, 0.8 and the categorical score mapped to 0.5.
+        assert_eq!(avg.count, 3);
         assert_close(avg.value, 0.5, 1e-9);
 
         let rate = measure(
