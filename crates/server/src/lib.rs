@@ -15,6 +15,7 @@ pub mod config;
 pub(crate) mod crypto;
 pub(crate) mod ee;
 pub(crate) mod email;
+pub(crate) mod entitlements;
 pub(crate) mod eval;
 pub(crate) mod http;
 pub(crate) mod ingest;
