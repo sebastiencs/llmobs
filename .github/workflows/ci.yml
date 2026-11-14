@@ -19,7 +19,7 @@ env:
   RUST_BACKTRACE: short
   # Kache permits PR uploads only to a separate prefix; protected main ignores it.
   KACHE_PULL_REQUEST_PREFIX: kache-pr-v2
-  # Only main and owner-authored, owner-triggered same-repository PRs may use R2.
+  # Only main and owner-authored, owner-triggered same-repository PRs may use the S3 cache.
   # Check the re-run actor too; re-running another author's PR does not grant access.
   CI_CACHE_ALLOWED: >-
     ${{
@@ -34,7 +34,7 @@ jobs:
   rust-lint:
     runs-on: ubuntu-latest
     environment:
-      name: cloudflare-r2
+      name: s3-cache
       deployment: false
     timeout-minutes: 30
     steps:
@@ -44,15 +44,15 @@ jobs:
       - uses: ./.github/actions/rust # zizmor: ignore[self-repository] actionlint 1.7.12 rejects the $/ form
         with:
           cache: ${{ env.CI_CACHE_ALLOWED }}
-          r2-access-key-id: ${{ env.CI_CACHE_ALLOWED == 'true' && secrets.R2_ACCESS_KEY_ID || '' }}
-          r2-secret-access-key: ${{ env.CI_CACHE_ALLOWED == 'true' && secrets.R2_SECRET_ACCESS_KEY || '' }}
+          s3-access-key-id: ${{ env.CI_CACHE_ALLOWED == 'true' && secrets.S3_CACHE_ACCESS_KEY_ID || '' }}
+          s3-secret-access-key: ${{ env.CI_CACHE_ALLOWED == 'true' && secrets.S3_CACHE_SECRET_ACCESS_KEY || '' }}
       - run: just fmt-check lint
       - run: just assert-clean
 
   rust-test:
     runs-on: ubuntu-latest
     environment:
-      name: cloudflare-r2
+      name: s3-cache
       deployment: false
     timeout-minutes: 45
     steps:
@@ -62,8 +62,8 @@ jobs:
       - uses: ./.github/actions/rust # zizmor: ignore[self-repository] actionlint 1.7.12 rejects the $/ form
         with:
           cache: ${{ env.CI_CACHE_ALLOWED }}
-          r2-access-key-id: ${{ env.CI_CACHE_ALLOWED == 'true' && secrets.R2_ACCESS_KEY_ID || '' }}
-          r2-secret-access-key: ${{ env.CI_CACHE_ALLOWED == 'true' && secrets.R2_SECRET_ACCESS_KEY || '' }}
+          s3-access-key-id: ${{ env.CI_CACHE_ALLOWED == 'true' && secrets.S3_CACHE_ACCESS_KEY_ID || '' }}
+          s3-secret-access-key: ${{ env.CI_CACHE_ALLOWED == 'true' && secrets.S3_CACHE_SECRET_ACCESS_KEY || '' }}
       - run: just test
       - run: just assert-clean
 
@@ -188,6 +188,9 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    environment:
+      name: s3-cache
+      deployment: false
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -195,7 +198,9 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/rust # zizmor: ignore[self-repository] actionlint 1.7.12 rejects the $/ form
         with:
-          cache: "false"
+          cache: ${{ env.CI_CACHE_ALLOWED }}
+          s3-access-key-id: ${{ env.CI_CACHE_ALLOWED == 'true' && secrets.S3_CACHE_ACCESS_KEY_ID || '' }}
+          s3-secret-access-key: ${{ env.CI_CACHE_ALLOWED == 'true' && secrets.S3_CACHE_SECRET_ACCESS_KEY || '' }}
       - uses: ./.github/actions/js # zizmor: ignore[self-repository] actionlint 1.7.12 rejects the $/ form
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
