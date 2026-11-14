@@ -625,6 +625,19 @@ it("prepends a new trace and highlights the row", async () => {
   expect(screen.getByText("6 loaded")).toBeInTheDocument();
 });
 
+it("inserts a trace that finished after a newer one at its start-time place", async () => {
+  const { emit } = await openLive("/acme/support-bot/traces?live=1");
+  emit.trace(liveTrace("c1000000000000000000000000000006", "newer arrival", LATER_STILL));
+  await screen.findByText("newer arrival");
+  emit.trace(liveTrace("c1000000000000000000000000000007", "late arrival", LATER));
+  const late = await screen.findByText("late arrival");
+  expect(late.closest("[role=row]")).toHaveClass("live-row");
+  expect(screen.getByText("7 loaded")).toBeInTheDocument();
+  const rows = screen.getAllByRole("row").map((row) => row.textContent ?? "");
+  const newer = rows.findIndex((text) => text.includes("newer arrival"));
+  expect(rows[newer + 1]).toContain("late arrival");
+});
+
 it("replaces a known trace in place", async () => {
   const { emit } = await openLive("/acme/support-bot/traces?live=1");
   emit.trace(liveTrace(FIRST, "renamed in place", "2026-01-01T10:30:00.000000000Z"));
