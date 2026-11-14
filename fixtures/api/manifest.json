@@ -16,6 +16,16 @@
     "file": "static/admin-settings.json"
   },
   {
+    "operation_id": "get_alert_rule",
+    "path_params": {
+      "id": "01900000-0000-7000-8000-000000000510"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/alert-rule.json"
+  },
+  {
     "operation_id": "get_auth_config",
     "path_params": {},
     "query": {},
@@ -393,12 +403,38 @@
     "file": "static/admin-users.json"
   },
   {
+    "operation_id": "list_alert_events",
+    "path_params": {
+      "id": "01900000-0000-7000-8000-000000000510"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/alert-events.json"
+  },
+  {
+    "operation_id": "list_alert_rules",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/alert-rules.json"
+  },
+  {
     "operation_id": "list_api_keys",
     "path_params": {},
     "query": {},
     "status": 200,
     "content_type": "application/json",
     "file": "static/api-keys.json"
+  },
+  {
+    "operation_id": "list_channels",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/channels.json"
   },
   {
     "operation_id": "list_llm_connections",

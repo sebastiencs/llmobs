@@ -221,6 +221,61 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
         "delete_saved_view",
     ),
     ("post", "/api/v1/projects/{project}/sql", "run_sql"),
+    (
+        "get",
+        "/api/v1/projects/{project}/channels",
+        "list_channels",
+    ),
+    (
+        "post",
+        "/api/v1/projects/{project}/channels",
+        "create_channel",
+    ),
+    (
+        "patch",
+        "/api/v1/projects/{project}/channels/{id}",
+        "update_channel",
+    ),
+    (
+        "delete",
+        "/api/v1/projects/{project}/channels/{id}",
+        "delete_channel",
+    ),
+    (
+        "post",
+        "/api/v1/projects/{project}/channels/{id}/test",
+        "test_channel",
+    ),
+    (
+        "get",
+        "/api/v1/projects/{project}/alert-rules",
+        "list_alert_rules",
+    ),
+    (
+        "post",
+        "/api/v1/projects/{project}/alert-rules",
+        "create_alert_rule",
+    ),
+    (
+        "get",
+        "/api/v1/projects/{project}/alert-rules/{id}",
+        "get_alert_rule",
+    ),
+    (
+        "patch",
+        "/api/v1/projects/{project}/alert-rules/{id}",
+        "update_alert_rule",
+    ),
+    (
+        "delete",
+        "/api/v1/projects/{project}/alert-rules/{id}",
+        "delete_alert_rule",
+    ),
+    (
+        "get",
+        "/api/v1/projects/{project}/alert-rules/{id}/events",
+        "list_alert_events",
+    ),
     ("get", "/api/v1/projects/{project}/metrics", "get_metrics"),
     (
         "get",
@@ -230,6 +285,7 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
 ];
 
 const QUERY_OR_BODY: &[&str] = &[
+    "list_alert_events",
     "list_org_members",
     "list_org_invites",
     "list_llm_connections",
@@ -281,6 +337,7 @@ const TAGS: &[&str] = &[
     "sql",
     "metrics",
     "media",
+    "alerts",
 ];
 
 const METHODS: &[&str] = &[
@@ -436,6 +493,10 @@ fn document_lint() {
             || *id == "delete_api_key"
             || *id == "delete_org_invite"
             || *id == "delete_personal_token"
+            || *id == "delete_channel"
+            || *id == "test_channel"
+            || *id == "get_alert_rule"
+            || *id == "delete_alert_rule"
         {
             expected_errors.extend(["400", "401", "403", "404", "429"]);
         } else if *id == "get_invite_preview" {
@@ -470,6 +531,12 @@ fn document_lint() {
             || *id == "post_llm_connection_test"
         {
             expected_errors.extend(["400", "401", "403", "404", "429"]);
+        } else if *id == "create_channel"
+            || *id == "update_channel"
+            || *id == "create_alert_rule"
+            || *id == "update_alert_rule"
+        {
+            expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
         } else if *id == "run_sql" {
             expected_errors.extend(["400", "401", "403", "404", "413", "415", "422", "429"]);
         } else if READ_OPERATIONS.contains(id) {
@@ -554,6 +621,9 @@ fn document_lint() {
         ("PersonalTokenPage", "PersonalToken"),
         ("SavedViewPage", "SavedView"),
         ("LlmConnectionPage", "LlmConnection"),
+        ("ChannelPage", "NotificationChannel"),
+        ("AlertRulePage", "AlertRule"),
+        ("AlertEventPage", "AlertEvent"),
     ];
     for (page, item) in pages {
         let schema = &schemas[page];
@@ -804,6 +874,9 @@ fn assert_nullability(schemas: &serde_json::Map<String, Value>) {
         "PersonalTokenPage",
         "SavedViewPage",
         "LlmConnectionPage",
+        "ChannelPage",
+        "AlertRulePage",
+        "AlertEventPage",
     ];
     let expected: BTreeSet<String> = pages
         .iter()

@@ -13,6 +13,7 @@ it("redirects a project to traces and marks Traces active", async () => {
   expect(router.state.location.pathname).toBe("/acme/support-bot/traces");
   expect(screen.getByRole("link", { name: "Traces" })).toHaveAttribute("aria-current", "page");
   expect(screen.getByRole("heading", { name: "Traces" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Alerts" })).toBeInTheDocument();
   expect(await screen.findByRole("grid", { name: "Traces" })).toHaveTextContent(
     "chat claude-sonnet-4-5",
   );

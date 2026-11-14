@@ -1,0 +1,26 @@
+{
+  "id": "01900000-0000-7000-8000-000000000510",
+  "name": "High error rate",
+  "enabled": true,
+  "condition": {
+    "metric": "error_rate",
+    "window": "5m",
+    "filter": "environment = 'production'",
+    "comparator": "gt",
+    "threshold": 0.05,
+    "min_count": 20
+  },
+  "channel_ids": [
+    "01900000-0000-7000-8000-000000000500",
+    "01900000-0000-7000-8000-000000000501"
+  ],
+  "cooldown_s": 3600,
+  "notify_while_firing": true,
+  "state": "firing",
+  "last_value": 0.125,
+  "last_count": 48,
+  "last_evaluated_at": "2026-01-01T10:06:00.000000000Z",
+  "last_fired_at": "2026-01-01T10:05:00.000000000Z",
+  "created_at": "2026-01-01T09:00:00.000000000Z",
+  "updated_at": "2026-01-01T09:00:00.000000000Z"
+}

@@ -68,6 +68,12 @@ pub(crate) enum ApiError {
         /// Which 403 this is.
         code: ProblemCode,
     },
+    /// The org's plan limit is reached (D178).
+    #[error("plan limit")]
+    PlanLimit {
+        /// Names the limit; never holds payload.
+        detail: String,
+    },
     /// The org's plan does not include the feature (D177, D-P-14). `detail` names it.
     #[error("plan required")]
     PlanRequired {
@@ -145,6 +151,9 @@ impl ApiError {
             }
             Self::Unauthorized => Problem::new(ProblemCode::Unauthorized, None),
             Self::Forbidden { code } => Problem::new(*code, None),
+            Self::PlanLimit { detail } => {
+                Problem::new(ProblemCode::PlanLimit, Some(detail.clone()))
+            }
             Self::PlanRequired { detail } => {
                 Problem::new(ProblemCode::PlanRequired, Some((*detail).to_owned()))
             }

@@ -5,6 +5,7 @@
 
 pub mod account;
 pub mod admin;
+pub mod alerts;
 pub mod common;
 pub mod connections;
 pub(crate) mod convert;

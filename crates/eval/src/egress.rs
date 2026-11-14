@@ -24,26 +24,34 @@ pub struct EgressPolicy {
     pub allow_private_network: bool,
 }
 
-/// One shared client. Redirects are not followed.
+/// One shared client with the SSRF guard (D166). Redirects are not followed; proxies are ignored.
 #[derive(Debug, Clone)]
-pub(crate) struct EgressClient {
+pub struct EgressClient {
     http: reqwest::Client,
     policy: EgressPolicy,
 }
 
 /// One POST. The caller owns the URL, the timeout, and the body cap.
-pub(crate) struct EgressRequest<'a> {
-    pub(crate) url: &'a Url,
-    pub(crate) headers: Vec<(HeaderName, HeaderValue)>,
-    pub(crate) body: Vec<u8>,
-    pub(crate) timeout: Duration,
-    pub(crate) max_response_bytes: usize,
+#[derive(Debug)]
+pub struct EgressRequest<'a> {
+    /// Destination. Only http and https are allowed.
+    pub url: &'a Url,
+    /// Extra request headers, in order.
+    pub headers: Vec<(HeaderName, HeaderValue)>,
+    /// Request body, sent as is.
+    pub body: Vec<u8>,
+    /// Whole-request timeout.
+    pub timeout: Duration,
+    /// Larger bodies fail with [`EgressError::TooLarge`].
+    pub max_response_bytes: usize,
 }
 
 /// The status and body of one response. The body is at most the request's cap.
 #[derive(Debug)]
-pub(crate) struct EgressResponse {
+pub struct EgressResponse {
+    /// HTTP status.
     pub status: StatusCode,
+    /// Body, at most the request's cap.
     pub body: Bytes,
 }
 
@@ -53,7 +61,7 @@ impl EgressClient {
     /// # Errors
     ///
     /// Returns [`EgressError::Request`] when the TLS backend cannot be initialized.
-    pub(crate) fn new(policy: EgressPolicy) -> Result<Self, EgressError> {
+    pub fn new(policy: EgressPolicy) -> Result<Self, EgressError> {
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
@@ -78,7 +86,7 @@ impl EgressClient {
     /// failures become [`EgressError::Timeout`], [`EgressError::Connect`], or
     /// [`EgressError::Request`]. Their text is not the client error's `Display`,
     /// which contains the URL.
-    pub(crate) async fn post(&self, req: EgressRequest<'_>) -> Result<EgressResponse, EgressError> {
+    pub async fn post(&self, req: EgressRequest<'_>) -> Result<EgressResponse, EgressError> {
         if req.url.scheme() != "http" && req.url.scheme() != "https" {
             return Err(EgressError::Scheme);
         }

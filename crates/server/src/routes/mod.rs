@@ -2,8 +2,10 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
 pub(crate) mod admin;
+pub(crate) mod alert_rules;
 pub(crate) mod api_keys;
 pub(crate) mod auth;
+pub(crate) mod channels;
 pub(crate) mod connections;
 pub(crate) mod entitlements;
 pub(crate) mod feedback;

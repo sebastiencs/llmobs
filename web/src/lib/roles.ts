@@ -59,6 +59,11 @@ export function canManageConnections(role: OrgRole | undefined): boolean {
   return atLeast(role, "admin");
 }
 
+/** Members and above manage alert rules and channels (D-K-9). */
+export function canManageAlerts(role: OrgRole | undefined): boolean {
+  return atLeast(role, "member");
+}
+
 /** Overrides apply only to org members and viewers (D139). */
 export function canHaveOverride(orgRole: OrgRole): boolean {
   return orgRole === "member" || orgRole === "viewer";

@@ -132,6 +132,8 @@ pub enum ProblemCode {
     SsoRequired,
     /// The account has not verified its email.
     EmailNotVerified,
+    /// The org's plan does not allow this (D178). The detail names the limit.
+    PlanLimit,
     /// The organization's plan does not include this feature.
     PlanRequired,
     /// The resource does not exist.
@@ -158,9 +160,11 @@ impl ProblemCode {
         match self {
             Self::BadRequest | Self::InvalidFilter | Self::QueryFailed => 400,
             Self::Unauthorized => 401,
-            Self::Forbidden | Self::SsoRequired | Self::EmailNotVerified | Self::PlanRequired => {
-                403
-            }
+            Self::Forbidden
+            | Self::SsoRequired
+            | Self::EmailNotVerified
+            | Self::PlanLimit
+            | Self::PlanRequired => 403,
             Self::NotFound => 404,
             Self::MethodNotAllowed => 405,
             Self::PayloadTooLarge => 413,
@@ -179,9 +183,11 @@ impl ProblemCode {
         match self {
             Self::BadRequest | Self::InvalidFilter | Self::QueryFailed => "Bad Request",
             Self::Unauthorized => "Unauthorized",
-            Self::Forbidden | Self::SsoRequired | Self::EmailNotVerified | Self::PlanRequired => {
-                "Forbidden"
-            }
+            Self::Forbidden
+            | Self::SsoRequired
+            | Self::EmailNotVerified
+            | Self::PlanLimit
+            | Self::PlanRequired => "Forbidden",
             Self::NotFound => "Not Found",
             Self::MethodNotAllowed => "Method Not Allowed",
             Self::PayloadTooLarge => "Payload Too Large",
@@ -455,6 +461,7 @@ mod tests {
         );
         assert_eq!(ProblemCode::SsoRequired.status(), 403);
         assert_eq!(ProblemCode::EmailNotVerified.status(), 403);
+        assert_eq!(ProblemCode::PlanLimit.status(), 403);
         assert_eq!(ProblemCode::PlanRequired.status(), 403);
         assert_eq!(ProblemCode::MethodNotAllowed.status(), 405);
         assert_eq!(ProblemCode::Conflict.status(), 409);

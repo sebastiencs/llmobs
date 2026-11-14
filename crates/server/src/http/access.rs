@@ -137,6 +137,8 @@ pub(crate) fn routes() -> Vec<RouteDef> {
     routes.extend(crate::routes::entitlements::routes());
     routes.extend(crate::routes::connections::routes());
     routes.extend(crate::routes::api_keys::routes());
+    routes.extend(crate::routes::channels::routes());
+    routes.extend(crate::routes::alert_rules::routes());
     routes.extend(crate::routes::tokens::routes());
     routes.extend(crate::routes::traces::routes());
     routes.extend(crate::routes::streams::routes());

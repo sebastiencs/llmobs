@@ -1,4 +1,4 @@
-Status: planned on 2026-11-14; K1–K12 not started
+Status: K1–K12 done on 2026-11-14
 
 # K · Alerts
 

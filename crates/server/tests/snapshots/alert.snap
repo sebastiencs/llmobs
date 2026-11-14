@@ -1,0 +1,39 @@
+---
+source: crates/server/src/email/mod.rs
+expression: "rendered(&mailer, &Email::Alert\n{\n    state: \"Firing\", rule_name: \"High errors\".to_owned(), project_name:\n    \"Support bot\".to_owned(), value: \"12.5%\".to_owned(), threshold:\n    \"5.0%\".to_owned(), window: \"5m\", rule_url:\n    \"https://example.com/acme/support-bot/alerts/r\".to_owned(), traces_url:\n    \"https://example.com/acme/support-bot/traces?from=a&to=b\".to_owned(),\n},)"
+---
+Subject: [llmobs] Firing: High errors
+
+Firing: High errors in Support bot
+Value: 12.5% (threshold 5.0%) over 5m
+
+View the rule:
+https://example.com/acme/support-bot/alerts/r
+
+View the traces:
+https://example.com/acme/support-bot/traces?from=a&to=b
+---
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Firing: High errors</title>
+  </head>
+  <body style="margin:0;padding:0;background-color:#f4f4f5;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f5;">
+      <tr>
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background-color:#ffffff;border-radius:8px;">
+            <tr>
+              <td style="padding:32px;font-family:sans-serif;font-size:16px;line-height:1.5;color:#18181b;">
+                <p style="margin:0 0 16px;font-weight:600;">Firing: High errors</p>
+                <p style="margin:0 0 16px;">Support bot · 12.5% (threshold 5.0%) over 5m</p>
+                <p style="margin:0;"><a href="https:&#x2f;&#x2f;example.com&#x2f;acme&#x2f;support-bot&#x2f;alerts&#x2f;r">View the rule</a> · <a href="https:&#x2f;&#x2f;example.com&#x2f;acme&#x2f;support-bot&#x2f;traces?from=a&amp;to=b">View the traces</a></p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
