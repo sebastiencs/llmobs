@@ -1,9 +1,13 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
+import { meQuery } from "@/api/queries";
 import { server } from "@/mocks/node";
+import { ORG_ID } from "@/test/fixtures";
 import { problemResponse } from "@/test/problem";
 import { renderApp } from "@/test/render";
+import deletionProjectFixture from "../../../../../../fixtures/api/static/deletion-project.json";
+import meFixture from "../../../../../../fixtures/api/static/me.json";
 import projectFixture from "../../../../../../fixtures/api/static/project.json";
 
 const projectNav = () => within(screen.getByRole("list", { name: "Project settings" }));
@@ -141,5 +145,95 @@ it("is read-only for a member", async () => {
   expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "Save" }).parentElement).toHaveAccessibleDescription(
     "Only project admins can change these settings",
+  );
+});
+
+it("deletes the project once its slug is typed, then returns to the org home", async () => {
+  let path = "";
+  let confirm: string | null = null;
+  server.use(
+    http.delete("/api/v1/projects/:project", ({ request }) => {
+      const url = new URL(request.url);
+      path = url.pathname;
+      confirm = url.searchParams.get("confirm");
+      return HttpResponse.json(deletionProjectFixture, { status: 202 });
+    }),
+  );
+
+  const { router, user } = await renderApp("/acme/support-bot/settings/general");
+  const open = await screen.findByRole("button", { name: "Delete project…" });
+  await waitFor(() => expect(open).toBeEnabled());
+  await user.click(open);
+
+  const dialog = await screen.findByRole("alertdialog");
+  const confirmButton = within(dialog).getByRole("button", { name: "Delete project" });
+  expect(confirmButton).toBeDisabled();
+  await user.type(
+    within(dialog).getByLabelText('Type the project slug "support-bot" to confirm'),
+    "support-bot",
+  );
+  await user.click(confirmButton);
+
+  await waitFor(() => expect(router.state.location.pathname).toBe("/acme"));
+  expect(path).toBe("/api/v1/projects/acme%2Fsupport-bot");
+  expect(confirm).toBe("support-bot");
+});
+
+it("disables project deletion for a project admin who is not an org admin", async () => {
+  server.use(
+    projectAs("admin"),
+    http.get("/api/auth/me", () =>
+      HttpResponse.json({
+        user: meFixture.user,
+        orgs: [{ id: ORG_ID, slug: "acme", name: "Acme", role: "member" }],
+      }),
+    ),
+  );
+
+  const { queryClient } = await renderApp("/acme/support-bot/settings/general");
+  await waitFor(() => expect(queryClient.getQueryData(meQuery.queryKey)).toBeDefined());
+
+  const button = screen.getByRole("button", { name: "Delete project…" });
+  expect(button).toBeDisabled();
+  expect(button.parentElement).toHaveAccessibleDescription(
+    "Only organization admins and owners can delete projects",
+  );
+});
+
+it("shows the org-admin message when the server refuses the deletion", async () => {
+  server.use(http.delete("/api/v1/projects/:project", () => problemResponse(403, "forbidden")));
+
+  const { user } = await renderApp("/acme/support-bot/settings/general");
+  const open = await screen.findByRole("button", { name: "Delete project…" });
+  await waitFor(() => expect(open).toBeEnabled());
+  await user.click(open);
+
+  const dialog = await screen.findByRole("alertdialog");
+  await user.type(
+    within(dialog).getByLabelText('Type the project slug "support-bot" to confirm'),
+    "support-bot",
+  );
+  await user.click(within(dialog).getByRole("button", { name: "Delete project" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Only organization admins and owners can delete projects.",
+  );
+});
+
+it("shows the Pro plan message when retention is refused by the plan", async () => {
+  server.use(
+    http.patch("/api/v1/projects/:project", () =>
+      problemResponse(403, "plan_required", {
+        detail: "data retention management is part of the Pro plan",
+      }),
+    ),
+  );
+
+  const { user } = await renderApp("/acme/support-bot/settings/general");
+  await screen.findByLabelText("Name");
+  await user.click(screen.getByRole("button", { name: "Save" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Data retention management is part of the Pro plan.",
   );
 });
