@@ -2,7 +2,7 @@
 
 Track G connects the Wave 1 areas into a running product: OTLP ingest into storage, the read API over A2's queries, score writes, live updates, and the embedded UI on the real API. It runs first and alone in Wave 2 because it settles the wiring every later track extends: the server's state and route table, `openapi.json`, the `fixtures/api` manifest and the web router (`docs/roadmap.md` § Wave 2).
 
-This document holds the decisions, the architecture, the interfaces later tracks build on, and the milestones. Each milestone gets its own plan of small sub-phases: [`01-m1-otlp-http-ingest.md`](01-m1-otlp-http-ingest.md), [`02-m2-read-api.md`](02-m2-read-api.md) and [`03-m3-writes-grpc-usage.md`](03-m3-writes-grpc-usage.md) and [`04-m4-live-updates.md`](04-m4-live-updates.md) so far.
+This document holds the decisions, the architecture, the interfaces later tracks build on, and the milestones. Each milestone gets its own plan of small sub-phases: [`01-m1-otlp-http-ingest.md`](01-m1-otlp-http-ingest.md), [`02-m2-read-api.md`](02-m2-read-api.md) and [`03-m3-writes-grpc-usage.md`](03-m3-writes-grpc-usage.md) [`04-m4-live-updates.md`](04-m4-live-updates.md) and [`05-m5-ui-and-e2e.md`](05-m5-ui-and-e2e.md).
 
 **Status.** Design, M1, M2 and M3 plans written. M1 implemented (PR #43), M2 implemented (PR #52), M3 implemented (branch `claude/g-m3-impl`), M4 implemented (branch `claude/g-m4-impl`). The A2 fixes M2 needs are merged (PR #48). The C review findings that touch G are in § Review findings, with the milestone each fix must precede.
 
@@ -48,6 +48,9 @@ All are in `docs/mvp-decisions.md` § Track G. The user chose the option marked 
 | D-G-32 | **Bus bounds:** 64 events of at most 500 summaries; nothing built without a stream. |
 | D-G-33 | **Live search window** over the arriving spans' start times; matched ids remembered. |
 | D-G-34 | **Stream slots and failures:** 100 per user; busy or slow re-reads retried; shutdown ends streams. |
+| D-G-35 | **Own UI embedding** in `llmobs-ui`'s `build.rs`, not `memory-serve` (it would enable `axum/tracing`). |
+| D-G-36 | **No G login page:** track L built it. |
+| D-G-37 | **`just check-release`** checks the UI is embedded; the release workflow is track N's. |
 
 ## Scope
 
@@ -237,9 +240,9 @@ Metrics results are cached 10 s per `(project, params)` (spec 05) in a small `Mu
 
 ### Embedded UI (M5)
 
-- `crates/ui/build.rs` checks for `web/dist/index.html`; `memory-serve` embeds the directory when present. `llmobs_ui::router() -> axum::Router` serves the assets with their content types, precompressed variants and ETags; `index.html` for any other `GET`/`HEAD` path (SPA fallback); `Cache-Control: public, max-age=31536000, immutable` under `/assets/`, `no-cache` for `index.html`. When `web/dist` was missing at build time, every UI path answers `503` text "web UI not built: run `just build-release`".
+- `crates/ui/build.rs` checks for `web/dist/index.html` and embeds the directory itself when present (D-G-35). `llmobs_ui::router() -> axum::Router` serves the assets with their content types, precompressed variants and ETags; `index.html` for any other `GET`/`HEAD` path (SPA fallback); `Cache-Control: public, max-age=31536000, immutable` under `/assets/`, `no-cache` for `index.html`. When `web/dist` was missing at build time, every UI path answers `503` text "web UI not built: run `just build-release`".
 - `llmobs_server::serve::bind(config, ui: Option<axum::Router>)` merges the UI router as the fallback of the main listener only. `/api/*`, `/v1/*`, `/mcp`, `/healthz`, `/readyz` never fall back to `index.html`: unknown paths there stay `404` problems. UI responses carry spec 12's CSP (`default-src 'self'; img-src 'self' blob: data:; media-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`.
-- The minimal `/login` page posts `/api/auth/login`, then navigates to the `redirect` search param (a relative path, D's rule) or `/`. The API client sends any `401` from `/api/v1/*` to `/login?redirect=<current path>`. The root route picks the first project from `/api/auth/me` (as today on mocks); a user with no project sees an empty state.
+- (Track L built the login page and the 401 handling, D-G-36.) The `/login` page posts `/api/auth/login`, then navigates to the `redirect` search param (a relative path, D's rule) or `/`. The API client sends any `401` from `/api/v1/*` to `/login?redirect=<current path>`. The root route picks the first project from `/api/auth/me` (as today on mocks); a user with no project sees an empty state.
 
 ### End-to-end test (M5)
 
