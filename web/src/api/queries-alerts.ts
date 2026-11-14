@@ -18,3 +18,13 @@ export function alertRulesQuery(org: string, project: string) {
     params: { path: { project: projectRef(org, project) } },
   });
 }
+
+export function alertRuleQuery(org: string, project: string, id: string) {
+  return $api.queryOptions("get", "/api/v1/projects/{project}/alert-rules/{id}", {
+    params: { path: { project: projectRef(org, project), id } },
+  });
+}
+
+export function alertEventsInit(org: string, project: string, id: string) {
+  return { params: { path: { project: projectRef(org, project), id }, query: { limit: 50 } } };
+}
