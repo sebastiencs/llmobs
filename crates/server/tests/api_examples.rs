@@ -14,7 +14,7 @@ use llmobs_core::span::Span;
 use llmobs_server::api::account::{
     AuthConfig, Me, OrgMembership, OrgRole, Project, SetupResponse, SignupResponse,
 };
-use llmobs_server::api::admin::{AdminSettings, AdminUser, CreatedAdminUser};
+use llmobs_server::api::admin::{AdminLicense, AdminSettings, AdminUser, CreatedAdminUser};
 use llmobs_server::api::common::Page;
 use llmobs_server::api::connections::{
     CreateLlmConnectionRequest, LlmConnection, LlmConnectionTestResult,
@@ -367,6 +367,7 @@ fn static_files_match_their_types() {
     roundtrip::<Page<AdminUser>>("static/admin-users.json");
     roundtrip::<CreatedAdminUser>("static/admin-user-created.json");
     roundtrip::<AdminSettings>("static/admin-settings.json");
+    roundtrip::<AdminLicense>("static/admin-license.json");
     roundtrip::<CreatedInvite>("static/invite-created.json");
     roundtrip::<InvitePreview>("static/invite-preview.json");
     roundtrip::<Page<ProjectMember>>("static/project-members.json");
@@ -486,7 +487,8 @@ fn generated_files_roundtrip() {
             | "post_signup"
             | "list_admin_users"
             | "post_admin_user"
-            | "get_admin_settings" => {}
+            | "get_admin_settings"
+            | "get_admin_license" => {}
             "list_llm_connections" => roundtrip::<Page<LlmConnection>>(&example.file),
             "get_llm_connection" | "post_llm_connection" => {
                 roundtrip::<LlmConnection>(&example.file);

@@ -30,8 +30,8 @@ use super::account::{
     UpdateMeRequest, UpdateOrgRequest, UpdateProjectRequest, User, VerifyEmailRequest,
 };
 use super::admin::{
-    AdminResetLink, AdminSettings, AdminUser, CreateAdminUserRequest, CreatedAdminUser,
-    UpdateAdminUserRequest,
+    AdminLicense, AdminResetLink, AdminSettings, AdminUser, CreateAdminUserRequest,
+    CreatedAdminUser, UpdateAdminUserRequest,
 };
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
 use super::connections::{
@@ -127,6 +127,7 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<UpdateAdminUserRequest>();
     set.insert::<AdminResetLink>();
     set.insert::<AdminSettings>();
+    set.insert::<AdminLicense>();
     set.insert::<OrgEntitlements>();
     set.insert::<Feature>();
     set.insert::<OrgMembership>();
@@ -610,6 +611,14 @@ fn admin_paths(paths: PathsBuilder) -> PathsBuilder {
             &[401, 403, 429],
         ))
         .build();
+    let license = operation("get_admin_license", "admin", "Read the instance licence")
+        .securities(session.clone())
+        .responses(responses(
+            "200",
+            json_of::<AdminLicense>("The licence status. The key itself is never returned."),
+            &[401, 403, 429],
+        ))
+        .build();
     let test_email = operation(
         "post_admin_settings_test_email",
         "admin",
@@ -639,6 +648,10 @@ fn admin_paths(paths: PathsBuilder) -> PathsBuilder {
         .path(
             "/api/v1/admin/settings",
             PathItem::new(HttpMethod::Get, settings),
+        )
+        .path(
+            "/api/v1/admin/license",
+            PathItem::new(HttpMethod::Get, license),
         )
         .path(
             "/api/v1/admin/settings/test-email",

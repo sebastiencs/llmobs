@@ -268,6 +268,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/license": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the instance licence */
+        get: operations["get_admin_license"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/settings": {
         parameters: {
             query?: never;
@@ -1131,6 +1148,32 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description `GET /api/v1/admin/license`. Never contains the key. */
+        AdminLicense: {
+            /** @description Customer name. Omitted with `none` and `invalid`. */
+            customer?: string;
+            /**
+             * Format: date-time
+             * @description Omitted with `none` and `invalid`.
+             */
+            expires_at?: string;
+            /** @description Features the licence lists, known to this build, expired or not. Empty with `none` and `invalid`. */
+            features: components["schemas"]["Feature"][];
+            /**
+             * Format: date-time
+             * @description Omitted with `none` and `invalid`.
+             */
+            grace_ends_at?: string;
+            /**
+             * Format: uuid
+             * @description Licence id. Omitted with `none` and `invalid`.
+             */
+            id?: string;
+            /** @description Why the key was refused. Only with `invalid`. */
+            reason?: string;
+            /** @description The status now. */
+            status: components["schemas"]["LicenseStatus"];
+        };
         /** @description `POST /api/v1/admin/users/{id}/reset-link` returns 200. */
         AdminResetLink: {
             /** @description `<public_url>/reset?token=…`. Valid for one hour. */
@@ -1703,6 +1746,11 @@ export interface components {
          * @enum {string}
          */
         KpiMetric: "traces" | "error_rate" | "latency_p95" | "cost_total" | "total_tokens";
+        /**
+         * @description Where the instance licence stands (D-P-7).
+         * @enum {string}
+         */
+        LicenseStatus: "none" | "invalid" | "active" | "grace" | "expired";
         /**
          * Format: int32
          * @description Page size. Default 50, accepted range 1–1000.
@@ -4059,6 +4107,53 @@ export interface operations {
             };
             /** @description The request body is larger than the limit. */
             413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_admin_license: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The licence status. The key itself is never returned. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminLicense"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

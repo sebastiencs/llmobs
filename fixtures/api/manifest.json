@@ -1,5 +1,13 @@
 [
   {
+    "operation_id": "get_admin_license",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/admin-license.json"
+  },
+  {
     "operation_id": "get_admin_settings",
     "path_params": {},
     "query": {},
