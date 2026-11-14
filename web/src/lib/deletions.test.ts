@@ -1,6 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
-import type { Schema } from "@/api/types";
 import {
   count,
   deletionErrorLabel,
@@ -9,8 +8,6 @@ import {
   invalidateProjectReads,
   isOpenDeletion,
 } from "./deletions";
-
-type Deletion = Schema<"Deletion">;
 
 const base = {
   id: "01900000-0000-7000-8000-000000000900",
