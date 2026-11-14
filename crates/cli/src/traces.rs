@@ -641,6 +641,20 @@ mod tests {
                 "list",
                 "--project",
                 "p",
+                "--since",
+                "1h",
+                "--to",
+                "2026-01-02T00:00:00Z"
+            ]),
+            Some(ErrorKind::ArgumentConflict)
+        );
+        assert_eq!(
+            kind(&[
+                "llmobs",
+                "traces",
+                "list",
+                "--project",
+                "p",
                 "--sort",
                 "nope"
             ]),
@@ -733,6 +747,30 @@ mod tests {
             canned.recorded()[0].target,
             "/api/v1/projects/01900000-0000-7000-8000-000000000001/traces?from=2026-01-01T00%3A00%3A00.000000000Z&to=2026-01-02T00%3A00%3A00.000000000Z&sort=start_time&order=desc&limit=50"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn list_to_alone_is_the_only_bound() {
+        let canned = Canned::json(vec![(200, EMPTY_PAGE.to_owned())]).await;
+        let (_out, err) = capture(&[
+            "list",
+            "--project",
+            "01900000-0000-7000-8000-000000000001",
+            "--to",
+            "2026-01-02T00:00:00Z",
+            "--url",
+            canned.url.as_str(),
+            "--token",
+            "x",
+        ])
+        .await
+        .unwrap();
+
+        assert_eq!(
+            canned.recorded()[0].target,
+            "/api/v1/projects/01900000-0000-7000-8000-000000000001/traces?to=2026-01-02T00%3A00%3A00Z&sort=start_time&order=desc&limit=50"
+        );
+        assert_eq!(err, "0 rows\n");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1067,7 +1105,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn broken_pipe_ends_quietly() {
         let dir = tempfile::tempdir().unwrap();
-        let list_canned = Canned::json(vec![(200, EMPTY_PAGE.to_owned())]).await;
+        let list_canned = Canned::json(vec![
+            (200, EMPTY_PAGE.to_owned()),
+            (200, EMPTY_PAGE.to_owned()),
+        ])
+        .await;
         let get_canned = Canned::json(vec![(200, detail_body(false, &[]).to_string())]).await;
 
         let mut broken = BrokenPipe { on_write: true };
@@ -1088,6 +1130,24 @@ mod tests {
             "--token",
             "x",
         ]);
+        run(
+            &list_command,
+            || Ok(dir.path().join("missing.toml")),
+            &mut streams,
+        )
+        .await
+        .unwrap();
+        assert!(err.is_empty());
+
+        // A pipe that only breaks on flush stops the list just as quietly.
+        let mut broken = BrokenPipe { on_write: false };
+        let mut err = Vec::new();
+        let mut streams = Io {
+            out: &mut broken,
+            err: &mut err,
+            input: &mut input,
+            stdout_is_terminal: false,
+        };
         run(
             &list_command,
             || Ok(dir.path().join("missing.toml")),

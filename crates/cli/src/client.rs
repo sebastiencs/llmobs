@@ -58,9 +58,19 @@ pub(crate) struct ConnectionArgs {
 /// The server and the token one command uses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Target {
-    /// Normalized: no trailing slash; starts with `http://` or `https://`.
+    /// Normalized: no trailing slash; starts with `http://` or `https://`; carries no credentials.
     pub(crate) server: String,
     pub(crate) token: Token,
+}
+
+/// Whether the URL embeds credentials: `user[:password]@` before the host. Such a URL would be
+/// stored, printed and requested with the password inside, so it is refused instead.
+fn has_userinfo(url: &str) -> bool {
+    let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority_end = after_scheme
+        .find(['/', '?', '#'])
+        .unwrap_or(after_scheme.len());
+    after_scheme[..authority_end].contains('@')
 }
 
 /// `credentials` is called only when the credentials file is needed (rows 3 and 4 below).
@@ -73,6 +83,9 @@ pub(crate) fn resolve_target(
         .as_deref()
         .map(str::trim)
         .filter(|url| !url.is_empty());
+    if url.is_some_and(has_userinfo) {
+        bail!("the server URL must not contain credentials");
+    }
     let token = args
         .token
         .as_ref()
@@ -86,9 +99,15 @@ pub(crate) fn resolve_target(
         (Some(url), None) => {
             let server = credentials::normalize_server_url(url);
             let file = credentials::load(&credentials()?)?;
-            let saved = file.servers.get(&server).ok_or_else(|| {
-                anyhow::anyhow!("no saved token for {server}; run `llmobs login --url {server}`")
-            })?;
+            let saved = file
+                .servers
+                .get(&server)
+                .filter(|saved| !saved.token.trim().is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "no saved token for {server}; run `llmobs login --url {server}`"
+                    )
+                })?;
             Target {
                 server,
                 token: Token(saved.token.trim().to_owned()),
@@ -104,6 +123,12 @@ pub(crate) fn resolve_target(
                     "not logged in; run `llmobs login --url <URL>` or set LLMOBS_URL and LLMOBS_TOKEN"
                 );
             };
+            if has_userinfo(server) {
+                bail!("the server URL must not contain credentials");
+            }
+            if saved.token.trim().is_empty() {
+                bail!("no saved token for {server}; run `llmobs login --url {server}`");
+            }
             Target {
                 server: server.clone(),
                 token: Token(saved.token.trim().to_owned()),
@@ -198,10 +223,10 @@ impl ApiClient {
             let text = read_limited(response).await;
             return Err(problem_error(status, &text, &self.target.server));
         }
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|error| self.unreachable(error))?;
+        let bytes = response.bytes().await.map_err(|error| {
+            anyhow::Error::new(error)
+                .context(format!("reading the answer from {}", self.target.server))
+        })?;
         serde_json::from_slice(&bytes)
             .map_err(|_| anyhow::anyhow!("the server sent an invalid response"))
     }
@@ -404,6 +429,75 @@ mod tests {
     }
 
     #[test]
+    fn resolve_target_refuses_urls_with_credentials() {
+        for url in [
+            "http://user@h:1",
+            "https://user:pass@h",
+            "http://u@h/path",
+            "http://u@h?q=1",
+        ] {
+            let error =
+                resolve_target(&args(Some(url), Some("pat-x")), no_credentials).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "the server URL must not contain credentials",
+                "{url}"
+            );
+        }
+        resolve_target(
+            &args(Some("http://h:1/@path"), Some("pat-x")),
+            no_credentials,
+        )
+        .unwrap();
+
+        let (_dir, path) = saved_file(&[("http://user:pass@h:1", "pat-x")]);
+        let saved = resolve_target(&args(None, None), || Ok(path.clone())).unwrap_err();
+        assert_eq!(
+            saved.to_string(),
+            "the server URL must not contain credentials"
+        );
+    }
+
+    #[test]
+    fn blank_saved_token_counts_as_absent() {
+        let (_dir, path) = saved_file(&[("http://h:1", "   ")]);
+        let file = || -> anyhow::Result<PathBuf> { Ok(path.clone()) };
+        for case in [&args(Some("http://h:1"), None), &args(None, None)] {
+            let error = resolve_target(case, file).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "no saved token for http://h:1; run `llmobs login --url http://h:1`"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_body_cut_mid_read_is_a_reading_error() {
+        let canned = crate::test_server::Canned::raw(vec![
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{\"a\":"
+                .to_vec(),
+        ])
+        .await;
+        let api = ApiClient::new(Target {
+            server: canned.url.clone(),
+            token: Token::from_str("x").unwrap(),
+        })
+        .unwrap();
+        let error = api
+            .post_json(
+                "/api/v1/projects/p/sql",
+                &serde_json::json!({}),
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").starts_with(&format!("reading the answer from {}", canned.url)),
+            "{error:#}"
+        );
+    }
+
+    #[test]
     fn project_segment_encodes_the_slug_slash() {
         assert_eq!(project_segment("acme/support-bot"), "acme%2Fsupport-bot");
         assert_eq!(
@@ -482,6 +576,20 @@ mod tests {
         assert_eq!(
             token.get_env().and_then(|value| value.to_str()),
             Some("LLMOBS_TOKEN")
+        );
+    }
+
+    #[test]
+    fn url_flag_reads_the_llmobs_url_env() {
+        let command = crate::Cli::command();
+        let query = command.find_subcommand("query").expect("query subcommand");
+        let url = query
+            .get_arguments()
+            .find(|argument| argument.get_id() == "url")
+            .expect("url argument");
+        assert_eq!(
+            url.get_env().and_then(|value| value.to_str()),
+            Some("LLMOBS_URL")
         );
     }
 }

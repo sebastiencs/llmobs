@@ -1,6 +1,7 @@
 //! `llmobs projects list`: every project the caller can read, across their orgs (spec 09
 //! § Orgs, projects, members, keys; D-H-12).
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -118,10 +119,13 @@ async fn list(
     Ok(())
 }
 
-/// Every item of a paged list endpoint, following `next_cursor` with 1000 items per page.
+/// Every item of a paged list endpoint, following `next_cursor` with 1000 items per page. A
+/// cursor the server already returned ends the walk with an error: following it would loop
+/// forever.
 async fn all_pages<T: DeserializeOwned>(api: &ApiClient, path: &str) -> anyhow::Result<Vec<T>> {
     let mut items = Vec::new();
     let mut cursor: Option<String> = None;
+    let mut seen = HashSet::new();
     loop {
         let mut params = vec![("limit", "1000".to_owned())];
         if let Some(next) = &cursor {
@@ -132,7 +136,12 @@ async fn all_pages<T: DeserializeOwned>(api: &ApiClient, path: &str) -> anyhow::
             .map_err(|_| anyhow::anyhow!("the server sent an invalid response"))?;
         items.extend(page.data);
         match page.next_cursor {
-            Some(next) => cursor = Some(next),
+            Some(next) => {
+                if !seen.insert(next.clone()) {
+                    anyhow::bail!("the server repeated a page cursor");
+                }
+                cursor = Some(next);
+            }
             None => return Ok(items),
         }
     }
@@ -368,6 +377,57 @@ mod tests {
         assert_eq!(names, ["acme/support-bot", "acme/playground", "beta/web"]);
         assert!(listed[2].get("role").is_none());
         assert_eq!(err, "");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn projects_list_stops_when_a_cursor_repeats() {
+        let org_page = json!({
+            "data": [{"id": "01900000-0000-7000-8000-000000000010", "slug": "acme", "name": "Acme", "role": "owner"}],
+            "next_cursor": "o2"
+        });
+        let canned = Canned::json(vec![
+            (200, org_page.to_string()),
+            (200, org_page.to_string()),
+        ])
+        .await;
+        let error = capture(&["list", "--url", canned.url.as_str(), "--token", "x"])
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "the server repeated a page cursor");
+        assert_eq!(canned.recorded().len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn projects_list_cleans_a_control_character_in_a_cell() {
+        let orgs = json!({
+            "data": [{"id": "01900000-0000-7000-8000-000000000010", "slug": "acme", "name": "Acme", "role": "owner"}],
+            "next_cursor": null
+        });
+        let projects = json!({
+            "data": [project_json(
+                "01900000-0000-7000-8000-000000000001",
+                "01900000-0000-7000-8000-000000000010",
+                "app",
+                "a\u{1b}b",
+                Some("admin"),
+            )],
+            "next_cursor": null
+        });
+        let canned = Canned::json(vec![(200, orgs.to_string()), (200, projects.to_string())]).await;
+
+        let (out, err) = capture(&["list", "--url", canned.url.as_str(), "--token", "x"])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            out,
+            format!(
+                "project   name  role   id\n--------  ----  -----  {}\nacme/app  a b   admin  {}\n",
+                "-".repeat(36),
+                "01900000-0000-7000-8000-000000000001"
+            )
+        );
+        assert_eq!(err, "1 row\n");
     }
 
     #[tokio::test(flavor = "multi_thread")]

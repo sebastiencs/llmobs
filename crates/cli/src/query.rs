@@ -268,18 +268,29 @@ async fn deliver(
 ) -> anyhow::Result<bool> {
     match destination {
         Some(path) => deliver_file(path, body).await.map(|()| true),
-        None => match write_stdout(out, body).await {
+        None => write_stdout(out, body).await,
+    }
+}
+
+/// A buffered answer goes through [`output::write_output`]. A streamed export cannot: it would
+/// need the whole body in memory, and one call per chunk would flush per chunk. Its chunks are
+/// copied and flushed once; a pipe broken at any point stops the command quietly.
+async fn write_stdout(out: &mut dyn Write, body: Body) -> anyhow::Result<bool> {
+    match body {
+        Body::Buffered(bytes) => output::write_output(out, &bytes).map_err(anyhow::Error::from),
+        Body::Streamed(mut response) => match copy_and_flush(&mut response, out).await {
             Err(error) if is_broken_pipe(&error) => Ok(false),
             other => other.map(|()| true),
         },
     }
 }
 
-async fn write_stdout(out: &mut dyn Write, body: Body) -> anyhow::Result<()> {
-    match body {
-        Body::Buffered(bytes) => out.write_all(&bytes)?,
-        Body::Streamed(mut response) => copy_body(&mut response, out).await?,
-    }
+/// Copies a streamed answer to stdout, then flushes it.
+async fn copy_and_flush(
+    response: &mut reqwest::Response,
+    out: &mut dyn Write,
+) -> anyhow::Result<()> {
+    copy_body(response, out).await?;
     out.flush()?;
     Ok(())
 }
@@ -771,6 +782,18 @@ mod tests {
                 "1h",
                 "--from",
                 "2026-01-01T00:00:00Z",
+                "--to",
+                "2026-01-02T00:00:00Z",
+            ]),
+            ErrorKind::ArgumentConflict
+        );
+        assert_eq!(
+            kind(&[
+                "SELECT 1",
+                "--project",
+                "p",
+                "--since",
+                "1h",
                 "--to",
                 "2026-01-02T00:00:00Z",
             ]),
