@@ -43,6 +43,8 @@ Competitor research: `research/competitors.md`.
 
 **Packaging**: binary, Docker image, docker-compose, minimal Helm chart; documented snapshot backup.
 
+**Cloud & plans**: the same binary self-hosted (open core, MIT, enterprise features behind a licence key) and as a cloud of cells (EU, US) with Free / Starter / Pro / Enterprise plans and a Teams add-on, billed on units through Stripe (D169–D179).
+
 ## Decision log
 
 D1–D168 below are numbered in one sequence. From now on a track's decisions are `D-<track>-<n>` (e.g. `D-F-1`) in a `## Track <id> — <name>` section of their own after this table, and a decision that belongs to no track takes the next plain number (`roadmap.md` § Decision IDs).
@@ -57,7 +59,7 @@ D1–D168 below are numbered in one sequence. From now on a track's decisions ar
 | D6 | Tenancy | Organizations → projects from day one. |
 | D7 | Query | Both a filter DSL and user-facing SQL. |
 | D8 | Frontend | React + TypeScript. |
-| D9 | License / business model | Deferred. |
+| D9 | License / business model | Open core with cloud plans (D169–D179); the licence model is D172. |
 | D10 | Distribution | Self-host first; usage metering + per-org limits built in from day one so cloud is mostly ops + billing later. |
 | D11 | Evaluators | LLM-as-judge (online + experiments), built-in Rust checks, webhook evaluator. Sandboxed code evaluators (Monty / WASM) in v2. |
 | D12 | Real time | Live trace view is a must: freshly ingested spans queryable within seconds. |
@@ -217,6 +219,17 @@ D1–D168 below are numbered in one sequence. From now on a track's decisions ar
 | D166 | Egress SSRF guard | Judges and webhooks share one rustls client that follows no redirects and drops every resolved or literal address in a denied range unless `allow_private_network_egress` is set. Denied ranges are loopback, RFC 1918, CGNAT `100.64.0.0/10`, link-local, unique local `fc00::/7`, unspecified, multicast, broadcast, `192.0.0.0/24`, `198.18.0.0/15`, documentation ranges, and their IPv4-mapped and NAT64 forms (spec 12). |
 | D167 | Live provider tests | CI never calls a real provider. Integration tests use an in-process mock; live tests are ignored and run only through `just eval-live` (E19). |
 | D168 | QueryContext session | **`QueryContext::session()` is `pub`.** It returns `&SessionContext` so the `#[ignore]` benchmark `crates/storage/tests/trace_bench.rs` can run raw SQL (Q5) and `EXPLAIN ANALYZE` from an integration test, which the `sql_json` sandbox (D96) rejects. It is a trusted in-process capability only: the SQL console and read endpoints keep going through `sql_json`/`sql_export`, which apply the D96 sandbox, and callers of `session()` must not expose it to untrusted SQL. Deviation recorded for the M3 review, with no behaviour change to the product (spec 05). |
+| D169 | Distribution | **Self-hosted and cloud, one binary.** Both run the same `llmobs` binary. What an org may do comes from one resolved set of entitlements per org: from its cloud plan, or from the instance's licence key when self-hosted (D172, D179). Refines D10. |
+| D170 | Cloud architecture | **Cells plus a control plane.** A cell is one independent `llmobs` instance (local NVMe for the WAL and hot data, an S3-compatible bucket for Parquet and backups, its own `meta.db`) holding many orgs; cells share nothing. A small control plane handles accounts, signup and region choice, Stripe, licence issuing, the org → cell mapping and routing. A full cell gets a sibling; an enterprise customer gets a dedicated cell (ours or in their cloud). Regions: EU and US; an org picks one at signup and stays there. The first cell (EU) runs on one Hetzner dedicated server with Hetzner Object Storage for Parquet and backups (D37); no failover, so no uptime SLA below dedicated cells. Scale-out storage (D3's scale mode) stays post-MVP. |
+| D171 | Billing | **Stripe in the MVP.** Checkout, subscriptions, metered overage reported from `usage_daily`, invoices, and webhooks that set an org's plan. Volume discounts are tiered Stripe prices. Built in the control plane (track Q). |
+| D172 | Licence | **Open core.** The core is MIT. Enterprise code lives in `ee/` areas (for example `crates/ee`, `web/src/ee`) under a commercial, source-available licence, compiled into the same binary and dormant without a key. A self-hosted licence key is an ed25519-signed token (customer, features, limits, expiry) verified offline against a public key built into the binary, set with `LLMOBS_LICENSE_KEY`; no phone-home. Without a key: the full core with no volume, seat or retention limits, enterprise features shown locked. On expiry: a grace period with warnings, then enterprise features lock. Licensing never blocks ingestion or deletes data. Keys are sold through the control plane (annual plans, trial keys). Settles D9. |
+| D173 | Billing unit | **Units = spans + scores** ingested, per org per month, counted from `usage_daily` (D-G-11). |
+| D174 | Over the limit | **Free: hard cap; paid: overage.** A free org at its monthly units gets 429 with a clear message on ingest (warnings at 80 % and 100 %). Paid plans keep ingesting and are billed per extra unit, with an optional spend cap set by the customer. |
+| D175 | Data access | **Hidden, then deleted.** Data older than the plan's data-access window is hidden from every read (UI, API, SQL, MCP, exports) but kept; an upgrade reveals it. It is physically deleted 30 days after it leaves the window (the retention machinery of A1 M5 and track M). Self-hosted without a plan has no window. |
+| D176 | Seats | **Owners, admins and members are seats; viewers are free and unlimited.** Free: 1 seat. Paid plans: unlimited seats. |
+| D177 | Plans | **Free, Starter, Pro, Enterprise, plus a Teams add-on.** Free: $0, 100k units/month (hard cap), 30 days data access, 1 seat, 1 project. Starter: $30/month, 200k units/month included then $4 per 100k (lower with volume), 120 days data access, unlimited seats. Pro: $150/month, the same units and overage as Starter, 5 years data access, data retention management, higher ingest rate limits, prioritized support; compliance reports (SOC 2, ISO 27001) and a HIPAA-ready region when available. Teams add-on (on Pro): $300/month for enterprise SSO through OIDC (for example Okta), SSO enforcement, fine-grained roles (per-project role overrides, D139, and later custom roles), and a dedicated Slack or Teams support channel. Enterprise: custom (dedicated cell, self-hosted licence, audit logs, SCIM, SLAs). Annotation queues and SAML stay out of the MVP (D20). |
+| D178 | Paid features | **Gated by entitlement:** Free gets 1 alert rule (any channel) and 1 active online-evaluation rule; paid plans get unlimited rules. Judges run on the customer's own LLM connection; each evaluation score counts as a unit (D173), judge-trace spans do not; SSO enforcement and fine-grained roles come with the Teams add-on; audit logs and SCIM with Enterprise and the self-hosted licence. Features that ship ungated today (per-project role overrides, D139) become gated when track P lands. |
+| D179 | Entitlements | **One resolved `Entitlements` value per org.** Instance defaults, then the plan (or the licence key when self-hosted), then per-org overrides. Every check reads it: ingest units and rate, the data-access window, retention and its grace period, seats, projects, judge spend, and feature checks in the API and UI. Built in track P, which takes over the limits, quotas and usage API from track N and replaces spec 12's bare `orgs.limits`. Entitlement checks are product behaviour, not the feature flags `AGENTS.md` forbids. |
 
 ## Track F — SDK tracing
 
@@ -384,6 +397,5 @@ Decisions of track L (`docs/plans/l-admin-ui/`), numbered `D-L-<n>` (`docs/roadm
 
 ## Open
 
-- License (D9).
 - Real product name (D46).
 - `.cursor/` is untracked while D58 says `.cursor/rules` is kept (and the plans tell agents to read it): commit `.cursor/rules`, or drop that mention from D58?
