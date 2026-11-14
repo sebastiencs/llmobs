@@ -1,6 +1,7 @@
 //! HTTP tests: a real `meta.db` and storage, a manual clock, `oneshot` (D151).
 #![cfg(test)]
 
+pub(crate) mod hook_receiver;
 pub(crate) mod mock_idp;
 pub(crate) mod mock_llm;
 

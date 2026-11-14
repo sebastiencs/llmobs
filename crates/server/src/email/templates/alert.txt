@@ -1,0 +1,8 @@
+{{ state }}: {{ rule_name }} in {{ project_name }}
+Value: {{ value }} (threshold {{ threshold }}) over {{ window }}
+
+View the rule:
+{{ rule_url }}
+
+View the traces:
+{{ traces_url }}

@@ -3,5 +3,7 @@
 
 pub(crate) mod channel;
 pub(crate) mod condition;
+pub(crate) mod deliver;
 pub(crate) mod evaluate;
+pub(crate) mod message;
 pub(crate) mod quota;

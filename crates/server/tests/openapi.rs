@@ -236,6 +236,11 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
         "delete_channel",
     ),
     (
+        "post",
+        "/api/v1/projects/{project}/channels/{id}/test",
+        "test_channel",
+    ),
+    (
         "get",
         "/api/v1/projects/{project}/alert-rules",
         "list_alert_rules",
@@ -482,6 +487,7 @@ fn document_lint() {
             || *id == "delete_org_invite"
             || *id == "delete_personal_token"
             || *id == "delete_channel"
+            || *id == "test_channel"
             || *id == "get_alert_rule"
             || *id == "delete_alert_rule"
         {

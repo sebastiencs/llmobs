@@ -480,6 +480,16 @@ pub struct UpdateAlertRuleRequest {
     pub notify_while_firing: Option<bool>,
 }
 
+/// The result of `POST /channels/{id}/test`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ChannelTestResult {
+    /// The channel accepted the message.
+    pub ok: bool,
+    /// Why it did not. Never contains a URL, a secret or an address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// What an event records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]

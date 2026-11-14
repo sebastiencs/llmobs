@@ -7,9 +7,11 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::alerts::channel::{ChannelConfig, open_config, seal_config};
+use crate::alerts::deliver::send_one;
+use crate::alerts::message::{self, MessageKind, Notice};
 use crate::api::alerts::{
-    ChannelDelivery, ChannelKind, CreateChannelRequest, DeliveryStatus, NotificationChannel,
-    UpdateChannelRequest,
+    AlertMetric, AlertWindow, ChannelDelivery, ChannelKind, ChannelTestResult, Comparator,
+    CreateChannelRequest, DeliveryStatus, NotificationChannel, UpdateChannelRequest,
 };
 use crate::api::common::{FieldError, Page};
 use crate::auth::principal::{self, Principal};
@@ -18,6 +20,7 @@ use crate::http::AppState;
 use crate::http::access::{Access, ProjectAccess, RouteDef};
 use crate::http::error::{self, ApiError};
 use crate::meta::alerts::{self, ChannelPatch, ChannelRow, LastDelivery, NewChannel};
+use crate::meta::orgs;
 
 /// Channel routes. Reads need `view`; writes need `manage_alerts` (D-K-9).
 pub(crate) fn routes() -> Vec<RouteDef> {
@@ -61,6 +64,16 @@ pub(crate) fn routes() -> Vec<RouteDef> {
             },
             documented: true,
             handler: delete(delete_channel),
+        },
+        RouteDef {
+            method: Method::POST,
+            path: "/api/v1/projects/{project}/channels/{id}/test",
+            access: Access::Project {
+                perm: ProjectPerm::ManageAlerts,
+                session_only: false,
+            },
+            documented: true,
+            handler: post(test_channel),
         },
     ]
 }
@@ -227,6 +240,80 @@ async fn delete_channel(
         "alert channel deleted"
     );
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Sends one sample message now and reports the result (D-K-7). Nothing is stored.
+async fn test_channel(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Extension(access): Extension<ProjectAccess>,
+    error::Path(ChannelPath { id }): error::Path<ChannelPath>,
+) -> Result<error::Json<ChannelTestResult>, ApiError> {
+    let user_id = principal::session_user(&principal)?.id;
+    let project = &access.project;
+    let Some(channel) = alerts::channel_by_id(state.meta.reader(), project.id, id).await? else {
+        return Err(ApiError::NotFound);
+    };
+    let config = match open_config(&state.secrets, &channel.id, &channel.config_enc) {
+        Ok(config) => config,
+        Err(_) => {
+            return Ok(error::Json(ChannelTestResult {
+                ok: false,
+                error: Some("the channel config could not be read".to_owned()),
+            }));
+        }
+    };
+    let org = orgs::org_by_id(state.meta.reader(), project.org_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let now = state.clock.now_ns();
+    let window_from = now.saturating_sub(300_000_000_000);
+    let public_url = &state.config.public_url;
+    let notice = Notice {
+        kind: MessageKind::Test,
+        event_id: Uuid::now_v7(),
+        rule_id: Uuid::nil(),
+        rule_name: "Test alert".to_owned(),
+        metric: AlertMetric::ErrorRate,
+        comparator: Comparator::Gt,
+        threshold: 0.05,
+        window: AlertWindow::M5,
+        value: Some(0.125),
+        count: Some(48),
+        window_from,
+        window_to: now,
+        occurred_at: now,
+        project_id: project.id,
+        project_name: project.name.clone(),
+        rule_url: public_url.join(&format!("/{}/{}/alerts", org.slug, project.slug)),
+        traces_url: message::traces_url(
+            public_url,
+            &org.slug,
+            &project.slug,
+            window_from,
+            now,
+            None,
+        ),
+    };
+    let result = match Box::pin(send_one(&state, &config, &notice, Uuid::now_v7(), now)).await {
+        Ok(()) => ChannelTestResult {
+            ok: true,
+            error: None,
+        },
+        Err(error) => ChannelTestResult {
+            ok: false,
+            error: Some(error.message),
+        },
+    };
+    tracing::info!(
+        target: "audit",
+        channel_id = %id,
+        project_id = %project.id,
+        user_id = %user_id,
+        ok = result.ok,
+        "alert channel tested"
+    );
+    Ok(error::Json(result))
 }
 
 /// Whether `field` is a config field of `kind` (the request field names).
@@ -411,6 +498,7 @@ mod tests {
     use super::*;
     use crate::api::alerts::{AlertCondition, AlertMetric, AlertWindow, Comparator};
     use crate::auth::roles::OrgRole;
+    use crate::test_support::hook_receiver::HookReceiver;
     use crate::test_support::{Seeded, TestApp, TestResponse, assert_logs_clean};
 
     const SECRET: &str = "0123456789abcdef";
@@ -850,6 +938,74 @@ mod tests {
             .send()
             .await;
         assert_eq!(key_create.status, 403);
+    }
+
+    #[tokio::test]
+    async fn send_test_reports_the_result() {
+        let app = TestApp::with_config(|config| {
+            config.security.allow_private_network_egress = true;
+        })
+        .await;
+        let seeded = app.seed().await;
+        let accepting = HookReceiver::start(vec![200]).await;
+        let refusing = HookReceiver::start(vec![500]).await;
+        let good = create_ok(
+            &app,
+            &seeded,
+            json!({"name": "Good", "kind": "webhook", "url": accepting.url("/hook"), "secret": SECRET}),
+        )
+        .await;
+        let bad = create_ok(
+            &app,
+            &seeded,
+            json!({"name": "Bad", "kind": "webhook", "url": refusing.url("/hook"), "secret": SECRET}),
+        )
+        .await;
+        let test_path = |id: Uuid| format!("{}/{id}/test", channels(&seeded));
+
+        let ok = send(
+            &app,
+            Method::POST,
+            &test_path(good.id),
+            &seeded.cookie,
+            None,
+        )
+        .await;
+        assert_eq!(ok.status, 200);
+        assert_eq!(ok.json::<Value>(), json!({"ok": true}));
+        let received = accepting.received();
+        assert_eq!(received.len(), 1);
+        assert!(String::from_utf8_lossy(&received[0].body).contains("\"type\":\"alert.test\""));
+
+        let failed = send(&app, Method::POST, &test_path(bad.id), &seeded.cookie, None).await;
+        assert_eq!(failed.status, 200);
+        assert_eq!(
+            failed.json::<Value>(),
+            json!({"ok": false, "error": "the endpoint answered 500"})
+        );
+
+        let viewer = app
+            .add_member(&seeded, "viewer@example.com", OrgRole::Viewer)
+            .await;
+        let denied = send(
+            &app,
+            Method::POST,
+            &test_path(good.id),
+            &viewer.cookie,
+            None,
+        )
+        .await;
+        assert_eq!(denied.status, 403);
+
+        let unknown = send(
+            &app,
+            Method::POST,
+            &test_path(Uuid::from_u128(9)),
+            &seeded.cookie,
+            None,
+        )
+        .await;
+        assert_eq!(unknown.status, 404);
     }
 
     #[tokio::test]

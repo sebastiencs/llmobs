@@ -35,9 +35,9 @@ use super::admin::{
 };
 use super::alerts::{
     AlertCondition, AlertDelivery, AlertEvent, AlertEventKind, AlertMetric, AlertRule, AlertState,
-    AlertWindow, ChannelDelivery, ChannelKind, Comparator, CreateAlertRuleRequest,
-    CreateChannelRequest, DeliveryStatus, LatencyTarget, NotificationChannel, ScoreAggregation,
-    UpdateAlertRuleRequest, UpdateChannelRequest,
+    AlertWindow, ChannelDelivery, ChannelKind, ChannelTestResult, Comparator,
+    CreateAlertRuleRequest, CreateChannelRequest, DeliveryStatus, LatencyTarget,
+    NotificationChannel, ScoreAggregation, UpdateAlertRuleRequest, UpdateChannelRequest,
 };
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
 use super::connections::{
@@ -198,6 +198,7 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<DeliveryStatus>();
     set.insert::<ChannelDelivery>();
     set.insert::<NotificationChannel>();
+    set.insert::<ChannelTestResult>();
     set.insert::<CreateChannelRequest>();
     set.insert::<UpdateChannelRequest>();
     set.insert_page::<NotificationChannel>("ChannelPage");
@@ -1822,6 +1823,17 @@ fn channel_paths(paths: PathsBuilder) -> PathsBuilder {
             &[400, 401, 403, 404, 429],
         ))
         .build();
+    let test = operation("test_channel", "alerts", "Send a test notification")
+        .description(Some(
+            "Sends one sample message now and reports the result. Nothing is stored. Needs role member.",
+        ))
+        .parameters(Some(vec![project_param(), path_uuid("id", "Channel id.")]))
+        .responses(responses(
+            "200",
+            json_of::<ChannelTestResult>("Whether the channel accepted the message."),
+            &[400, 401, 403, 404, 429],
+        ))
+        .build();
     paths
         .path(
             format!("{PROJECT}/channels"),
@@ -1838,6 +1850,10 @@ fn channel_paths(paths: PathsBuilder) -> PathsBuilder {
         .path(
             format!("{PROJECT}/channels/{{id}}"),
             PathItem::new(HttpMethod::Delete, delete),
+        )
+        .path(
+            format!("{PROJECT}/channels/{{id}}/test"),
+            PathItem::new(HttpMethod::Post, test),
         )
 }
 

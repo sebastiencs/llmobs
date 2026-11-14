@@ -4878,6 +4878,99 @@
         }
       }
     },
+    "/api/v1/projects/{project}/channels/{id}/test": {
+      "post": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Send a test notification",
+        "description": "Sends one sample message now and reports the result. Nothing is stored. Needs role member.",
+        "operationId": "test_channel",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Channel id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether the channel accepted the message.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelTestResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project}/media/{sha256}": {
       "get": {
         "tags": [
@@ -8944,6 +9037,23 @@
               "null"
             ],
             "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
+      },
+      "ChannelTestResult": {
+        "type": "object",
+        "description": "The result of `POST /channels/{id}/test`.",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Why it did not. Never contains a URL, a secret or an address."
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "The channel accepted the message."
           }
         }
       },

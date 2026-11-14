@@ -788,6 +788,26 @@ export interface paths {
         patch: operations["update_channel"];
         trace?: never;
     };
+    "/api/v1/projects/{project}/channels/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a test notification
+         * @description Sends one sample message now and reports the result. Nothing is stored. Needs role member.
+         */
+        post: operations["test_channel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project}/media/{sha256}": {
         parameters: {
             query?: never;
@@ -1616,6 +1636,13 @@ export interface components {
             data: components["schemas"]["NotificationChannel"][];
             /** @description Opaque cursor for the next page, or null when this is the last page. */
             next_cursor: string | null;
+        };
+        /** @description The result of `POST /channels/{id}/test`. */
+        ChannelTestResult: {
+            /** @description Why it did not. Never contains a URL, a secret or an address. */
+            error?: string;
+            /** @description The channel accepted the message. */
+            ok: boolean;
         };
         /**
          * @description One column of a logical view.
@@ -7627,6 +7654,76 @@ export interface operations {
             };
             /** @description The request conflicts with the current state. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    test_channel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+                /** @description Channel id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether the channel accepted the message. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelTestResult"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

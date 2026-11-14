@@ -965,6 +965,201 @@ pub(crate) async fn record_evaluation(
     }
 }
 
+/// A delivery whose attempt is due, with what the message needs.
+#[derive(Clone, PartialEq)]
+pub(crate) struct DueDelivery {
+    pub(crate) id: Uuid,
+    pub(crate) attempts: i64,
+    pub(crate) channel_id: Uuid,
+    pub(crate) channel_kind: ChannelKind,
+    pub(crate) config_enc: Vec<u8>,
+    pub(crate) event: EventRow,
+    pub(crate) project_id: ProjectId,
+    pub(crate) project_name: String,
+    pub(crate) project_slug: String,
+    pub(crate) org_slug: String,
+}
+
+/// Prints the ids, attempts and kind only: the event holds the rule name and filter.
+impl fmt::Debug for DueDelivery {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DueDelivery")
+            .field("id", &self.id)
+            .field("attempts", &self.attempts)
+            .field("channel_id", &self.channel_id)
+            .field("channel_kind", &self.channel_kind)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct DueRecord {
+    id: String,
+    attempts: i64,
+    channel_id: String,
+    channel_kind: String,
+    config_enc: Vec<u8>,
+    event_id: String,
+    rule_id: String,
+    event_kind: String,
+    value: Option<f64>,
+    count: Option<i64>,
+    threshold: f64,
+    window_from: i64,
+    window_to: i64,
+    details: String,
+    event_created_at: i64,
+    project_id: String,
+    project_name: String,
+    project_slug: String,
+    org_slug: String,
+}
+
+/// `pending` deliveries with `next_attempt_at <= now`, oldest `next_attempt_at` first, then `id`,
+/// at most `limit`. Only deliveries of active projects in active orgs.
+///
+/// # Errors
+///
+/// Returns [`MetaError`] when the query fails or a stored value does not decode.
+pub(crate) async fn due_deliveries(
+    pool: &SqlitePool,
+    now: i64,
+    limit: i64,
+) -> Result<Vec<DueDelivery>, MetaError> {
+    let records: Vec<DueRecord> = sqlx::query_as(
+        "SELECT d.id, d.attempts, d.channel_id, c.kind AS channel_kind, c.config_enc, \
+         e.id AS event_id, e.rule_id, e.kind AS event_kind, e.value, e.count, e.threshold, \
+         e.window_from, e.window_to, e.details, e.created_at AS event_created_at, \
+         p.id AS project_id, p.name AS project_name, p.slug AS project_slug, o.slug AS org_slug \
+         FROM notification_deliveries d \
+         JOIN notification_channels c ON c.id = d.channel_id \
+         JOIN alert_events e ON e.id = d.event_id \
+         JOIN alert_rules r ON r.id = e.rule_id \
+         JOIN projects p ON p.id = r.project_id \
+         JOIN orgs o ON o.id = p.org_id \
+         WHERE d.status = 'pending' AND d.next_attempt_at <= ? AND p.state = 'active' \
+           AND o.state = 'active' \
+         ORDER BY d.next_attempt_at, d.id \
+         LIMIT ?",
+    )
+    .bind(now)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    records.into_iter().map(due_from).collect()
+}
+
+/// The result of one attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Attempt {
+    Sent,
+    /// Try again at `next_attempt_at` (already computed by the caller).
+    Retry {
+        error: String,
+        next_attempt_at: i64,
+    },
+    Failed {
+        error: String,
+    },
+}
+
+/// Records one attempt: `attempts += 1`, `updated_at = now`, and the status from `attempt`.
+/// Only a row still `pending` is changed; returns whether it was.
+///
+/// # Errors
+///
+/// Returns [`MetaError`] when the update fails.
+pub(crate) async fn finish_delivery(
+    conn: &mut SqliteConnection,
+    id: Uuid,
+    attempt: Attempt,
+    now: i64,
+) -> Result<bool, MetaError> {
+    let (status, next_attempt_at, error) = match attempt {
+        Attempt::Sent => ("sent", None, None),
+        Attempt::Retry {
+            error,
+            next_attempt_at,
+        } => ("pending", Some(next_attempt_at), Some(error)),
+        Attempt::Failed { error } => ("failed", None, Some(error)),
+    };
+    let result = sqlx::query(
+        "UPDATE notification_deliveries SET status = ?, attempts = attempts + 1, \
+         next_attempt_at = ?, last_error = ?, updated_at = ? \
+         WHERE id = ? AND status = 'pending'",
+    )
+    .bind(status)
+    .bind(next_attempt_at)
+    .bind(error)
+    .bind(now)
+    .bind(id.to_string())
+    .execute(&mut *conn)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Deletes events created before `events_before` (their deliveries cascade) and `sent`/`failed`
+/// deliveries updated before `deliveries_before`. Returns `(events, deliveries)` deleted.
+///
+/// # Errors
+///
+/// Returns [`MetaError`] when a delete fails.
+pub(crate) async fn prune(
+    conn: &mut SqliteConnection,
+    events_before: i64,
+    deliveries_before: i64,
+) -> Result<(u64, u64), MetaError> {
+    let events = sqlx::query("DELETE FROM alert_events WHERE created_at < ?")
+        .bind(events_before)
+        .execute(&mut *conn)
+        .await?
+        .rows_affected();
+    let deliveries = sqlx::query(
+        "DELETE FROM notification_deliveries WHERE status IN ('sent', 'failed') AND updated_at < ?",
+    )
+    .bind(deliveries_before)
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    Ok((events, deliveries))
+}
+
+fn due_from(record: DueRecord) -> Result<DueDelivery, MetaError> {
+    let channel_kind =
+        ChannelKind::parse(&record.channel_kind).ok_or_else(|| corrupt(DELIVERIES, "kind"))?;
+    let kind =
+        AlertEventKind::parse(&record.event_kind).ok_or_else(|| corrupt(DELIVERIES, "kind"))?;
+    let details: EventDetails =
+        serde_json::from_str(&record.details).map_err(|_| corrupt(DELIVERIES, "details"))?;
+    Ok(DueDelivery {
+        id: parse_uuid(&record.id, DELIVERIES, "id")?,
+        attempts: record.attempts,
+        channel_id: parse_uuid(&record.channel_id, DELIVERIES, "id")?,
+        channel_kind,
+        config_enc: record.config_enc,
+        event: EventRow {
+            id: parse_uuid(&record.event_id, DELIVERIES, "id")?,
+            rule_id: parse_uuid(&record.rule_id, DELIVERIES, "id")?,
+            kind,
+            value: record.value,
+            count: record.count,
+            threshold: record.threshold,
+            window_from: record.window_from,
+            window_to: record.window_to,
+            details,
+            created_at: record.event_created_at,
+        },
+        project_id: record
+            .project_id
+            .parse()
+            .map_err(|_| corrupt(DELIVERIES, "id"))?,
+        project_name: record.project_name,
+        project_slug: record.project_slug,
+        org_slug: record.org_slug,
+    })
+}
+
 /// The rule `id` of the project on `conn`, with its channel ids.
 async fn rule_on(
     conn: &mut SqliteConnection,

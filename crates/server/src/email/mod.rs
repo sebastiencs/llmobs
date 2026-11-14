@@ -42,6 +42,8 @@ const TEMPLATES: &[(&str, &str)] = &[
     ),
     ("test.txt", include_str!("templates/test.txt")),
     ("test.html", include_str!("templates/test.html")),
+    ("alert.txt", include_str!("templates/alert.txt")),
+    ("alert.html", include_str!("templates/alert.html")),
 ];
 
 /// One transactional message. The `url` is the link the later phase built.
@@ -70,6 +72,18 @@ pub(crate) enum Email {
     },
     /// Instance-settings test message.
     Test,
+    /// An alert notification (D-K-8).
+    Alert {
+        /// `Firing`, `Resolved`, `Still firing` or `Test`.
+        state: &'static str,
+        rule_name: String,
+        project_name: String,
+        value: String,
+        threshold: String,
+        window: &'static str,
+        rule_url: String,
+        traces_url: String,
+    },
 }
 
 /// Subject, plain text, and HTML for one [`Email`].
@@ -269,6 +283,29 @@ impl Mailer {
                 context! { url => url },
             ),
             Email::Test => ("test.txt", "test.html", context! {}),
+            Email::Alert {
+                state,
+                rule_name,
+                project_name,
+                value,
+                threshold,
+                window,
+                rule_url,
+                traces_url,
+            } => (
+                "alert.txt",
+                "alert.html",
+                context! {
+                    state => *state,
+                    rule_name => rule_name,
+                    project_name => project_name,
+                    value => value,
+                    threshold => threshold,
+                    window => *window,
+                    rule_url => rule_url,
+                    traces_url => traces_url,
+                },
+            ),
         };
         Ok(Rendered {
             subject,
@@ -453,6 +490,9 @@ fn subject(email: &Email) -> String {
         Email::PasswordReset { .. } => format!("Reset your {PRODUCT} password"),
         Email::VerifyEmail { .. } => format!("Verify your email for {PRODUCT}"),
         Email::Test => format!("{PRODUCT} test email"),
+        Email::Alert {
+            state, rule_name, ..
+        } => format!("[{PRODUCT}] {state}: {rule_name}"),
     }
 }
 
@@ -462,6 +502,7 @@ fn template_name(email: &Email) -> &'static str {
         Email::PasswordReset { .. } => "password_reset",
         Email::VerifyEmail { .. } => "verify_email",
         Email::Test => "test",
+        Email::Alert { .. } => "alert",
     }
 }
 
@@ -568,6 +609,23 @@ mod tests {
                 )
             );
             insta::assert_snapshot!("test_email", rendered(&mailer, &Email::Test));
+            insta::assert_snapshot!(
+                "alert",
+                rendered(
+                    &mailer,
+                    &Email::Alert {
+                        state: "Firing",
+                        rule_name: "High errors".to_owned(),
+                        project_name: "Support bot".to_owned(),
+                        value: "12.5%".to_owned(),
+                        threshold: "5.0%".to_owned(),
+                        window: "5m",
+                        rule_url: "https://example.com/acme/support-bot/alerts/r".to_owned(),
+                        traces_url: "https://example.com/acme/support-bot/traces?from=a&to=b"
+                            .to_owned(),
+                    },
+                )
+            );
         });
 
         let without = mailer
