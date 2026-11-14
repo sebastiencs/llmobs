@@ -684,8 +684,6 @@ mod tests {
         running.shutdown().await.unwrap();
 
         // An interrupted rotation: the database already uses the new key.
-        let stored = std::fs::read_to_string(dir.path().join("secret.key")).unwrap();
-        decode_key(stored.trim_end(), "test").unwrap();
         let new = random_key().unwrap();
         write_key_file(&dir.path().join("secret.key.new"), &new).unwrap();
         let check = SecretBox::new(&new).check_value().to_owned();

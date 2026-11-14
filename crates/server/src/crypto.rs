@@ -2,7 +2,7 @@
 #![cfg_attr(not(test), allow(dead_code))] // seal and rotation are used from I1.3 on
 
 use std::fmt;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -270,11 +270,36 @@ fn tmp_path(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// Removes a leftover `secret.key*.tmp`. Its absence is fine; any other error is
+/// returned, so a stale tmp with a wider mode cannot survive and receive the key.
+fn remove_if_present(path: &Path) -> Result<(), CryptoError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(CryptoError::Io {
+            action: "remove",
+            path: path.to_path_buf(),
+            error,
+        }),
+    }
+}
+
+/// Flushes a directory change to disk.
+fn sync_dir(dir: &Path) -> Result<(), CryptoError> {
+    std::fs::File::open(dir)
+        .and_then(|dir| dir.sync_all())
+        .map_err(|error| CryptoError::Io {
+            action: "sync",
+            path: dir.to_path_buf(),
+            error,
+        })
+}
+
 /// § Key file, "Write". A crash leaves either no file or a whole one.
 pub(crate) fn write_key_file(path: &Path, key: &[u8; 32]) -> Result<(), CryptoError> {
     let tmp = tmp_path(path);
     // A crash can leave a leftover with a wider mode.
-    let _ = std::fs::remove_file(&tmp);
+    remove_if_present(&tmp)?;
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(true)
@@ -303,14 +328,7 @@ pub(crate) fn write_key_file(path: &Path, key: &[u8; 32]) -> Result<(), CryptoEr
         path: path.to_path_buf(),
         error,
     })?;
-    let dir = path.parent().unwrap_or(Path::new("."));
-    std::fs::File::open(dir)
-        .and_then(|dir| dir.sync_all())
-        .map_err(|error| CryptoError::Io {
-            action: "sync",
-            path: dir.to_path_buf(),
-            error,
-        })
+    sync_dir(path.parent().unwrap_or(Path::new(".")))
 }
 
 /// The env value, else the file. `Ok(None)` when neither exists. Never writes.
@@ -341,36 +359,36 @@ pub(crate) fn read_key(
 
 /// § Key file, "Finishing a rotation". `check` is the stored check value, if any.
 pub(crate) fn finish_rotation(data_dir: &Path, check: Option<&str>) -> Result<(), CryptoError> {
-    let _ = std::fs::remove_file(tmp_path(&key_path(data_dir)));
+    remove_if_present(&tmp_path(&key_path(data_dir)))?;
     let new_path = data_dir.join("secret.key.new");
-    let _ = std::fs::remove_file(tmp_path(&new_path));
+    remove_if_present(&tmp_path(&new_path))?;
     if !new_path.is_file() {
         return Ok(());
     }
-    let text = std::fs::read_to_string(&new_path).map_err(|error| CryptoError::Io {
-        action: "read",
-        path: new_path.clone(),
-        error,
-    })?;
-    // A key that does not decode counts as "does not match".
-    let matches = decode_key(key_file_text(&text), &new_path.display().to_string())
-        .ok()
-        .is_some_and(|key| {
-            check.is_some_and(|stored| constant_time_eq(stored, SecretBox::new(&key).check_value()))
-        });
+    // A file that cannot be read, or whose key does not decode or match, counts as
+    // "does not match": it is deleted and startup continues.
+    let matches = match std::fs::read_to_string(&new_path) {
+        Ok(text) => decode_key(key_file_text(&text), &new_path.display().to_string())
+            .ok()
+            .is_some_and(|key| {
+                check.is_some_and(|stored| {
+                    constant_time_eq(stored, SecretBox::new(&key).check_value())
+                })
+            }),
+        // It vanished between the check above and the read.
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(_error) => false,
+    };
     if matches {
         std::fs::rename(&new_path, key_path(data_dir)).map_err(|error| CryptoError::Io {
             action: "rename",
             path: new_path.clone(),
             error,
         })?;
+        sync_dir(data_dir)?;
         tracing::warn!("finished an interrupted key rotation");
     } else {
-        std::fs::remove_file(&new_path).map_err(|error| CryptoError::Io {
-            action: "remove",
-            path: new_path.clone(),
-            error,
-        })?;
+        remove_if_present(&new_path)?;
         tracing::warn!("removed an unused secret.key.new");
     }
     Ok(())
@@ -647,6 +665,70 @@ mod tests {
         assert!(!dir.path().join("secret.key.new").exists());
         let text = std::fs::read_to_string(dir.path().join("secret.key")).unwrap();
         assert_eq!(decode_key(key_file_text(&text), "test").unwrap(), old);
+    }
+
+    #[test]
+    fn finish_rotation_removes_leftover_tmp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        write_key_file(&dir.path().join("secret.key"), &[1; 32]).unwrap();
+        std::fs::write(dir.path().join("secret.key.tmp"), "leftover\n").unwrap();
+        std::fs::write(dir.path().join("secret.key.new.tmp"), "leftover\n").unwrap();
+        finish_rotation(dir.path(), None).unwrap();
+        assert!(!dir.path().join("secret.key.tmp").exists());
+        assert!(!dir.path().join("secret.key.new.tmp").exists());
+    }
+
+    #[test]
+    fn finish_rotation_deletes_an_undecodable_new_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = [1; 32];
+        write_key_file(&dir.path().join("secret.key"), &old).unwrap();
+        std::fs::write(dir.path().join("secret.key.new"), "not base64\n").unwrap();
+        let check = SecretBox::new(&old).check_value().to_owned();
+        finish_rotation(dir.path(), Some(&check)).unwrap();
+        assert!(!dir.path().join("secret.key.new").exists());
+        let text = std::fs::read_to_string(dir.path().join("secret.key")).unwrap();
+        assert_eq!(decode_key(key_file_text(&text), "test").unwrap(), old);
+    }
+
+    #[test]
+    fn finish_rotation_without_a_check_deletes_a_new_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = [1; 32];
+        write_key_file(&dir.path().join("secret.key"), &old).unwrap();
+        write_key_file(&dir.path().join("secret.key.new"), &[2; 32]).unwrap();
+        finish_rotation(dir.path(), None).unwrap();
+        assert!(!dir.path().join("secret.key.new").exists());
+        let text = std::fs::read_to_string(dir.path().join("secret.key")).unwrap();
+        assert_eq!(decode_key(key_file_text(&text), "test").unwrap(), old);
+    }
+
+    #[test]
+    fn load_key_reads_a_file_with_a_wide_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = [3; 32];
+        write_key_file(&dir.path().join("secret.key"), &key).unwrap();
+        std::fs::set_permissions(
+            dir.path().join("secret.key"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        let loaded = load_key(None, dir.path(), true).unwrap();
+        assert_eq!(loaded.source, KeySource::File);
+        assert_eq!(loaded.key, key);
+    }
+
+    #[test]
+    fn write_key_file_replaces_a_leftover_tmp() {
+        let dir = tempfile::tempdir().unwrap();
+        let tmp = dir.path().join("secret.key.tmp");
+        std::fs::write(&tmp, "leftover\n").unwrap();
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let path = dir.path().join("secret.key");
+        write_key_file(&path, &[4; 32]).unwrap();
+        assert!(!tmp.exists());
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
     }
 
     #[tokio::test]
