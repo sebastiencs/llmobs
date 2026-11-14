@@ -42,32 +42,58 @@ export function replaceLiveTrace(data: TracePages, trace: Schema<"TraceSummary">
   return changed ? { ...data, pages } : data;
 }
 
-/** `traces` is newest first. They land on the first page, ahead of what is already there. */
-export function prependLiveTraces(
-  data: TracePages,
-  traces: readonly Schema<"TraceSummary">[],
-): TracePages {
-  const first = data.pages[0];
-  if (!first || traces.length === 0) {
-    return data;
-  }
-  return {
-    ...data,
-    pages: [{ ...first, data: [...traces, ...first.data] }, ...data.pages.slice(1)],
-  };
-}
-
 /**
- * Live mode is start time, newest first. A new row belongs at the top when the
- * first page is empty or this trace is at least as new as the current first row.
+ * Live mode is start time, newest first, but traces arrive in the order they
+ * finish. Each trace goes before the first loaded row that started earlier; one
+ * older than every loaded row goes last only when no page is left to load, and
+ * is left for paging otherwise. Returns the ids that were inserted.
  * RFC 3339 timestamps in the same shape compare as strings.
  */
-export function belongsAtTop(data: TracePages, trace: Schema<"TraceSummary">): boolean {
-  const first = data.pages[0]?.data[0];
-  if (!first) {
-    return true;
+export function insertLiveTraces(
+  data: TracePages,
+  traces: readonly Schema<"TraceSummary">[],
+): { data: TracePages; inserted: string[] } {
+  let pages = data.pages;
+  const inserted: string[] = [];
+  for (const trace of traces) {
+    const next = insertOne(pages, trace);
+    if (next) {
+      pages = next;
+      inserted.push(trace.trace_id);
+    }
   }
-  return trace.start_time >= first.start_time;
+  return { data: inserted.length > 0 ? { ...data, pages } : data, inserted };
+}
+
+function insertOne(
+  pages: TracePages["pages"],
+  trace: Schema<"TraceSummary">,
+): TracePages["pages"] | undefined {
+  for (const [pageIndex, page] of pages.entries()) {
+    const index = page.data.findIndex((row) => row.start_time < trace.start_time);
+    if (index >= 0) {
+      return withRow(pages, pageIndex, index, trace);
+    }
+  }
+  const lastIndex = pages.length - 1;
+  const last = pages[lastIndex];
+  if (!last || last.next_cursor !== null) {
+    return undefined;
+  }
+  return withRow(pages, lastIndex, last.data.length, trace);
+}
+
+function withRow(
+  pages: TracePages["pages"],
+  pageIndex: number,
+  index: number,
+  trace: Schema<"TraceSummary">,
+): TracePages["pages"] {
+  return pages.map((page, at) =>
+    at === pageIndex
+      ? { ...page, data: [...page.data.slice(0, index), trace, ...page.data.slice(index)] }
+      : page,
+  );
 }
 
 export function firstPageOnly(data: TracePages): TracePages {

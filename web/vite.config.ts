@@ -34,6 +34,10 @@ export default defineConfig(({ mode }) => ({
     react(),
     tailwindcss(),
   ],
+  build: {
+    // The UI's CSP (spec 12) has no `data:` source for fonts or scripts: every asset is a file.
+    assetsInlineLimit: 0,
+  },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

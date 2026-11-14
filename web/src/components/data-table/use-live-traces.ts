@@ -3,12 +3,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Schema } from "@/api/types";
 import { ROW_HEIGHT } from "@/components/data-table/data-table";
 import {
-  belongsAtTop,
   firstPageOnly,
   firstPageWouldExceed,
+  insertLiveTraces,
   LIVE_BUFFER_MAX,
   LIVE_PAGE_MAX,
-  prependLiveTraces,
   pushBuffered,
   replaceLiveTrace,
   type TracePages,
@@ -114,6 +113,7 @@ export function useLiveTraces({
       mark(unseen.map((trace) => trace.trace_id));
       return;
     }
+    let inserted: string[] = [];
     queryClient.setQueryData<TracePages>(queryKeyRef.current, (data) => {
       if (!data) {
         return data;
@@ -124,10 +124,14 @@ export function useLiveTraces({
           next = replaceLiveTrace(next, trace);
         }
       }
-      const pending = rows.filter((trace) => !traceInList(data, trace.trace_id));
-      return pending.length > 0 ? prependLiveTraces(next, pending) : next;
+      const result = insertLiveTraces(
+        next,
+        rows.filter((trace) => !traceInList(data, trace.trace_id)),
+      );
+      inserted = result.inserted;
+      return result.data;
     });
-    mark(unseen.map((trace) => trace.trace_id));
+    mark(inserted);
   }
 
   function reveal() {
@@ -186,7 +190,7 @@ export function useLiveTraces({
       writeBuffer(pushed.buffer);
       return;
     }
-    if (!current || !belongsAtTop(current, trace)) {
+    if (!current) {
       return;
     }
     if (firstPageWouldExceed(current, 1, limits.page)) {
@@ -194,11 +198,14 @@ export function useLiveTraces({
       mark([trace.trace_id]);
       return;
     }
-    queryClient.setQueryData<TracePages>(key, (data) =>
-      data ? prependLiveTraces(data, [trace]) : data,
-    );
-    mark([trace.trace_id]);
-    if (selectedRef.current) {
+    const result = insertLiveTraces(current, [trace]);
+    if (result.inserted.length === 0) {
+      return;
+    }
+    queryClient.setQueryData<TracePages>(key, result.data);
+    mark(result.inserted);
+    // Only a new first row moves the rows already in view; one inserted lower does not.
+    if (selectedRef.current && result.data.pages[0]?.data[0]?.trace_id === trace.trace_id) {
       scrollAdjust.current += ROW_HEIGHT;
     }
   }
