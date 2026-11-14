@@ -562,12 +562,10 @@ mod tests {
         let storage = crate::Storage::open(aged(dir.path())).await.unwrap();
         // Both spans belong to the same trace and are near midnight, so the
         // anchor keeps the day-2 row in the day-1 partition (D86).
+        // One append, so a single flush sees both rows: two appends could be
+        // flushed apart under load (max_age is 100ms) and give two files.
         storage
-            .append_spans(project(), spans_at(&[1_000]))
-            .await
-            .unwrap();
-        storage
-            .append_spans(project(), spans_at(&[DAY_NS + 1_000]))
+            .append_spans(project(), spans_at(&[1_000, DAY_NS + 1_000]))
             .await
             .unwrap();
         wait_flushed(&storage, 1).await;
