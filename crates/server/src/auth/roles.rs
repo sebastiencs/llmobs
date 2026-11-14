@@ -81,6 +81,8 @@ pub(crate) enum OrgPerm {
     CreateProject,
     /// Members, invites, and org limits.
     ManageMembers,
+    /// Create, edit, delete and test LLM connections (D-I-24).
+    ManageConnections,
 }
 
 /// What a project route requires.
@@ -177,7 +179,9 @@ impl OrgPerm {
     pub(crate) fn min_role(self) -> OrgRole {
         match self {
             Self::View => OrgRole::Viewer,
-            Self::Rename | Self::CreateProject | Self::ManageMembers => OrgRole::Admin,
+            Self::Rename | Self::CreateProject | Self::ManageMembers | Self::ManageConnections => {
+                OrgRole::Admin
+            }
         }
     }
 }
@@ -251,6 +255,7 @@ mod tests {
         assert_eq!(OrgPerm::Rename.min_role(), OrgRole::Admin);
         assert_eq!(OrgPerm::CreateProject.min_role(), OrgRole::Admin);
         assert_eq!(OrgPerm::ManageMembers.min_role(), OrgRole::Admin);
+        assert_eq!(OrgPerm::ManageConnections.min_role(), OrgRole::Admin);
         assert_eq!(ProjectPerm::View.min_role(), Role::Viewer);
         assert_eq!(ProjectPerm::ManageSettings.min_role(), Role::Admin);
         assert_eq!(ProjectPerm::ManageMembers.min_role(), Role::Admin);

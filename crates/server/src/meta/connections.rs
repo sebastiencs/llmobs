@@ -339,7 +339,7 @@ pub(crate) async fn set_connection_status(
     Ok(())
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(sqlx::FromRow)]
 struct ConnectionRecord {
     id: String,
     org_id: String,

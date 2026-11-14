@@ -634,7 +634,7 @@ fn is_list(route: &RouteDef) -> bool {
     route.method == Method::GET
         && matches!(
             route.path.rsplit('/').next(),
-            Some("orgs" | "projects" | "members" | "api-keys" | "tokens")
+            Some("orgs" | "projects" | "members" | "api-keys" | "tokens" | "llm-connections")
         )
 }
 
