@@ -18,6 +18,7 @@ pub(crate) mod projects;
 pub(crate) mod read;
 pub(crate) mod saved_views;
 pub(crate) mod schema;
+pub(crate) mod score_definitions;
 pub(crate) mod scores;
 pub(crate) mod sessions;
 pub(crate) mod sql;

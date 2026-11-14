@@ -76,6 +76,8 @@ pub(crate) struct AppInner {
     pub(crate) connections: crate::eval::connection::ConnectionCache,
     /// Trace-load permits (D-I-23).
     pub(crate) trace_loads: crate::eval::trace_load::TraceLoads,
+    /// Live score definitions (D-I-26).
+    pub(crate) definitions: crate::eval::definitions::DefinitionCache,
 }
 
 impl AppState {

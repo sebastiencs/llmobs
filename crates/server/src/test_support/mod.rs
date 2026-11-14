@@ -223,6 +223,7 @@ impl TestApp {
             eval_runner,
             connections: crate::eval::connection::ConnectionCache::default(),
             trace_loads: crate::eval::trace_load::TraceLoads::default(),
+            definitions: crate::eval::definitions::DefinitionCache::default(),
         });
         let router = if let Some(table) = table {
             serve_router(state.clone(), table)

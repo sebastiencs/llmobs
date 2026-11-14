@@ -18,6 +18,7 @@ use crate::http::AppState;
 use crate::http::error::ApiError;
 use crate::ingest::IngestError;
 use crate::meta::projects::ProjectRow;
+use crate::meta::score_definitions::DefinitionRow;
 use crate::routes::read::{READ_TIMEOUT, open_query};
 
 /// Most scores one request writes.
@@ -82,6 +83,7 @@ pub(crate) async fn write(
     items: Vec<ScoreCreate>,
 ) -> Result<Vec<Uuid>, ApiError> {
     let now = state.clock.now_ns();
+    let definitions = state.definitions.live(&state.meta, project.id, now).await?;
     let mut errors = Vec::new();
     if !(1..=MAX_SCORES).contains(&items.len()) {
         errors.push(FieldError {
@@ -93,7 +95,9 @@ pub(crate) async fn write(
     let checked: Vec<Option<ScoreSource>> = items
         .iter()
         .enumerate()
-        .map(|(index, item)| check_item(index, item, writer, project, now, &mut errors))
+        .map(|(index, item)| {
+            check_item(index, item, writer, project, now, &definitions, &mut errors)
+        })
         .collect();
     if !errors.is_empty() {
         return Err(invalid(errors));
@@ -240,6 +244,7 @@ fn check_item(
     writer: Writer,
     project: &ProjectRow,
     now: i64,
+    definitions: &[DefinitionRow],
     errors: &mut Vec<FieldError>,
 ) -> Option<ScoreSource> {
     let before = errors.len();
@@ -288,7 +293,62 @@ fn check_item(
             }
         }
     }
+    check_definition(index, item, definitions, errors);
     source.filter(|_| errors.len() == before)
+}
+
+/// Checks the item against the live definition of its name, if there is one (spec 06,
+/// D-I-26): the type, then the numeric range or the categorical label.
+fn check_definition(
+    index: usize,
+    item: &ScoreCreate,
+    definitions: &[DefinitionRow],
+    errors: &mut Vec<FieldError>,
+) {
+    let Some(definition) = definitions
+        .iter()
+        .find(|definition| definition.name == item.name)
+    else {
+        return;
+    };
+    if item.value.data_type() != definition.data_type {
+        errors.push(field(
+            index,
+            "value",
+            &format!(
+                "value must be {} for this score definition",
+                definition.data_type.as_str()
+            ),
+        ));
+        return;
+    }
+    match &item.value {
+        ScoreValue::Numeric(value) => {
+            let below = definition.min_value.is_some_and(|min| *value < min);
+            let above = definition.max_value.is_some_and(|max| *value > max);
+            if below || above {
+                errors.push(field(
+                    index,
+                    "value",
+                    "value is outside the score definition's range",
+                ));
+            }
+        }
+        ScoreValue::Categorical { label, .. } => {
+            if !definition
+                .categories
+                .iter()
+                .any(|category| category.label == *label)
+            {
+                errors.push(field(
+                    index,
+                    "value",
+                    "label is not a category of this score definition",
+                ));
+            }
+        }
+        ScoreValue::Boolean(_) | ScoreValue::Text(_) => {}
+    }
 }
 
 fn is_v7(id: Uuid) -> bool {
@@ -402,7 +462,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::meta::score_definitions::{DefinitionCategory, DefinitionFields, insert_definition};
     use crate::test_support::TestApp;
+    use llmobs_core::enums::ScoreDataType;
     use llmobs_storage::ScoreListRequest;
 
     /// The fixed project of the derived-id tests.
@@ -1098,5 +1160,203 @@ mod tests {
         assert_eq!(session.session_id, None);
         let span = rows.iter().find(|row| row.score_id == on_span).unwrap();
         assert_eq!(span.session_id.as_deref(), Some("chat-42"));
+    }
+
+    /// Inserts a definition straight into `meta.db`, without the route's cache drop.
+    async fn define(
+        app: &TestApp,
+        project: ProjectId,
+        fields: DefinitionFields,
+        data_type: ScoreDataType,
+    ) {
+        let now = app.state.clock.now_ns();
+        app.state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    insert_definition(conn, Uuid::now_v7(), project, data_type, fields, now)
+                        .await
+                        .map(|_| ())
+                })
+            })
+            .await
+            .unwrap();
+    }
+
+    fn numeric_definition(name: &str, archived_at: Option<i64>) -> DefinitionFields {
+        DefinitionFields {
+            name: name.to_owned(),
+            categories: Vec::new(),
+            min_value: Some(0.0),
+            max_value: Some(1.0),
+            description: None,
+            archived_at,
+        }
+    }
+
+    fn tone_definition() -> DefinitionFields {
+        DefinitionFields {
+            name: "tone".to_owned(),
+            categories: ["good", "bad"]
+                .iter()
+                .map(|label| DefinitionCategory {
+                    label: (*label).to_owned(),
+                    value: None,
+                })
+                .collect(),
+            min_value: None,
+            max_value: None,
+            description: None,
+            archived_at: None,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn scores_must_fit_their_live_definition() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        define(
+            &app,
+            seeded.project.id,
+            numeric_definition("relevance", None),
+            ScoreDataType::Numeric,
+        )
+        .await;
+        define(
+            &app,
+            seeded.project.id,
+            tone_definition(),
+            ScoreDataType::Categorical,
+        )
+        .await;
+        let refused_items = vec![
+            item("relevance", 1.5),
+            ScoreCreate {
+                value: ScoreValue::Boolean(true),
+                ..item("relevance", 0.5)
+            },
+            ScoreCreate {
+                value: ScoreValue::Categorical {
+                    label: "meh".to_owned(),
+                    value: None,
+                },
+                ..item("tone", 0.5)
+            },
+        ];
+        let errors = refused(write(&app.state, &seeded.project, api_writer(), refused_items).await);
+        assert_eq!(
+            errors,
+            vec![
+                (
+                    "scores[0].value".to_owned(),
+                    "value is outside the score definition's range".to_owned()
+                ),
+                (
+                    "scores[1].value".to_owned(),
+                    "value must be numeric for this score definition".to_owned()
+                ),
+                (
+                    "scores[2].value".to_owned(),
+                    "label is not a category of this score definition".to_owned()
+                ),
+            ]
+        );
+        assert!(stored(&app, seeded.project.id).await.is_empty());
+
+        let fitting = vec![
+            item("relevance", 0.0),
+            ScoreCreate {
+                value: ScoreValue::Categorical {
+                    label: "good".to_owned(),
+                    value: None,
+                },
+                ..item("tone", 0.5)
+            },
+        ];
+        let ids = write(&app.state, &seeded.project, api_writer(), fitting)
+            .await
+            .unwrap();
+        assert_eq!(ids.len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn archived_definitions_are_not_checked() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let now = app.state.clock.now_ns();
+        define(
+            &app,
+            seeded.project.id,
+            numeric_definition("relevance", Some(now)),
+            ScoreDataType::Numeric,
+        )
+        .await;
+        let ids = write(
+            &app.state,
+            &seeded.project,
+            api_writer(),
+            vec![item("relevance", 5.0)],
+        )
+        .await
+        .unwrap();
+        assert_eq!(ids.len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn definitions_are_cached_until_a_write() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let definitions = format!("/api/v1/projects/{}/score-definitions", seeded.project.id);
+        // The first write loads the (empty) definitions into the cache.
+        write(
+            &app.state,
+            &seeded.project,
+            api_writer(),
+            vec![item("relevance", 5.0)],
+        )
+        .await
+        .unwrap();
+
+        let created = app
+            .request(axum::http::Method::POST, &definitions)
+            .header(axum::http::header::COOKIE.as_str(), &seeded.cookie)
+            .json(&serde_json::json!({
+                "name": "relevance",
+                "data_type": "numeric",
+                "min_value": 0.0,
+                "max_value": 1.0
+            }))
+            .send()
+            .await;
+        assert_eq!(created.status, 201);
+        let id = created.json::<serde_json::Value>()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        // The create dropped the cache, so the next write sees the new definition.
+        let refused_write = write(
+            &app.state,
+            &seeded.project,
+            api_writer(),
+            vec![item("relevance", 5.0)],
+        )
+        .await;
+        assert_eq!(refused(refused_write).len(), 1);
+
+        let archived = app
+            .request(axum::http::Method::DELETE, &format!("{definitions}/{id}"))
+            .header(axum::http::header::COOKIE.as_str(), &seeded.cookie)
+            .send()
+            .await;
+        assert_eq!(archived.status, 204);
+        // The archive dropped the cache again: the same write succeeds at once.
+        write(
+            &app.state,
+            &seeded.project,
+            api_writer(),
+            vec![item("relevance", 5.0)],
+        )
+        .await
+        .unwrap();
     }
 }
