@@ -2,7 +2,7 @@
 
 ## Configuration
 
-Sources, later overriding earlier: built-in defaults → `llmobs.toml` (`--config` or `LLMOBS_CONFIG`) → env vars (`LLMOBS_` + upper-snake path, e.g. `LLMOBS_STORAGE__OBJECT_STORE` for `storage.object_store`; common ones also have short aliases listed below). Parsed with `figment`; unknown keys are an error. `llmobs admin check` validates config, data dir, encryption key, SMTP and object store connectivity.
+Sources, later overriding earlier: built-in defaults → `llmobs.toml` (`--config` or `LLMOBS_CONFIG`) → env vars (`LLMOBS_` + upper-snake path, e.g. `LLMOBS_STORAGE__OBJECT_STORE` for `storage.object_store`; common ones also have short aliases listed below). Parsed with `figment`; unknown keys are an error. The log filter always caps the `rmcp` target at `warn`, since that crate logs MCP arguments and results at `debug` (D-H-11). `LLMOBS_URL`, `LLMOBS_TOKEN` and `LLMOBS_PROJECT` belong to the CLI's remote commands (D-H-12) and are not config keys. `llmobs admin check` validates config, data dir, encryption key, SMTP and object store connectivity.
 
 GitHub and Google also accept the split form (`LLMOBS_AUTH__GITHUB__CLIENT_ID`, `LLMOBS_AUTH__GOOGLE__CLIENT_SECRET`, and the other scalar fields of those tables). `[[auth.oidc]]` is TOML only; `LLMOBS_AUTH__OIDC__*` is ignored.
 
@@ -123,7 +123,7 @@ llmobs admin backup --to /backups/llmobs-$(date +%F)   # online, consistent
 - Outbound requests (webhooks, LLM connections, OIDC, Slack) go through an HTTP client with an SSRF guard. Unless `security.allow_private_network_egress = true` (needed for local Ollama/vLLM — the LLM connection form explains the setting; the UI cannot read its value (D-I-4)), the client drops every resolved address, and any literal IP in the URL, in these ranges (D166): loopback, RFC 1918, CGNAT `100.64.0.0/10`, link-local, unique local `fc00::/7`, unspecified, multicast, broadcast, `192.0.0.0/24`, `198.18.0.0/15`, documentation ranges, and IPv4-mapped or NAT64 forms of any of these. If none is left, the call fails before connecting. Redirects are never followed. `http` and `https` only. Identity-provider URLs are operator configuration and are not passed through that guard. The OIDC client refuses redirects and times out after 10 seconds.
 - Request size limits everywhere; JSON depth limit 128.
 - Credentials are never taken from query strings. Request logs carry the matched route template, not the raw URI (D150).
-- Content-Security-Policy on the UI: `default-src 'self'; img-src 'self' blob: data:; media-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'`, with `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`; payloads rendered as text (no HTML injection from trace content).
+- Content-Security-Policy on the UI: `default-src 'self'; img-src 'self' blob: data:; media-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`, with `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`; payloads rendered as text (no HTML injection from trace content).
 - `cargo deny` (advisories, bans, sources) on every CI run and `cargo deny check advisories` weekly (RustSec, the database `cargo audit` uses); Dependabot alerts for JS and Python; dependency licenses compatible with any license we later pick (license check enabled once D9 is decided, D57).
 
 ## Documentation deliverables (part of the MVP)

@@ -4,8 +4,8 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::header::{
-    ACCEPT_ENCODING, ALLOW, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, ETAG,
-    IF_NONE_MATCH, VARY,
+    ACCEPT, ACCEPT_ENCODING, ALLOW, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
+    ETAG, IF_NONE_MATCH, VARY,
 };
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::response::Response;
@@ -22,15 +22,15 @@ struct Asset {
 
 include!(concat!(env!("OUT_DIR"), "/assets.rs"));
 
-const CONTENT_SECURITY_POLICY_VALUE: &str = "default-src 'self'; img-src 'self' blob: data:; media-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'";
+const CONTENT_SECURITY_POLICY_VALUE: &str = "default-src 'self'; img-src 'self' blob: data:; media-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 /// Whether `web/dist` was present at build time.
 pub fn embedded() -> bool {
     BUILT
 }
 
-/// Answers every `GET` and `HEAD`: an embedded file, `index.html` for an extension-less path
-/// that matches no file (the SPA fallback), or `503` when no UI was embedded.
+/// Answers every `GET` and `HEAD`: an embedded file, `index.html` for a path that is not a
+/// missing file (the SPA fallback, D-G-35), or `503` when no UI was embedded.
 pub fn router() -> Router {
     router_with(BUILT, ASSETS)
 }
@@ -39,6 +39,67 @@ fn router_with(built: bool, assets: &'static [Asset]) -> Router {
     Router::new().fallback(move |request: Request| async move {
         with_security_headers(serve(built, assets, &request))
     })
+}
+
+/// Extensions of the files a web build emits. A missing path whose last segment ends in one
+/// of these is a missing file (`404`), unless the request is a page load.
+const FILE_EXTENSIONS: &[&str] = &[
+    "css",
+    "gif",
+    "html",
+    "ico",
+    "jpeg",
+    "jpg",
+    "js",
+    "json",
+    "map",
+    "mjs",
+    "png",
+    "svg",
+    "txt",
+    "wasm",
+    "webmanifest",
+    "webp",
+    "woff",
+    "woff2",
+];
+
+/// Whether a path that matches no embedded file names a missing file (`404`) rather than an
+/// app route (`index.html`, D-G-35).
+fn looks_like_file(headers: &HeaderMap, path: &str) -> bool {
+    if path.starts_with("/assets/") {
+        return true;
+    }
+    if is_page_load(headers) {
+        return false;
+    }
+    let last_segment = path.rsplit('/').next().unwrap_or_default();
+    last_segment.rsplit_once('.').is_some_and(|(_, extension)| {
+        FILE_EXTENSIONS
+            .iter()
+            .any(|known| extension.eq_ignore_ascii_case(known))
+    })
+}
+
+/// A browser page load: `Sec-Fetch-Mode: navigate`, or an `Accept` header that lists
+/// `text/html`.
+fn is_page_load(headers: &HeaderMap) -> bool {
+    let navigate = headers
+        .get("sec-fetch-mode")
+        .is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"navigate"));
+    navigate
+        || headers
+            .get_all(ACCEPT)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .any(|item| {
+                item.split(';')
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .eq_ignore_ascii_case("text/html")
+            })
 }
 
 fn serve(built: bool, assets: &'static [Asset], request: &Request) -> Response {
@@ -65,14 +126,10 @@ fn serve(built: bool, assets: &'static [Asset], request: &Request) -> Response {
     let wanted = if path == "/" { "/index.html" } else { path };
     let asset = match assets.iter().find(|asset| asset.path == wanted) {
         Some(asset) => asset,
-        None => {
-            let last_segment = path.rsplit('/').next().unwrap_or_default();
-            let looks_like_file = path.starts_with("/assets/") || last_segment.contains('.');
-            match assets.iter().find(|asset| asset.path == "/index.html") {
-                Some(index) if !looks_like_file => index,
-                _ => return reply(StatusCode::NOT_FOUND, HeaderMap::new(), Body::empty()),
-            }
-        }
+        None => match assets.iter().find(|asset| asset.path == "/index.html") {
+            Some(index) if !looks_like_file(request.headers(), path) => index,
+            _ => return reply(StatusCode::NOT_FOUND, HeaderMap::new(), Body::empty()),
+        },
     };
 
     let mut headers = HeaderMap::new();
@@ -89,11 +146,7 @@ fn serve(built: bool, assets: &'static [Asset], request: &Request) -> Response {
         headers.insert(VARY, HeaderValue::from_static("accept-encoding"));
     }
 
-    let if_none_match = request
-        .headers()
-        .get(IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok());
-    if if_none_match == Some(asset.etag) {
+    if none_match(request.headers(), asset.etag) {
         return reply(StatusCode::NOT_MODIFIED, headers, Body::empty());
     }
 
@@ -132,6 +185,18 @@ fn accepts_gzip(headers: &HeaderMap) -> bool {
                     _ => true,
                 })
         })
+}
+
+/// Whether `If-None-Match` matches `etag`: `*`, or any listed tag equal to it under the weak
+/// comparison of RFC 9110 § 13.1.2 (a `W/` prefix is ignored).
+fn none_match(headers: &HeaderMap, etag: &str) -> bool {
+    headers
+        .get_all(IF_NONE_MATCH)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .any(|tag| tag == "*" || tag.strip_prefix("W/").unwrap_or(tag) == etag)
 }
 
 fn reply(status: StatusCode, headers: HeaderMap, body: Body) -> Response {
@@ -286,18 +351,57 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn serves_top_level_files_and_404s_missing_ones() {
+    async fn serves_top_level_files_and_404s_missing_ones_outside_page_loads() {
         let app = test_app();
         let (status, headers, body) = get(&app, Method::GET, "/favicon.svg", &[]).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers[CACHE_CONTROL], "no-cache");
         assert_eq!(body, b"<svg/>");
 
-        for uri in ["/assets/missing.js", "/missing.png"] {
+        for uri in ["/assets/missing.js", "/missing.png", "/a/b/report.json"] {
             let (status, _, body) = get(&app, Method::GET, uri, &[]).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
             assert!(body.is_empty(), "{uri}");
         }
+    }
+
+    #[tokio::test]
+    async fn serves_index_for_dotted_deep_links() {
+        let app = test_app();
+        for uri in [
+            "/acme/proj/users/alice%40example.com",
+            "/acme/proj/sessions/chat.2026-01",
+            "/acme/proj/users/v1.2",
+        ] {
+            let (status, headers, body) = get(&app, Method::GET, uri, &[]).await;
+            assert_eq!(status, StatusCode::OK, "{uri}");
+            assert_eq!(body, b"<html>app</html>", "{uri}");
+            assert_eq!(headers[CACHE_CONTROL], "no-cache", "{uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_page_load_gets_index_even_for_a_file_extension() {
+        let app = test_app();
+        for headers in [
+            &[("sec-fetch-mode", "navigate")][..],
+            &[("accept", "text/html,application/xhtml+xml;q=0.9")][..],
+        ] {
+            let (status, _, body) =
+                get(&app, Method::GET, "/acme/proj/users/report.json", headers).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body, b"<html>app</html>");
+        }
+
+        let (status, _, body) = get(
+            &app,
+            Method::GET,
+            "/assets/missing.js",
+            &[("sec-fetch-mode", "navigate")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.is_empty());
     }
 
     #[tokio::test]
@@ -309,6 +413,26 @@ mod tests {
         assert_eq!(headers[ETAG], "\"aaaa\"");
         assert!(body.is_empty());
         assert_security_headers(&headers);
+
+        for etag in ["W/\"aaaa\"", "\"zzzz\", \"aaaa\"", "*"] {
+            let (status, _, _) = get(&app, Method::GET, "/", &[("if-none-match", etag)]).await;
+            assert_eq!(status, StatusCode::NOT_MODIFIED, "{etag}");
+        }
+        let (status, _, _) = get(&app, Method::GET, "/", &[("if-none-match", "\"zzzz\"")]).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn the_csp_restricts_base_and_form_targets() {
+        let app = test_app();
+        let (_, headers, _) = get(&app, Method::GET, "/", &[]).await;
+        let csp = headers
+            .get("content-security-policy")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(csp.contains("base-uri 'none'"));
+        assert!(csp.contains("form-action 'self'"));
     }
 
     #[tokio::test]

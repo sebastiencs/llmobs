@@ -85,7 +85,7 @@ Overrides apply only to org `member`s and `viewer`s (D139). They can raise the p
 | Action | viewer | member | admin | owner |
 |---|:-:|:-:|:-:|:-:|
 | View traces, sessions, dashboards, datasets, experiments, SQL console | ✓ | ✓ | ✓ | ✓ |
-| Annotate (human scores), add to dataset, edit datasets, run SQL exports | | ✓ | ✓ | ✓ |
+| Annotate (human scores), add to dataset, edit datasets, run SQL exports (an `sk` key with `read` may export, D-H-5), share saved views (D-H-6) | | ✓ | ✓ | ✓ |
 | Manage evaluators, online rules, alert rules, channels, score definitions | | ✓ | ✓ | ✓ |
 | Manage API keys, LLM connections, project settings (retention), GDPR deletions | | | ✓ | ✓ |
 | Create/delete projects, manage members & invites, org limits | | | ✓ | ✓ |
@@ -98,9 +98,9 @@ A resource outside the caller's reach answers **404**, never 403, so ids cannot 
 
 Enforced in one place: every route is declared with its access (public, any signed-in user, session-only, an org permission, a project permission, or instance admin). One middleware enforces it before the handler, resolves `{org}` and `{project}`, and hands the handler the resolved access. The principal is a session user, a PAT user, or an API key.
 
-**Session-only** (a session cookie; a PAT or an API key is refused): creating, listing or revoking API keys and personal access tokens, changing members, roles, overrides or invites, the password and the account name. Exception: a PAT may revoke itself with `DELETE /api/v1/me/tokens/current` (D140). A PAT with scope `read` may call safe methods (GET, HEAD) only; `read, write` may call everything except those session-only routes.
+**Session-only** (a session cookie; a PAT or an API key is refused): creating, listing or revoking API keys and personal access tokens, changing members, roles, overrides or invites, the password and the account name. Exception: a PAT may revoke itself with `DELETE /api/v1/me/tokens/current` (D140). A PAT with scope `read` may call safe methods (GET, HEAD) only, plus the two reads that use POST: `POST /api/v1/projects/{project}/sql` and `POST /mcp` (D-H-4); `read, write` may call everything except those session-only routes.
 
-API keys are project-bound and their scopes map onto permissions: `ingest` (OTLP + scores write), `read` (safe methods of project-scoped routes), `write` (datasets, experiments, scores, deletions by trace), `feedback` (public feedback only). Track D enforces `read`; later tracks map `ingest`, `write` and `feedback` (D140). Deletion by user or project requires `admin` with a session or a `read, write` PAT, never an API key.
+API keys are project-bound and their scopes map onto permissions: `ingest` (OTLP + scores write), `read` (safe methods of project-scoped routes, and `POST …/sql`, D-H-4), `write` (datasets, experiments, scores, deletions by trace), `feedback` (public feedback only). Track D enforces `read`; later tracks map `ingest`, `write` and `feedback` (D140). Deletion by user or project requires `admin` with a session or a `read, write` PAT, never an API key.
 
 ## API keys
 
@@ -108,7 +108,7 @@ API keys are project-bound and their scopes map onto permissions: `ingest` (OTLP
 |---|---|---|---|
 | Secret | `sk-llmobs-` + 32 base62 chars | default `ingest, read, write`; can be `ingest` only | OTel exporters, SDK, CI |
 | Public | `pk-llmobs-` + 24 base62 chars | `feedback` | browsers (end-user feedback) |
-| Personal access token | `pat-llmobs-` + 32 base62 chars | `read` or `read, write`; acts as the user | CLI, MCP |
+| Personal access token | `pat-llmobs-` + 32 base62 chars | `read` or `read, write`; acts as the user | CLI, MCP (the only credential `/mcp` accepts, D-H-3) |
 
 - Stored as SHA-256 hex (high-entropy keys don't need a slow hash). The display `prefix` is the type prefix plus the first 6 random characters (for example `sk-llmobs-a1B2c3`) (D140). Shown once at creation.
 - Optional `expires_at`. `last_used_at` is coalesced in memory and written every 60 s and at shutdown.
