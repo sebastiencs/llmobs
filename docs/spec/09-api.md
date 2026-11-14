@@ -166,7 +166,7 @@ Streamable HTTP at `POST /mcp`, stateless, JSON responses, implemented with the 
 | `get_trace` | `project, trace_id, around?, include_payloads=false, max_chars?` | span tree with optional truncated I/O |
 | `get_span` | `project, trace_id, span_id, around?, max_chars?` | full span |
 
-`project` is a project UUID or `org-slug/project-slug`. Each result is one text item of compact JSON. Every result is capped at `max_chars` characters (default 20,000, 1,000–100,000); string attribute, metadata and resource-attribute values are cut to 200 characters; a `notes` list names every cut. `query_sql` cuts string cells at 2,000 characters; `get_trace` with `include_payloads` shows the 200-character input/output previews, and `get_span` the full payloads cut to fit `max_chars`. Argument and query errors are tool results with `isError: true` and `{error: {code, message, position?}}` using the problem codes above.
+`project` is a project UUID or `org-slug/project-slug`. Each result is one text item of compact JSON. Every result is capped at `max_chars` characters (default 20,000, 1,000–100,000); string attribute, metadata and resource-attribute values are cut to 200 characters; a `notes` list names every cut. `query_sql` cuts string cells at 2,000 characters; `get_trace` with `include_payloads` shows the 200-character input/output previews, and `get_span` the full payloads cut to fit `max_chars`. A call whose client disconnects is cancelled and its query dropped (rmcp ignores `notifications/cancelled` in stateless mode, so a cancel without a disconnect runs to the tool's time limit). Argument and query errors are tool results with `isError: true` and `{error: {code, message, position?}}` using the problem codes above.
 
 ## CLI (`llmobs` binary)
 

@@ -944,7 +944,14 @@ mod tests {
     /// batch yet — and the already-elapsed 1 ns deadline then maps to `RunError::Timeout`.
     #[tokio::test(flavor = "multi_thread")]
     async fn run_query_times_out() {
-        let (app, seeded, _) = with_dataset().await;
+        // The GROUP BY runs through a RepartitionExec only with more than one partition, so
+        // pin it: on a one-core runner the default would let the query finish on its first poll.
+        let app = TestApp::with_config(|config| {
+            config.storage.query.target_partitions = 4;
+        })
+        .await;
+        let seeded = app.seed().await;
+        app.load_example_dataset(seeded.project.id).await;
         let window = required_window(Some(t(FROM)), Some(t(TO))).unwrap();
         let ctx = open_query_windowed(&app.state, seeded.project.id, Some(window))
             .await

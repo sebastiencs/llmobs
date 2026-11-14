@@ -120,11 +120,13 @@ impl ServerHandler for McpServer {
     ) -> Result<CallToolResponse, McpError> {
         let started = Instant::now();
         let arguments = request.arguments.unwrap_or_default();
-        // rmcp runs this in a spawned task and cancels `context.ct` when the client disconnects
-        // (or cancels the request), while the concurrency guard in the axum handler is already
+        // rmcp runs this in a spawned task and cancels `context.ct` when the client disconnects,
+        // while the concurrency guard in the axum handler is already
         // released. Racing the tool against the token drops its query instead of letting it run
         // to completion for a caller that is gone (DataFusion cancels on drop). `biased` with
-        // the tool first: a tool that already finished is never thrown away.
+        // the tool first: a tool that already finished is never thrown away. In stateless mode
+        // rmcp 3.10 ignores `notifications/cancelled`, so a cancel without a disconnect runs
+        // until the tool's own time limit.
         let (tool, outcome) = tokio::select! {
             biased;
             result = self.run_tool(&request.name, arguments) => match result {
@@ -908,9 +910,9 @@ mod tests {
     ///
     /// Deterministic in three parts: the slow call's cross join over the 14 example spans
     /// (14⁹ ≈ 20 billion rows) runs for minutes, so whether it is still running when the
-    /// probes run never depends on timing precision; the head start (250 ms) only orders the
-    /// slow call's admission before the first probe, and needs only to exceed loopback
-    /// dispatch and the meta.db read (sub-10 ms); and after the disconnect the free probe
+    /// probes run never depends on timing precision; the first probe is retried until the
+    /// slow call holds its admission (a probe admitted earlier just answers and frees it);
+    /// and after the disconnect the free probe
     /// itself waits out the 200 ms admission window, so the cancellation's propagation (all
     /// in-memory, µs–ms) is absorbed rather than raced.
     #[tokio::test(flavor = "multi_thread")]
@@ -953,12 +955,22 @@ mod tests {
         socket.write_all(head.as_bytes()).await.unwrap();
         socket.write_all(body.as_bytes()).await.unwrap();
         socket.flush().await.unwrap();
-        tokio::time::sleep(Duration::from_millis(250)).await;
 
-        // While it runs it holds the only query memory: another call is busy.
-        let (is_error, body) = call(&app, &token, "query_sql", &select_one).await;
-        assert!(is_error, "{body}");
-        assert_eq!(body["error"]["code"], json!("busy"));
+        // While it runs it holds the only query memory: another call is busy. Retry until the
+        // slow call has been admitted.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let (is_error, body) = call(&app, &token, "query_sql", &select_one).await;
+            if is_error && body["error"]["code"] == json!("busy") {
+                break;
+            }
+            assert!(!is_error, "{body}");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the slow call was never admitted"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
 
         // The client goes away. rmcp cancels the call's token, `call_tool` drops the tool
         // future, the query context (and its memory) is dropped with it, and a following
