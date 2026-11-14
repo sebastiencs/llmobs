@@ -262,7 +262,7 @@ Embedding spans use the `input` price only: `cost_output` is null and `cost_tota
 
 ## Live bus
 
-After `append_spans` returns (the batch is in the WAL and the memtable), `commit` publishes it on an in-process `tokio::sync::broadcast` channel as one event with a monotonic id, the project id, the touched trace ids and the spans' light columns, whatever the source (OTLP/HTTP, gRPC, judge traces). SSE handlers subscribe and filter by project / trace. Nothing is replayed: a subscriber that lags, or a client that reconnects with `Last-Event-ID`, is sent a `resync` event and refetches (D-G-12).
+After `append_spans` returns (the batch is in the WAL and the memtable), `commit` publishes it on an in-process `tokio::sync::broadcast` channel as events with a monotonic id, the project id and the spans' light columns (at most 500 per event; nothing is built when no stream is open, D-G-32), whatever the source (OTLP/HTTP, gRPC, judge traces). SSE handlers subscribe and filter by project / trace. Nothing is replayed: a subscriber that lags, or a client that reconnects with `Last-Event-ID`, is sent a `resync` event and refetches (D-G-12).
 
 ## Online-eval triggers
 

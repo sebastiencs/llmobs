@@ -150,7 +150,7 @@ Field lists live in the Rust types (`llmobs_server::api`) and the contract file;
 
 ## SSE
 
-`text/event-stream`, `event:` names `span`, `trace`, `resync`, `ping` (every 15 s). Data = JSON of the light columns: `span` events carry a `SpanSummary`, `trace` events a `TraceSummary`, `resync` and `ping` an empty object. `span` and `trace` events carry an `id:` that increases over the process's life. Nothing is replayed: a request with `Last-Event-ID`, or a subscriber that fell behind the live bus, first gets `resync`, and the client refetches (D-G-12). Auth by cookie (UI) or bearer. Max 100 concurrent streams per user (per key for an API key); one more is `429` `rate_limited`.
+`text/event-stream`, `event:` names `span`, `trace`, `resync`, `ping` (every 15 s). Data = JSON of the light columns: `span` events carry a `SpanSummary`, `trace` events a `TraceSummary`, `resync` and `ping` an empty object. `span` and `trace` events carry an `id:` that increases over the process's life. Nothing is replayed: a request with `Last-Event-ID`, or a subscriber that fell behind the live bus, first gets `resync`, and the client refetches (D-G-12). Auth by cookie (UI) or bearer. Max 100 concurrent streams per user (per key for an API key); one more is `429` `rate_limited`. Responses send `Cache-Control: no-cache` and `X-Accel-Buffering: no`. Every stream ends when the server shuts down; the span stream also ends after 10 minutes without a span. The trace stream's `search` is checked over the arriving spans' time range (D-G-33).
 
 ## MCP server
 

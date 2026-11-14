@@ -2,7 +2,7 @@
 
 Track G connects the Wave 1 areas into a running product: OTLP ingest into storage, the read API over A2's queries, score writes, live updates, and the embedded UI on the real API. It runs first and alone in Wave 2 because it settles the wiring every later track extends: the server's state and route table, `openapi.json`, the `fixtures/api` manifest and the web router (`docs/roadmap.md` § Wave 2).
 
-This document holds the decisions, the architecture, the interfaces later tracks build on, and the milestones. Each milestone gets its own plan of small sub-phases: [`01-m1-otlp-http-ingest.md`](01-m1-otlp-http-ingest.md), [`02-m2-read-api.md`](02-m2-read-api.md) and [`03-m3-writes-grpc-usage.md`](03-m3-writes-grpc-usage.md) so far.
+This document holds the decisions, the architecture, the interfaces later tracks build on, and the milestones. Each milestone gets its own plan of small sub-phases: [`01-m1-otlp-http-ingest.md`](01-m1-otlp-http-ingest.md), [`02-m2-read-api.md`](02-m2-read-api.md) and [`03-m3-writes-grpc-usage.md`](03-m3-writes-grpc-usage.md) and [`04-m4-live-updates.md`](04-m4-live-updates.md) so far.
 
 **Status.** Design, M1, M2 and M3 plans written. M1 implemented (PR #43), M2 implemented (PR #52), M3 implemented (branch `claude/g-m3-impl`). The A2 fixes M2 needs are merged (PR #48). The C review findings that touch G are in § Review findings, with the milestone each fix must precede.
 
@@ -44,6 +44,10 @@ All are in `docs/mvp-decisions.md` § Track G. The user chose the option marked 
 | D-G-28 | **Score write contract.** `{scores: […]}` 1–1000, `200 {score_ids}`; UUIDv8 derived ids; DELETE `204`; feedback `200 {score_id}`. (User's choice of the answer.) |
 | D-G-29 | **OTLP/gRPC** with a tonic `transport::Server`, gzip, `authorization` metadata. |
 | D-G-30 | **Usage counters** through `CommitTarget` and score writes, flushed to `usage_daily`. |
+| D-G-31 | **Storage read `trace_refresh`** for the trace stream's re-reads. |
+| D-G-32 | **Bus bounds:** 64 events of at most 500 summaries; nothing built without a stream. |
+| D-G-33 | **Live search window** over the arriving spans' start times; matched ids remembered. |
+| D-G-34 | **Stream slots and failures:** 100 per user; busy or slow re-reads retried; shutdown ends streams. |
 
 ## Scope
 
@@ -203,12 +207,14 @@ Sizes are strings with a binary unit, as `[storage]` (D90).
 
 ### Live bus and SSE (M4)
 
-- `LiveBus` wraps `broadcast::Sender<Arc<LiveEvent>>` with capacity 1024 and an `AtomicU64` event id. `LiveEvent { id, project_id, spans: Vec<SpanSummary>, trace_ids: Vec<TraceId> }` is built once per committed batch from the light columns (spec 09 § Response shapes), after `append_spans` returns.
-- `GET /traces/{id}/stream`: filters events on project and trace id and sends one `span` event per matching span, with the event's `id`. It closes after 10 minutes without a matching event.
-- `GET /traces/stream` (D-G-13, D-G-22): at open, compiles `filter` and `search` with A2 (an error answers `400 invalid_filter` / `bad_request` before any event); then collects touched trace ids of its project and every second, if any, runs `trace_list` with the request's `filter`, `include_eval`, `include_experiments` and `search`, plus `trace_id IN (…)` (at most 500 ids per tick; more is a `resync`), and sends one `trace` event per row. Trace ids that matched `search` are remembered for the stream's life and re-read without `search` afterwards (D-C-5's rule; at most 10 000 remembered ids, then `resync` and the set is cleared). A failed re-read sends `resync`. `TraceStreamParams.search` already exists (C's fix).
-- Server-side bounds: one broadcast channel of 1024 events; per stream at most 500 trace ids per tick and one `trace_list` page (`limit` 500); nothing is buffered per client beyond the socket. Client-side bounds on rows and the paused buffer are C's fix (see § Review findings).
-- Both: `ping` every 15 s; a request with `Last-Event-ID`, or a `RecvError::Lagged`, sends `resync` first (data `{}`); at most 100 open streams per user (`429` problem `rate_limited` beyond, counted per user id, keys per key id); access `ProjectPerm::View`.
-- The UI already speaks this protocol (D134, `web/src/mocks/sse.ts`).
+The plan is [`04-m4-live-updates.md`](04-m4-live-updates.md).
+
+- `LiveBus` wraps `broadcast::Sender<Arc<LiveEvent>>` with capacity 64 and an `AtomicU64` event id. `LiveEvent { id, project_id, spans: Vec<SpanSummary> }` holds at most 500 summaries; a commit publishes one or more events after `append_spans` returns, and none when no stream is open (D-G-32).
+- `GET /traces/{id}/stream`: filters events on project and trace id and sends one `span` event per matching span, with the event's `id`. It closes after 10 minutes without a matching span.
+- `GET /traces/stream` (D-G-13, D-G-22, D-G-33): at open, validates `filter` with `trace_refresh` and an empty id list (an error answers `400 invalid_filter` before any event). Then it collects the trace ids its project's events touch (with the min and max `start_time` per trace) and once a second re-reads them with `trace_refresh` (at most 500 ids per tick; more is a `resync`), sending one `trace` event per row. With `search`, not-yet-matched traces are re-read with the search over the arrival window; matched ids are remembered (at most 10 000) and re-read without it.
+- Bounds: the bus as above; per stream at most 500 ids per tick and one re-read at a time; nothing is buffered per client beyond a 16-event channel and the socket.
+- Both: `ping` every 15 s; a request with `Last-Event-ID`, or a `RecvError::Lagged`, sends `resync` (data `{}`); at most 100 open streams per user (`429` `rate_limited`); a busy or slow re-read is retried next tick; shutdown ends every stream first (D-G-34); access `ProjectPerm::View`.
+- The UI already speaks this protocol (D134, `web/src/lib/sse.ts`).
 
 ### Read API (M2)
 
