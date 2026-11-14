@@ -312,14 +312,10 @@ async fn run_trace_stream(stream: TraceStream, tx: mpsc::Sender<Event>) {
                     }
                     Err(RefreshError::Retry) => {
                         // Busy or timed out: the traces wait for the next tick, with no resync.
+                        // `pending` was emptied by the take and the bus is not read during the
+                        // refresh, so the merged map is the batch again: at most 500 ids.
                         for (id, (low, high)) in batch {
                             note(&mut pending, id, low, high);
-                        }
-                        if pending.len() > MAX_REFRESH_IDS {
-                            pending.clear();
-                            if tx.send(resync()).await.is_err() {
-                                return;
-                            }
                         }
                     }
                     Err(RefreshError::Resync) => {
@@ -961,6 +957,8 @@ mod tests {
         let app = TestApp::new().await;
         let seeded = app.seed().await;
         let mut stream = open_traces(&app, &seeded, "").await;
+        // 1 100 spans publish as events of 500, 500 and 100 (`MAX_EVENT_SPANS`): the second
+        // event takes the pending map past `MAX_REFRESH_IDS`.
         let spans: Vec<_> = (1..=1100_u64)
             .map(|number| {
                 let mut row = dataset_span(0);
