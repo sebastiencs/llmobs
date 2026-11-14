@@ -390,7 +390,7 @@ The server stores a resolved scope and its cascades in one transaction, before i
 - Dataset items whose `source_trace_id` is in scope are hard-deleted, all versions (track J).
 - `experiment_items` referencing those traces are deleted (track J); `eval_jobs` referencing them are deleted unless `running` (D-M-6).
 - A running judge job, and any judge run that loaded its target before the deletion, is stopped by the server's 24-hour deletion guard before it commits a judge trace or a score (D-M-6).
-- `alert_events` hold only aggregates and are kept.
+- `alert_events` hold only aggregates; they are pruned after 90 days with their deliveries (D-K-10).
 
 ### Physical erasure: the deletion rewriter
 
