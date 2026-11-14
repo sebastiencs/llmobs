@@ -33,6 +33,26 @@ CREATE TABLE email_verifications (
 index email_verifications_user
 CREATE INDEX email_verifications_user ON email_verifications(user_id)
 
+table evaluators
+CREATE TABLE evaluators (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  config TEXT NOT NULL,
+  output_score TEXT NOT NULL,
+  connection_id TEXT REFERENCES llm_connections(id),
+  secret_enc BLOB,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(project_id, name)
+)
+
+index evaluators_connection
+CREATE INDEX evaluators_connection ON evaluators(connection_id) WHERE connection_id IS NOT NULL
+
 table identities
 CREATE TABLE identities (
     id TEXT PRIMARY KEY,
@@ -190,6 +210,24 @@ CREATE INDEX saved_views_lookup ON saved_views(project_id, kind)
 index saved_views_owner
 CREATE INDEX saved_views_owner ON saved_views(project_id, owner_user_id)
 
+table score_definitions
+CREATE TABLE score_definitions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  data_type TEXT NOT NULL,
+  categories TEXT,
+  min_value REAL,
+  max_value REAL,
+  description TEXT,
+  archived_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+)
+
+index score_definitions_live
+CREATE UNIQUE INDEX score_definitions_live ON score_definitions(project_id, name) WHERE archived_at IS NULL
+
 index sqlite_autoindex__sqlx_migrations_1
 
 index sqlite_autoindex_api_keys_1
@@ -197,6 +235,10 @@ index sqlite_autoindex_api_keys_1
 index sqlite_autoindex_api_keys_2
 
 index sqlite_autoindex_email_verifications_1
+
+index sqlite_autoindex_evaluators_1
+
+index sqlite_autoindex_evaluators_2
 
 index sqlite_autoindex_identities_1
 
@@ -231,6 +273,8 @@ index sqlite_autoindex_projects_1
 index sqlite_autoindex_projects_2
 
 index sqlite_autoindex_saved_views_1
+
+index sqlite_autoindex_score_definitions_1
 
 index sqlite_autoindex_usage_daily_1
 

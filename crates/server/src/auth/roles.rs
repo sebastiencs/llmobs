@@ -96,6 +96,8 @@ pub(crate) enum ProjectPerm {
     ManageMembers,
     /// Write and delete scores (spec 08: member and above).
     Annotate,
+    /// Evaluators, online rules, score definitions, test and manual runs (D-I-24).
+    ManageEvaluation,
     /// Read project data through a POST with a body, such as the SQL console (D-H-4).
     /// Same holders as `View`; a read-only PAT and a `read` key may use it on POST.
     Query,
@@ -194,7 +196,7 @@ impl ProjectPerm {
     pub(crate) fn min_role(self) -> Role {
         match self {
             Self::View | Self::Query => Role::Viewer,
-            Self::Annotate => Role::Member,
+            Self::Annotate | Self::ManageEvaluation => Role::Member,
             Self::ManageSettings | Self::ManageMembers => Role::Admin,
         }
     }
@@ -204,7 +206,7 @@ impl ProjectPerm {
         match self {
             Self::View | Self::Query => Some(KeyScope::Read),
             Self::Annotate => Some(KeyScope::Write),
-            Self::ManageSettings | Self::ManageMembers => None,
+            Self::ManageEvaluation | Self::ManageSettings | Self::ManageMembers => None,
         }
     }
 }
@@ -270,6 +272,9 @@ mod tests {
         // Score writes: viewer no; member, admin and owner yes.
         assert_eq!(ProjectPerm::Annotate.min_role(), Role::Member);
         assert_eq!(ProjectPerm::Annotate.key_scope(), Some(KeyScope::Write));
+        // Evaluation: member and above; an API key cannot manage it (D-I-24).
+        assert_eq!(ProjectPerm::ManageEvaluation.min_role(), Role::Member);
+        assert!(ProjectPerm::ManageEvaluation.key_scope().is_none());
         let viewer =
             effective_project_role(OrgRole::Viewer, None).expect("viewer sees the project");
         assert!(viewer < ProjectPerm::Annotate.min_role());
