@@ -18,7 +18,7 @@ use crate::http::access::{Access, ProjectAccess, RouteDef};
 use crate::http::error::ApiError;
 use crate::ingest::body::{body_encoding, body_format, read_capped};
 use crate::ingest::otlp::export_response;
-use crate::ingest::{Accepted, CommitTarget, IngestError};
+use crate::ingest::{Accepted, CommitTarget, IngestError, commit_in_task};
 use crate::meta::projects::ProjectRow;
 
 /// The OTLP/HTTP route. Undocumented, so it stays out of `openapi.json` (D-G-6).
@@ -82,18 +82,7 @@ async fn export_body(
         request_bytes: decompressed_bytes,
         now_ns,
     };
-    let receipt = state
-        .ingest
-        .commit(
-            &state.storage,
-            &state.usage,
-            &state.live,
-            target,
-            normalized,
-        )
-        .await?;
-    // The budget covers the spans until they are appended (D-G-5).
-    drop(reservation);
+    let receipt = commit_in_task(state, target, normalized, reservation).await?;
     tracing::info!(
         target: "ingest",
         project_id = %project.id,

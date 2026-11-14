@@ -8,6 +8,7 @@ mod fixtures_tests;
 pub(crate) mod grpc;
 pub(crate) mod otlp;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 
 use bytes::Bytes;
@@ -22,9 +23,10 @@ use llmobs_otel::{
 };
 use llmobs_storage::error::{AppendError, MediaError};
 use llmobs_storage::{MediaBlob, Storage};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
 use crate::config::{IngestConfig, MediaConfig};
+use crate::http::AppState;
 use crate::http::error::ApiError;
 use crate::live::LiveBus;
 use crate::meta::projects::ProjectRow;
@@ -42,11 +44,50 @@ pub(crate) struct Ingest {
     max_request_bytes: usize,
     max_spans_per_request: usize,
     limits: IngestLimits,
+    commits: Arc<Commits>,
 }
 
 /// Budget held by one request from before its body is read until it is answered.
 #[derive(Debug)]
 pub(crate) struct Reservation(OwnedSemaphorePermit);
+
+/// Commits running in their own task, so shutdown can wait for them (D-G-38).
+#[derive(Debug, Default)]
+struct Commits {
+    running: AtomicUsize,
+    done: Notify,
+}
+
+/// One running commit. Dropping it wakes [`Ingest::wait_for_commits`] when it was the last.
+struct CommitGuard(Arc<Commits>);
+
+impl Commits {
+    fn enter(self: &Arc<Self>) -> CommitGuard {
+        self.running.fetch_add(1, Ordering::SeqCst);
+        CommitGuard(Arc::clone(self))
+    }
+
+    async fn idle(&self) {
+        loop {
+            let notified = self.done.notified();
+            tokio::pin!(notified);
+            // Registered before the check, so a guard dropped in between still wakes it.
+            notified.as_mut().enable();
+            if self.running.load(Ordering::SeqCst) == 0 {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+impl Drop for CommitGuard {
+    fn drop(&mut self) {
+        if self.0.running.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.0.done.notify_waiters();
+        }
+    }
+}
 
 /// What `accept` produced. Holds the request's reservation until dropped.
 #[derive(Debug)]
@@ -116,6 +157,7 @@ impl Ingest {
             max_spans_per_request: usize::try_from(config.max_spans_per_request)
                 .unwrap_or(usize::MAX),
             limits: config.limits(media),
+            commits: Arc::default(),
         }
     }
 
@@ -328,6 +370,41 @@ impl Ingest {
             media: stored,
         })
     }
+
+    /// Waits until no commit started by [`commit_in_task`] is running (D-G-38).
+    pub(crate) async fn wait_for_commits(&self) {
+        self.commits.idle().await;
+    }
+}
+
+/// Runs [`Ingest::commit`] in its own task and waits for it (D-G-38). When the request is
+/// dropped while waiting (the client went away), the task still appends, publishes and counts
+/// the spans. `reservation` moves into the task: the budget covers the spans until they are
+/// appended (D-G-5).
+pub(crate) async fn commit_in_task(
+    state: &AppState,
+    target: CommitTarget,
+    normalized: Normalized,
+    reservation: Reservation,
+) -> Result<CommitReceipt, IngestError> {
+    let guard = state.ingest.commits.enter();
+    let state = state.clone();
+    let task = tokio::spawn(async move {
+        let _guard = guard;
+        let result = state
+            .ingest
+            .commit(
+                &state.storage,
+                &state.usage,
+                &state.live,
+                target,
+                normalized,
+            )
+            .await;
+        drop(reservation);
+        result
+    });
+    task.await.map_err(IngestError::Join)?
 }
 
 /// Converts a normalized blob to the storage type, checking that its hash is 32 bytes.
@@ -408,6 +485,7 @@ impl From<IngestError> for ApiError {
 mod tests {
     use std::io::Write;
     use std::path::Path;
+    use std::time::Duration;
 
     use axum::http::{StatusCode, header};
     use axum::response::IntoResponse;
@@ -981,6 +1059,63 @@ mod tests {
             matches!(error, IngestError::Append(AppendError::ProjectDropped)),
             "{error:?}"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_commit_finishes_after_its_request_is_dropped() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let normalized = accepted_fixture(
+            &app,
+            &seeded.project,
+            "llmobs/sdk-observe-nested/input.json",
+        )
+        .await;
+        let spans = normalized.spans.len();
+        assert!(spans > 0);
+        // A receiver must exist, or `publish` builds nothing.
+        let mut bus = app.state.live.subscribe();
+        let reservation = app.state.ingest.reserve_exact(1).expect("budget");
+        // Poll the commit once and drop it, as a disconnecting client does. Tokio's `timeout`
+        // polls the future before checking the deadline; do not assert on the result.
+        let _polled = tokio::time::timeout(
+            Duration::ZERO,
+            commit_in_task(
+                &app.state,
+                target(&app, &seeded.project),
+                normalized,
+                reservation,
+            ),
+        )
+        .await;
+        tokio::time::timeout(Duration::from_secs(10), app.state.ingest.wait_for_commits())
+            .await
+            .expect("the commit finishes");
+        assert_eq!(stored_spans(&app, seeded.project.id).await, spans);
+        let event = bus.try_recv().expect("an event was published");
+        assert_eq!(event.spans.len(), spans);
+        app.state
+            .usage
+            .flush(&app.state.meta)
+            .await
+            .expect("usage flushes");
+        let counted: i64 = sqlx::query_scalar("SELECT spans FROM usage_daily WHERE project_id = ?")
+            .bind(seeded.project.id.to_string())
+            .fetch_one(app.state.meta.reader())
+            .await
+            .expect("one usage row for the day");
+        assert_eq!(counted, i64::try_from(spans).unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wait_for_commits_returns_at_once_when_idle() {
+        let app = TestApp::new().await;
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            app.state.ingest.wait_for_commits(),
+        )
+        .await
+        .expect("idle");
     }
 
     /// Status, `Retry-After`, problem `code` and `detail` of the response for `error`.
