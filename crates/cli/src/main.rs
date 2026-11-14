@@ -1,11 +1,18 @@
+mod client;
+mod credentials;
 mod login;
+mod output;
+mod projects;
+mod query;
+#[cfg(test)]
+mod test_server;
+mod traces;
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use chrono::{DateTime, SecondsFormat};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use llmobs_server::admin::{self, UserSummary};
 use llmobs_server::config::{LogConfig, LogFormat, ServerConfig};
 use llmobs_server::serve::{self, ServeError};
@@ -29,7 +36,7 @@ enum Command {
         #[arg(long)]
         config: Option<PathBuf>,
     },
-    /// Manage users in this data directory.
+    /// Manage users and the encryption key in this data directory.
     Admin {
         #[command(subcommand)]
         command: AdminCommand,
@@ -50,6 +57,18 @@ enum Command {
         /// Server URL. Required when more than one server is saved.
         #[arg(long)]
         url: Option<String>,
+    },
+    /// Run a SQL query on a project.
+    Query(Box<query::QueryArgs>),
+    /// List and show traces.
+    Traces {
+        #[command(subcommand)]
+        command: Box<traces::TracesCommand>,
+    },
+    /// List the projects you can read.
+    Projects {
+        #[command(subcommand)]
+        command: Box<projects::ProjectsCommand>,
     },
 }
 
@@ -86,17 +105,21 @@ enum AdminCommand {
     ListUsers {
         /// `table` or `json`.
         #[arg(long, value_enum, default_value = "table")]
-        format: ListFormat,
+        format: output::ListFormat,
         /// Config file. Overrides `LLMOBS_CONFIG`.
         #[arg(long)]
         config: Option<PathBuf>,
     },
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum ListFormat {
-    Table,
-    Json,
+    /// Re-encrypt stored secrets under a new key. Stop the server first.
+    RotateEncryptionKey {
+        /// Read the new key (32 bytes, standard base64) from one line of stdin. Default:
+        /// generate one, unless the current key comes from `LLMOBS_ENCRYPTION_KEY`.
+        #[arg(long)]
+        new_from_stdin: bool,
+        /// Config file. Overrides `LLMOBS_CONFIG`.
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
 }
 
 fn main() {
@@ -148,9 +171,59 @@ async fn run_cli(
         Command::Serve { config } => serve(config.as_deref()).await?,
         Command::Admin { command } => admin_command(command).await?,
         Command::Login { url, no_browser } => {
-            login::login(&url, no_browser, &credentials_path()?, io::stdout()).await?;
+            login::login(
+                &url,
+                no_browser,
+                &credentials::credentials_path()?,
+                io::stdout(),
+            )
+            .await?;
         }
-        Command::Logout { url } => login::logout(url.as_deref(), &credentials_path()?).await?,
+        Command::Logout { url } => {
+            login::logout(url.as_deref(), &credentials::credentials_path()?).await?;
+        }
+        Command::Query(args) => {
+            let stdout = io::stdout();
+            let stdout_is_terminal = stdout.is_terminal();
+            let (mut out, mut err, mut input) = (stdout.lock(), io::stderr().lock(), io::stdin());
+            let mut streams = output::Io {
+                out: &mut out,
+                err: &mut err,
+                input: &mut input,
+                stdout_is_terminal,
+            };
+            query::run(
+                &args,
+                credentials::credentials_path,
+                &mut streams,
+                chrono::Utc::now(),
+            )
+            .await?;
+        }
+        Command::Traces { command } => {
+            let stdout = io::stdout();
+            let stdout_is_terminal = stdout.is_terminal();
+            let (mut out, mut err, mut input) = (stdout.lock(), io::stderr().lock(), io::stdin());
+            let mut streams = output::Io {
+                out: &mut out,
+                err: &mut err,
+                input: &mut input,
+                stdout_is_terminal,
+            };
+            traces::run(&command, credentials::credentials_path, &mut streams).await?;
+        }
+        Command::Projects { command } => {
+            let stdout = io::stdout();
+            let stdout_is_terminal = stdout.is_terminal();
+            let (mut out, mut err, mut input) = (stdout.lock(), io::stderr().lock(), io::stdin());
+            let mut streams = output::Io {
+                out: &mut out,
+                err: &mut err,
+                input: &mut input,
+                stdout_is_terminal,
+            };
+            projects::run(&command, credentials::credentials_path, &mut streams).await?;
+        }
     }
     Ok(())
 }
@@ -172,6 +245,7 @@ fn annotate(error: ServeError) -> anyhow::Error {
         ServeError::Config(_) => "loading config",
         ServeError::Storage(_) => "opening storage",
         ServeError::Meta(_) => "opening meta.db",
+        ServeError::Crypto(_) => "loading the encryption key",
         ServeError::Bind { .. } => "binding",
         ServeError::Prices(_) => "building the price table",
         ServeError::Serve(_) => "serving",
@@ -180,8 +254,23 @@ fn annotate(error: ServeError) -> anyhow::Error {
     anyhow::Error::from(error).context(context)
 }
 
+/// The `rmcp` crate logs whole MCP requests and results below `warn`; they can hold prompts
+/// and SQL text, so its level is capped whatever `log.level` says (README § Privacy).
+const RMCP_DIRECTIVE: &str = "rmcp=warn";
+
+/// `log.level` as an `EnvFilter`, with [`RMCP_DIRECTIVE`] added last so it replaces any
+/// `rmcp=…` directive in `level`.
+fn log_filter(level: &str) -> anyhow::Result<EnvFilter> {
+    let directive = RMCP_DIRECTIVE
+        .parse()
+        .context("parsing the rmcp log directive")?;
+    Ok(EnvFilter::try_new(level)
+        .context("loading config")?
+        .add_directive(directive))
+}
+
 fn init_tracing(log: &LogConfig) -> anyhow::Result<()> {
-    let filter = EnvFilter::try_new(&log.level).context("loading config")?;
+    let filter = log_filter(&log.level)?;
     let format = log.format.unwrap_or_else(default_log_format);
     match format {
         LogFormat::Pretty => {
@@ -264,11 +353,33 @@ async fn admin_command(command: AdminCommand) -> anyhow::Result<()> {
             let users = admin::list_users(&loaded).await.context("listing users")?;
             let mut stdout = io::stdout().lock();
             match format {
-                ListFormat::Table => write_table(&mut stdout, &users)?,
-                ListFormat::Json => {
+                output::ListFormat::Table => write_table(&mut stdout, &users)?,
+                output::ListFormat::Json => {
                     let listed = users.iter().map(listed_user).collect::<Vec<_>>();
                     writeln!(stdout, "{}", serde_json::to_string_pretty(&listed)?)?;
                 }
+            }
+        }
+        AdminCommand::RotateEncryptionKey {
+            new_from_stdin,
+            config,
+        } => {
+            let new_key = if new_from_stdin {
+                Some(read_key_line(io::stdin().lock())?)
+            } else {
+                None
+            };
+            let loaded = load_config(config.as_deref())?;
+            let rotated = admin::rotate_encryption_key(&loaded, new_key.as_deref())
+                .await
+                .context("rotating the encryption key")?;
+            let mut stdout = io::stdout().lock();
+            writeln!(stdout, "Re-encrypted {} values.", rotated.values)?;
+            if loaded.encryption_key.is_some() {
+                writeln!(
+                    stdout,
+                    "Set LLMOBS_ENCRYPTION_KEY to the new key before the next start."
+                )?;
             }
         }
     }
@@ -279,17 +390,29 @@ fn load_config(path: Option<&Path>) -> anyhow::Result<ServerConfig> {
     ServerConfig::load(path).context("loading config")
 }
 
-fn credentials_path() -> anyhow::Result<PathBuf> {
-    let config = dirs::config_dir().context("finding the config directory")?;
-    Ok(config.join("llmobs").join("credentials.toml"))
-}
-
 /// One stdin line, with a trailing `\n` or `\r\n` removed. The password itself is not trimmed.
 fn read_password_line(mut input: impl BufRead) -> anyhow::Result<String> {
     let mut line = String::new();
     let read = input.read_line(&mut line).context("reading the password")?;
     if read == 0 {
         anyhow::bail!("expected a password on stdin");
+    }
+    if line.ends_with('\n') {
+        line.pop();
+        if line.ends_with('\r') {
+            line.pop();
+        }
+    }
+    Ok(line)
+}
+
+/// One stdin line, with a trailing `\n` or `\r\n` removed. Leading and trailing
+/// spaces are trimmed where the key is decoded.
+fn read_key_line(mut input: impl BufRead) -> anyhow::Result<String> {
+    let mut line = String::new();
+    let read = input.read_line(&mut line).context("reading the key")?;
+    if read == 0 {
+        anyhow::bail!("expected a key on stdin");
     }
     if line.ends_with('\n') {
         line.pop();
@@ -311,7 +434,7 @@ fn write_table(out: &mut impl Write, users: &[UserSummary]) -> io::Result<()> {
             user.name.as_deref().unwrap_or(""),
             yes_no(user.instance_admin),
             yes_no(user.disabled),
-            format_time(user.created_at),
+            output::format_time(user.created_at),
         )?;
     }
     Ok(())
@@ -319,20 +442,6 @@ fn write_table(out: &mut impl Write, users: &[UserSummary]) -> io::Result<()> {
 
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
-}
-
-fn format_time(ns: i64) -> String {
-    if ns < 0 {
-        return String::new();
-    }
-    let seconds = ns.div_euclid(1_000_000_000);
-    let nanos = ns.rem_euclid(1_000_000_000);
-    let Ok(subsec) = u32::try_from(nanos) else {
-        return String::new();
-    };
-    DateTime::from_timestamp(seconds, subsec)
-        .map(|time| time.to_rfc3339_opts(SecondsFormat::Nanos, true))
-        .unwrap_or_default()
 }
 
 #[derive(serde::Serialize)]
@@ -352,7 +461,7 @@ fn listed_user(user: &UserSummary) -> ListedUser {
         name: user.name.clone(),
         instance_admin: user.instance_admin,
         disabled: user.disabled,
-        created_at: format_time(user.created_at),
+        created_at: output::format_time(user.created_at),
     }
 }
 
@@ -405,7 +514,83 @@ impl Signals {
 
 #[cfg(test)]
 mod tests {
-    use super::run_cli;
+    use std::sync::{Arc, Mutex};
+
+    use clap::Parser;
+
+    use super::{AdminCommand, Cli, Command, log_filter, run_cli};
+    use crate::output;
+
+    #[test]
+    fn log_filter_caps_rmcp() {
+        for level in ["info", "trace", "info,rmcp=trace"] {
+            let filter = log_filter(level).unwrap().to_string();
+            assert!(filter.contains("rmcp=warn"), "{level}: {filter}");
+            assert!(!filter.contains("rmcp=trace"), "{level}: {filter}");
+        }
+    }
+
+    /// `log_filter("debug")` admits debug events, but not rmcp's: a subscriber built from it
+    /// drops an rmcp event (rmcp logs whole requests and results at debug) and still emits a
+    /// debug event for another target.
+    #[test]
+    fn a_debug_filter_drops_rmcp_debug_events() {
+        use tracing_subscriber::Layer;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let buffer = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let writer = Arc::clone(&buffer);
+        let layer = tracing_subscriber::fmt::layer()
+            .with_writer(move || Buffer(Arc::clone(&writer)))
+            .with_ansi(false)
+            .with_target(true)
+            .with_filter(log_filter("debug").unwrap());
+        let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(layer));
+        let guard = tracing::dispatcher::set_default(&dispatch);
+        tracing::debug!(target: "rmcp::service", "dropped-canary");
+        tracing::debug!(target: "llmobs::serve", "kept-canary");
+        drop(guard);
+        drop(dispatch);
+        let logs = String::from_utf8_lossy(&buffer.lock().unwrap().clone()).into_owned();
+        assert!(!logs.contains("dropped-canary"), "{logs}");
+        assert!(logs.contains("kept-canary"), "{logs}");
+        assert!(logs.contains("llmobs::serve"), "{logs}");
+    }
+
+    /// `io::Write` over the shared buffer of [`a_debug_filter_drops_rmcp_debug_events`].
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Buffer {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().write(data)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn rotate_encryption_key_parses() {
+        let cli = Cli::try_parse_from([
+            "llmobs",
+            "admin",
+            "rotate-encryption-key",
+            "--new-from-stdin",
+        ])
+        .unwrap();
+        let Command::Admin {
+            command: AdminCommand::RotateEncryptionKey { new_from_stdin, .. },
+        } = cli.command
+        else {
+            panic!("expected the rotate-encryption-key command");
+        };
+        assert!(new_from_stdin);
+        assert!(
+            Cli::try_parse_from(["llmobs", "admin", "rotate-encryption-key", "--new", "x"])
+                .is_err()
+        );
+    }
 
     #[tokio::test]
     async fn missing_config_exits_with_the_path() {
@@ -419,6 +604,27 @@ mod tests {
     }
 
     #[test]
+    fn admin_list_users_keeps_its_format_flag() {
+        let format_of = |argv: &[&str]| match Cli::try_parse_from(argv).unwrap().command {
+            Command::Admin {
+                command: AdminCommand::ListUsers { format, .. },
+            } => format,
+            other => panic!("unexpected command {other:?}"),
+        };
+        assert_eq!(
+            format_of(&["llmobs", "admin", "list-users", "--format", "json"]),
+            output::ListFormat::Json
+        );
+        assert_eq!(
+            format_of(&["llmobs", "admin", "list-users"]),
+            output::ListFormat::Table
+        );
+        let error =
+            Cli::try_parse_from(["llmobs", "admin", "list-users", "--format", "xml"]).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+    }
+
+    #[test]
     fn password_line_drops_one_trailing_newline() {
         let line = super::read_password_line("secret\r\n".as_bytes()).unwrap();
         assert_eq!(line, "secret");
@@ -427,6 +633,16 @@ mod tests {
         let eof = super::read_password_line("secret".as_bytes()).unwrap();
         assert_eq!(eof, "secret");
         assert!(super::read_password_line("".as_bytes()).is_err());
+    }
+
+    #[test]
+    fn key_line_drops_one_trailing_newline() {
+        let crlf = super::read_key_line("key-line\r\n".as_bytes()).unwrap();
+        assert_eq!(crlf, "key-line");
+        let eof = super::read_key_line("key-line".as_bytes()).unwrap();
+        assert_eq!(eof, "key-line");
+        let error = super::read_key_line("".as_bytes()).unwrap_err();
+        assert_eq!(error.to_string(), "expected a key on stdin");
     }
 
     #[tokio::test]

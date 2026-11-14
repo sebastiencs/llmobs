@@ -38,7 +38,7 @@ pub struct SavedView {
     pub kind: SavedViewKind,
     /// Display name.
     pub name: String,
-    /// Opaque UI state: list-page URL params, or `{query, params}` for SQL.
+    /// Opaque UI state: list-page URL params, or `{query, params, range}` / `{query, params, from, to}` for SQL (D-H-7).
     #[schema(value_type = Object)]
     pub state: Map<String, Value>,
     /// Owner. Omitted when the view has no owner.
@@ -46,7 +46,7 @@ pub struct SavedView {
     pub owner_user_id: Option<Uuid>,
     /// Visible to every member of the project.
     pub shared: bool,
-    /// Default view for this kind when the caller has no view of their own.
+    /// The default of its scope: among the owner's private views of this kind ("my default"), or among the project's shared views of this kind ("project default"). Setting it clears the other default of that scope (D-H-6).
     pub is_default: bool,
     /// Creation time, nanoseconds since the Unix epoch. JSON is RFC 3339.
     #[serde(with = "llmobs_core::time_serde")]
@@ -68,13 +68,13 @@ pub struct CreateSavedView {
     pub kind: SavedViewKind,
     /// Display name.
     pub name: String,
-    /// Opaque UI state: list-page URL params, or `{query, params}` for SQL.
+    /// Opaque UI state: list-page URL params, or `{query, params, range}` / `{query, params, from, to}` for SQL (D-H-7).
     #[schema(value_type = Object)]
     pub state: Map<String, Value>,
     /// Visible to every member of the project. Default false.
     #[serde(default)]
     pub shared: bool,
-    /// Default view for this kind. Default false.
+    /// The default of its scope: among the owner's private views of this kind ("my default"), or among the project's shared views of this kind ("project default"). Setting it clears the other default of that scope (D-H-6). Default false.
     #[serde(default)]
     pub is_default: bool,
 }
@@ -88,14 +88,14 @@ pub struct UpdateSavedView {
     /// Display name.
     #[serde(default)]
     pub name: Option<String>,
-    /// Opaque UI state: list-page URL params, or `{query, params}` for SQL.
+    /// Opaque UI state: list-page URL params, or `{query, params, range}` / `{query, params, from, to}` for SQL (D-H-7).
     #[serde(default)]
     #[schema(value_type = Option<Object>)]
     pub state: Option<Map<String, Value>>,
-    /// Visible to every member of the project.
+    /// Visible to every member of the project. Omitted: unchanged.
     #[serde(default)]
     pub shared: Option<bool>,
-    /// Default view for this kind.
+    /// The default of its scope: among the owner's private views of this kind ("my default"), or among the project's shared views of this kind ("project default"). Setting it clears the other default of that scope (D-H-6). Omitted: unchanged.
     #[serde(default)]
     pub is_default: Option<bool>,
 }

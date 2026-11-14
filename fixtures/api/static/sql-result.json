@@ -1,0 +1,39 @@
+{
+  "columns": [
+    {
+      "name": "span_kind",
+      "type": "Utf8"
+    },
+    {
+      "name": "spans",
+      "type": "Int64"
+    },
+    {
+      "name": "first_start",
+      "type": "Timestamp(ns, \"UTC\")"
+    }
+  ],
+  "rows": [
+    {
+      "span_kind": "agent",
+      "spans": 2,
+      "first_start": "2026-01-01T10:00:00.000000000Z"
+    },
+    {
+      "span_kind": "chain",
+      "spans": 1,
+      "first_start": "2026-01-01T10:10:00.000000000Z"
+    },
+    {
+      "span_kind": "llm",
+      "spans": 5,
+      "first_start": "2026-01-01T10:00:00.100000000Z"
+    },
+    {
+      "span_kind": "tool",
+      "spans": 1,
+      "first_start": "2026-01-01T10:00:01.950000000Z"
+    }
+  ],
+  "truncated": false
+}

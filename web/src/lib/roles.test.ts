@@ -3,6 +3,7 @@ import {
   atLeast,
   canChangeRole,
   canHaveOverride,
+  canManageConnections,
   canRemoveMember,
   grantableRoles,
   overrideLabel,
@@ -47,6 +48,14 @@ it("removes members like the server", () => {
   expect(canRemoveMember("owner", "owner", false)).toBe(true);
   expect(canRemoveMember("admin", "member", false)).toBe(true);
   expect(canRemoveMember("member", "viewer", false)).toBe(false);
+});
+
+it("lets only admins and owners manage connections", () => {
+  expect(canManageConnections("owner")).toBe(true);
+  expect(canManageConnections("admin")).toBe(true);
+  expect(canManageConnections("member")).toBe(false);
+  expect(canManageConnections("viewer")).toBe(false);
+  expect(canManageConnections(undefined)).toBe(false);
 });
 
 it("overrides only members and viewers", () => {

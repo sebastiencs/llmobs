@@ -47,6 +47,9 @@ CREATE TABLE identities (
 index identities_user
 CREATE INDEX identities_user ON identities(user_id)
 
+table instance_settings
+CREATE TABLE instance_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)
+
 table invites
 CREATE TABLE invites (
     id TEXT PRIMARY KEY,
@@ -62,6 +65,30 @@ CREATE TABLE invites (
 
 index invites_pending
 CREATE UNIQUE INDEX invites_pending ON invites(org_id, email) WHERE accepted_at IS NULL
+
+table llm_connections
+CREATE TABLE llm_connections (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  adapter TEXT NOT NULL,
+  base_url TEXT,
+  secret_enc BLOB NOT NULL,
+  api_key_hint TEXT NOT NULL,
+  extra_headers_enc BLOB,
+  extra_header_names TEXT NOT NULL DEFAULT '[]',
+  default_model TEXT,
+  structured_output TEXT NOT NULL DEFAULT 'native',
+  max_concurrency INTEGER NOT NULL DEFAULT 4,
+  requests_per_minute INTEGER NOT NULL DEFAULT 300,
+  status TEXT NOT NULL DEFAULT 'ok',
+  last_error TEXT,
+  last_error_at INTEGER,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(org_id, name)
+)
 
 table org_members
 CREATE TABLE org_members (
@@ -143,6 +170,26 @@ CREATE TABLE projects (
 index projects_org
 CREATE INDEX projects_org ON projects(org_id)
 
+table saved_views
+CREATE TABLE saved_views (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  state TEXT NOT NULL,
+  owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  shared INTEGER NOT NULL DEFAULT 0,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+)
+
+index saved_views_lookup
+CREATE INDEX saved_views_lookup ON saved_views(project_id, kind)
+
+index saved_views_owner
+CREATE INDEX saved_views_owner ON saved_views(project_id, owner_user_id)
+
 index sqlite_autoindex__sqlx_migrations_1
 
 index sqlite_autoindex_api_keys_1
@@ -155,9 +202,15 @@ index sqlite_autoindex_identities_1
 
 index sqlite_autoindex_identities_2
 
+index sqlite_autoindex_instance_settings_1
+
 index sqlite_autoindex_invites_1
 
 index sqlite_autoindex_invites_2
+
+index sqlite_autoindex_llm_connections_1
+
+index sqlite_autoindex_llm_connections_2
 
 index sqlite_autoindex_org_members_1
 
@@ -176,6 +229,8 @@ index sqlite_autoindex_project_members_1
 index sqlite_autoindex_projects_1
 
 index sqlite_autoindex_projects_2
+
+index sqlite_autoindex_saved_views_1
 
 index sqlite_autoindex_usage_daily_1
 

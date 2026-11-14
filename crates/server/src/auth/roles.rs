@@ -81,6 +81,8 @@ pub(crate) enum OrgPerm {
     CreateProject,
     /// Members, invites, and org limits.
     ManageMembers,
+    /// Create, edit, delete and test LLM connections (D-I-24).
+    ManageConnections,
 }
 
 /// What a project route requires.
@@ -94,6 +96,9 @@ pub(crate) enum ProjectPerm {
     ManageMembers,
     /// Write and delete scores (spec 08: member and above).
     Annotate,
+    /// Read project data through a POST with a body, such as the SQL console (D-H-4).
+    /// Same holders as `View`; a read-only PAT and a `read` key may use it on POST.
+    Query,
 }
 
 /// Scope on a project API key. Track D enforces [`Self::Read`] (D140).
@@ -177,7 +182,9 @@ impl OrgPerm {
     pub(crate) fn min_role(self) -> OrgRole {
         match self {
             Self::View => OrgRole::Viewer,
-            Self::Rename | Self::CreateProject | Self::ManageMembers => OrgRole::Admin,
+            Self::Rename | Self::CreateProject | Self::ManageMembers | Self::ManageConnections => {
+                OrgRole::Admin
+            }
         }
     }
 }
@@ -186,7 +193,7 @@ impl ProjectPerm {
     /// Lowest effective project role that may perform this.
     pub(crate) fn min_role(self) -> Role {
         match self {
-            Self::View => Role::Viewer,
+            Self::View | Self::Query => Role::Viewer,
             Self::Annotate => Role::Member,
             Self::ManageSettings | Self::ManageMembers => Role::Admin,
         }
@@ -195,7 +202,7 @@ impl ProjectPerm {
     /// Scope an API key needs. `None` means a key cannot call the route.
     pub(crate) fn key_scope(self) -> Option<KeyScope> {
         match self {
-            Self::View => Some(KeyScope::Read),
+            Self::View | Self::Query => Some(KeyScope::Read),
             Self::Annotate => Some(KeyScope::Write),
             Self::ManageSettings | Self::ManageMembers => None,
         }
@@ -251,10 +258,13 @@ mod tests {
         assert_eq!(OrgPerm::Rename.min_role(), OrgRole::Admin);
         assert_eq!(OrgPerm::CreateProject.min_role(), OrgRole::Admin);
         assert_eq!(OrgPerm::ManageMembers.min_role(), OrgRole::Admin);
+        assert_eq!(OrgPerm::ManageConnections.min_role(), OrgRole::Admin);
         assert_eq!(ProjectPerm::View.min_role(), Role::Viewer);
         assert_eq!(ProjectPerm::ManageSettings.min_role(), Role::Admin);
         assert_eq!(ProjectPerm::ManageMembers.min_role(), Role::Admin);
         assert_eq!(ProjectPerm::View.key_scope(), Some(KeyScope::Read));
+        assert_eq!(ProjectPerm::Query.min_role(), Role::Viewer);
+        assert_eq!(ProjectPerm::Query.key_scope(), Some(KeyScope::Read));
         assert!(ProjectPerm::ManageSettings.key_scope().is_none());
         assert!(ProjectPerm::ManageMembers.key_scope().is_none());
         // Score writes: viewer no; member, admin and owner yes.

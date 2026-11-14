@@ -7,13 +7,14 @@ Synthetic data for UI mocks, the OpenAPI examples, and later storage and API tes
 | Path | Written by |
 |---|---|
 | `dataset/spans.json`, `dataset/scores.json` | hand |
-| `static/*.json` | hand |
+| `static/*.json` | hand, except `static/sql-result.json` |
 | `media/<sha256>.png` | hand |
 | `responses/` | `just api-examples`: the real read handlers over `dataset/` |
 | `manifest.json` | `just api-examples` |
+| `static/sql-result.json` | `just api-examples`: the real `run_sql` handler's answer to `requests/sql-query.json` |
 | `requests/*.json` | hand | example request bodies, checked against their types and `openapi.json` |
 
-Do not edit `responses/` or `manifest.json` by hand. Regenerate them with `just api-examples`.
+Do not edit `responses/`, `manifest.json` or `static/sql-result.json` by hand. Regenerate them with `just api-examples`.
 
 `get_schema` is checked against `static/schema.json`, which A2's catalog test also reads. `get_metrics` is generated over `[2026-01-01T10:00:00Z, 11:00:00Z)` with `bucket=10m`. Its manifest query is empty, so the mocks serve it for any range.
 
@@ -31,6 +32,7 @@ Do not edit `responses/` or `manifest.json` by hand. Regenerate them with `just 
 | API key | `01900000-0000-7000-8000-000000000200`, prefix `sk-llmobs-EXAMPL`. `api-key-created.json` uses the same synthetic `sk-llmobs-EXAMPLE0…` secret as `setup-response.json`. It is not a live key |
 | Personal token | `01900000-0000-7000-8000-000000000201`, prefix `pat-llmobs-EXAMPL`. `personal-token-created.json` uses the synthetic `pat-llmobs-EXAMPLE0…` secret. It is not a live token |
 | Invitation | `01900000-0000-7000-8000-000000000300` for `guest@example.com`. `invite-created.json` uses the synthetic accept token `EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXAMPLE0EXA`. It is not a live invitation |
+| LLM connection | `01900000-0000-7000-8000-000000000400`, `OpenAI`. `requests/llm-connection-create.json` holds a synthetic key; it is not a live key |
 | Created account | `01900000-0000-7000-8000-000000000102`, `new@example.com`. `admin-user-created.json` reuses that synthetic token in the reset link. It is not a live reset |
 | Trace ids | `a1000000000000000000000000000001` through `…0006` |
 | Span ids | `b1000000000000` plus the trace digit and the span digit. Trace 1 span 2 is `b100000000000012` |

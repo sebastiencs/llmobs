@@ -1,4 +1,5 @@
-//! Live SSE streams (spec 09 § SSE; D-G-12, D-G-34).
+//! Live SSE streams (spec 09 § SSE; D-G-12, D-G-34). Every stream ends after
+//! `StreamTiming::max_age`, or when its client stops reading for `StreamTiming::send`.
 //!
 //! A handler validates, takes a slot, subscribes to the bus, spawns one task and returns at
 //! once. The task owns the slot and the bus receiver and never holds an `AppState`.
@@ -30,7 +31,7 @@ use crate::http::AppState;
 use crate::http::access::{Access, ProjectAccess, RouteDef};
 use crate::http::error::{self, ApiError};
 use crate::live::{LiveEvent, StreamOwner, StreamSlot, StreamTiming, shut};
-use crate::routes::read::{attach_trace_scores, open_query, open_query_on};
+use crate::routes::read::{attach_trace_scores, check_search, open_query, open_query_on};
 
 /// Events the task may have queued for one client before it waits.
 const CLIENT_BUFFER: usize = 16;
@@ -128,20 +129,22 @@ async fn run_span_stream(stream: SpanStream, tx: mpsc::Sender<Event>) {
         timing,
         slot: _slot,
     } = stream;
-    if resume && tx.send(resync()).await.is_err() {
+    if resume && !send(&tx, resync(), timing.send).await {
         return;
     }
     let mut ping = interval_at(Instant::now() + timing.ping, timing.ping);
     ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut idle = Instant::now() + timing.idle;
+    let end = Instant::now() + timing.max_age;
     loop {
         tokio::select! {
             biased;
             () = shut(&mut closed) => return,
             () = tx.closed() => return,
+            () = sleep_until(end) => return,
             () = sleep_until(idle) => return,
             _ = ping.tick() => {
-                if tx.send(ping_event()).await.is_err() {
+                if !send(&tx, ping_event(), timing.send).await {
                     return;
                 }
             }
@@ -155,14 +158,14 @@ async fn run_span_stream(stream: SpanStream, tx: mpsc::Sender<Event>) {
                             tracing::warn!("a span event could not be encoded");
                             continue;
                         };
-                        if tx.send(message).await.is_err() {
+                        if !send(&tx, message, timing.send).await {
                             return;
                         }
                         idle = Instant::now() + timing.idle;
                     }
                 }
                 Err(RecvError::Lagged(_)) => {
-                    if tx.send(resync()).await.is_err() {
+                    if !send(&tx, resync(), timing.send).await {
                         return;
                     }
                 }
@@ -179,6 +182,7 @@ async fn stream_traces(
     error::Query(params): error::Query<TraceStreamParams>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    check_search(params.search.as_deref())?;
     let slot = take_slot(&state, &principal)?;
     // Subscribed before the filter is checked, so no event is missed. Both drop on an error.
     let bus = state.live.subscribe();
@@ -239,7 +243,7 @@ async fn run_trace_stream(stream: TraceStream, tx: mpsc::Sender<Event>) {
         .search
         .as_deref()
         .filter(|text| !text.trim().is_empty());
-    if resume && tx.send(resync()).await.is_err() {
+    if resume && !send(&tx, resync(), timing.send).await {
         return;
     }
     let mut ping = interval_at(Instant::now() + timing.ping, timing.ping);
@@ -249,13 +253,15 @@ async fn run_trace_stream(stream: TraceStream, tx: mpsc::Sender<Event>) {
     let mut pending = Pending::new();
     let mut matched = HashSet::new();
     let mut last_id = 0_u64;
+    let end = Instant::now() + timing.max_age;
     loop {
         tokio::select! {
             biased;
             () = shut(&mut closed) => return,
             () = tx.closed() => return,
+            () = sleep_until(end) => return,
             _ = ping.tick() => {
-                if tx.send(ping_event()).await.is_err() {
+                if !send(&tx, ping_event(), timing.send).await {
                     return;
                 }
             }
@@ -270,14 +276,14 @@ async fn run_trace_stream(stream: TraceStream, tx: mpsc::Sender<Event>) {
                     }
                     if pending.len() > MAX_REFRESH_IDS {
                         pending.clear();
-                        if tx.send(resync()).await.is_err() {
+                        if !send(&tx, resync(), timing.send).await {
                             return;
                         }
                     }
                 }
                 Err(RecvError::Lagged(_)) => {
                     pending.clear();
-                    if tx.send(resync()).await.is_err() {
+                    if !send(&tx, resync(), timing.send).await {
                         return;
                     }
                 }
@@ -297,7 +303,7 @@ async fn run_trace_stream(stream: TraceStream, tx: mpsc::Sender<Event>) {
                 };
                 match outcome {
                     Ok(refreshed) => {
-                        if refreshed.overflowed && tx.send(resync()).await.is_err() {
+                        if refreshed.overflowed && !send(&tx, resync(), timing.send).await {
                             return;
                         }
                         for row in &refreshed.rows {
@@ -305,7 +311,7 @@ async fn run_trace_stream(stream: TraceStream, tx: mpsc::Sender<Event>) {
                                 tracing::warn!("a trace event could not be encoded");
                                 continue;
                             };
-                            if tx.send(message).await.is_err() {
+                            if !send(&tx, message, timing.send).await {
                                 return;
                             }
                         }
@@ -319,7 +325,7 @@ async fn run_trace_stream(stream: TraceStream, tx: mpsc::Sender<Event>) {
                         }
                     }
                     Err(RefreshError::Resync) => {
-                        if tx.send(resync()).await.is_err() {
+                        if !send(&tx, resync(), timing.send).await {
                             return;
                         }
                     }
@@ -364,7 +370,7 @@ async fn refresh(
     batch: &Pending,
     matched: &mut HashSet<TraceId>,
 ) -> Result<Refreshed, RefreshError> {
-    let ctx = open_query_on(storage, project, None)
+    let ctx = open_query_on(storage, project, None, None)
         .await
         .map_err(|error| match error {
             ApiError::Unavailable { .. } => RefreshError::Retry,
@@ -460,6 +466,15 @@ fn search_window(batch: &Pending, ids: &[TraceId]) -> Option<TimeWindow> {
     let to = high.saturating_add(1);
     let from = low.max(high.saturating_sub(MAX_SEARCH_SPAN_NS));
     TimeWindow::new(from, to).ok()
+}
+
+/// Sends `event` to the client. `false` when the client is gone, or has not made room for it
+/// within `timeout` (G review m-1): the stream then ends.
+async fn send(tx: &mpsc::Sender<Event>, event: Event, timeout: Duration) -> bool {
+    matches!(
+        tokio::time::timeout(timeout, tx.send(event)).await,
+        Ok(Ok(()))
+    )
 }
 
 /// Takes a stream slot for the caller, or answers `429` (D-G-34).
@@ -592,6 +607,41 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn the_span_stream_ignores_other_projects() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let (other, _key) = app.add_project(&seeded, "other", None).await;
+        let mut stream = app
+            .request(axum::http::Method::GET, &stream_path(&seeded, TRACE_1))
+            .header("cookie", &seeded.cookie)
+            .send_stream()
+            .await;
+        assert_eq!(stream.status, StatusCode::OK);
+
+        let mut row = dataset_span(0);
+        row.trace_id = TRACE_1.parse::<TraceId>().unwrap();
+        row.span_id = "b100000000000008".parse::<SpanId>().unwrap();
+        row.parent_span_id = None;
+        app.commit_spans(&other, vec![row]).await;
+        assert!(
+            stream
+                .next_non_ping(Duration::from_millis(300))
+                .await
+                .is_none(),
+            "a span of another project is not sent"
+        );
+
+        commit_one(&app, &seeded, TRACE_1, "b100000000000009").await;
+        let event = stream
+            .next_non_ping(WAIT)
+            .await
+            .expect("a span of the stream's project is sent");
+        assert_eq!(event.event, "span");
+        let span: SpanSummary = serde_json::from_str(&event.data).unwrap();
+        assert_eq!(span.span_id.to_string(), "b100000000000009");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_ping_arrives_within_a_second() {
         let app = TestApp::new().await;
         let seeded = app.seed().await;
@@ -636,6 +686,29 @@ mod tests {
             .send_stream()
             .await;
         assert!(stream.body_closed(Duration::from_secs(3)).await);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_span_stream_ends_at_its_maximum_age_even_while_spans_arrive() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let mut stream = app
+            .request(axum::http::Method::GET, &stream_path(&seeded, TRACE_1))
+            .header("cookie", &seeded.cookie)
+            .send_stream()
+            .await;
+        assert_eq!(stream.status, StatusCode::OK);
+        let opened = tokio::time::Instant::now();
+        let mut closed = false;
+        for n in 0..20_u64 {
+            commit_one(&app, &seeded, TRACE_1, &format!("b1{n:014x}")).await;
+            if stream.body_closed(Duration::from_millis(300)).await {
+                closed = true;
+                break;
+            }
+        }
+        assert!(closed, "the span stream ends at its maximum age");
+        assert!(opened.elapsed() >= Duration::from_millis(3_500));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -707,6 +780,50 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert!(app.state.live.acquire(owner).is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_client_that_stops_reading_loses_its_stream_and_slot() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let owner = StreamOwner::User(user_id(&app).await);
+        let stream = app
+            .request(axum::http::Method::GET, &stream_path(&seeded, TRACE_1))
+            .header("cookie", &seeded.cookie)
+            .send_stream()
+            .await;
+        assert_eq!(stream.status, StatusCode::OK);
+        let mut held: Vec<StreamSlot> = (0..99)
+            .map(|_| app.state.live.acquire(owner).expect("a slot is free"))
+            .collect();
+        assert!(app.state.live.acquire(owner).is_none());
+
+        // One commit of 40 spans of the streamed trace: the task queues 16 events and the
+        // 17th send waits for a reader that never comes.
+        let rows: Vec<_> = (0..40_u64)
+            .map(|n| {
+                let mut row = dataset_span(0);
+                row.trace_id = TRACE_1.parse::<TraceId>().unwrap();
+                row.span_id = format!("b1{n:014x}").parse::<SpanId>().unwrap();
+                row.parent_span_id = None;
+                row
+            })
+            .collect();
+        app.commit_spans(&seeded.project, rows).await;
+
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(600);
+        loop {
+            if let Some(slot) = app.state.live.acquire(owner) {
+                held.push(slot);
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "a stalled client loses its stream and slot"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        drop(stream);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -835,6 +952,42 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn the_trace_stream_ignores_other_projects() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let (other, _key) = app.add_project(&seeded, "other", None).await;
+        let mut stream = open_traces(&app, &seeded, "").await;
+        assert_eq!(stream.status, StatusCode::OK);
+
+        let mut row = dataset_span(0);
+        row.trace_id = trace_id(70).parse::<TraceId>().unwrap();
+        row.span_id = "b100000000000070".parse::<SpanId>().unwrap();
+        row.parent_span_id = None;
+        row.name = "theirs".to_owned();
+        row.environment = Some("production".to_owned());
+        app.commit_spans(&other, vec![row]).await;
+        assert!(
+            stream
+                .next_non_ping(Duration::from_millis(300))
+                .await
+                .is_none(),
+            "a span of another project is not sent"
+        );
+
+        commit_span(
+            &app,
+            &seeded,
+            &trace_id(71),
+            "b100000000000071",
+            "mine",
+            "production",
+        )
+        .await;
+        let trace = next_trace(&mut stream).await;
+        assert_eq!(trace.trace_id.to_string(), trace_id(71));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_filter_that_matches_nothing_sends_nothing() {
         let app = TestApp::new().await;
         let seeded = app.seed().await;
@@ -871,6 +1024,34 @@ mod tests {
             .await;
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
         assert_eq!(response.json::<Value>()["code"], "invalid_filter");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_long_search_is_refused_before_the_stream_opens() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let response = app
+            .request(
+                axum::http::Method::GET,
+                &traces_stream_path(&seeded, &format!("?search={}", "a".repeat(1025))),
+            )
+            .header("cookie", &seeded.cookie)
+            .send()
+            .await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST);
+        assert_eq!(response.json::<Value>()["code"], "bad_request");
+
+        let owner = StreamOwner::User(user_id(&app).await);
+        let mut held = Vec::new();
+        for _ in 0..100 {
+            held.push(
+                app.state
+                    .live
+                    .acquire(owner)
+                    .expect("the refused request held no slot"),
+            );
+        }
+        drop(held);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -998,6 +1179,22 @@ mod tests {
         let mut stream = open_traces(&app, &seeded, "").await;
         app.state.live.close();
         assert!(stream.body_closed(Duration::from_secs(1)).await);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_trace_stream_ends_at_its_maximum_age() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let mut stream = open_traces(&app, &seeded, "").await;
+        assert_eq!(stream.status, StatusCode::OK);
+        assert!(
+            !stream.body_closed(Duration::from_secs(3)).await,
+            "open before the maximum age"
+        );
+        assert!(
+            stream.body_closed(Duration::from_secs(3)).await,
+            "closed after the maximum age"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

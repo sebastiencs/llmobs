@@ -95,13 +95,32 @@ pub(crate) enum ApiError {
     /// A2 refused or failed the query (D94). The message goes to the caller and is never logged.
     #[error("query error")]
     Query(#[source] RunError),
+    /// A2 refused or failed a SQL console statement (D94). Like [`Self::Query`], but an
+    /// invalid statement is reported on the `query` field.
+    #[error("sql error")]
+    Sql(#[source] RunError),
     /// The server failed. The source is logged; the response detail is generic.
     #[error("internal error")]
     Internal(#[source] Box<dyn StdError + Send + Sync>),
 }
 
 impl ApiError {
-    fn problem(&self) -> Problem {
+    /// Logs what the caller does not see: an internal source at `error`, a query failure's
+    /// kind at `error` (internal) or `info` (refused). Never a message or the query (D94).
+    pub(crate) fn log(&self) {
+        if let Self::Internal(source) = self {
+            tracing::error!(error = %source, "internal error");
+        }
+        if let Self::Query(error) | Self::Sql(error) = self {
+            if matches!(error, RunError::Internal(_)) {
+                tracing::error!(kind = error.kind(), "query failed");
+            } else {
+                tracing::info!(kind = error.kind(), "query refused");
+            }
+        }
+    }
+
+    pub(crate) fn problem(&self) -> Problem {
         match self {
             Self::PayloadTooLarge { detail } => {
                 Problem::new(ProblemCode::PayloadTooLarge, Some((*detail).to_owned()))
@@ -128,7 +147,8 @@ impl ApiError {
             Self::RangeNotSatisfiable { .. } => {
                 Problem::new(ProblemCode::RangeNotSatisfiable, None)
             }
-            Self::Query(error) => query_problem(error),
+            Self::Query(error) => query_problem(error, "filter", "invalid filter"),
+            Self::Sql(error) => query_problem(error, "query", "invalid query"),
             Self::Internal(_) => {
                 Problem::new(ProblemCode::Internal, Some("internal error".to_owned()))
             }
@@ -136,15 +156,13 @@ impl ApiError {
     }
 }
 
-fn query_problem(error: &RunError) -> Problem {
+fn query_problem(error: &RunError, field: &str, invalid_detail: &str) -> Problem {
     match error {
         RunError::Invalid(query) => {
-            let mut problem = Problem::new(
-                ProblemCode::InvalidFilter,
-                Some("invalid filter".to_owned()),
-            );
+            let mut problem =
+                Problem::new(ProblemCode::InvalidFilter, Some(invalid_detail.to_owned()));
             problem.errors.push(FieldError {
-                field: "filter".to_owned(),
+                field: field.to_owned(),
                 message: query.message.clone(),
                 position: query.position.map(|position| TextPosition {
                     line: position.line,
@@ -184,16 +202,7 @@ impl From<QueryError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        if let Self::Internal(source) = &self {
-            tracing::error!(error = %source, "internal error");
-        }
-        if let Self::Query(error) = &self {
-            if matches!(error, RunError::Internal(_)) {
-                tracing::error!(kind = error.kind(), "query failed");
-            } else {
-                tracing::info!(kind = error.kind(), "query refused");
-            }
-        }
+        self.log();
         let mut headers = HeaderMap::new();
         match self {
             Self::RateLimited { retry_after_s } => {
@@ -275,6 +284,18 @@ fn bad_request(detail: String) -> ApiError {
     ApiError::BadRequest {
         detail: Some(detail),
         errors: Vec::new(),
+    }
+}
+
+/// One `400 bad_request` field error. The problem has no `detail`.
+pub(crate) fn field_error(field: &str, message: &str) -> ApiError {
+    ApiError::BadRequest {
+        detail: None,
+        errors: vec![FieldError {
+            field: field.to_owned(),
+            message: message.to_owned(),
+            position: None,
+        }],
     }
 }
 
@@ -452,6 +473,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn field_error_has_no_detail() {
+        let ApiError::BadRequest { detail, errors } = field_error("name", "bad") else {
+            panic!("field_error is a bad request");
+        };
+        assert_eq!(detail, None);
+        assert_eq!(
+            errors,
+            vec![FieldError {
+                field: "name".to_owned(),
+                message: "bad".to_owned(),
+                position: None,
+            }]
+        );
+    }
+
+    #[test]
     fn invalid_filter_is_400_with_a_position() {
         let error = ApiError::Query(RunError::Invalid(InvalidQuery {
             message: "unexpected token".to_owned(),
@@ -527,5 +564,56 @@ mod tests {
         let response = error.into_response();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers().get(RETRY_AFTER).unwrap(), "1");
+    }
+
+    async fn problem_of(error: ApiError) -> (StatusCode, Problem) {
+        let response = error.into_response();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn sql_errors_name_the_query_field() {
+        let error = ApiError::Sql(RunError::Invalid(InvalidQuery {
+            message: "bad".into(),
+            position: Some(Position { line: 1, column: 3 }),
+        }));
+        let (status, problem) = problem_of(error).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(problem.code, ProblemCode::InvalidFilter);
+        assert_eq!(problem.detail.as_deref(), Some("invalid query"));
+        assert_eq!(problem.errors[0].field, "query");
+        assert_eq!(
+            problem.errors[0].position,
+            Some(TextPosition { line: 1, column: 3 })
+        );
+
+        let error = ApiError::Query(RunError::Invalid(InvalidQuery {
+            message: "bad".into(),
+            position: None,
+        }));
+        let (_, problem) = problem_of(error).await;
+        assert_eq!(problem.code, ProblemCode::InvalidFilter);
+        assert_eq!(problem.detail.as_deref(), Some("invalid filter"));
+        assert_eq!(problem.errors[0].field, "filter");
+    }
+
+    #[tokio::test]
+    async fn sql_timeout_and_memory_map_to_422() {
+        let (status, problem) = problem_of(ApiError::Sql(RunError::Timeout)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(problem.code, ProblemCode::QueryTimeout);
+
+        let (status, problem) = problem_of(ApiError::Sql(RunError::TooLarge)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(problem.code, ProblemCode::QueryTooLarge);
+
+        let (status, problem) = problem_of(ApiError::Sql(RunError::Failed("x".into()))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(problem.code, ProblemCode::QueryFailed);
+        assert_eq!(problem.detail.as_deref(), Some("x"));
     }
 }

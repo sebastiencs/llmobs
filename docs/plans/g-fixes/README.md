@@ -9,7 +9,7 @@ The work is split into 5 phases, F1–F5. One agent implements one phase. Each p
 
 **Do only the phase you were given.** If something in the phase file does not match the code, or a step fails in a way the file does not cover, stop and report: do not improvise a different design.
 
-**Status:** decisions settled with the user (2026-11-14). Nothing is implemented.
+**Status:** decisions settled with the user (2026-11-14). Implemented: F1–F5, each reviewed against its phase file.
 
 **Read first** (every phase):
 - `AGENTS.md`;

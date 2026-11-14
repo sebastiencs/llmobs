@@ -80,6 +80,12 @@ export const SHORTCUTS: readonly Shortcut[] = [
     bindings: [{ id: "fit", key: "0" }],
   },
   {
+    keys: "⌘↵",
+    description: "Run the query",
+    scope: "SQL console",
+    bindings: [],
+  },
+  {
     keys: "g then t / s / e / u / d",
     description: "Go to traces, spans, sessions, users, or dashboard",
     scope: "project",

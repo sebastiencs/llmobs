@@ -6,6 +6,7 @@
 pub mod account;
 pub mod admin;
 pub mod common;
+pub mod connections;
 pub(crate) mod convert;
 pub mod invites;
 pub mod keys;
@@ -17,5 +18,6 @@ pub mod saved_views;
 pub mod schema;
 pub mod scores;
 pub mod sessions;
+pub mod sql;
 pub mod traces;
 pub mod users;

@@ -16,6 +16,9 @@ use llmobs_server::api::account::{
 };
 use llmobs_server::api::admin::{AdminSettings, AdminUser, CreatedAdminUser};
 use llmobs_server::api::common::Page;
+use llmobs_server::api::connections::{
+    CreateLlmConnectionRequest, LlmConnection, LlmConnectionTestResult,
+};
 use llmobs_server::api::invites::{CreatedInvite, Invite, InvitePreview};
 use llmobs_server::api::keys::{ApiKey, CreatedApiKey, CreatedPersonalToken, PersonalToken};
 use llmobs_server::api::members::{OrgMember, ProjectMember};
@@ -26,6 +29,7 @@ use llmobs_server::api::saved_views::SavedView;
 use llmobs_server::api::schema::SchemaResponse;
 use llmobs_server::api::scores::{FeedbackRequest, ScoreBatch};
 use llmobs_server::api::sessions::{SessionDetail, SessionSummary};
+use llmobs_server::api::sql::{SqlQueryRequest, SqlQueryResult};
 use llmobs_server::api::traces::{SpanDetail, SpanSummary, TraceDetail, TraceSummary};
 use llmobs_server::api::users::{EndUserDetail, EndUserSummary};
 use serde::de::DeserializeOwned;
@@ -368,16 +372,22 @@ fn static_files_match_their_types() {
     roundtrip::<Project>("static/project.json");
     roundtrip::<Page<ApiKey>>("static/api-keys.json");
     roundtrip::<CreatedApiKey>("static/api-key-created.json");
+    roundtrip::<Page<LlmConnection>>("static/llm-connections.json");
+    roundtrip::<LlmConnection>("static/llm-connection.json");
+    roundtrip::<LlmConnectionTestResult>("static/llm-connection-test.json");
     roundtrip::<Page<PersonalToken>>("static/personal-tokens.json");
     roundtrip::<CreatedPersonalToken>("static/personal-token-created.json");
     roundtrip::<SchemaResponse>("static/schema.json");
     roundtrip::<Page<SavedView>>("static/saved-views.json");
+    roundtrip::<SqlQueryResult>("static/sql-result.json");
 }
 
 #[test]
 fn request_examples_match_their_types_and_the_openapi_document() {
     roundtrip::<ScoreBatch>("requests/score-batch.json");
     roundtrip::<FeedbackRequest>("requests/feedback.json");
+    roundtrip::<CreateLlmConnectionRequest>("requests/llm-connection-create.json");
+    roundtrip::<SqlQueryRequest>("requests/sql-query.json");
     let document = read_json::<Value>(&contract_document());
     let registry = jsonschema::Registry::new()
         .add(OPENAPI_URI, document.clone())
@@ -387,6 +397,8 @@ fn request_examples_match_their_types_and_the_openapi_document() {
     let requests = [
         ("create_key_scores", "requests/score-batch.json"),
         ("post_feedback", "requests/feedback.json"),
+        ("post_llm_connection", "requests/llm-connection-create.json"),
+        ("run_sql", "requests/sql-query.json"),
     ];
     let mut failures = Vec::new();
     for (operation_id, file) in requests {
@@ -452,6 +464,7 @@ fn generated_files_roundtrip() {
             "list_personal_tokens" => roundtrip::<Page<PersonalToken>>(&example.file),
             "post_personal_token" => roundtrip::<CreatedPersonalToken>(&example.file),
             "get_metrics" => roundtrip::<MetricsResponse>(&example.file),
+            "run_sql" => roundtrip::<SqlQueryResult>(&example.file),
             "get_auth_config"
             | "get_me"
             | "list_orgs"
@@ -471,6 +484,11 @@ fn generated_files_roundtrip() {
             | "list_admin_users"
             | "post_admin_user"
             | "get_admin_settings" => {}
+            "list_llm_connections" => roundtrip::<Page<LlmConnection>>(&example.file),
+            "get_llm_connection" | "post_llm_connection" => {
+                roundtrip::<LlmConnection>(&example.file);
+            }
+            "post_llm_connection_test" => roundtrip::<LlmConnectionTestResult>(&example.file),
             other => panic!("{other} has no round-trip"),
         }
     }

@@ -66,7 +66,7 @@ const MAX_TRACES: usize = 100;
 const VALUE_CUT: usize = 200;
 /// The note added when [`cut_values`] cut something.
 const CUT_NOTE: &str =
-    "metadata, attribute and preview values longer than 200 characters were cut to 200 characters plus …";
+    "metadata, attribute and preview values longer than 200 characters were cut to 200 characters";
 /// The two preview fields of trace and span summaries.
 const PREVIEWS: [&str; 2] = ["input_preview", "output_preview"];
 /// The fields of a span detail that can be large. They are cut, all to the same length, only
@@ -297,7 +297,7 @@ Body:
 ///
 /// When it does not fit, every `HEAVY` field that is present, not `null`, and whose compact
 /// JSON (`render`) is longer than `n` characters is replaced by the string
-/// `output::cut(&render(field), n)` (its JSON text cut to `n` characters plus `…`), and the
+/// `output::cut(&render(field), n)` (its JSON text cut to `n` characters in total), and the
 /// note `"fields cut to {n} characters of their JSON text: {names}"` is appended (`names` =
 /// the cut fields in `HEAVY` order, joined with ", "). `n` is the largest value in
 /// `0..=max_chars` for which the whole body fits, found by binary search; if even `n = 0`
@@ -458,9 +458,9 @@ async fn insert(app: &TestApp, project_id: ProjectId, owner: Uuid, kind: SavedVi
 
 **Long values in all three tools.** `values_are_cut_to_200_characters`: build one more span from `dataset_span(13)` (trace 6's only span) and commit it with `app.commit_spans(&seeded.project, vec![span]).await`, after setting: `trace_id = TraceId::from_str("a1000000000000000000000000000007").unwrap()`, `span_id = SpanId::from_str("b100000000000071").unwrap()`, `parent_span_id = None`, `name = "long-values".to_owned()`, `start_time = 1_767_264_000_000_000_000` (10:40 UTC), `end_time = start_time + 1_000_000_000`, `metadata = {"note": 300 × "m"}`, `attributes = {"long": 300 × "a"}`, `resource_attributes = {"svc.long": 300 × "r"}`, `input_preview = Some(300 × "i")`, `output_preview = Some(300 × "o")`. Then:
 
-- `search_traces` with `"from": "2026-01-01T10:35:00Z"`: one trace, `trace_id` `…007`; its `metadata.note`, `input_preview` and `output_preview` have 201 characters ending with `…`; `notes` = `[CUT_NOTE]`.
-- `get_trace` of `…007` with `"include_payloads": true`: `trace.metadata.note`, `trace.input_preview`, `spans[0].span.metadata.note` and `spans[0].span.input_preview` have 201 characters; `notes` = `[CUT_NOTE]`. Without `include_payloads`: no preview keys, `spans[0].span.metadata.note` has 201 characters, `notes` = `[CUT_NOTE]`.
-- `get_span` of `…007` / `b100000000000071`: `metadata.note`, `attributes.long`, `resource_attributes["svc.long"]`, `input_preview` and `output_preview` have 201 characters; `notes` = `[CUT_NOTE]`.
+- `search_traces` with `"from": "2026-01-01T10:35:00Z"`: one trace, `trace_id` `…007`; its `metadata.note`, `input_preview` and `output_preview` have 200 characters ending with `…`; `notes` = `[CUT_NOTE]`.
+- `get_trace` of `…007` with `"include_payloads": true`: `trace.metadata.note`, `trace.input_preview`, `spans[0].span.metadata.note` and `spans[0].span.input_preview` have 200 characters; `notes` = `[CUT_NOTE]`. Without `include_payloads`: no preview keys, `spans[0].span.metadata.note` has 200 characters, `notes` = `[CUT_NOTE]`.
+- `get_span` of `…007` / `b100000000000071`: `metadata.note`, `attributes.long`, `resource_attributes["svc.long"]`, `input_preview` and `output_preview` have 200 characters; `notes` = `[CUT_NOTE]`.
 
 **Logs**
 
@@ -470,10 +470,10 @@ async fn insert(app: &TestApp, project_id: ProjectId, owner: Uuid, kind: SavedVi
 
 **Unit tests** (plain `#[test]`)
 
-- `cut_values_cuts_maps_and_strings`: object `{"metadata": {"a": <300 × x>, "b": "short", "n": 5}, "input_preview": <250 × y>, "output_preview": null, "other": <300 × z>}`; `cut_values(&mut o, &["metadata"], &PREVIEWS)` → `true`; `metadata.a` has 201 characters ending with `…`; `metadata.b` = `"short"`; `metadata.n` = `5`; `input_preview` has 201 characters; `output_preview` is `null`; `other` keeps 300. A second call returns `false`.
+- `cut_values_cuts_maps_and_strings`: object `{"metadata": {"a": <300 × x>, "b": "short", "n": 5}, "input_preview": <250 × y>, "output_preview": null, "other": <300 × z>}`; `cut_values(&mut o, &["metadata"], &PREVIEWS)` → `true`; `metadata.a` has 200 characters ending with `…`; `metadata.b` = `"short"`; `metadata.n` = `5`; `input_preview` has 200 characters; `output_preview` is `null`; `other` keeps 300. A second call returns `false`.
 - `compact_summary_drops_previews_when_asked`: `compact_summary(json!({"input_preview": "a", "output_preview": "b", "name": "n"}), false)` → `(json!({"name": "n"}), false)`.
 - `fit_span_returns_a_fitting_span_unchanged`: span `{"span_id": "x", "input": {"format": "text", "value": "hi"}}`, no notes, `max_chars` 1000 → `{"span": {…same…}, "notes": []}`.
-- `fit_span_cuts_heavy_fields_only`: span `{"span_id": "x", "input": {"format": "text", "value": <5000 × a>}, "output": {"format": "text", "value": <5000 × b>}, "events": null}`; `max_chars` 1000 → rendered length ≤ 1000; `span.span_id` = `"x"`; `span.events` is `null` (null is never cut); `span.input` and `span.output` are strings ending with `…` with equal character counts `c`; `notes` = `[format!("fields cut to {} characters of their JSON text: input, output", c - 1)]`.
+- `fit_span_cuts_heavy_fields_only`: span `{"span_id": "x", "input": {"format": "text", "value": <5000 × a>}, "output": {"format": "text", "value": <5000 × b>}, "events": null}`; `max_chars` 1000 → rendered length ≤ 1000; `span.span_id` = `"x"`; `span.events` is `null` (null is never cut); `span.input` and `span.output` are strings ending with `…` with equal character counts `c`; `notes` = `[format!("fields cut to {} characters of their JSON text: input, output", c)]`.
 - `fit_span_reports_when_nothing_fits`: span with `"metadata"` holding 100 keys `k0`…`k99`, each a 190-character value (not heavy), `max_chars` 1000 → the last note is `"the span exceeds max_chars even with its large fields cut"`.
 - `bounded_limits`: `bounded(None, 20, 100, "m")` = `Ok(20)`; `Some(100)` → `Ok(100)`; `Some(0)`, `Some(101)`, `Some(-1)` → `Err(ApiError::BadRequest { .. })`.
 

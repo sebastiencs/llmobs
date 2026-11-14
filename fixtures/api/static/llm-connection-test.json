@@ -1,0 +1,5 @@
+{
+  "ok": true,
+  "model": "gpt-5-mini",
+  "latency_ms": 420
+}

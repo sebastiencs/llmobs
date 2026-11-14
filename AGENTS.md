@@ -31,7 +31,7 @@ If the code has to deviate from the spec, update the spec **in the same change**
 
 ## Rules
 
-**No compatibility layers.** When a type, function, format, config key or protocol field changes, update every caller and delete the old path in the same change. No shims, aliases, `#[deprecated]` wrappers, versioned codecs, feature flags or dual read/write paths.
+**No compatibility layers.** When a type, function, format, config key or protocol field changes, update every caller and delete the old path in the same change. No shims, aliases, `#[deprecated]` wrappers, versioned codecs, feature flags or dual read/write paths. Entitlement checks (what a plan or licence allows, D179) are product behaviour, not feature flags.
 
 **No unnecessary abstractions.**
 - Prefer concrete types and plain functions.
@@ -146,7 +146,7 @@ Run everything through `just`:
 | `just capture <group>/<case>` | record an OTLP fixture from a scenario, e.g. `just capture openinference/openai-chat-tool` |
 | `just capture-all` | recapture every scenario |
 | `just check-capture` | lint and type-check the capture scenarios, then recapture every scenario and compare (timing excluded) |
-| `just e2e` | run the Python and TypeScript SDKs against a real `llmobs serve` (D-G-20) |
+| `just e2e` | build the web, run the Rust e2e tests with the UI embedded, then the Python and TypeScript SDK suites against a real `llmobs serve` |
 
 Required tools:
 - `rustup` (the toolchain is pinned in `rust-toolchain.toml`)

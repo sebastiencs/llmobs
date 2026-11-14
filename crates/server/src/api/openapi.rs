@@ -34,6 +34,11 @@ use super::admin::{
     UpdateAdminUserRequest,
 };
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
+use super::connections::{
+    ConnectionStatus, CreateLlmConnectionRequest, LlmAdapter, LlmConnection,
+    LlmConnectionTestError, LlmConnectionTestResult, StructuredOutputMode, TestErrorClass,
+    TestLlmConnectionRequest, UpdateLlmConnectionRequest,
+};
 use super::invites::{CreateInviteRequest, CreatedInvite, Invite, InvitePreview};
 use super::keys::{
     ApiKey as ProjectApiKey, CreateApiKeyRequest, CreatePersonalTokenRequest, CreatedApiKey,
@@ -48,6 +53,7 @@ use super::scores::{
     ScoreWriteResult,
 };
 use super::sessions::{SessionDetail, SessionListParams, SessionSort, SessionSummary};
+use super::sql::{SqlColumnInfo, SqlQueryRequest, SqlQueryResult};
 use super::traces::{
     SpanDetail, SpanListParams, SpanSort, SpanSummary, TraceDetail, TraceDetailParams,
     TraceListParams, TraceSort, TraceStreamParams, TraceSummary,
@@ -136,6 +142,17 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<PersonalToken>();
     set.insert::<CreatedPersonalToken>();
     set.insert::<CreatePersonalTokenRequest>();
+    set.insert::<LlmAdapter>();
+    set.insert::<StructuredOutputMode>();
+    set.insert::<ConnectionStatus>();
+    set.insert::<TestErrorClass>();
+    set.insert::<LlmConnection>();
+    set.insert::<CreateLlmConnectionRequest>();
+    set.insert::<UpdateLlmConnectionRequest>();
+    set.insert::<TestLlmConnectionRequest>();
+    set.insert::<LlmConnectionTestError>();
+    set.insert::<LlmConnectionTestResult>();
+    set.insert_page::<LlmConnection>("LlmConnectionPage");
     set.insert::<TraceSummary>();
     set.insert::<SpanSummary>();
     set.insert::<TraceDetail>();
@@ -156,6 +173,9 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<CreateSavedView>();
     set.insert::<UpdateSavedView>();
     set.insert::<MetricsResponse>();
+    set.insert::<SqlQueryRequest>();
+    set.insert::<SqlQueryResult>();
+    set.insert::<SqlColumnInfo>();
     set.insert_page::<TraceSummary>("TracePage");
     set.insert_page::<SpanSummary>("SpanPage");
     set.insert_page::<SessionSummary>("SessionPage");
@@ -239,6 +259,10 @@ pub fn openapi() -> OpenApi {
                 "Instance administrators: accounts and the effective settings.",
             ),
             tag("orgs", "Organizations the caller belongs to."),
+            tag(
+                "llm_connections",
+                "LLM provider connections that evaluators use. Keys are write-only.",
+            ),
             tag("projects", "Projects the caller can see."),
             tag("traces", "Trace list, detail, and live streams."),
             tag("spans", "Span list and detail."),
@@ -247,6 +271,7 @@ pub fn openapi() -> OpenApi {
             tag("scores", "Scores attached to spans, traces, and sessions."),
             tag("schema", "Filter and SQL catalog."),
             tag("saved_views", "Saved list views and SQL queries."),
+            tag("sql", "SQL console over the project's views."),
             tag("metrics", "Dashboard metrics."),
             tag("media", "Extracted media blobs."),
         ]))
@@ -518,12 +543,14 @@ fn paths() -> Paths {
     let paths = invite_paths(paths);
     let paths = project_paths(paths);
     let paths = member_paths(paths);
+    let paths = connection_paths(paths);
     let paths = api_key_paths(paths);
     let paths = token_paths(paths);
     let paths = trace_paths(paths);
     let paths = session_paths(paths);
     let paths = score_paths(paths);
     let paths = saved_view_paths(paths);
+    let paths = sql_paths(paths);
     media_paths(paths).build()
 }
 
@@ -1119,6 +1146,111 @@ fn member_paths(paths: PathsBuilder) -> PathsBuilder {
         )
 }
 
+fn connection_paths(paths: PathsBuilder) -> PathsBuilder {
+    let org = path_string("org", "Org UUID or slug.");
+    let id = path_uuid("id", "Connection id.");
+    let list = operation(
+        "list_llm_connections",
+        "llm_connections",
+        "List LLM connections",
+    )
+    .description(Some("Any member of the organization."))
+    .parameters(Some(with_query::<PageParams>(vec![org.clone()])))
+    .responses(responses(
+        "200",
+        json_named(
+            "LlmConnectionPage",
+            "One page of connections, ordered by name. Keys and header values are not included.",
+        ),
+        QUERY_ERRORS,
+    ))
+    .build();
+    let create = operation(
+        "post_llm_connection",
+        "llm_connections",
+        "Create an LLM connection",
+    )
+    .description(Some("Organization admins and owners."))
+    .parameters(Some(vec![org.clone()]))
+    .request_body(Some(json_body("CreateLlmConnectionRequest")))
+    .responses(responses(
+        "201",
+        json_of::<LlmConnection>("The connection."),
+        &[400, 401, 403, 404, 409, 429],
+    ))
+    .build();
+    let get = operation(
+        "get_llm_connection",
+        "llm_connections",
+        "Get an LLM connection",
+    )
+    .description(Some("Any member of the organization."))
+    .parameters(Some(vec![org.clone(), id.clone()]))
+    .responses(responses(
+        "200",
+        json_of::<LlmConnection>("The connection."),
+        &[400, 401, 403, 404, 429],
+    ))
+    .build();
+    let patch = operation(
+        "patch_llm_connection",
+        "llm_connections",
+        "Update an LLM connection",
+    )
+    .description(Some("Organization admins and owners."))
+    .parameters(Some(vec![org.clone(), id.clone()]))
+    .request_body(Some(json_body("UpdateLlmConnectionRequest")))
+    .responses(responses(
+        "200",
+        json_of::<LlmConnection>("The connection."),
+        &[400, 401, 403, 404, 409, 429],
+    ))
+    .build();
+    let delete = operation(
+        "delete_llm_connection",
+        "llm_connections",
+        "Delete an LLM connection",
+    )
+    .description(Some("Organization admins and owners."))
+    .parameters(Some(vec![org.clone(), id.clone()]))
+    .responses(responses(
+        "204",
+        ResponseBuilder::new()
+            .description("The connection is deleted.")
+            .build(),
+        &[400, 401, 403, 404, 429],
+    ))
+    .build();
+    let test = operation(
+        "post_llm_connection_test",
+        "llm_connections",
+        "Test an LLM connection",
+    )
+    .description(Some("Organization admins and owners."))
+    .parameters(Some(vec![org, id]))
+    .request_body(Some(json_body("TestLlmConnectionRequest")))
+    .responses(responses(
+        "200",
+        json_of::<LlmConnectionTestResult>(
+            "The outcome. A provider failure is ok: false, not an error status.",
+        ),
+        &[400, 401, 403, 404, 429],
+    ))
+    .build();
+    let mut collection = PathItem::new(HttpMethod::Get, list);
+    collection.post = Some(create);
+    let mut connection = PathItem::new(HttpMethod::Get, get);
+    connection.patch = Some(patch);
+    connection.delete = Some(delete);
+    paths
+        .path("/api/v1/orgs/{org}/llm-connections", collection)
+        .path("/api/v1/orgs/{org}/llm-connections/{id}", connection)
+        .path(
+            "/api/v1/orgs/{org}/llm-connections/{id}/test",
+            PathItem::new(HttpMethod::Post, test),
+        )
+}
+
 fn api_key_paths(paths: PathsBuilder) -> PathsBuilder {
     let session_only = vec![SecurityRequirement::new("session", [] as [&str; 0])];
     let list = operation("list_api_keys", "projects", "List API keys")
@@ -1523,8 +1655,30 @@ fn score_paths(paths: PathsBuilder) -> PathsBuilder {
         )
 }
 
+fn sql_paths(paths: PathsBuilder) -> PathsBuilder {
+    let run = operation("run_sql", "sql", "Run a SQL query")
+        .description(Some(
+            "Runs one read-only statement over the project's `spans`, `traces`, `sessions` and `scores` views (spec 05 § SQL console). `from` and `to` window `spans` and `traces` on `start_time` and `scores` on `created_at`. Without them the query reads all history. At most 10,000 rows; `truncated` says when more matched. SQL errors are `invalid_filter` on the `query` field, with a `position` when one is known. Exports stream; an error before the first row is a problem document, a later one cuts the transfer. `timeout_ms` bounds the whole export.",
+        ))
+        .parameters(Some(vec![project_param()]))
+        .request_body(Some(json_body("SqlQueryRequest")))
+        .responses(responses(
+            "200",
+            sql_result(),
+            &[400, 401, 403, 404, 413, 415, 422, 429, 503],
+        ))
+        .build();
+    paths.path(
+        format!("{PROJECT}/sql"),
+        PathItem::new(HttpMethod::Post, run),
+    )
+}
+
 fn saved_view_paths(paths: PathsBuilder) -> PathsBuilder {
     let list = operation("list_saved_views", "saved_views", "List saved views")
+        .description(Some(
+            "Views the caller can see: their own and every shared view. An API key sees shared views. Ordered by id (creation order).",
+        ))
         .parameters(Some(with_query::<SavedViewListParams>(vec![
             project_param(),
         ])))
@@ -1535,15 +1689,21 @@ fn saved_view_paths(paths: PathsBuilder) -> PathsBuilder {
         ))
         .build();
     let create = operation("create_saved_view", "saved_views", "Create a saved view")
+        .description(Some(
+            "Creates a view owned by the caller. Sharing needs role member. At most 1,000 views per user and project (409). A session or a read-write personal access token; API keys cannot write saved views.",
+        ))
         .parameters(Some(vec![project_param()]))
         .request_body(Some(json_body("CreateSavedView")))
         .responses(responses(
             "201",
             json_of::<SavedView>("The created saved view."),
-            QUERY_ERRORS,
+            &[400, 401, 403, 404, 409, 413, 415, 429],
         ))
         .build();
     let update = operation("update_saved_view", "saved_views", "Update a saved view")
+        .description(Some(
+            "The owner changes name, state, shared and is_default; sharing, or editing a shared view, needs role member. A project admin may also unshare another user's shared view. Setting is_default clears the other default of the same scope: the caller's private views of that kind, or the project's shared views of that kind.",
+        ))
         .parameters(Some(vec![
             project_param(),
             path_uuid("id", "Saved view id."),
@@ -1552,10 +1712,13 @@ fn saved_view_paths(paths: PathsBuilder) -> PathsBuilder {
         .responses(responses(
             "200",
             json_of::<SavedView>("The updated saved view."),
-            QUERY_ERRORS,
+            &[400, 401, 403, 404, 409, 413, 415, 429],
         ))
         .build();
     let delete = operation("delete_saved_view", "saved_views", "Delete a saved view")
+        .description(Some(
+            "The owner deletes their view, at any role. A project admin may also delete another user's shared view.",
+        ))
         .parameters(Some(vec![
             project_param(),
             path_uuid("id", "Saved view id."),
@@ -1563,7 +1726,7 @@ fn saved_view_paths(paths: PathsBuilder) -> PathsBuilder {
         .responses(responses(
             "204",
             ResponseBuilder::new().description("Deleted.").build(),
-            AUTH_ERRORS,
+            QUERY_ERRORS,
         ))
         .build();
     paths
@@ -1756,14 +1919,35 @@ fn binary(description: &str) -> Response {
 }
 
 fn media_bytes() -> Content {
-    Content::new(Some(
-        ObjectBuilder::new()
-            .schema_type(Type::String)
-            .format(Some(SchemaFormat::KnownFormat(KnownFormat::Binary)))
-            .description(Some(
-                "Bytes of the blob. The response Content-Type is the blob's MIME type.",
-            )),
-    ))
+    Content::new(Some(binary_string().description(Some(
+        "Bytes of the blob. The response Content-Type is the blob's MIME type.",
+    ))))
+}
+
+/// `type: string, format: binary`.
+fn binary_string() -> ObjectBuilder {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .format(Some(SchemaFormat::KnownFormat(KnownFormat::Binary)))
+}
+
+/// The `200` of `run_sql`: the JSON result first, then the three export types (D-H-8).
+fn sql_result() -> Response {
+    ResponseBuilder::new()
+        .description(
+            "Columns and rows as JSON. With `Accept: text/csv`, `application/x-ndjson` or `application/vnd.apache.parquet`, the whole result in that format instead (at most 10,000,000 rows; `limit` is validated but not applied; exports need role member), with `Content-Disposition: attachment`. The first of those types in `Accept`, or `application/json`, decides; anything else is JSON.",
+        )
+        .content(
+            "application/json",
+            Content::new(Some(Ref::from_schema_name(SqlQueryResult::name()))),
+        )
+        .content("text/csv", Content::new(Some(string_schema())))
+        .content("application/x-ndjson", Content::new(Some(string_schema())))
+        .content(
+            "application/vnd.apache.parquet",
+            Content::new(Some(binary_string())),
+        )
+        .build()
 }
 
 fn responses(status: &str, success: Response, errors: &[u16]) -> Responses {
@@ -1790,6 +1974,7 @@ fn problem(code: u16) -> Response {
         409 => "The request conflicts with the current state.",
         413 => "The request body is larger than the limit.",
         416 => "The Range header does not overlap the blob.",
+        415 => "The request body is not JSON.",
         422 => "The query took longer than its time limit or needed more memory than allowed.",
         429 => "Too many requests.",
         503 => "The server is busy or a dependency is unavailable. Retry later.",

@@ -1,0 +1,9 @@
+{
+  "query": "SELECT span_kind, count(*) AS spans, min(start_time) AS first_start FROM spans WHERE environment = {env:String} GROUP BY span_kind ORDER BY span_kind",
+  "params": {
+    "env": "production"
+  },
+  "from": "2026-01-01T10:00:00Z",
+  "to": "2026-01-01T11:00:00Z",
+  "limit": 100
+}

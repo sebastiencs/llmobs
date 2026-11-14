@@ -128,6 +128,12 @@ axum = { version = "0.8.9", default-features = false, features = [
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
 # Session cookie parsing (P9). Default features stay off so `axum/tracing` is not enabled (D150).
 axum-extra = { version = "0.12.6", default-features = false, features = ["cookie"] }
+# MCP server (D-H-2): streamable HTTP, stateless, JSON responses. `server` gives
+# `ServerHandler`; no `macros`: the server implements it by hand.
+rmcp = { version = "3.10.0", default-features = false, features = [
+    "server",
+    "transport-streamable-http-server",
+] }
 # Field path of a JSON or query error, without the rejected value (P4).
 serde_path_to_error = "0.1.20"
 # Email normalization: trim, NFC, lowercase (P6, D136).
@@ -196,6 +202,8 @@ openidconnect = { version = "4.1.0", default-features = false, features = ["reqw
 oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest", "rustls-tls"] }
 # HMAC-SHA256 for webhook signatures (D165) and the OAuth state cookie (P24). RustCrypto 0.13, matching `sha2` 0.11.
 hmac = "0.13.0"
+# AES-256-GCM for sealed columns (D-I-2). Nonces come from the server's own random source, so the `getrandom` feature is not needed.
+aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "alloc"] }
 # Constant-time compare of token hashes.
 subtle = "2.6.1"
 # OpenAPI 3.1 schemas. `uuid` enables the `format: uuid` schema. Do not enable

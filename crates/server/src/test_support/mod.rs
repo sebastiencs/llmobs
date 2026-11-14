@@ -2,6 +2,7 @@
 #![cfg(test)]
 
 pub(crate) mod mock_idp;
+pub(crate) mod mock_llm;
 
 use std::future::Future;
 use std::io::{self, Write};
@@ -41,19 +42,24 @@ use crate::auth::secret::{self, KeyKind, NewKey};
 use crate::auth::session::start_session;
 use crate::clock::Clock;
 use crate::config::{
-    AuthSettings, IngestConfig, InitConfig, LogConfig, MediaConfig, PublicUrl, ServerConfig,
+    AuthSettings, EvalConfig, IngestConfig, InitConfig, LogConfig, MediaConfig, PublicUrl,
+    SecurityConfig, ServerConfig,
 };
 use crate::http::access::RouteDef;
 use crate::http::{AppInner, AppState, router, router_with, serve_router};
 use crate::meta::api_keys::{self, NewApiKey};
 use crate::meta::members::add_org_member;
 use crate::meta::orgs::insert_org;
+use crate::meta::personal_tokens::{NewToken, insert_token};
 use crate::meta::projects::{ProjectRow, insert_project};
 use crate::meta::users::{self, NewUser, insert_user};
 use crate::meta::{MetaDb, MetaError};
 
 /// `2026-01-01T00:00:00Z`.
 const MANUAL_NOW_NS: i64 = 1_767_225_600_000_000_000;
+
+/// The key every test `SecretBox` is built from (D-I-2).
+pub(crate) const TEST_KEY: [u8; 32] = [7; 32];
 
 /// One process's data directory and router.
 pub(crate) struct TestApp {
@@ -87,6 +93,25 @@ impl TestApp {
         routes: Router<AppState>,
     ) -> Self {
         Self::open(tweak, Some(routes), None, false, None, None).await
+    }
+
+    /// Serves this app's router on `127.0.0.1` at an ephemeral port, in a background task that
+    /// ends with the test's runtime. Returns the address. For tests that need a real socket
+    /// (how hyper ends a failed body).
+    pub(crate) async fn serve_loopback(&self) -> SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a loopback port");
+        let addr = listener.local_addr().expect("loopback address");
+        let router = self.router.clone();
+        tokio::spawn(async move {
+            let _ = axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await;
+        });
+        addr
     }
 
     /// The given route table instead of the server's, with the same layers.
@@ -139,6 +164,20 @@ impl TestApp {
             .await
             .expect("storage opens");
         let meta = MetaDb::open(&config.data_dir).await.expect("meta.db opens");
+        let secrets = crate::crypto::SecretBox::new(&TEST_KEY);
+        crate::crypto::verify_or_record(
+            &meta,
+            &secrets,
+            &crate::crypto::key_path(&config.data_dir),
+        )
+        .await
+        .expect("check value");
+        let eval_runner = Arc::new(
+            llmobs_eval::EvalRunner::new(llmobs_eval::EgressPolicy {
+                allow_private_network: config.security.allow_private_network_egress,
+            })
+            .expect("eval runner"),
+        );
         let mailer = if stub_mailer {
             let from = format!("{PRODUCT} <noreply@example.com>");
             Some(Arc::new(crate::email::Mailer::stub(&from)))
@@ -180,6 +219,9 @@ impl TestApp {
             live: crate::live::LiveBus::new(crate::live::StreamTiming::TEST),
             metrics_cache: crate::routes::metrics::MetricsCache::default(),
             usage: crate::usage::Usage::default(),
+            secrets,
+            eval_runner,
+            connections: crate::eval::connection::ConnectionCache::default(),
         });
         let router = if let Some(table) = table {
             serve_router(state.clone(), table)
@@ -212,6 +254,8 @@ impl TestApp {
 /// A user (`ada@example.com`, instance admin), an org `acme` they own, a
 /// project `support-bot`, a session cookie, and one `sk` key per scope set.
 pub(crate) struct Seeded {
+    /// `ada@example.com`'s `users.id`.
+    pub(crate) user_id: Uuid,
     pub(crate) org_id: OrgId,
     pub(crate) project: ProjectRow,
     pub(crate) cookie: String,
@@ -269,6 +313,7 @@ impl TestApp {
             .unwrap();
         let cookie = session_cookie(self, user_id).await;
         Seeded {
+            user_id,
             org_id,
             project,
             cookie,
@@ -319,6 +364,86 @@ impl TestApp {
             .await
             .unwrap();
         (project, plaintext)
+    }
+}
+
+/// A user added to `seeded`'s org by [`TestApp::add_member`].
+#[derive(Debug, Clone)]
+pub(crate) struct Member {
+    /// `users.id`.
+    pub(crate) id: Uuid,
+    /// `llmobs_session=…`, ready for a `cookie` header.
+    pub(crate) cookie: String,
+}
+
+impl TestApp {
+    /// A new user `email` with org role `role` in `seeded`'s org (no project override), and a
+    /// session cookie for them.
+    pub(crate) async fn add_member(&self, seeded: &Seeded, email: &str, role: OrgRole) -> Member {
+        let now = self.state.clock.now_ns();
+        let org_id = seeded.org_id;
+        let email = email.to_owned();
+        let id = self
+            .state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    let user = insert_user(
+                        conn,
+                        NewUser {
+                            email,
+                            name: None,
+                            password_hash: None,
+                            email_verified_at: None,
+                            is_instance_admin: false,
+                        },
+                        now,
+                    )
+                    .await?;
+                    add_org_member(conn, org_id, user.id, role, now).await?;
+                    Ok(user.id)
+                })
+            })
+            .await
+            .unwrap();
+        let cookie = session_cookie(self, id).await;
+        Member { id, cookie }
+    }
+
+    /// A personal access token for `user_id`, returned as its plaintext: scope `read`, plus
+    /// `write` when `write` is true.
+    pub(crate) async fn personal_token(&self, user_id: Uuid, write: bool) -> String {
+        let minted = secret::new_key(KeyKind::Personal).unwrap();
+        let plaintext = minted.plaintext.clone();
+        let now = self.state.clock.now_ns();
+        let scopes = if write {
+            vec![KeyScope::Read, KeyScope::Write]
+        } else {
+            vec![KeyScope::Read]
+        };
+        self.state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    insert_token(
+                        conn,
+                        NewToken {
+                            user_id,
+                            name: "test".to_owned(),
+                            prefix: minted.prefix,
+                            hash: minted.hash,
+                            scopes,
+                            expires_at: None,
+                        },
+                        now,
+                    )
+                    .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
+        plaintext
     }
 }
 
@@ -527,6 +652,9 @@ fn default_config(data_dir: &std::path::Path) -> ServerConfig {
         },
         ingest: IngestConfig::default(),
         media: MediaConfig::default(),
+        eval: EvalConfig::default(),
+        security: SecurityConfig::default(),
+        encryption_key: None,
         auth: AuthSettings::default(),
         smtp_url: None,
         email_from: None,
@@ -667,7 +795,8 @@ impl TestResponse {
     }
 }
 
-/// A streaming response, read event by event (D-G-12). Dropping it ends the stream.
+/// A streaming response: read event by event (D-G-12) or frame by frame. Dropping it ends the
+/// stream.
 pub(crate) struct TestStream {
     pub(crate) status: StatusCode,
     pub(crate) headers: HeaderMap,
@@ -685,6 +814,45 @@ pub(crate) struct SseEvent {
 }
 
 impl TestStream {
+    /// Reads data frames until the body ends or fails. Returns the bytes and whether the body
+    /// ended with an error. Panics when it does not end within `wait`.
+    pub(crate) async fn read_to_end(&mut self, wait: Duration) -> (Vec<u8>, bool) {
+        let read = async {
+            let mut bytes = Vec::new();
+            loop {
+                match self.body.frame().await {
+                    Some(Ok(frame)) => {
+                        if let Ok(data) = frame.into_data() {
+                            bytes.extend_from_slice(&data);
+                        }
+                    }
+                    Some(Err(_)) => return (bytes, true),
+                    None => return (bytes, false),
+                }
+            }
+        };
+        tokio::time::timeout(wait, read)
+            .await
+            .unwrap_or_else(|_| panic!("body did not end"))
+    }
+
+    /// The next data frame, or `None` when the body ends, fails, or `wait` passes first.
+    pub(crate) async fn next_frame(&mut self, wait: Duration) -> Option<Bytes> {
+        let next = async {
+            loop {
+                match self.body.frame().await {
+                    Some(Ok(frame)) => {
+                        if let Ok(data) = frame.into_data() {
+                            return Some(data);
+                        }
+                    }
+                    Some(Err(_)) | None => return None,
+                }
+            }
+        };
+        tokio::time::timeout(wait, next).await.ok().flatten()
+    }
+
     /// The next event, or `None` when `wait` passes first or the body ends.
     pub(crate) async fn next_event(&mut self, wait: Duration) -> Option<SseEvent> {
         tokio::time::timeout(wait, self.read_event())
@@ -772,8 +940,21 @@ pub(crate) async fn assert_logs_clean<T>(needles: &[&str], future: impl Future<O
     value
 }
 
+/// Installs, once per test binary, a global subscriber that is interested in every callsite
+/// and discards everything. Without one, a callsite first registered while no capturing
+/// subscriber is the default on any thread caches the interest `never`, and a later capture
+/// on another test's thread misses its events (empty logs, flaky asserts).
+pub(crate) fn ensure_global_subscriber() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        // An error means a global subscriber already exists, which serves as well.
+        let _ = tracing::subscriber::set_global_default(tracing_subscriber::registry());
+    });
+}
+
 /// The formatted tracing output produced while `future` is polled.
 pub(crate) async fn capture_logs<T>(future: impl Future<Output = T>) -> (T, String) {
+    ensure_global_subscriber();
     let buffer = Arc::new(Mutex::new(Vec::<u8>::new()));
     let writer = Arc::clone(&buffer);
     let layer = tracing_subscriber::fmt::layer()

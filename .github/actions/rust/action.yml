@@ -3,14 +3,14 @@ description: Install the repo toolchain, just, and cargo-deny
 
 inputs:
   cache:
-    description: Read and save the R2 compiler cache for a trusted CI run.
+    description: Read and save the S3 compiler cache for a trusted CI run.
     required: false
     default: "true"
-  r2-access-key-id:
-    description: Bucket-scoped R2 access key ID with Object Read & Write permission.
+  s3-access-key-id:
+    description: Bucket-scoped Garage access key ID with read and write permission.
     required: false
-  r2-secret-access-key:
-    description: Secret access key paired with r2-access-key-id.
+  s3-secret-access-key:
+    description: Secret access key paired with s3-access-key-id.
     required: false
 
 runs:
@@ -21,18 +21,18 @@ runs:
       # No arguments: rustup installs the channel and components in rust-toolchain.toml.
       run: rustup toolchain install
 
-    - name: Cache Rust compilation with kache and R2
+    - name: Cache Rust compilation with kache and Garage
       # The caller enables caching and supplies credentials only for trusted runs.
-      if: inputs.cache == 'true' && inputs.r2-access-key-id != '' && inputs.r2-secret-access-key != ''
+      if: inputs.cache == 'true' && inputs.s3-access-key-id != '' && inputs.s3-secret-access-key != ''
       uses: kunobi-ninja/kache-action@ad7317540dcdd71c904f7a60a87b620a0c0e67ed # v1
       with:
         version: "2.0.0"
-        s3-bucket: llmobs-cache
-        s3-endpoint: https://f575c8aba37f5d64c55d2e211037990f.r2.cloudflarestorage.com
-        s3-region: auto
+        s3-bucket: kache
+        s3-endpoint: https://s3.chapu.is
+        s3-region: us-east-1
         s3-prefix: kache-v2
-        s3-access-key-id: ${{ inputs.r2-access-key-id }}
-        s3-secret-access-key: ${{ inputs.r2-secret-access-key }}
+        s3-access-key-id: ${{ inputs.s3-access-key-id }}
+        s3-secret-access-key: ${{ inputs.s3-secret-access-key }}
         # Clippy and test jobs must not overwrite each other's prefetch manifests.
         manifest-key: ${{ github.job }}
         cache-executables: true

@@ -82,6 +82,36 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
         "/api/v1/orgs/{org}/invites/{id}",
         "delete_org_invite",
     ),
+    (
+        "get",
+        "/api/v1/orgs/{org}/llm-connections",
+        "list_llm_connections",
+    ),
+    (
+        "post",
+        "/api/v1/orgs/{org}/llm-connections",
+        "post_llm_connection",
+    ),
+    (
+        "get",
+        "/api/v1/orgs/{org}/llm-connections/{id}",
+        "get_llm_connection",
+    ),
+    (
+        "patch",
+        "/api/v1/orgs/{org}/llm-connections/{id}",
+        "patch_llm_connection",
+    ),
+    (
+        "delete",
+        "/api/v1/orgs/{org}/llm-connections/{id}",
+        "delete_llm_connection",
+    ),
+    (
+        "post",
+        "/api/v1/orgs/{org}/llm-connections/{id}/test",
+        "post_llm_connection_test",
+    ),
     ("get", "/api/v1/orgs/{org}/projects", "list_projects"),
     ("post", "/api/v1/orgs/{org}/projects", "post_project"),
     ("get", "/api/v1/projects/{project}", "get_project"),
@@ -184,6 +214,7 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
         "/api/v1/projects/{project}/saved-views/{id}",
         "delete_saved_view",
     ),
+    ("post", "/api/v1/projects/{project}/sql", "run_sql"),
     ("get", "/api/v1/projects/{project}/metrics", "get_metrics"),
     (
         "get",
@@ -195,6 +226,7 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
 const QUERY_OR_BODY: &[&str] = &[
     "list_org_members",
     "list_org_invites",
+    "list_llm_connections",
     "list_project_members",
     "list_projects",
     "list_api_keys",
@@ -209,8 +241,6 @@ const QUERY_OR_BODY: &[&str] = &[
     "get_user",
     "list_scores",
     "list_saved_views",
-    "create_saved_view",
-    "update_saved_view",
     "get_metrics",
 ];
 
@@ -233,6 +263,7 @@ const TAGS: &[&str] = &[
     "admin",
     "auth",
     "orgs",
+    "llm_connections",
     "projects",
     "traces",
     "spans",
@@ -241,6 +272,7 @@ const TAGS: &[&str] = &[
     "scores",
     "schema",
     "saved_views",
+    "sql",
     "metrics",
     "media",
 ];
@@ -415,12 +447,24 @@ fn document_lint() {
             // The handler always answers 204. CSRF is the shared origin check.
         } else if *id == "create_scores" || *id == "create_key_scores" {
             expected_errors.extend(["400", "401", "403", "404", "413", "429"]);
-        } else if *id == "delete_score" {
+        } else if *id == "delete_score" || *id == "delete_saved_view" {
             expected_errors.extend(["400", "401", "403", "404", "429"]);
+        } else if *id == "create_saved_view" || *id == "update_saved_view" {
+            // 409: unsharing a view whose owner was deleted.
+            expected_errors.extend(["400", "401", "403", "404", "409", "413", "415", "429"]);
         } else if *id == "post_feedback" {
             expected_errors.extend(["400", "401", "403", "404", "413", "429"]);
         } else if *id == "get_media" {
             expected_errors.extend(["401", "403", "404", "416", "429"]);
+        } else if *id == "post_llm_connection" || *id == "patch_llm_connection" {
+            expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
+        } else if *id == "get_llm_connection"
+            || *id == "delete_llm_connection"
+            || *id == "post_llm_connection_test"
+        {
+            expected_errors.extend(["400", "401", "403", "404", "429"]);
+        } else if *id == "run_sql" {
+            expected_errors.extend(["400", "401", "403", "404", "413", "415", "422", "429"]);
         } else if READ_OPERATIONS.contains(id) {
             expected_errors.extend(["400", "401", "403", "404", "422", "429"]);
         } else if *id != "get_auth_config" && QUERY_OR_BODY.contains(id) {
@@ -502,6 +546,7 @@ fn document_lint() {
         ("ApiKeyPage", "ApiKey"),
         ("PersonalTokenPage", "PersonalToken"),
         ("SavedViewPage", "SavedView"),
+        ("LlmConnectionPage", "LlmConnection"),
     ];
     for (page, item) in pages {
         let schema = &schemas[page];
@@ -751,6 +796,7 @@ fn assert_nullability(schemas: &serde_json::Map<String, Value>) {
         "ApiKeyPage",
         "PersonalTokenPage",
         "SavedViewPage",
+        "LlmConnectionPage",
     ];
     let expected: BTreeSet<String> = pages
         .iter()

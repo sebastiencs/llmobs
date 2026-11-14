@@ -10,8 +10,10 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+aes-gcm.workspace = true
 arrow.workspace = true
 llmobs-core.workspace = true
+llmobs-eval.workspace = true
 llmobs-otel.workspace = true
 llmobs-storage.workspace = true
 utoipa.workspace = true
@@ -53,6 +55,7 @@ opentelemetry-proto.workspace = true
 tonic.workspace = true
 futures.workspace = true
 hex.workspace = true
+rmcp.workspace = true
 
 [dev-dependencies]
 datafusion.workspace = true

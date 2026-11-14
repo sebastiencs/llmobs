@@ -25,8 +25,10 @@ use tokio::task::JoinHandle;
 use crate::auth::Limits;
 use crate::clock::Clock;
 use crate::config::{ConfigError, ServerConfig};
+use crate::crypto::{CryptoError, KeySource, SecretBox, finish_rotation, load_key};
 use crate::http::{AppInner, AppState, otlp_router, router};
 use crate::ingest::{Ingest, grpc};
+use crate::meta::instance_settings::{ENCRYPTION_CHECK, get_setting};
 use crate::meta::{MetaDb, MetaError};
 use tonic::transport::server::TcpIncoming;
 
@@ -60,6 +62,9 @@ pub enum ServeError {
     /// `meta.db` could not be opened or migrated.
     #[error(transparent)]
     Meta(#[from] MetaError),
+    /// The encryption key could not be loaded, or does not match the data directory.
+    #[error(transparent)]
+    Crypto(#[from] CryptoError),
     /// The HTTP socket could not be bound.
     #[error("binding {addr}")]
     Bind {
@@ -200,6 +205,27 @@ pub async fn bind(config: ServerConfig, ui: Option<axum::Router>) -> Result<Runn
             return Err(error.into());
         }
     };
+    let secrets = match open_secrets(&config, &meta).await {
+        Ok(secrets) => secrets,
+        Err(error) => {
+            release_storage(storage).await;
+            meta.close().await;
+            return Err(error.into());
+        }
+    };
+    let eval_runner = match llmobs_eval::EvalRunner::new(llmobs_eval::EgressPolicy {
+        allow_private_network: config.security.allow_private_network_egress,
+    }) {
+        Ok(runner) => Arc::new(runner),
+        Err(_error) => {
+            release_storage(storage).await;
+            meta.close().await;
+            return Err(ServeError::Config(ConfigError::Invalid {
+                key: "security",
+                reason: "could not build the evaluation HTTP client",
+            }));
+        }
+    };
     let prices = match PriceTable::new(builtin_price_rows()) {
         Ok(prices) => prices,
         Err(error) => {
@@ -273,6 +299,9 @@ pub async fn bind(config: ServerConfig, ui: Option<axum::Router>) -> Result<Runn
         live: crate::live::LiveBus::new(crate::live::StreamTiming::DEFAULT),
         metrics_cache: crate::routes::metrics::MetricsCache::default(),
         usage: crate::usage::Usage::default(),
+        secrets,
+        eval_runner,
+        connections: crate::eval::connection::ConnectionCache::default(),
     });
     if let Err(error) = crate::bootstrap::prepare(&state).await {
         release_state(state).await;
@@ -370,6 +399,28 @@ pub async fn bind(config: ServerConfig, ui: Option<axum::Router>) -> Result<Runn
             spawn_usage(state),
         ],
     })
+}
+
+/// Finishes an interrupted rotation, loads the key, then checks it (D-I-1, D-I-3).
+async fn open_secrets(config: &ServerConfig, meta: &MetaDb) -> Result<SecretBox, CryptoError> {
+    let check = get_setting(meta.reader(), ENCRYPTION_CHECK).await?;
+    let env = config
+        .encryption_key
+        .as_ref()
+        .map(|key| key.expose().as_str());
+    if env.is_none() {
+        finish_rotation(&config.data_dir, check.as_deref())?;
+    }
+    let loaded = load_key(env, &config.data_dir, check.is_some())?;
+    let secrets = SecretBox::new(&loaded.key);
+    crate::crypto::verify_or_record(meta, &secrets, &loaded.path).await?;
+    if loaded.source == KeySource::Generated {
+        tracing::warn!(
+            path = %loaded.path.display(),
+            "generated an encryption key; back this file up with the data directory"
+        );
+    }
+    Ok(secrets)
 }
 
 /// Binds `addr` and returns the listener with the address it actually got.
@@ -486,6 +537,14 @@ impl Running {
             let _ = task.await;
         }
         if let Some(state) = self.state.take() {
+            // Commits whose request was dropped still run (D-G-38): they append and count
+            // before the final flushes.
+            if tokio::time::timeout(STORAGE_SHUTDOWN, state.ingest.wait_for_commits())
+                .await
+                .is_err()
+            {
+                tracing::error!("ingest commits did not finish before shutdown");
+            }
             if let Err(error) = state.last_used.flush(&state.meta).await {
                 tracing::error!(error = %error, "last_used flush failed");
             }
@@ -581,14 +640,17 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        AuthSettings, IngestConfig, InitConfig, LogConfig, MediaConfig, PublicUrl,
+        AuthSettings, EvalConfig, IngestConfig, InitConfig, LogConfig, MediaConfig, PublicUrl,
+        Secret, SecurityConfig,
     };
+    use crate::crypto::{decode_key, encode_key, random_key, write_key_file};
+    use crate::meta::instance_settings::put_setting;
 
     #[tokio::test]
     async fn an_empty_database_logs_the_setup_url_once() {
         let dir = tempfile::tempdir().unwrap();
         let (running, logs) =
-            crate::test_support::capture_logs(bind(config(dir.path()), None)).await;
+            crate::test_support::capture_logs(Box::pin(bind(config(dir.path()), None))).await;
         let running = running.unwrap();
         assert_eq!(
             logs.matches("setup required: open http://localhost:8080/setup?token=")
@@ -616,6 +678,80 @@ mod tests {
         assert!(matches!(error, ServeError::Init { .. }), "{text}");
         assert!(text.contains("LLMOBS_INIT_SECRET_KEY"), "{text}");
         assert!(!text.contains("not-a-secret-key"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_wrong_encryption_key_fails_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut first = config(dir.path());
+        first.encryption_key = Some(Secret::new(encode_key(&[1; 32])));
+        let running = bind(first, None).await.unwrap();
+        running.shutdown().await.unwrap();
+
+        let mut second = config(dir.path());
+        second.encryption_key = Some(Secret::new(encode_key(&[2; 32])));
+        let error = bind(second, None).await.unwrap_err();
+        assert!(matches!(error, ServeError::Crypto(_)), "{error}");
+
+        // The failed start released the lock, and the first key still works.
+        let mut third = config(dir.path());
+        third.encryption_key = Some(Secret::new(encode_key(&[1; 32])));
+        let running = bind(third, None).await.unwrap();
+        running.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn startup_finishes_an_interrupted_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let running = bind(config(dir.path()), None).await.unwrap();
+        running.shutdown().await.unwrap();
+
+        // An interrupted rotation: the database already uses the new key.
+        let new = random_key().unwrap();
+        write_key_file(&dir.path().join("secret.key.new"), &new).unwrap();
+        let check = SecretBox::new(&new).check_value().to_owned();
+        let meta = MetaDb::open(dir.path()).await.unwrap();
+        meta.write(move |conn| {
+            Box::pin(async move { put_setting(conn, ENCRYPTION_CHECK, &check).await })
+        })
+        .await
+        .unwrap();
+        meta.close().await;
+
+        let running = bind(config(dir.path()), None).await.unwrap();
+        running.shutdown().await.unwrap();
+        let rotated = std::fs::read_to_string(dir.path().join("secret.key")).unwrap();
+        assert_eq!(decode_key(rotated.trim_end(), "test").unwrap(), new);
+        assert!(!dir.path().join("secret.key.new").exists());
+    }
+
+    #[tokio::test]
+    async fn startup_removes_a_stale_new_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let running = bind(config(dir.path()), None).await.unwrap();
+        running.shutdown().await.unwrap();
+        let before = std::fs::read_to_string(dir.path().join("secret.key")).unwrap();
+        write_key_file(&dir.path().join("secret.key.new"), &random_key().unwrap()).unwrap();
+
+        let running = bind(config(dir.path()), None).await.unwrap();
+        running.shutdown().await.unwrap();
+        assert!(!dir.path().join("secret.key.new").exists());
+        let after = std::fs::read_to_string(dir.path().join("secret.key")).unwrap();
+        assert_eq!(before, after);
+    }
+
+    #[tokio::test]
+    async fn a_lost_key_file_fails_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let running = bind(config(dir.path()), None).await.unwrap();
+        running.shutdown().await.unwrap();
+        std::fs::remove_file(dir.path().join("secret.key")).unwrap();
+
+        let error = bind(config(dir.path()), None).await.unwrap_err();
+        assert!(
+            matches!(error, ServeError::Crypto(CryptoError::Missing { .. })),
+            "{error}"
+        );
     }
 
     #[tokio::test]
@@ -1104,6 +1240,9 @@ mod tests {
             },
             ingest: IngestConfig::default(),
             media: MediaConfig::default(),
+            eval: EvalConfig::default(),
+            security: SecurityConfig::default(),
+            encryption_key: None,
             auth: AuthSettings::default(),
             smtp_url: None,
             email_from: None,

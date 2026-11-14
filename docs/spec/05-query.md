@@ -76,6 +76,8 @@ The search box on list pages adds a conjunct:
  OR system_instructions ILIKE '%q%')          -- spans view
 ```
 
+The search text is at most 1,024 bytes; a longer one is a `400` (D-G-39).
+
 `\` becomes `\\`, `%` becomes `\%` and `_` becomes `\_`. The pattern is `%<escaped>%`, with `ILIKE … ESCAPE '\'`. An empty or all-whitespace search adds nothing.
 
 On the `traces` view, search runs on `spans` first (semi-join: `trace_id IN (SELECT trace_id FROM spans WHERE <search> AND <time window>)`). Search **requires a time window** (default: the page's time picker, max 30 days unless the user confirms "search all") because it is a scan. DataFusion's `ILIKE` on Utf8 runs on the arrow string kernels; with column projection only the needed heavy columns are read.

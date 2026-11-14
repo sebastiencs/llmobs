@@ -15,24 +15,49 @@ use crate::http::error::ApiError;
 /// Time allowed for one read: planning, running and score lookups each get this budget.
 pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Most bytes of `search` text a list or stream accepts (D-G-39).
+pub(crate) const MAX_SEARCH_BYTES: usize = 1024;
+
+/// `400 bad_request` when `search` is longer than [`MAX_SEARCH_BYTES`] (G review m-2). The
+/// message never quotes the text.
+pub(crate) fn check_search(search: Option<&str>) -> Result<(), ApiError> {
+    match search {
+        Some(text) if text.len() > MAX_SEARCH_BYTES => Err(ApiError::BadRequest {
+            detail: Some(format!("search is longer than {MAX_SEARCH_BYTES} bytes")),
+            errors: Vec::new(),
+        }),
+        _ => Ok(()),
+    }
+}
+
 /// Admits a query on `project` and builds A2's context, without a window (D101).
 pub(crate) async fn open_query(
     state: &AppState,
     project: ProjectId,
     around: Option<i64>,
 ) -> Result<QueryContext, ApiError> {
-    open_query_on(&state.storage, project, around).await
+    open_query_on(&state.storage, project, around, None).await
 }
 
 /// [`open_query`] for a caller that holds the storage but not the whole state, such as a
-/// stream task (the task must not keep an `AppState` alive).
+/// stream task (the task must not keep an `AppState` alive). `window` is D101's.
 pub(crate) async fn open_query_on(
     storage: &Storage,
     project: ProjectId,
     around: Option<i64>,
+    window: Option<TimeWindow>,
 ) -> Result<QueryContext, ApiError> {
     let source = storage.query(project, QueryOptions { around }).await?;
-    Ok(QueryContext::new(source, None)?)
+    Ok(QueryContext::new(source, window)?)
+}
+
+/// [`open_query`] with D101's window written into the views. The SQL console uses it.
+pub(crate) async fn open_query_windowed(
+    state: &AppState,
+    project: ProjectId,
+    window: Option<TimeWindow>,
+) -> Result<QueryContext, ApiError> {
+    open_query_on(&state.storage, project, None, window).await
 }
 
 /// `[from, to)`. One bound alone leaves the other side open (`i64::MIN` / `i64::MAX`). Neither: `None`.
