@@ -889,7 +889,14 @@ mod tests {
         assert!(text.starts_with("HTTP/1.1 200"), "{text}");
         assert!(text.ends_with("ui"), "{text}");
 
-        for path in ["/api/v1/nope", "/v1/nope"] {
+        for path in ["/apiary", "/v1x"] {
+            let page = http_get(running.local_addr, path, "close").await;
+            let text = String::from_utf8_lossy(&page);
+            assert!(text.starts_with("HTTP/1.1 200"), "{path}: {text}");
+            assert!(text.ends_with("ui"), "{path}: {text}");
+        }
+
+        for path in ["/api", "/api/v1/nope", "/v1/nope", "/mcp/x"] {
             let missing = http_get(running.local_addr, path, "close").await;
             let text = String::from_utf8_lossy(&missing);
             assert!(text.starts_with("HTTP/1.1 404"), "{path}: {text}");
