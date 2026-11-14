@@ -170,6 +170,13 @@ mod tests {
     }
 
     #[test]
+    fn server_url_trims_a_tab_before_the_control_check() {
+        // A tab is whitespace, so `trim` drops it before `check_server_url` runs: a
+        // leading tab never reaches the control-character refusal.
+        assert_eq!(server_url("\thttp://h").unwrap(), "http://h");
+    }
+
+    #[test]
     fn check_server_url_refuses_credentials_and_bad_schemes() {
         let cases = [
             ("http://[::1]:8080", false),

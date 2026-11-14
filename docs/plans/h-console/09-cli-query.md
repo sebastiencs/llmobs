@@ -111,8 +111,6 @@ Next to it, one helper runs the three steps in the same order for every raw URL 
 pub(crate) fn server_url(raw: &str) -> anyhow::Result<String>;
 ```
 
-`logout` still picks its server with `chosen_server`, but a saved key the check refuses (written by an older binary) must stay removable: when the chosen URL fails the check yet names a saved entry exactly (`--url <bad>`), or is the only saved key (plain `logout`), that entry is removed locally — no request is sent to the URL and it is never printed — and `logout` prints `removed a saved server whose URL is not allowed`. `chosen_server` itself keeps refusing such URLs on every normal path.
-
 Move `fn credentials_path() -> anyhow::Result<PathBuf>` from `main.rs` into `credentials.rs` as `pub(crate)`.
 
 The module's first line is this doc comment:
