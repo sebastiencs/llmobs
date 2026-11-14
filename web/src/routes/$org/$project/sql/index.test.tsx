@@ -1,12 +1,15 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { CLIPPED, NO_CHART } from "@/components/sql/result-chart";
 import { DEFAULT_QUERY } from "@/lib/sql/draft";
+import { EXPORT_ROLE_REASON } from "@/lib/sql/export";
 import { server } from "@/mocks/node";
 import { savedViewHandlers } from "@/mocks/saved-views";
 import { ADA_ID, BOB_ID } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 import projectFixture from "../../../../../../fixtures/api/static/project.json";
+import schemaFixture from "../../../../../../fixtures/api/static/schema.json";
 import resultDocument from "../../../../../../fixtures/api/static/sql-result.json";
 
 const PROBLEM_JSON = { "Content-Type": "application/problem+json" };
@@ -1031,4 +1034,418 @@ it("works when localStorage throws", async () => {
   } finally {
     setItem.mockRestore();
   }
+});
+
+let restoreDownloads: (() => void) | undefined;
+afterEach(() => {
+  restoreDownloads?.();
+  restoreDownloads = undefined;
+});
+
+function captureDownloads() {
+  const saved: { href: string; download: string; rel: string }[] = [];
+  const revoked: string[] = [];
+  const target = URL as unknown as Record<string, unknown>;
+  const original = {
+    createObjectURL: target.createObjectURL,
+    revokeObjectURL: target.revokeObjectURL,
+  };
+  target.createObjectURL = () => "blob:test";
+  target.revokeObjectURL = (url: string) => {
+    revoked.push(url);
+  };
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+    this: HTMLAnchorElement,
+  ) {
+    saved.push({ href: this.getAttribute("href") ?? "", download: this.download, rel: this.rel });
+  });
+  restoreDownloads = () => {
+    click.mockRestore();
+    for (const [key, value] of Object.entries(original)) {
+      if (value === undefined) {
+        delete target[key];
+      } else {
+        target[key] = value;
+      }
+    }
+  };
+  return { saved, revoked };
+}
+
+/** Watches `POST /sql` without answering it: the default mock still replies. */
+function watchSql() {
+  const seen: { accept: string | null; body: Record<string, unknown> }[] = [];
+  server.use(
+    http.post("*/api/v1/projects/:project/sql", async ({ request }) => {
+      const body = (await request.clone().json()) as Record<string, unknown>;
+      seen.push({ accept: request.headers.get("Accept"), body });
+    }),
+  );
+  return seen;
+}
+
+async function exportAs(user: { click: (element: Element) => Promise<void> }, label: string) {
+  await user.click(await screen.findByRole("button", { name: "Export" }));
+  await user.click(await screen.findByRole("menuitem", { name: label }));
+}
+
+it("exports CSV with the run's body", async () => {
+  const downloads = captureDownloads();
+  const seen = watchSql();
+  const { user } = await renderApp("/acme/support-bot/sql?range=1h");
+  await exportAs(user, "CSV");
+  await waitFor(() => {
+    expect(downloads.saved).toEqual([
+      { href: "blob:test", download: "query-20260101T100000Z.csv", rel: "noopener" },
+    ]);
+  });
+  const request = single(seen);
+  expect(request.accept).toBe("text/csv");
+  expect(Object.keys(request.body).sort()).toEqual(["from", "query", "to"]);
+  expect(Date.parse(String(request.body.to)) - Date.parse(String(request.body.from))).toBe(
+    3_600_000,
+  );
+});
+
+it("exports NDJSON and Parquet", async () => {
+  const downloads = captureDownloads();
+  const seen = watchSql();
+  const { user } = await renderApp("/acme/support-bot/sql");
+  await exportAs(user, "NDJSON");
+  await waitFor(() => {
+    expect(downloads.saved).toEqual([
+      { href: "blob:test", download: "query-20260101T100000Z.ndjson", rel: "noopener" },
+    ]);
+  });
+  await waitFor(() => {
+    expect(screen.queryByText("Exporting…")).toBeNull();
+  });
+  await exportAs(user, "Parquet");
+  await waitFor(() => {
+    expect(downloads.saved).toEqual([
+      { href: "blob:test", download: "query-20260101T100000Z.ndjson", rel: "noopener" },
+      { href: "blob:test", download: "query-20260101T100000Z.parquet", rel: "noopener" },
+    ]);
+  });
+  expect(seen.map((entry) => entry.accept)).toEqual([
+    "application/x-ndjson",
+    "application/vnd.apache.parquet",
+  ]);
+});
+
+it("shows Exporting… and blocks Run", async () => {
+  captureDownloads();
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.use(
+    http.post("*/api/v1/projects/:project/sql", async () => {
+      await gate;
+      return new HttpResponse("a\r\n", { headers: { "Content-Type": "text/csv" } });
+    }),
+  );
+  const { user } = await renderApp("/acme/support-bot/sql");
+  await exportAs(user, "CSV");
+  expect(await screen.findByText("Exporting…")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
+  await user.click(screen.getByRole("button", { name: "Export" }));
+  const items = await screen.findAllByRole("menuitem");
+  expect(items).toHaveLength(3);
+  for (const item of items) {
+    expect(item).toHaveAttribute("aria-disabled", "true");
+  }
+  await user.keyboard("{Escape}");
+  release();
+  await waitFor(() => {
+    expect(screen.queryByText("Exporting…")).toBeNull();
+    expect(screen.getByRole("button", { name: "Run" })).toBeEnabled();
+  });
+});
+
+it("blocks export while a run is pending", async () => {
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  captureSql(async () => {
+    await gate;
+    return HttpResponse.json(resultDocument);
+  });
+  const { user } = await renderApp("/acme/support-bot/sql");
+  await user.click(screen.getByRole("button", { name: "Run" }));
+  expect(await screen.findByText("Running…")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Export" }));
+  expect(await screen.findByRole("menuitem", { name: "CSV" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  await user.keyboard("{Escape}");
+  release();
+  await screen.findByRole("grid", { name: "Query results" });
+});
+
+it("blocks an export with an invalid parameter", async () => {
+  storeFullDraft({ query: "SELECT {n:Int}", params: { n: "x" } });
+  const seen = watchSql();
+  const { user } = await renderApp("/acme/support-bot/sql");
+  await exportAs(user, "CSV");
+  await screen.findByText("Enter an integer");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(seen).toHaveLength(0);
+});
+
+it("disables export items on an empty query", async () => {
+  storeDraft("  ");
+  const { user } = await renderApp("/acme/support-bot/sql");
+  await user.click(screen.getByRole("button", { name: "Export" }));
+  expect(await screen.findByRole("menuitem", { name: "CSV" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+});
+
+it("disables export for viewers", async () => {
+  asRole("viewer");
+  const { user } = await renderApp("/acme/support-bot/sql");
+  const trigger = screen.getByRole("button", { name: "Export" });
+  expect(trigger).toBeEnabled();
+  await user.click(trigger);
+  const item = await screen.findByRole("menuitem", { name: /^CSV/ });
+  expect(item).toHaveAttribute("aria-disabled", "true");
+  expect(item).toHaveTextContent(EXPORT_ROLE_REASON);
+});
+
+it("shows a refused export", async () => {
+  const downloads = captureDownloads();
+  server.use(
+    http.post("*/api/v1/projects/:project/sql", () =>
+      HttpResponse.json(
+        { type: "about:blank", title: "Forbidden", status: 403, code: "forbidden" },
+        { status: 403, headers: PROBLEM_JSON },
+      ),
+    ),
+  );
+  const { user } = await renderApp("/acme/support-bot/sql");
+  await exportAs(user, "CSV");
+  expect(await screen.findByRole("alert")).toHaveTextContent(EXPORT_ROLE_REASON);
+  expect(downloads.saved).toEqual([]);
+});
+
+it("reports a network failure", async () => {
+  const downloads = captureDownloads();
+  server.use(http.post("*/api/v1/projects/:project/sql", () => HttpResponse.error()));
+  const { user } = await renderApp("/acme/support-bot/sql");
+  await exportAs(user, "CSV");
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "The export failed before it finished",
+  );
+  expect(downloads.saved).toEqual([]);
+});
+
+it("Run clears an export error", async () => {
+  captureDownloads();
+  server.use(
+    http.post("*/api/v1/projects/:project/sql", () =>
+      HttpResponse.json(
+        { type: "about:blank", title: "Forbidden", status: 403, code: "forbidden" },
+        { status: 403, headers: PROBLEM_JSON },
+      ),
+    ),
+  );
+  const { user } = await renderApp("/acme/support-bot/sql");
+  await exportAs(user, "CSV");
+  await screen.findByText(EXPORT_ROLE_REASON);
+  server.use(http.post("*/api/v1/projects/:project/sql", () => HttpResponse.json(resultDocument)));
+  await user.click(screen.getByRole("button", { name: "Run" }));
+  await waitFor(() => {
+    expect(screen.queryByText(EXPORT_ROLE_REASON)).toBeNull();
+  });
+  await screen.findByRole("grid", { name: "Query results" });
+});
+
+it("draws a line chart with one series per value and keeps the tab", async () => {
+  captureSql(() =>
+    HttpResponse.json({
+      columns: [
+        { name: "day", type: 'Timestamp(Nanosecond, Some("UTC"))' },
+        { name: "model", type: "Utf8" },
+        { name: "cost", type: "Float64" },
+      ],
+      rows: [
+        { day: "2026-01-01T00:00:00.000000000Z", model: "a;}b{", cost: 1 },
+        { day: "2026-01-02T00:00:00.000000000Z", model: "b", cost: 2 },
+      ],
+      truncated: false,
+    }),
+  );
+  const { user } = await renderApp("/acme/support-bot/sql");
+  await user.click(screen.getByRole("button", { name: "Run" }));
+  await screen.findByRole("grid", { name: "Query results" });
+  await user.click(screen.getByRole("tab", { name: "Chart" }));
+  expect(
+    await screen.findByRole("region", {
+      name: "Line chart of cost by day, one series per model",
+    }),
+  ).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Run" }));
+  await waitFor(() => {
+    expect(screen.getByRole("tab", { name: "Chart" })).toHaveAttribute("aria-selected", "true");
+  });
+  expect(
+    screen.getByRole("region", { name: "Line chart of cost by day, one series per model" }),
+  ).toBeInTheDocument();
+});
+
+it("draws a bar chart", async () => {
+  captureSql(() =>
+    HttpResponse.json({
+      columns: [
+        { name: "name", type: "Utf8" },
+        { name: "traces", type: "Int64" },
+      ],
+      rows: [
+        { name: "a", traces: 1 },
+        { name: "b", traces: 2 },
+      ],
+      truncated: false,
+    }),
+  );
+  const { user } = await renderApp("/acme/support-bot/sql");
+  await user.click(screen.getByRole("button", { name: "Run" }));
+  await screen.findByRole("grid", { name: "Query results" });
+  await user.click(screen.getByRole("tab", { name: "Chart" }));
+  expect(
+    await screen.findByRole("region", { name: "Bar chart of traces by name" }),
+  ).toBeInTheDocument();
+});
+
+it("says when no chart fits", async () => {
+  captureSql(() =>
+    HttpResponse.json({
+      columns: [{ name: "name", type: "Utf8" }],
+      rows: [{ name: "a" }],
+      truncated: false,
+    }),
+  );
+  const { user } = await renderApp("/acme/support-bot/sql");
+  await user.click(screen.getByRole("button", { name: "Run" }));
+  await screen.findByRole("grid", { name: "Query results" });
+  await user.click(screen.getByRole("tab", { name: "Chart" }));
+  expect(await screen.findByText(NO_CHART)).toBeInTheDocument();
+});
+
+it("notes a clipped chart", async () => {
+  captureSql(() =>
+    HttpResponse.json({
+      columns: [
+        { name: "name", type: "Utf8" },
+        { name: "a", type: "Int64" },
+        { name: "b", type: "Int64" },
+        { name: "c", type: "Int64" },
+        { name: "d", type: "Int64" },
+        { name: "e", type: "Int64" },
+        { name: "f", type: "Int64" },
+      ],
+      rows: [{ name: "x", a: 1, b: 1, c: 1, d: 1, e: 1, f: 1 }],
+      truncated: false,
+    }),
+  );
+  const { user } = await renderApp("/acme/support-bot/sql");
+  await user.click(screen.getByRole("button", { name: "Run" }));
+  await screen.findByRole("grid", { name: "Query results" });
+  await user.click(screen.getByRole("tab", { name: "Chart" }));
+  expect(await screen.findByText(CLIPPED)).toBeInTheDocument();
+});
+
+it("inserts names from the schema browser", async () => {
+  storeDraft("");
+  const { user } = await renderApp("/acme/support-bot/sql");
+  const traces = await screen.findByRole("list", { name: "traces columns" });
+  await user.click(within(traces).getByRole("button", { name: "Insert cost_total" }));
+  await waitFor(() => {
+    expect(editorContent().textContent).toBe("cost_total");
+  });
+  await user.click(screen.getByRole("button", { name: "spans", expanded: false }));
+  await user.click(
+    within(screen.getByRole("list", { name: "spans columns" })).getByRole("button", {
+      name: "Insert model",
+    }),
+  );
+  await waitFor(() => {
+    expect(editorContent().textContent).toBe("cost_total model");
+  });
+});
+
+it("lists SQL functions on demand", async () => {
+  storeDraft("");
+  const { user } = await renderApp("/acme/support-bot/sql");
+  await screen.findByRole("button", { name: "Insert traces" });
+  const functions = screen.getByRole("button", { name: "Functions", expanded: false });
+  expect(screen.queryByRole("list", { name: "Functions" })).toBeNull();
+  await user.click(functions);
+  const list = screen.getByRole("list", { name: "Functions" });
+  expect(
+    within(list)
+      .getAllByRole("button")
+      .map((button) => button.getAttribute("aria-label")),
+  ).toEqual(schemaFixture.functions.filter((fn) => fn.in_sql).map((fn) => `Insert ${fn.name}(`));
+  await user.click(within(list).getByRole("button", { name: "Insert now(" }));
+  await waitFor(() => {
+    expect(editorContent().textContent).toBe("now(");
+  });
+});
+
+it("shows Loading… until the schema arrives", async () => {
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.use(
+    http.get("*/api/v1/projects/:project/schema", async () => {
+      await gate;
+      return HttpResponse.json(schemaFixture);
+    }),
+  );
+  await renderApp("/acme/support-bot/sql");
+  expect(
+    within(await screen.findByRole("navigation", { name: "Schema" })).getByText("Loading…"),
+  ).toBeInTheDocument();
+  release();
+  await screen.findByRole("button", { name: "Insert traces" });
+});
+
+it("shows Schema unavailable when the schema fails", async () => {
+  server.use(
+    http.get("*/api/v1/projects/:project/schema", () =>
+      HttpResponse.json(
+        { type: "about:blank", title: "Service Unavailable", status: 503, code: "busy" },
+        { status: 503, headers: PROBLEM_JSON },
+      ),
+    ),
+  );
+  await renderApp("/acme/support-bot/sql");
+  expect(
+    await within(screen.getByRole("navigation", { name: "Schema" })).findByText(
+      "Schema unavailable",
+    ),
+  ).toBeInTheDocument();
+});
+
+it("hides the schema browser and remembers it", async () => {
+  const { user } = await renderApp("/acme/support-bot/sql");
+  await user.click(await screen.findByRole("button", { name: "Schema" }));
+  expect(screen.queryByRole("navigation", { name: "Schema" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Schema" })).toHaveAttribute("aria-pressed", "false");
+  expect(localStorage.getItem("llmobs.sql.schema")).toBe("closed");
+});
+
+it("starts closed when it was closed", async () => {
+  localStorage.setItem("llmobs.sql.schema", "closed");
+  await renderApp("/acme/support-bot/sql");
+  expect(await screen.findByRole("button", { name: "Schema" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  expect(screen.queryByRole("navigation", { name: "Schema" })).toBeNull();
 });

@@ -85,6 +85,7 @@ export function SqlEditor({
   schema,
   invalid,
   describedBy,
+  insert,
 }: {
   value: string;
   onChange: (text: string) => void;
@@ -96,6 +97,8 @@ export function SqlEditor({
   invalid: boolean;
   /** Id of the element that explains the failure. */
   describedBy?: string;
+  /** Each `seq` greater than the last one inserts `text` and focuses the editor. */
+  insert?: { text: string; seq: number };
 }) {
   const parent = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -103,6 +106,10 @@ export function SqlEditor({
   const attributes = useRef(new Compartment());
   /** Texts the editor reported through `onChange` that have not come back as `value` yet. */
   const echoes = useRef<string[]>([]);
+  /** The last insert sequence the effect below handled. */
+  const lastInsert = useRef(0);
+  /** Whether the editor itself was ever focused (a cursor may exist without it). */
+  const touched = useRef(false);
   const onChangeRef = useRef(onChange);
   const onRunRef = useRef(onRun);
   const initial = useRef({ value, schema, invalid, describedBy });
@@ -129,6 +136,12 @@ export function SqlEditor({
           autocompletion(),
           placeholder("SELECT … FROM traces"),
           errorField,
+          EditorView.domEventHandlers({
+            focus: () => {
+              touched.current = true;
+              return false;
+            },
+          }),
           attributes.current.of(contentAttributes(start.invalid, start.describedBy)),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
@@ -197,6 +210,29 @@ export function SqlEditor({
         : null;
     view.dispatch({ effects: setError.of(range) });
   }, [errorFrom, errorTo]);
+
+  const insertSeq = insert?.seq;
+  const insertText = insert?.text;
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || insertSeq === undefined || insertText === undefined) {
+      return;
+    }
+    if (insertSeq <= lastInsert.current) {
+      return;
+    }
+    lastInsert.current = insertSeq;
+    // An editor never focused has its cursor at 0; append instead.
+    const length = view.state.doc.length;
+    const target = touched.current ? view.state.selection.main : { from: length, to: length };
+    const before = view.state.sliceDoc(Math.max(0, target.from - 1), target.from);
+    const text = before !== "" && !/[\s(,.]/.test(before) ? ` ${insertText}` : insertText;
+    view.dispatch({
+      changes: { from: target.from, to: target.to, insert: text },
+      selection: { anchor: target.from + text.length },
+    });
+    view.focus();
+  }, [insertSeq, insertText]);
 
   return (
     <div ref={parent} className="h-full min-h-0 overflow-hidden rounded-md border border-input" />

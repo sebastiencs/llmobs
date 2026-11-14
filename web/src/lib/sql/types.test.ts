@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { isNumericType } from "@/lib/sql/types";
+import { isDateType, isNumericType, isTextType, isTimestampType } from "@/lib/sql/types";
 
 it("recognises numeric Arrow types", () => {
   for (const type of [
@@ -24,4 +24,23 @@ it("recognises numeric Arrow types", () => {
   ]) {
     expect(isNumericType(type), type).toBe(false);
   }
+});
+
+it("recognises timestamp Arrow types", () => {
+  expect(isTimestampType('Timestamp(Nanosecond, Some("UTC"))')).toBe(true);
+  expect(isTimestampType('Timestamp(ns, "UTC")')).toBe(true);
+  expect(isTimestampType("Date32")).toBe(false);
+});
+
+it("recognises date Arrow types", () => {
+  expect(isDateType("Date32")).toBe(true);
+  expect(isDateType("Date64")).toBe(true);
+  expect(isDateType("Utf8")).toBe(false);
+});
+
+it("recognises text Arrow types", () => {
+  for (const type of ["Utf8", "LargeUtf8", "Utf8View"]) {
+    expect(isTextType(type), type).toBe(true);
+  }
+  expect(isTextType("Int64")).toBe(false);
 });

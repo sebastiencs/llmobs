@@ -146,3 +146,68 @@ it("lets Tab leave the editor", async () => {
   await user.tab();
   expect(screen.getByRole("button", { name: "After" })).toHaveFocus();
 });
+
+function InsertHarness({ initial = "" }: { initial?: string }) {
+  const [value, setValue] = useState(initial);
+  const [insert, setInsert] = useState<{ text: string; seq: number }>();
+  const [tick, setTick] = useState(0);
+  return (
+    <>
+      <button type="button" onClick={() => setInsert({ text: "x", seq: (insert?.seq ?? 0) + 1 })}>
+        Insert
+      </button>
+      <button type="button" onClick={() => setTick(tick + 1)}>
+        Rerender
+      </button>
+      <span>{tick}</span>
+      <SqlEditor
+        value={value}
+        onChange={setValue}
+        onRun={() => {}}
+        errorRange={null}
+        schema={undefined}
+        invalid={false}
+        insert={insert}
+      />
+    </>
+  );
+}
+
+function editorText(): string {
+  return document.querySelector(".cm-content")?.textContent ?? "";
+}
+
+it("inserts once per seq, with a separating space", async () => {
+  const user = userEvent.setup();
+  render(<InsertHarness />);
+  await user.click(screen.getByRole("button", { name: "Insert" }));
+  await waitFor(() => {
+    expect(editorText()).toBe("x");
+  });
+  await user.click(screen.getByRole("button", { name: "Rerender" }));
+  await user.click(screen.getByRole("button", { name: "Rerender" }));
+  expect(editorText()).toBe("x");
+  await user.click(screen.getByRole("button", { name: "Insert" }));
+  await waitFor(() => {
+    expect(editorText()).toBe("x x");
+  });
+});
+
+it("appends when never focused, inserts at the cursor once focused", async () => {
+  const user = userEvent.setup();
+  render(<InsertHarness initial="SELECT  FROM t" />);
+  await user.click(screen.getByRole("button", { name: "Insert" }));
+  await waitFor(() => {
+    expect(editorText()).toBe("SELECT  FROM t x");
+  });
+  const content = document.querySelector(".cm-content");
+  if (!(content instanceof HTMLElement)) {
+    throw new Error("SQL editor did not mount");
+  }
+  content.focus();
+  await user.keyboard("{Control>}{Home}{/Control}{ArrowRight>7/}");
+  await user.click(screen.getByRole("button", { name: "Insert" }));
+  await waitFor(() => {
+    expect(editorText()).toBe("SELECT x FROM t x");
+  });
+});
