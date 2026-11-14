@@ -61,6 +61,27 @@ const MANUAL_NOW_NS: i64 = 1_767_225_600_000_000_000;
 /// The key every test `SecretBox` is built from (D-I-2).
 pub(crate) const TEST_KEY: [u8; 32] = [7; 32];
 
+/// The development signing seed (`fixtures/license/dev-1.key`, D-P-6).
+const DEV_SEED: &str = include_str!("../../../../fixtures/license/dev-1.key");
+
+/// Signs `payload` as a `dev-1` token (D-P-5). Debug builds trust it.
+pub(crate) fn sign_token(payload: &serde_json::Value) -> String {
+    use base64::Engine;
+    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+    use ed25519_dalek::Signer;
+
+    let seed: [u8; 32] = STANDARD
+        .decode(DEV_SEED.trim())
+        .expect("dev seed is base64")
+        .try_into()
+        .expect("dev seed is 32 bytes");
+    let key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let body = URL_SAFE_NO_PAD.encode(serde_json::to_vec(payload).expect("payload serializes"));
+    let signed = format!("{}.dev-1.{body}", crate::ee::token::TOKEN_TAG);
+    let signature = URL_SAFE_NO_PAD.encode(key.sign(signed.as_bytes()).to_bytes());
+    format!("{signed}.{signature}")
+}
+
 /// One process's data directory and router.
 pub(crate) struct TestApp {
     /// Kept so the directory outlives the open files.

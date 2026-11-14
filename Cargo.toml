@@ -184,6 +184,8 @@ regex = "1.13.1"
 # Normalized Levenshtein for the similarity check (D164). Unicode scalar values.
 strsim = "0.11.1"
 sha2 = "0.11.1"
+# Licence keys and org entitlement tokens (D-P-5). Already in Cargo.lock through openidconnect.
+ed25519-dalek = "3.0.0"
 base64 = "0.23.1"
 # Password hashing (D143). Defaults include `alloc`, `getrandom`, and `password-hash`.
 argon2 = "0.6.0"

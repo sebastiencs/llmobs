@@ -3342,6 +3342,7 @@ dependencies = [
  "bytesize",
  "chrono",
  "datafusion",
+ "ed25519-dalek",
  "figment",
  "flate2",
  "futures",
