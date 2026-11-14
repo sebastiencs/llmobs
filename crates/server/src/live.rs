@@ -30,12 +30,17 @@ pub(crate) const MAX_EVENT_SPANS: usize = 500;
 /// Open streams one owner may hold (D-G-34).
 pub(crate) const MAX_STREAMS_PER_OWNER: u32 = 100;
 
-/// Cadences of the streams (spec: § Timing of the M4 plan).
+/// Cadences and limits of the streams (D-G-34).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StreamTiming {
     pub(crate) tick: Duration,
     pub(crate) ping: Duration,
+    /// The span stream ends after this long without a span.
     pub(crate) idle: Duration,
+    /// Every stream ends this long after it opened (G review M-2).
+    pub(crate) max_age: Duration,
+    /// A stream ends when its client has not made room for an event within this (m-1).
+    pub(crate) send: Duration,
 }
 
 impl StreamTiming {
@@ -43,6 +48,8 @@ impl StreamTiming {
         tick: Duration::from_secs(1),
         ping: Duration::from_secs(15),
         idle: Duration::from_secs(600),
+        max_age: Duration::from_secs(900),
+        send: Duration::from_secs(30),
     };
 
     #[cfg(test)]
@@ -50,6 +57,8 @@ impl StreamTiming {
         tick: Duration::from_millis(20),
         ping: Duration::from_millis(200),
         idle: Duration::from_secs(1),
+        max_age: Duration::from_secs(4),
+        send: Duration::from_millis(100),
     };
 }
 
