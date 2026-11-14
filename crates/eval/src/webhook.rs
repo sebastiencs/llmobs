@@ -29,8 +29,8 @@ const RESPONSE_CAP: usize = 64 * 1024;
 /// Score reason length, in Unicode scalar values.
 const REASON_CHARS: usize = 8_000;
 
-/// `X-Llmobs-Signature`. Lower case, as HTTP header names are compared.
-pub(crate) const SIGNATURE_HEADER: &str = "x-llmobs-signature";
+/// The signature header, lower case. D46 renames it with the product.
+pub const SIGNATURE_HEADER: &str = "x-llmobs-signature";
 
 const NOT_JSON_OBJECT: &str = "not a JSON object";
 const MISSING_VALUE: &str = "missing value";
@@ -166,17 +166,26 @@ fn failed(host: Option<String>, request_body: Vec<u8>, error: WebhookError) -> W
     }
 }
 
-/// `t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<body>")>`.
-fn signature(secret: &Secret, timestamp: i64, body: &[u8]) -> Result<HeaderValue, WebhookError> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.expose().as_bytes())
-        .map_err(|_| WebhookError::InvalidRequest)?;
+/// `t=<timestamp>,v1=<hex HMAC-SHA256(secret, "<timestamp>.<body>")>`, the value of
+/// [`SIGNATURE_HEADER`]. The webhook evaluator and alert webhooks sign the same way.
+///
+/// `None` only when the HMAC cannot be keyed, which HMAC-SHA256 never refuses.
+#[must_use]
+pub fn sign_payload(secret: &Secret, timestamp: i64, body: &[u8]) -> Option<String> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.expose().as_bytes()).ok()?;
     let mut payload = timestamp.to_string().into_bytes();
     payload.push(b'.');
     payload.extend_from_slice(body);
     mac.update(&payload);
-    let hex = hex::encode(mac.finalize().into_bytes());
-    HeaderValue::from_str(&format!("t={timestamp},v1={hex}"))
-        .map_err(|_| WebhookError::InvalidRequest)
+    Some(format!(
+        "t={timestamp},v1={}",
+        hex::encode(mac.finalize().into_bytes())
+    ))
+}
+
+fn signature(secret: &Secret, timestamp: i64, body: &[u8]) -> Result<HeaderValue, WebhookError> {
+    let text = sign_payload(secret, timestamp, body).ok_or(WebhookError::InvalidRequest)?;
+    HeaderValue::from_str(&text).map_err(|_| WebhookError::InvalidRequest)
 }
 
 fn headers(

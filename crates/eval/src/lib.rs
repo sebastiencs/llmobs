@@ -13,6 +13,8 @@
 //!
 //! The crate has no database. A caller hands it an evaluator, already-decrypted
 //! connection material, and the variables or trace data for one run. Spec 06 and D155.
+//!
+//! [`EgressClient`] and [`sign_payload`] are public so the server's alert deliveries share the guard and the signature (D-K-11).
 
 mod check;
 mod config;
@@ -32,7 +34,7 @@ pub use config::{
     Check, ContainsMode, Evaluator, EvaluatorConfig, JudgeConfig, JudgeOutput, OutputScore,
     WebhookConfig,
 };
-pub use egress::EgressPolicy;
+pub use egress::{EgressClient, EgressPolicy, EgressRequest, EgressResponse};
 pub use error::{
     CheckError, ConfigError, EgressError, ErrorClass, EvalError, JudgeError, MappingError,
     TemplateError, WebhookError,
@@ -45,10 +47,14 @@ pub use secret::Secret;
 pub use template::PromptTemplate;
 pub use templates::{JudgeTemplate, builtin_templates};
 pub use trace::{EvalOrigin, EvalTarget};
+pub use webhook::{SIGNATURE_HEADER, sign_payload};
 
 #[cfg(test)]
 #[path = "../tests/anthropic.rs"]
 mod anthropic_tests;
+#[cfg(test)]
+#[path = "../tests/egress_public.rs"]
+mod egress_public_tests;
 #[cfg(test)]
 #[path = "../tests/gemini.rs"]
 mod gemini_tests;

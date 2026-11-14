@@ -148,6 +148,13 @@ impl EvalRunner {
         })
     }
 
+    /// The shared egress client, for other outbound calls that need the same guard
+    /// (alert deliveries, D-K-11).
+    #[must_use]
+    pub fn egress(&self) -> &EgressClient {
+        &self.client
+    }
+
     /// Runs `input` once. A failure is [`EvalRun::outcome`]; the trace is always set.
     pub async fn run(&self, input: RunInput<'_>) -> EvalRun {
         let started = now_ns();

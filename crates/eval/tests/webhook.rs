@@ -526,3 +526,20 @@ async fn keeps_the_secret_out_of_request_failures() {
 fn config_with_header(url: &str, name: &str, value: &str) -> WebhookConfig {
     config(url.to_owned(), vec![(name, value)])
 }
+
+#[test]
+fn sign_payload_matches_the_test_vector() {
+    let secret = Secret::new(VECTOR_SECRET.to_owned());
+    assert_eq!(
+        crate::sign_payload(&secret, 1_700_000_000, BODY.as_bytes()).as_deref(),
+        Some(SIGNATURE)
+    );
+}
+
+#[test]
+fn sign_payload_depends_on_the_timestamp_and_the_body() {
+    let secret = Secret::new(VECTOR_SECRET.to_owned());
+    let base = crate::sign_payload(&secret, 1_700_000_000, b"{}");
+    assert_ne!(base, crate::sign_payload(&secret, 1_700_000_001, b"{}"));
+    assert_ne!(base, crate::sign_payload(&secret, 1_700_000_000, b"{ }"));
+}
