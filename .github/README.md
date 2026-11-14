@@ -61,6 +61,15 @@ The bucket stays private; neither public access nor CORS configuration is
 needed. GitHub's workflow token keeps `contents: read`, and kache writes its
 report to the job summary without posting PR comments.
 
+## Linker
+
+The Rust jobs link with mold 3.0.0 (installed by `actions/rust/action.yml`) rather
+than the default `rust-lld`, selected workflow-wide by
+`RUSTFLAGS: -Clinker-features=-lld -Clink-arg=-fuse-ld=mold` in `ci.yml`. mold
+links the workspace test binaries and the `llmobs` binary several times faster.
+The flag lives in CI only: local builds are unaffected, and any `RUSTFLAGS`
+change changes every kache cache key, so one cold run repopulates the store.
+
 ## First runs
 
 After the secrets are configured, a qualifying owner PR or a run on `main` can

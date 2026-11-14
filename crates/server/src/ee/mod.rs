@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: Elastic-2.0
+//! Enterprise code (D172, D-P-1). Licensed under the Elastic License 2.0 (`LICENSE` here);
+//! the rest of the crate is MIT. Core code calls these modules directly.
+
+pub(crate) mod license;
+pub(crate) mod project_roles;
+pub(crate) mod sso_enforcement;
+pub(crate) mod token;

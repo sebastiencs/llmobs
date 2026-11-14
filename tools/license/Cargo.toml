@@ -1,0 +1,22 @@
+[package]
+name = "llmobs-license-tool"
+description = "Sign llmobs licence keys and entitlement tokens with a seed file (development and trials)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+license = "Elastic-2.0"
+
+[[bin]]
+name = "llmobs-license"
+path = "src/main.rs"
+
+[dependencies]
+base64 = { workspace = true }
+clap = { workspace = true }
+ed25519-dalek = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

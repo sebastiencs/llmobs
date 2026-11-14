@@ -8,6 +8,7 @@ pub mod admin;
 pub mod common;
 pub mod connections;
 pub(crate) mod convert;
+pub mod entitlements;
 pub mod evaluators;
 pub mod invites;
 pub mod keys;

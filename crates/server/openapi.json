@@ -310,7 +310,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -386,7 +386,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -497,7 +497,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -552,7 +552,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -614,7 +614,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -686,7 +686,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -769,7 +769,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -816,6 +816,62 @@
         ]
       }
     },
+    "/api/v1/admin/license": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read the instance licence",
+        "operationId": "get_admin_license",
+        "responses": {
+          "200": {
+            "description": "The licence status. The key itself is never returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminLicense"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/settings": {
       "get": {
         "tags": [
@@ -845,7 +901,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -904,7 +960,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1001,7 +1057,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1075,7 +1131,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1172,7 +1228,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1269,7 +1325,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1365,7 +1421,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1424,7 +1480,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1511,7 +1567,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1595,7 +1651,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1644,7 +1700,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1720,7 +1776,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1938,7 +1994,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2028,7 +2084,80 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{org}/entitlements": {
+      "get": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "Read the org's entitlements",
+        "description": "Features the org may use now and where Upgrade buttons go (D179). Any org member.",
+        "operationId": "get_org_entitlements",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Org UUID or slug.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The org's entitlements.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgEntitlements"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2129,7 +2258,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2219,7 +2348,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2319,7 +2448,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2426,7 +2555,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2517,7 +2646,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2620,7 +2749,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2704,7 +2833,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2815,7 +2944,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2928,7 +3057,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3029,7 +3158,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3114,7 +3243,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3229,7 +3358,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3345,7 +3474,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3435,7 +3564,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3517,7 +3646,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3607,7 +3736,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3708,7 +3837,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3803,7 +3932,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3893,7 +4022,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3971,7 +4100,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4073,7 +4202,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4164,7 +4293,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4267,7 +4396,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4370,7 +4499,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4454,7 +4583,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4555,7 +4684,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4685,7 +4814,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4806,7 +4935,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4908,7 +5037,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4996,7 +5125,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5147,7 +5276,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5278,7 +5407,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5369,7 +5498,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5485,7 +5614,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5586,7 +5715,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5688,7 +5817,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5799,7 +5928,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5890,7 +6019,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5986,7 +6115,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6087,7 +6216,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6270,7 +6399,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6381,7 +6510,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6487,7 +6616,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6662,7 +6791,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6792,7 +6921,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6986,7 +7115,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -7115,7 +7244,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -7329,7 +7458,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -7468,7 +7597,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -7589,7 +7718,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -7709,7 +7838,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -7821,7 +7950,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -7986,7 +8115,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -8116,7 +8245,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -8218,7 +8347,7 @@
             }
           },
           "403": {
-            "description": "The credentials do not allow this operation.",
+            "description": "The credentials do not allow this operation, or the organization's plan does not include it (code plan_required).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -8278,6 +8407,50 @@
   },
   "components": {
     "schemas": {
+      "AdminLicense": {
+        "type": "object",
+        "description": "`GET /api/v1/admin/license`. Never contains the key.",
+        "required": [
+          "status",
+          "features"
+        ],
+        "properties": {
+          "customer": {
+            "type": "string",
+            "description": "Customer name. Omitted with `none` and `invalid`."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Omitted with `none` and `invalid`."
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Feature"
+            },
+            "description": "Features the licence lists, known to this build, expired or not. Empty with `none` and `invalid`."
+          },
+          "grace_ends_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Omitted with `none` and `invalid`."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Licence id. Omitted with `none` and `invalid`."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why the key was refused. Only with `invalid`."
+          },
+          "status": {
+            "$ref": "#/components/schemas/LicenseStatus",
+            "description": "The status now."
+          }
+        }
+      },
       "AdminResetLink": {
         "type": "object",
         "description": "`POST /api/v1/admin/users/{id}/reset-link` returns 200.",
@@ -8301,6 +8474,7 @@
           "password_enabled",
           "email_verification_required",
           "enforce_sso_domains",
+          "enforce_sso_applied",
           "smtp_enabled",
           "providers",
           "trusted_proxies"
@@ -8313,6 +8487,10 @@
           "email_verification_required": {
             "type": "boolean",
             "description": "New accounts must verify their email before signing in."
+          },
+          "enforce_sso_applied": {
+            "type": "boolean",
+            "description": "Whether `enforce_sso_domains` is applied: it needs a licence listing `sso_enforcement`."
           },
           "enforce_sso_domains": {
             "type": "array",
@@ -9501,6 +9679,14 @@
           }
         }
       },
+      "Feature": {
+        "type": "string",
+        "description": "A feature an org may be entitled to. Names are append-only (D-P-12).",
+        "enum": [
+          "project_roles",
+          "sso_enforcement"
+        ]
+      },
       "FeedbackRequest": {
         "type": "object",
         "description": "`POST /api/public/feedback` body (spec 06 § End-user feedback).",
@@ -9781,6 +9967,17 @@
           "latency_p95",
           "cost_total",
           "total_tokens"
+        ]
+      },
+      "LicenseStatus": {
+        "type": "string",
+        "description": "Where the instance licence stands (D-P-7).",
+        "enum": [
+          "none",
+          "invalid",
+          "active",
+          "grace",
+          "expired"
         ]
       },
       "Limit": {
@@ -10248,6 +10445,26 @@
           }
         }
       },
+      "OrgEntitlements": {
+        "type": "object",
+        "description": "`GET /api/v1/orgs/{org}/entitlements` (D-P-15). M2 adds the plan and limits; M3 the usage.",
+        "required": [
+          "features"
+        ],
+        "properties": {
+          "features": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Feature"
+            },
+            "description": "Features the org may use now, in a fixed order."
+          },
+          "upgrade_url": {
+            "type": "string",
+            "description": "Where an Upgrade button goes. Omitted when the instance sets none."
+          }
+        }
+      },
       "OrgId": {
         "type": "string",
         "format": "uuid",
@@ -10619,6 +10836,7 @@
           "forbidden",
           "sso_required",
           "email_not_verified",
+          "plan_required",
           "not_found",
           "method_not_allowed",
           "payload_too_large",

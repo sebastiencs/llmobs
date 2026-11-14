@@ -268,6 +268,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/license": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the instance licence */
+        get: operations["get_admin_license"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/settings": {
         parameters: {
             query?: never;
@@ -474,6 +491,26 @@ export interface paths {
         head?: never;
         /** Rename an organization */
         patch: operations["patch_org"];
+        trace?: never;
+    };
+    "/api/v1/orgs/{org}/entitlements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the org's entitlements
+         * @description Features the org may use now and where Upgrade buttons go (D179). Any org member.
+         */
+        get: operations["get_org_entitlements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/orgs/{org}/invites": {
@@ -1251,6 +1288,32 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description `GET /api/v1/admin/license`. Never contains the key. */
+        AdminLicense: {
+            /** @description Customer name. Omitted with `none` and `invalid`. */
+            customer?: string;
+            /**
+             * Format: date-time
+             * @description Omitted with `none` and `invalid`.
+             */
+            expires_at?: string;
+            /** @description Features the licence lists, known to this build, expired or not. Empty with `none` and `invalid`. */
+            features: components["schemas"]["Feature"][];
+            /**
+             * Format: date-time
+             * @description Omitted with `none` and `invalid`.
+             */
+            grace_ends_at?: string;
+            /**
+             * Format: uuid
+             * @description Licence id. Omitted with `none` and `invalid`.
+             */
+            id?: string;
+            /** @description Why the key was refused. Only with `invalid`. */
+            reason?: string;
+            /** @description The status now. */
+            status: components["schemas"]["LicenseStatus"];
+        };
         /** @description `POST /api/v1/admin/users/{id}/reset-link` returns 200. */
         AdminResetLink: {
             /** @description `<public_url>/reset?token=…`. Valid for one hour. */
@@ -1266,6 +1329,8 @@ export interface components {
             email_from?: string;
             /** @description New accounts must verify their email before signing in. */
             email_verification_required: boolean;
+            /** @description Whether `enforce_sso_domains` is applied: it needs a licence listing `sso_enforcement`. */
+            enforce_sso_applied: boolean;
             /** @description Domains that must use SSO. Empty means SSO is not required. */
             enforce_sso_domains: string[];
             /** @description Password login is enabled. */
@@ -1861,6 +1926,11 @@ export interface components {
              */
             output_tokens?: number;
         };
+        /**
+         * @description A feature an org may be entitled to. Names are append-only (D-P-12).
+         * @enum {string}
+         */
+        Feature: "project_roles" | "sso_enforcement";
         /** @description `POST /api/public/feedback` body (spec 06 § End-user feedback). */
         FeedbackRequest: {
             /** @description Free-text comment. */
@@ -2008,6 +2078,11 @@ export interface components {
          * @enum {string}
          */
         KpiMetric: "traces" | "error_rate" | "latency_p95" | "cost_total" | "total_tokens";
+        /**
+         * @description Where the instance licence stands (D-P-7).
+         * @enum {string}
+         */
+        LicenseStatus: "none" | "invalid" | "active" | "grace" | "expired";
         /**
          * Format: int32
          * @description Page size. Default 50, accepted range 1–1000.
@@ -2265,6 +2340,13 @@ export interface components {
              */
             total_tokens?: number;
         };
+        /** @description `GET /api/v1/orgs/{org}/entitlements` (D-P-15). M2 adds the plan and limits; M3 the usage. */
+        OrgEntitlements: {
+            /** @description Features the org may use now, in a fixed order. */
+            features: components["schemas"]["Feature"][];
+            /** @description Where an Upgrade button goes. Omitted when the instance sets none. */
+            upgrade_url?: string;
+        };
         /**
          * Format: uuid
          * @description Organization id. A UUID, created as UUIDv7 and parsed from any version.
@@ -2430,7 +2512,7 @@ export interface components {
          *     Spec 09 § Conventions. Later endpoints add codes.
          * @enum {string}
          */
-        ProblemCode: "bad_request" | "invalid_filter" | "query_failed" | "query_timeout" | "query_too_large" | "busy" | "unauthorized" | "forbidden" | "sso_required" | "email_not_verified" | "not_found" | "method_not_allowed" | "payload_too_large" | "unsupported_media_type" | "range_not_satisfiable" | "conflict" | "rate_limited" | "internal";
+        ProblemCode: "bad_request" | "invalid_filter" | "query_failed" | "query_timeout" | "query_too_large" | "busy" | "unauthorized" | "forbidden" | "sso_required" | "email_not_verified" | "plan_required" | "not_found" | "method_not_allowed" | "payload_too_large" | "unsupported_media_type" | "range_not_satisfiable" | "conflict" | "rate_limited" | "internal";
         /**
          * @description A project the caller can see.
          *
@@ -4093,7 +4175,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4153,7 +4235,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4258,7 +4340,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4307,7 +4389,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4358,7 +4440,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4418,7 +4500,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4487,7 +4569,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4507,6 +4589,53 @@ export interface operations {
             };
             /** @description The request body is larger than the limit. */
             413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_admin_license: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The licence status. The key itself is never returned. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminLicense"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4552,7 +4681,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4606,7 +4735,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4676,7 +4805,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4736,7 +4865,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4808,7 +4937,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4885,7 +5014,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4963,7 +5092,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5012,7 +5141,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5073,7 +5202,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5142,7 +5271,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5187,7 +5316,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5253,7 +5382,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5424,7 +5553,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5496,7 +5625,66 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_org_entitlements: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Org UUID or slug. */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The org's entitlements. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgEntitlements"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5569,7 +5757,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5641,7 +5829,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5718,7 +5906,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5791,7 +5979,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5863,7 +6051,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5942,7 +6130,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6010,7 +6198,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6093,7 +6281,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6176,7 +6364,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6249,7 +6437,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6317,7 +6505,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6400,7 +6588,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6482,7 +6670,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6554,7 +6742,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6622,7 +6810,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6694,7 +6882,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6767,7 +6955,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6839,7 +7027,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6907,7 +7095,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6966,7 +7154,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7039,7 +7227,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7111,7 +7299,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7192,7 +7380,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7271,7 +7459,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7339,7 +7527,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7413,7 +7601,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7497,7 +7685,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7588,7 +7776,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7662,7 +7850,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7730,7 +7918,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7813,7 +8001,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7906,7 +8094,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7978,7 +8166,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8073,7 +8261,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8147,7 +8335,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8233,7 +8421,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8308,7 +8496,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8380,7 +8568,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8457,7 +8645,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8531,7 +8719,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8629,7 +8817,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8719,7 +8907,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8805,7 +8993,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8901,7 +9089,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8994,7 +9182,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9101,7 +9289,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9194,7 +9382,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9319,7 +9507,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9418,7 +9606,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9509,7 +9697,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9599,7 +9787,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9687,7 +9875,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9774,7 +9962,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9867,7 +10055,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9954,7 +10142,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The credentials do not allow this operation. */
+            /** @description The credentials do not allow this operation, or the organization's plan does not include it (code plan_required). */
             403: {
                 headers: {
                     [name: string]: unknown;

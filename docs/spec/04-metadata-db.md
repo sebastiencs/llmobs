@@ -41,7 +41,6 @@ CREATE TABLE web_sessions (
 
 CREATE TABLE orgs (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE,
-  limits TEXT NOT NULL DEFAULT '{}',  -- unused; track P's M2 drops it for org_entitlements (D179, D-P-9)
   state TEXT NOT NULL DEFAULT 'active', -- 'active' | 'deleting'
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
@@ -450,6 +449,26 @@ CREATE INDEX notification_deliveries_due ON notification_deliveries(status, next
 CREATE INDEX notification_deliveries_event ON notification_deliveries(event_id);
 CREATE INDEX notification_deliveries_channel ON notification_deliveries(channel_id, updated_at);
 ```
+
+## Entitlements (track P)
+
+```sql
+CREATE TABLE org_entitlements (           -- the newest accepted org token (D-P-11)
+  org_id TEXT PRIMARY KEY REFERENCES orgs(id) ON DELETE CASCADE,
+  token TEXT NOT NULL,                    -- as received; never logged
+  token_id TEXT NOT NULL,
+  issued_at INTEGER NOT NULL,
+  received_at INTEGER NOT NULL
+);
+CREATE TABLE org_window_ends (            -- data windows that stopped applying, kept 30 days (D-P-30)
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  ended_at INTEGER NOT NULL,
+  data_access_days INTEGER,               -- NULL = unlimited
+  PRIMARY KEY (org_id, ended_at)
+);
+```
+
+`orgs` has no `limits` column: track P's M2 drops it (D179, D-P-9).
 
 ## Metering & instance
 

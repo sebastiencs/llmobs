@@ -78,6 +78,8 @@ pub(crate) struct AppInner {
     pub(crate) trace_loads: crate::eval::trace_load::TraceLoads,
     /// Live score definitions (D-I-26).
     pub(crate) definitions: crate::eval::definitions::DefinitionCache,
+    /// Licence and (from M2) org entitlements (D179, D-P-10).
+    pub(crate) entitlements: crate::entitlements::EntitlementsState,
 }
 
 impl AppState {
@@ -402,6 +404,7 @@ mod tests {
             }),
             403
         );
+        assert_eq!(status_of(ApiError::PlanRequired { detail: "x" }), 403);
         assert_eq!(status_of(ApiError::NotFound), 404);
         assert_eq!(
             status_of(ApiError::Conflict {

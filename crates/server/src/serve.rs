@@ -279,6 +279,10 @@ pub async fn bind(config: ServerConfig, ui: Option<axum::Router>) -> Result<Runn
             }));
         }
     };
+    let license = crate::ee::license::LicenseState::from_key(
+        config.license_key.as_ref().map(|key| key.expose().as_str()),
+    );
+    crate::entitlements::log_license(&license, Clock::System.now_ns());
     let storage = Arc::new(storage);
     let state = AppState::new(AppInner {
         config,
@@ -304,7 +308,9 @@ pub async fn bind(config: ServerConfig, ui: Option<axum::Router>) -> Result<Runn
         connections: crate::eval::connection::ConnectionCache::default(),
         trace_loads: crate::eval::trace_load::TraceLoads::default(),
         definitions: crate::eval::definitions::DefinitionCache::default(),
+        entitlements: crate::entitlements::EntitlementsState::new(license),
     });
+    crate::ee::sso_enforcement::warn_if_unlicensed(&state);
     if let Err(error) = crate::bootstrap::prepare(&state).await {
         release_state(state).await;
         return Err(serve_bootstrap(error));
@@ -642,8 +648,8 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        AuthSettings, EvalConfig, IngestConfig, InitConfig, LogConfig, MediaConfig, PublicUrl,
-        Secret, SecurityConfig,
+        AuthSettings, EntitlementsConfig, EvalConfig, IngestConfig, InitConfig, LogConfig,
+        MediaConfig, PublicUrl, Secret, SecurityConfig,
     };
     use crate::crypto::{decode_key, encode_key, random_key, write_key_file};
     use crate::meta::instance_settings::put_setting;
@@ -1244,7 +1250,9 @@ mod tests {
             media: MediaConfig::default(),
             eval: EvalConfig::default(),
             security: SecurityConfig::default(),
+            entitlements: EntitlementsConfig::default(),
             encryption_key: None,
+            license_key: None,
             auth: AuthSettings::default(),
             smtp_url: None,
             email_from: None,

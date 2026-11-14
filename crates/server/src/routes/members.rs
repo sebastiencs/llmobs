@@ -5,15 +5,14 @@ use std::collections::HashMap;
 
 use axum::extract::{Extension, State};
 use axum::http::StatusCode;
-use axum::routing::{delete, get, patch, put};
+use axum::routing::{delete, get, patch};
 use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::api::account::OrgRole;
 use crate::api::common::{Page, PageParams, ProblemCode};
 use crate::api::members::{
-    MemberUser, OrgMember, ProjectMember, ProjectRoleOverride, SetProjectOverrideRequest,
-    UpdateOrgMemberRequest,
+    MemberUser, OrgMember, ProjectMember, ProjectRoleOverride, UpdateOrgMemberRequest,
 };
 use crate::auth::principal::{self, Principal};
 use crate::auth::roles::{self, OrgPerm, ProjectOverride, ProjectPerm, Role};
@@ -68,35 +67,15 @@ pub(crate) fn routes() -> Vec<RouteDef> {
             documented: true,
             handler: get(list_project_members),
         },
-        RouteDef {
-            method: axum::http::Method::PUT,
-            path: "/api/v1/projects/{project}/members/{user}",
-            access: Access::Project {
-                perm: ProjectPerm::ManageMembers,
-                session_only: true,
-            },
-            documented: true,
-            handler: put(set_project_override),
-        },
-        RouteDef {
-            method: axum::http::Method::DELETE,
-            path: "/api/v1/projects/{project}/members/{user}",
-            access: Access::Project {
-                perm: ProjectPerm::ManageMembers,
-                session_only: true,
-            },
-            documented: true,
-            handler: delete(remove_project_override),
-        },
     ]
 }
 
 #[derive(Debug, Deserialize)]
-struct UserPath {
-    user: Uuid,
+pub(crate) struct UserPath {
+    pub(crate) user: Uuid,
 }
 
-enum MemberChange {
+pub(crate) enum MemberChange {
     Done,
     Missing,
     Forbidden,
@@ -252,71 +231,6 @@ async fn list_project_members(
     )?))
 }
 
-async fn set_project_override(
-    State(state): State<AppState>,
-    Extension(access): Extension<ProjectAccess>,
-    error::Path(UserPath { user: target }): error::Path<UserPath>,
-    error::Json(body): error::Json<SetProjectOverrideRequest>,
-) -> Result<error::Json<ProjectMember>, ApiError> {
-    let org_id = access.project.org_id;
-    let project_id = access.project.id;
-    let override_role = stored_override(body.role);
-    let outcome = state
-        .meta
-        .write(move |conn| {
-            Box::pin(async move {
-                let Some(role) = members::org_role_tx(conn, org_id, target).await? else {
-                    return Ok(MemberChange::Missing);
-                };
-                if matches!(role, OrgRole::Owner | OrgRole::Admin) {
-                    return Ok(MemberChange::Forbidden);
-                }
-                members::set_project_override(conn, project_id, target, override_role).await?;
-                Ok(MemberChange::Done)
-            })
-        })
-        .await?;
-    match outcome {
-        MemberChange::Done => {}
-        MemberChange::Missing => return Err(ApiError::NotFound),
-        MemberChange::Forbidden => {
-            return Err(ApiError::BadRequest {
-                detail: Some("owners and admins cannot be overridden".to_owned()),
-                errors: Vec::new(),
-            });
-        }
-    }
-    let stored = members::project_override(state.meta.reader(), project_id, target).await?;
-    let members = members::org_members(state.meta.reader(), org_id).await?;
-    let Some(member) = members.into_iter().find(|member| member.user.id == target) else {
-        return Err(ApiError::NotFound);
-    };
-    Ok(error::Json(project_member(&member, stored)))
-}
-
-async fn remove_project_override(
-    State(state): State<AppState>,
-    Extension(access): Extension<ProjectAccess>,
-    error::Path(UserPath { user: target }): error::Path<UserPath>,
-) -> Result<StatusCode, ApiError> {
-    let org_id = access.project.org_id;
-    let project_id = access.project.id;
-    let belongs = members::org_role(state.meta.reader(), org_id, target).await?;
-    if belongs.is_none() {
-        return Err(ApiError::NotFound);
-    }
-    state
-        .meta
-        .write(move |conn| {
-            Box::pin(async move {
-                members::remove_project_override(conn, project_id, target).await?;
-                Ok(())
-            })
-        })
-        .await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
 /// Nobody sets a role above their own, and only an owner changes an owner or grants `owner`.
 fn may_set_role(actor: OrgRole, target: OrgRole, new_role: OrgRole) -> bool {
     if target == OrgRole::Owner && actor != OrgRole::Owner {
@@ -356,7 +270,7 @@ fn org_member(member: &MemberRow) -> OrgMember {
     }
 }
 
-fn project_member(member: &MemberRow, stored: Option<ProjectOverride>) -> ProjectMember {
+pub(crate) fn project_member(member: &MemberRow, stored: Option<ProjectOverride>) -> ProjectMember {
     let effective = roles::effective_project_role(member.role, stored).map(api_role);
     ProjectMember {
         user: member_user(member),
@@ -388,15 +302,6 @@ fn api_override(role: ProjectOverride) -> ProjectRoleOverride {
         ProjectOverride::Member => ProjectRoleOverride::Member,
         ProjectOverride::Viewer => ProjectRoleOverride::Viewer,
         ProjectOverride::None => ProjectRoleOverride::None,
-    }
-}
-
-fn stored_override(role: ProjectRoleOverride) -> ProjectOverride {
-    match role {
-        ProjectRoleOverride::Admin => ProjectOverride::Admin,
-        ProjectRoleOverride::Member => ProjectOverride::Member,
-        ProjectRoleOverride::Viewer => ProjectOverride::Viewer,
-        ProjectRoleOverride::None => ProjectOverride::None,
     }
 }
 
@@ -717,163 +622,5 @@ mod tests {
             .await
             .unwrap();
         assert!(stored.is_none());
-    }
-
-    #[tokio::test]
-    async fn overrides_hide_projects_and_respect_the_ceiling() {
-        let app = TestApp::new().await;
-        let (_, ada) = signed_in(&app, "ada@example.com").await;
-        let (admin_id, _) = signed_in(&app, "admin@example.com").await;
-        let (member_id, member) = signed_in(&app, "member@example.com").await;
-        let (viewer_id, viewer) = signed_in(&app, "viewer@example.com").await;
-        let (outsider_id, _) = signed_in(&app, "outsider@example.com").await;
-        let org = create_org(&app, &ada, "Acme").await;
-        add_member(&app, org.id, admin_id, OrgRole::Admin).await;
-        add_member(&app, org.id, member_id, OrgRole::Member).await;
-        add_member(&app, org.id, viewer_id, OrgRole::Viewer).await;
-        let first = create_project(&app, &ada, "acme", "Alpha").await;
-        let second = create_project(&app, &ada, "acme", "Beta").await;
-
-        let not_admin = app
-            .request(
-                Method::PUT,
-                &format!("/api/v1/projects/{}/members/{viewer_id}", first.id),
-            )
-            .header(header::COOKIE.as_str(), &member)
-            .json(&serde_json::json!({ "role": "none" }))
-            .send()
-            .await;
-        assert_eq!(not_admin.status, 403);
-
-        let on_admin = app
-            .request(
-                Method::PUT,
-                &format!("/api/v1/projects/{}/members/{admin_id}", first.id),
-            )
-            .header(header::COOKIE.as_str(), &ada)
-            .json(&serde_json::json!({ "role": "viewer" }))
-            .send()
-            .await;
-        assert_eq!(on_admin.status, 400);
-        assert_eq!(
-            on_admin.problem().detail.as_deref(),
-            Some("owners and admins cannot be overridden")
-        );
-
-        let missing = app
-            .request(
-                Method::PUT,
-                &format!("/api/v1/projects/{}/members/{outsider_id}", first.id),
-            )
-            .header(header::COOKIE.as_str(), &ada)
-            .json(&serde_json::json!({ "role": "none" }))
-            .send()
-            .await;
-        assert_eq!(missing.status, 404);
-
-        let hidden = app
-            .request(
-                Method::PUT,
-                &format!("/api/v1/projects/{}/members/{member_id}", first.id),
-            )
-            .header(header::COOKIE.as_str(), &ada)
-            .json(&serde_json::json!({ "role": "none" }))
-            .send()
-            .await;
-        assert_eq!(hidden.status, 200);
-        let hidden: ProjectMember = hidden.json();
-        assert_eq!(hidden.role_override, Some(ProjectRoleOverride::None));
-        assert!(hidden.effective_role.is_none());
-
-        let get_hidden = app
-            .request(Method::GET, &format!("/api/v1/projects/{}", first.id))
-            .header(header::COOKIE.as_str(), &member)
-            .send()
-            .await;
-        assert_eq!(get_hidden.status, 404);
-        let listed: Page<Project> = app
-            .request(Method::GET, "/api/v1/orgs/acme/projects")
-            .header(header::COOKIE.as_str(), &member)
-            .send()
-            .await
-            .json();
-        assert!(listed.data.iter().all(|project| project.id != first.id));
-        assert!(listed.data.iter().any(|project| project.id == second.id));
-
-        let raised = app
-            .request(
-                Method::PUT,
-                &format!("/api/v1/projects/{}/members/{viewer_id}", first.id),
-            )
-            .header(header::COOKIE.as_str(), &ada)
-            .json(&serde_json::json!({ "role": "admin" }))
-            .send()
-            .await;
-        assert_eq!(raised.status, 200);
-
-        let managed = app
-            .request(
-                Method::PUT,
-                &format!("/api/v1/projects/{}/members/{member_id}", first.id),
-            )
-            .header(header::COOKIE.as_str(), &viewer)
-            .json(&serde_json::json!({ "role": "viewer" }))
-            .send()
-            .await;
-        assert_eq!(managed.status, 200);
-
-        let other_project = app
-            .request(
-                Method::PUT,
-                &format!("/api/v1/projects/{}/members/{member_id}", second.id),
-            )
-            .header(header::COOKIE.as_str(), &viewer)
-            .json(&serde_json::json!({ "role": "viewer" }))
-            .send()
-            .await;
-        assert_eq!(other_project.status, 403);
-
-        let cleared = app
-            .request(
-                Method::DELETE,
-                &format!("/api/v1/projects/{}/members/{member_id}", first.id),
-            )
-            .header(header::COOKIE.as_str(), &ada)
-            .send()
-            .await;
-        assert_eq!(cleared.status, 204);
-        let again = app
-            .request(
-                Method::DELETE,
-                &format!("/api/v1/projects/{}/members/{member_id}", first.id),
-            )
-            .header(header::COOKIE.as_str(), &ada)
-            .send()
-            .await;
-        assert_eq!(again.status, 204);
-
-        let lowered = app
-            .request(
-                Method::PUT,
-                &format!("/api/v1/projects/{}/members/{viewer_id}", first.id),
-            )
-            .header(header::COOKIE.as_str(), &viewer)
-            .json(&serde_json::json!({ "role": "member" }))
-            .send()
-            .await;
-        assert_eq!(lowered.status, 200);
-        let lowered: ProjectMember = lowered.json();
-        assert_eq!(lowered.user.id, viewer_id);
-        assert_eq!(lowered.role_override, Some(ProjectRoleOverride::Member));
-        let lost = app
-            .request(
-                Method::PUT,
-                &format!("/api/v1/projects/{}/members/{member_id}", first.id),
-            )
-            .header(header::COOKIE.as_str(), &viewer)
-            .json(&serde_json::json!({ "role": "viewer" }))
-            .send()
-            .await;
-        assert_eq!(lost.status, 403);
     }
 }
