@@ -1,6 +1,6 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { Waypoints } from "lucide-react";
+import { Trash2, Waypoints } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { problemOf } from "@/api/problem";
 import { projectRef } from "@/api/project-ref";
@@ -16,6 +16,8 @@ import {
 import { DataTable } from "@/components/data-table/data-table";
 import { traceListOptions } from "@/components/data-table/use-infinite-list";
 import { useLiveTraces } from "@/components/data-table/use-live-traces";
+import { DeleteMatchingDialog } from "@/components/deletions/delete-matching-dialog";
+import { DisabledReason } from "@/components/disabled-reason";
 import { FilterBar } from "@/components/filter-bar/filter-bar";
 import { appendFilter, filterMessage } from "@/components/filter-bar/logic";
 import { ListToolbar } from "@/components/list-toolbar";
@@ -31,6 +33,7 @@ import { TraceView } from "@/components/trace/trace-view";
 import { orderedTraceColumns, scoreNames, traceColumnSpecs } from "@/components/trace-columns";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { atLeast } from "@/lib/roles";
 import {
   parseTracesSearch,
   type TraceMode,
@@ -62,9 +65,11 @@ export const Route = createFileRoute("/$org/$project/traces/")({
 });
 
 function TracesPage() {
-  const { org, project } = useProject();
+  const { org, project, data } = useProject();
+  const canDelete = atLeast(data.role, "admin");
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const applyView = useCallback(
     (next: Record<string, unknown>) => {
       void navigate({
@@ -313,8 +318,40 @@ function TracesPage() {
                   columns={
                     <ColumnChooser columns={specs} visible={visible} onVisible={onColumns} />
                   }
-                  views={<SavedViewsMenu kind="traces" search={search} onApply={applyView} />}
+                  views={
+                    <>
+                      <SavedViewsMenu kind="traces" search={search} onApply={applyView} />
+                      <DisabledReason
+                        reason={canDelete ? undefined : "Only project admins can delete traces"}
+                      >
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={!canDelete}
+                          onClick={() => {
+                            setDeleteOpen(true);
+                          }}
+                        >
+                          <Trash2 />
+                          Delete matching…
+                        </Button>
+                      </DisabledReason>
+                    </>
+                  }
                   loaded={list.data ? rows.length : undefined}
+                />
+                <DeleteMatchingDialog
+                  open={deleteOpen}
+                  onOpenChange={setDeleteOpen}
+                  selection={{
+                    filter: search.filter,
+                    search: search.search,
+                    from: resolved.from,
+                    to: resolved.to,
+                    includeEval: search.eval === 1,
+                    includeExperiments: search.exp === 1,
+                  }}
                 />
                 {filterError ? (
                   <div className="mx-auto flex max-w-md flex-col gap-2 px-4 py-16">

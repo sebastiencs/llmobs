@@ -891,3 +891,42 @@ function stubClipboard() {
   });
   return writeText;
 }
+
+function projectAs(role: string) {
+  return http.get("/api/v1/projects/:project", () =>
+    HttpResponse.json({ ...projectFixture, role }),
+  );
+}
+
+it("previews the delete of the traces the list shows", async () => {
+  let previewBody: unknown;
+  server.use(
+    http.post("/api/v1/projects/:project/deletions/preview", async ({ request }) => {
+      previewBody = await request.json();
+      return HttpResponse.json({ matched_traces: 2, capped: false });
+    }),
+  );
+  const { user } = await renderApp(
+    "/acme/support-bot/traces?filter=status%20%3D%20'error'&search=refund&range=24h&eval=1",
+  );
+  await user.click(await screen.findByRole("button", { name: "Delete matching…" }));
+
+  expect(await screen.findByText(/^2 traces match/)).toBeInTheDocument();
+  const body = previewBody as { from: string; to: string };
+  expect(body).toMatchObject({
+    filter: "status = 'error'",
+    search: "refund",
+    include_eval: true,
+    include_experiments: false,
+  });
+  expect(Date.parse(body.from)).toBeLessThan(Date.parse(body.to));
+});
+
+it("disables delete matching for members, with the reason", async () => {
+  server.use(projectAs("member"));
+  await renderApp("/acme/support-bot/traces");
+
+  const button = await screen.findByRole("button", { name: "Delete matching…" });
+  expect(button).toBeDisabled();
+  expect(button.parentElement).toHaveAccessibleDescription("Only project admins can delete traces");
+});

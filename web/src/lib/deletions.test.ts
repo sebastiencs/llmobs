@@ -1,3 +1,4 @@
+import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import type { Schema } from "@/api/types";
 import {
@@ -5,6 +6,7 @@ import {
   deletionErrorLabel,
   deletionStatusLabel,
   deletionSubject,
+  invalidateProjectReads,
   isOpenDeletion,
 } from "./deletions";
 
@@ -96,4 +98,17 @@ describe("isOpenDeletion", () => {
     expect(isOpenDeletion({ ...base, kind: "user", status: "applied" })).toBe(false);
     expect(isOpenDeletion({ ...base, kind: "user", status: "failed" })).toBe(false);
   });
+});
+
+it("invalidates the project's reads and leaves other queries alone", async () => {
+  const queryClient = new QueryClient();
+  const projectRead = ["get", "/api/v1/projects/{project}/traces", {}] as const;
+  const orgRead = ["get", "/api/v1/orgs/{org}/projects", {}] as const;
+  queryClient.setQueryData(projectRead, { data: [] });
+  queryClient.setQueryData(orgRead, { data: [] });
+
+  await invalidateProjectReads(queryClient);
+
+  expect(queryClient.getQueryState(projectRead)?.isInvalidated).toBe(true);
+  expect(queryClient.getQueryState(orgRead)?.isInvalidated).toBe(false);
 });

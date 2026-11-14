@@ -1,8 +1,16 @@
-import { Link } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { cn } from "cn";
-import { SquareArrowOutUpRight, X } from "lucide-react";
+import { SquareArrowOutUpRight, Trash2, X } from "lucide-react";
+import { useState } from "react";
+import { $api } from "@/api/client";
+import { problemMessage } from "@/api/problem";
+import { traceDetailQuery } from "@/api/queries";
 import type { Schema } from "@/api/types";
+import { forgetTrace } from "@/components/command/recent-traces";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CopyButton } from "@/components/copy-button";
+import { DisabledReason } from "@/components/disabled-reason";
 import { IdText } from "@/components/id-text";
 import { useProject } from "@/components/shell/project-context";
 import { StatusDot } from "@/components/status-dot";
@@ -10,7 +18,9 @@ import { TimeText } from "@/components/time-text";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { invalidateProjectReads } from "@/lib/deletions";
 import { formatCost, formatDuration, formatTokens } from "@/lib/format";
+import { atLeast } from "@/lib/roles";
 import type { TraceMode } from "@/lib/search/traces";
 import type { StreamStatus } from "@/lib/sse";
 
@@ -34,9 +44,39 @@ export function TraceHeader({
   onClose?: () => void;
   live?: { status: StreamStatus; onStop: () => void };
 }) {
-  const { org, project } = useProject();
+  const { org, project, ref, data } = useProject();
   const search = pageSearch(spanId, mode);
   const href = traceHref(org, project, trace.trace_id, search);
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const deletion = $api.useMutation("post", "/api/v1/projects/{project}/deletions");
+  const canDelete = atLeast(data.role, "admin");
+
+  function deleteTrace() {
+    deletion.mutate(
+      {
+        params: { path: { project: ref } },
+        body: { kind: "trace_ids", trace_ids: [trace.trace_id] },
+      },
+      {
+        onSuccess: async () => {
+          setConfirmOpen(false);
+          forgetTrace(trace.trace_id);
+          if (onClose) {
+            onClose();
+          } else {
+            await navigate({ to: "/$org/$project/traces", params: { org, project } });
+          }
+          // Drop the cached detail so a view still mounted does not flash "Could not load this trace".
+          queryClient.removeQueries({
+            queryKey: traceDetailQuery(org, project, trace.trace_id).queryKey,
+          });
+          void invalidateProjectReads(queryClient);
+        },
+      },
+    );
+  }
 
   return (
     <TooltipProvider>
@@ -67,6 +107,23 @@ export function TraceHeader({
                 </Button>
               </span>
             ) : null}
+            <DisabledReason
+              reason={canDelete ? undefined : "Only project admins can delete traces"}
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Delete trace"
+                disabled={!canDelete}
+                onClick={() => {
+                  deletion.reset();
+                  setConfirmOpen(true);
+                }}
+              >
+                <Trash2 />
+              </Button>
+            </DisabledReason>
             <CopyButton value={href} label="link" />
             {onClose ? (
               <Link
@@ -138,6 +195,19 @@ export function TraceHeader({
           ))}
         </div>
       </section>
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Delete this trace?"
+        description="Its spans, scores and evaluation traces are hidden within seconds and erased within 24 hours. This cannot be undone."
+        confirmLabel="Delete trace"
+        destructive
+        pending={deletion.isPending}
+        error={
+          deletion.error ? problemMessage(deletion.error, "Could not delete the trace.") : undefined
+        }
+        onConfirm={deleteTrace}
+      />
     </TooltipProvider>
   );
 }
