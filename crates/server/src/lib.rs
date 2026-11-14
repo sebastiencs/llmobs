@@ -15,6 +15,7 @@ pub mod config;
 pub(crate) mod email;
 pub(crate) mod http;
 pub(crate) mod ingest;
+pub(crate) mod live;
 pub(crate) mod meta;
 pub(crate) mod routes;
 pub(crate) mod scores;

@@ -268,6 +268,7 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         providers,
         oauth_key,
         ingest,
+        live: crate::live::LiveBus::new(crate::live::StreamTiming::DEFAULT),
         metrics_cache: crate::routes::metrics::MetricsCache::default(),
         usage: crate::usage::Usage::default(),
     });
@@ -460,6 +461,9 @@ impl Running {
     ///
     /// Returns the accept loop's error when it failed before the drain finished.
     pub async fn shutdown(mut self) -> Result<(), ServeError> {
+        if let Some(state) = &self.state {
+            state.live.close();
+        }
         if let Some(sender) = self.shutdown_tx.take() {
             let _ = sender.send(());
         }

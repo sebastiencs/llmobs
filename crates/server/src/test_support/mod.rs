@@ -175,6 +175,7 @@ impl TestApp {
             providers,
             oauth_key: crate::auth::oidc::random_key().expect("oauth key"),
             ingest,
+            live: crate::live::LiveBus::new(crate::live::StreamTiming::TEST),
             metrics_cache: crate::routes::metrics::MetricsCache::default(),
             usage: crate::usage::Usage::default(),
         });
@@ -366,13 +367,57 @@ impl TestApp {
     }
 }
 
+/// The spans of `fixtures/api/dataset/spans.json`, as written.
+fn dataset_spans() -> Vec<Span> {
+    let dataset = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/api/dataset");
+    let spans_text = std::fs::read_to_string(format!("{dataset}/spans.json")).unwrap();
+    serde_json::from_str(&spans_text).unwrap()
+}
+
+/// The `index`-th span of the example dataset, as written (its `project_id` is the fixture's).
+pub(crate) fn dataset_span(index: usize) -> Span {
+    dataset_spans()
+        .into_iter()
+        .nth(index)
+        .expect("the dataset has that many spans")
+}
+
+impl TestApp {
+    /// Commits `spans` to `project` through the ingest path: the live bus sees them and the
+    /// usage counters count them. The spans' `project_id` is set to `project`.
+    pub(crate) async fn commit_spans(&self, project: &ProjectRow, mut spans: Vec<Span>) {
+        for span in &mut spans {
+            span.project_id = project.id;
+        }
+        self.state
+            .ingest
+            .commit(
+                &self.state.storage,
+                &self.state.usage,
+                &self.state.live,
+                crate::ingest::CommitTarget {
+                    org_id: project.org_id,
+                    project_id: project.id,
+                    request_bytes: 0,
+                    now_ns: self.state.clock.now_ns(),
+                },
+                llmobs_otel::Normalized {
+                    spans,
+                    media: Vec::new(),
+                    rejections: llmobs_otel::Rejections::default(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+}
+
 impl TestApp {
     /// Appends `fixtures/api/dataset` (spans and scores) to `project` and stores the PNGs of
     /// `fixtures/api/media`. Every row's `project_id` is set to `project`.
     pub(crate) async fn load_example_dataset(&self, project: ProjectId) {
         let dataset = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/api/dataset");
-        let spans_text = std::fs::read_to_string(format!("{dataset}/spans.json")).unwrap();
-        let mut spans: Vec<Span> = serde_json::from_str(&spans_text).unwrap();
+        let mut spans = dataset_spans();
         for span in &mut spans {
             span.project_id = project;
         }

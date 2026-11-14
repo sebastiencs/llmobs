@@ -84,7 +84,13 @@ async fn export_body(
     };
     let receipt = state
         .ingest
-        .commit(&state.storage, &state.usage, target, normalized)
+        .commit(
+            &state.storage,
+            &state.usage,
+            &state.live,
+            target,
+            normalized,
+        )
         .await?;
     // The budget covers the spans until they are appended (D-G-5).
     drop(reservation);
@@ -173,6 +179,7 @@ fn log_refusal(project: ProjectId, error: &IngestError, started: Instant) {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::time::Duration;
 
     use axum::http::{Method, StatusCode};
     use bytes::Bytes;
@@ -750,6 +757,32 @@ mod tests {
         assert!(logs.contains("too_many_spans"), "{logs}");
         assert!(!logs.contains(MARKER), "{logs}");
         assert!(!logs.contains(&seeded.ingest_key), "{logs}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_accepted_export_is_published_on_the_live_bus() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let mut events = app.state.live.subscribe();
+        let response = post_traces(
+            &app,
+            &seeded.ingest_key,
+            "application/json",
+            plain_export(2),
+        )
+        .send()
+        .await;
+        assert_eq!(response.status, StatusCode::OK);
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("an event arrives")
+            .expect("the bus is open");
+        assert_eq!(event.project_id, seeded.project.id);
+        assert_eq!(
+            event.spans.len(),
+            stored_spans(&app, seeded.project.id).await
+        );
+        assert_eq!(event.spans.len(), 2);
     }
 
     #[tokio::test(flavor = "multi_thread")]

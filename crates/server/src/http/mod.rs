@@ -61,6 +61,8 @@ pub(crate) struct AppInner {
     pub(crate) oauth_key: [u8; 32],
     /// OTLP ingest core: budget, prices, `accept` and `commit` (D-G-1).
     pub(crate) ingest: crate::ingest::Ingest,
+    /// Live bus and stream slots (D-G-12).
+    pub(crate) live: crate::live::LiveBus,
     /// `GET /metrics` answers cached 10 s (spec 05).
     pub(crate) metrics_cache: crate::routes::metrics::MetricsCache,
     /// Usage counters, flushed every 10 s (D-G-11).

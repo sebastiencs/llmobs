@@ -26,6 +26,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::config::{IngestConfig, MediaConfig};
 use crate::http::error::ApiError;
+use crate::live::LiveBus;
 use crate::meta::projects::ProjectRow;
 use crate::usage::Usage;
 use body::{BodyEncoding, BodyError, BodyFormat, DecompressError, decompress};
@@ -283,6 +284,7 @@ impl Ingest {
         &self,
         storage: &Storage,
         usage: &Usage,
+        live: &LiveBus,
         target: CommitTarget,
         normalized: Normalized,
     ) -> Result<CommitReceipt, IngestError> {
@@ -301,14 +303,17 @@ impl Ingest {
         }
         let accepted = spans.len();
         if !spans.is_empty() {
-            let batch = tokio::task::spawn_blocking(move || spans_to_record_batch(&spans))
-                .await
-                .map_err(IngestError::Join)?
-                .map_err(IngestError::Batch)?;
+            let (batch, spans) = tokio::task::spawn_blocking(move || {
+                spans_to_record_batch(&spans).map(|batch| (batch, spans))
+            })
+            .await
+            .map_err(IngestError::Join)?
+            .map_err(IngestError::Batch)?;
             storage
                 .append_spans(target.project_id, batch)
                 .await
                 .map_err(IngestError::Append)?;
+            live.publish(target.project_id, &spans);
         }
         usage.add(
             target.org_id,
@@ -779,6 +784,7 @@ mod tests {
             .commit(
                 &app.state.storage,
                 &app.state.usage,
+                &app.state.live,
                 target(&app, &seeded.project),
                 normalized,
             )
@@ -842,6 +848,7 @@ mod tests {
             .commit(
                 &app.state.storage,
                 &app.state.usage,
+                &app.state.live,
                 CommitTarget {
                     request_bytes: 7,
                     ..target(&app, &seeded.project)
@@ -885,6 +892,7 @@ mod tests {
             .commit(
                 &app.state.storage,
                 &app.state.usage,
+                &app.state.live,
                 target(&app, &seeded.project),
                 normalized,
             )
@@ -907,6 +915,7 @@ mod tests {
             .commit(
                 &app.state.storage,
                 &app.state.usage,
+                &app.state.live,
                 CommitTarget {
                     request_bytes: 7,
                     ..target(&app, &seeded.project)
@@ -962,6 +971,7 @@ mod tests {
             .commit(
                 &app.state.storage,
                 &app.state.usage,
+                &app.state.live,
                 target(&app, &seeded.project),
                 normalized,
             )

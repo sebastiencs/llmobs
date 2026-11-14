@@ -122,7 +122,13 @@ async fn export_request(
     };
     let receipt = state
         .ingest
-        .commit(&state.storage, &state.usage, target, normalized)
+        .commit(
+            &state.storage,
+            &state.usage,
+            &state.live,
+            target,
+            normalized,
+        )
         .await?;
     // The budget covers the spans until they are appended (D-G-5).
     drop(reservation);
