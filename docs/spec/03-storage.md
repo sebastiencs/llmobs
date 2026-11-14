@@ -385,8 +385,10 @@ A deletion may cover rows of a `spans` or `scores` file only when its `deletion_
 
 ### Cascades, inside the server's request transaction (`meta.db`)
 
-- Dataset items whose `source_trace_id` is in scope are hard-deleted, all versions.
-- `experiment_items` and `eval_jobs` referencing those traces are deleted.
+The server stores a resolved scope and its cascades in one transaction, before it registers the deletion (D-M-3):
+- Dataset items whose `source_trace_id` is in scope are hard-deleted, all versions (track J).
+- `experiment_items` referencing those traces are deleted (track J); `eval_jobs` referencing them are deleted unless `running` (D-M-6).
+- A running judge job, and any judge run that loaded its target before the deletion, is stopped by the server's 24-hour deletion guard before it commits a judge trace or a score (D-M-6).
 - `alert_events` hold only aggregates and are kept.
 
 ### Physical erasure: the deletion rewriter
@@ -424,7 +426,7 @@ GC removes the obsolete files like any others (§5), so no listing of the `proje
 
 ## 8. Retention
 
-Each project has `retention_days` in `meta.db` (null means keep forever). The server calls `apply_retention(project, keep_from = today − retention_days)` hourly. Storage then:
+Each project has `retention_days` in `meta.db` (null means keep forever). The server calls `apply_retention(project, keep_from = today − effective days)` hourly, and once when a `PATCH` sets retention. The effective days are the shorter of the project's `retention_days` and its org's plan cap (data-access window + 30 days, D175), when either is set (D-M-10, D-M-15). Storage then:
 - commits one catalog edit that obsoletes every file of the project in days before the watermark, across `spans`, `traces` and `scores`, quarantined files included (no file is rewritten, because partitions are per day);
 - records the watermark in `retention_watermarks`, in the same transaction. The watermark is the later of the stored one and `keep_from`: it never moves back.
 
