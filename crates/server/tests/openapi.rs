@@ -215,6 +215,26 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
         "delete_saved_view",
     ),
     ("post", "/api/v1/projects/{project}/sql", "run_sql"),
+    (
+        "get",
+        "/api/v1/projects/{project}/channels",
+        "list_channels",
+    ),
+    (
+        "post",
+        "/api/v1/projects/{project}/channels",
+        "create_channel",
+    ),
+    (
+        "patch",
+        "/api/v1/projects/{project}/channels/{id}",
+        "update_channel",
+    ),
+    (
+        "delete",
+        "/api/v1/projects/{project}/channels/{id}",
+        "delete_channel",
+    ),
     ("get", "/api/v1/projects/{project}/metrics", "get_metrics"),
     (
         "get",
@@ -275,6 +295,7 @@ const TAGS: &[&str] = &[
     "sql",
     "metrics",
     "media",
+    "alerts",
 ];
 
 const METHODS: &[&str] = &[
@@ -429,6 +450,7 @@ fn document_lint() {
             || *id == "delete_api_key"
             || *id == "delete_org_invite"
             || *id == "delete_personal_token"
+            || *id == "delete_channel"
         {
             expected_errors.extend(["400", "401", "403", "404", "429"]);
         } else if *id == "get_invite_preview" {
@@ -463,6 +485,8 @@ fn document_lint() {
             || *id == "post_llm_connection_test"
         {
             expected_errors.extend(["400", "401", "403", "404", "429"]);
+        } else if *id == "create_channel" || *id == "update_channel" {
+            expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
         } else if *id == "run_sql" {
             expected_errors.extend(["400", "401", "403", "404", "413", "415", "422", "429"]);
         } else if READ_OPERATIONS.contains(id) {
@@ -547,6 +571,7 @@ fn document_lint() {
         ("PersonalTokenPage", "PersonalToken"),
         ("SavedViewPage", "SavedView"),
         ("LlmConnectionPage", "LlmConnection"),
+        ("ChannelPage", "NotificationChannel"),
     ];
     for (page, item) in pages {
         let schema = &schemas[page];
@@ -797,6 +822,7 @@ fn assert_nullability(schemas: &serde_json::Map<String, Value>) {
         "PersonalTokenPage",
         "SavedViewPage",
         "LlmConnectionPage",
+        "ChannelPage",
     ];
     let expected: BTreeSet<String> = pages
         .iter()

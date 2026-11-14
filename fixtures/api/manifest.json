@@ -383,6 +383,14 @@
     "file": "static/api-keys.json"
   },
   {
+    "operation_id": "list_channels",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/channels.json"
+  },
+  {
     "operation_id": "list_llm_connections",
     "path_params": {
       "org": "acme"

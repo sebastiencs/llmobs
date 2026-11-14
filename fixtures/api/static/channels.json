@@ -1,0 +1,52 @@
+{
+  "data": [
+    {
+      "id": "01900000-0000-7000-8000-000000000502",
+      "name": "On-call email",
+      "kind": "email",
+      "target_hint": "oncall@example.com +1",
+      "available": true,
+      "recipients": [
+        "oncall@example.com",
+        "ada@example.com"
+      ],
+      "header_names": [],
+      "created_at": "2026-01-01T09:00:00.000000000Z",
+      "updated_at": "2026-01-01T09:00:00.000000000Z"
+    },
+    {
+      "id": "01900000-0000-7000-8000-000000000501",
+      "name": "Pager webhook",
+      "kind": "webhook",
+      "target_hint": "hooks.example.com",
+      "available": true,
+      "recipients": [],
+      "header_names": [
+        "X-Team"
+      ],
+      "last_delivery": {
+        "status": "failed",
+        "at": "2026-01-01T10:05:00.000000000Z",
+        "error": "the endpoint answered 500"
+      },
+      "created_at": "2026-01-01T09:00:00.000000000Z",
+      "updated_at": "2026-01-01T09:00:00.000000000Z"
+    },
+    {
+      "id": "01900000-0000-7000-8000-000000000500",
+      "name": "Team Slack",
+      "kind": "slack",
+      "target_hint": "hooks.slack.com/…/abcd",
+      "available": true,
+      "recipients": [],
+      "header_names": [],
+      "last_delivery": {
+        "status": "sent",
+        "at": "2026-01-01T10:05:00.000000000Z"
+      },
+      "created_at": "2026-01-01T09:00:00.000000000Z",
+      "updated_at": "2026-01-01T09:00:00.000000000Z"
+    }
+  ],
+  "next_cursor": null
+}

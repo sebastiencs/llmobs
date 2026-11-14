@@ -33,6 +33,10 @@ use super::admin::{
     AdminResetLink, AdminSettings, AdminUser, CreateAdminUserRequest, CreatedAdminUser,
     UpdateAdminUserRequest,
 };
+use super::alerts::{
+    ChannelDelivery, ChannelKind, CreateChannelRequest, DeliveryStatus, NotificationChannel,
+    UpdateChannelRequest,
+};
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
 use super::connections::{
     ConnectionStatus, CreateLlmConnectionRequest, LlmAdapter, LlmConnection,
@@ -188,6 +192,13 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert_page::<ProjectApiKey>("ApiKeyPage");
     set.insert_page::<PersonalToken>("PersonalTokenPage");
     set.insert_page::<SavedView>("SavedViewPage");
+    set.insert::<ChannelKind>();
+    set.insert::<DeliveryStatus>();
+    set.insert::<ChannelDelivery>();
+    set.insert::<NotificationChannel>();
+    set.insert::<CreateChannelRequest>();
+    set.insert::<UpdateChannelRequest>();
+    set.insert_page::<NotificationChannel>("ChannelPage");
     set
 }
 
@@ -274,6 +285,10 @@ pub fn openapi() -> OpenApi {
             tag("sql", "SQL console over the project's views."),
             tag("metrics", "Dashboard metrics."),
             tag("media", "Extracted media blobs."),
+            tag(
+                "alerts",
+                "Alert rules, alert events and notification channels.",
+            ),
         ]))
         .components(Some(components(&schemas)))
         .security(Some([
@@ -551,6 +566,7 @@ fn paths() -> Paths {
     let paths = score_paths(paths);
     let paths = saved_view_paths(paths);
     let paths = sql_paths(paths);
+    let paths = channel_paths(paths);
     media_paths(paths).build()
 }
 
@@ -1744,6 +1760,65 @@ fn saved_view_paths(paths: PathsBuilder) -> PathsBuilder {
         )
         .path(
             format!("{PROJECT}/saved-views/{{id}}"),
+            PathItem::new(HttpMethod::Delete, delete),
+        )
+}
+
+fn channel_paths(paths: PathsBuilder) -> PathsBuilder {
+    let list = operation("list_channels", "alerts", "List notification channels")
+        .parameters(Some(vec![project_param()]))
+        .responses(responses(
+            "200",
+            json_named("ChannelPage", "Every channel of the project, by name."),
+            AUTH_ERRORS,
+        ))
+        .build();
+    let create = operation("create_channel", "alerts", "Create a notification channel")
+        .description(Some(
+            "Needs role member. Email channels need SMTP. At most 20 channels per project (409).",
+        ))
+        .parameters(Some(vec![project_param()]))
+        .request_body(Some(json_body("CreateChannelRequest")))
+        .responses(responses(
+            "201",
+            json_of::<NotificationChannel>("The created channel."),
+            &[400, 401, 403, 404, 409, 429],
+        ))
+        .build();
+    let update = operation("update_channel", "alerts", "Update a notification channel")
+        .parameters(Some(vec![project_param(), path_uuid("id", "Channel id.")]))
+        .request_body(Some(json_body("UpdateChannelRequest")))
+        .responses(responses(
+            "200",
+            json_of::<NotificationChannel>("The updated channel."),
+            &[400, 401, 403, 404, 409, 429],
+        ))
+        .build();
+    let delete = operation("delete_channel", "alerts", "Delete a notification channel")
+        .parameters(Some(vec![project_param(), path_uuid("id", "Channel id.")]))
+        .responses(responses(
+            "204",
+            ResponseBuilder::new()
+                .description("Deleted. Rules that used it no longer do.")
+                .build(),
+            &[400, 401, 403, 404, 429],
+        ))
+        .build();
+    paths
+        .path(
+            format!("{PROJECT}/channels"),
+            PathItem::new(HttpMethod::Get, list),
+        )
+        .path(
+            format!("{PROJECT}/channels"),
+            PathItem::new(HttpMethod::Post, create),
+        )
+        .path(
+            format!("{PROJECT}/channels/{{id}}"),
+            PathItem::new(HttpMethod::Patch, update),
+        )
+        .path(
+            format!("{PROJECT}/channels/{{id}}"),
             PathItem::new(HttpMethod::Delete, delete),
         )
 }

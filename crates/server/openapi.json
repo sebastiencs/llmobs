@@ -3920,6 +3920,374 @@
         ]
       }
     },
+    "/api/v1/projects/{project}/channels": {
+      "get": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "List notification channels",
+        "operationId": "list_channels",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every channel of the project, by name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Create a notification channel",
+        "description": "Needs role member. Email channels need SMTP. At most 20 channels per project (409).",
+        "operationId": "create_channel",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChannelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created channel.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationChannel"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/channels/{id}": {
+      "delete": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Delete a notification channel",
+        "operationId": "delete_channel",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Channel id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted. Rules that used it no longer do."
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Update a notification channel",
+        "operationId": "update_channel",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Channel id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateChannelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated channel.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationChannel"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project}/media/{sha256}": {
       "get": {
         "tags": [
@@ -7571,6 +7939,62 @@
         },
         "additionalProperties": false
       },
+      "ChannelDelivery": {
+        "type": "object",
+        "description": "The newest finished delivery of a channel.",
+        "required": [
+          "status",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it finished."
+          },
+          "error": {
+            "type": "string",
+            "description": "Why it failed. Never contains a URL, a secret or an address."
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeliveryStatus",
+            "description": "`sent` or `failed`."
+          }
+        }
+      },
+      "ChannelKind": {
+        "type": "string",
+        "description": "A notification channel's kind (D-K-6).",
+        "enum": [
+          "slack",
+          "webhook",
+          "email"
+        ]
+      },
+      "ChannelPage": {
+        "type": "object",
+        "description": "One page of results. `next_cursor` is null when there is no next page.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationChannel"
+            },
+            "description": "Items in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
+      },
       "ColumnSchema": {
         "type": "object",
         "description": "One column of a logical view.\n\nSpec 05 § Logical views.",
@@ -7691,6 +8115,50 @@
               "$ref": "#/components/schemas/ApiKeyScope"
             },
             "description": "Secret keys default to ingest, read, and write. Public keys default to feedback."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateChannelRequest": {
+        "type": "object",
+        "description": "Body of `POST /channels`. Send the fields of `kind` only.",
+        "required": [
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "headers": {
+            "type": "object",
+            "description": "`webhook`: extra headers, at most 10.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ChannelKind",
+            "description": "The kind. Cannot change later."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name, 1–100 characters after trimming."
+          },
+          "recipients": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`email`: 1–20 addresses."
+          },
+          "secret": {
+            "type": "string",
+            "description": "`webhook`: the signing secret, 16–256 characters."
+          },
+          "url": {
+            "type": "string",
+            "description": "`slack` and `webhook`: the URL."
           }
         },
         "additionalProperties": false
@@ -7943,6 +8411,15 @@
             "description": "The stored token, without the secret."
           }
         }
+      },
+      "DeliveryStatus": {
+        "type": "string",
+        "description": "A delivery's status.",
+        "enum": [
+          "pending",
+          "sent",
+          "failed"
+        ]
       },
       "EndUserDetail": {
         "type": "object",
@@ -8786,6 +9263,72 @@
             "type": "integer",
             "format": "int64",
             "description": "Sum of `total_tokens`. Omitted when every span omitted the field."
+          }
+        }
+      },
+      "NotificationChannel": {
+        "type": "object",
+        "description": "A notification channel. The URL, the secret and header values are never returned (D-K-6).",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "target_hint",
+          "available",
+          "recipients",
+          "header_names",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "False for an email channel while SMTP is not configured."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Creation time."
+          },
+          "header_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Names of the extra webhook headers. Empty for other kinds."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Channel id."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ChannelKind",
+            "description": "`slack`, `webhook` or `email`."
+          },
+          "last_delivery": {
+            "$ref": "#/components/schemas/ChannelDelivery",
+            "description": "The newest finished delivery. Absent when none finished yet."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name, unique in the project."
+          },
+          "recipients": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Email recipients. Empty for other kinds."
+          },
+          "target_hint": {
+            "type": "string",
+            "description": "Where it sends, without secrets: `hooks.slack.com/…/abcd`, a host, or the first address and `+N`."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last change."
           }
         }
       },
@@ -11238,6 +11781,42 @@
         },
         "additionalProperties": false
       },
+      "UpdateChannelRequest": {
+        "type": "object",
+        "description": "Body of `PATCH /channels/{id}`. An absent field keeps its value; `headers` replaces the whole map.",
+        "properties": {
+          "headers": {
+            "type": "object",
+            "description": "`webhook`: the new header map.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string",
+            "description": "New display name."
+          },
+          "recipients": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`email`: the new recipient list."
+          },
+          "secret": {
+            "type": "string",
+            "description": "`webhook`: a new signing secret."
+          },
+          "url": {
+            "type": "string",
+            "description": "`slack` and `webhook`: a new URL."
+          }
+        },
+        "additionalProperties": false
+      },
       "UpdateLlmConnectionRequest": {
         "type": "object",
         "description": "`PATCH /api/v1/orgs/{org}/llm-connections/{id}` body. Absent means\nunchanged; an empty body is valid and changes only `updated_at`.",
@@ -11582,6 +12161,10 @@
     {
       "name": "media",
       "description": "Extracted media blobs."
+    },
+    {
+      "name": "alerts",
+      "description": "Alert rules, alert events and notification channels."
     }
   ]
 }

@@ -689,6 +689,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project}/channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List notification channels */
+        get: operations["list_channels"];
+        put?: never;
+        /**
+         * Create a notification channel
+         * @description Needs role member. Email channels need SMTP. At most 20 channels per project (409).
+         */
+        post: operations["create_channel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project}/channels/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a notification channel */
+        delete: operations["delete_channel"];
+        options?: never;
+        head?: never;
+        /** Update a notification channel */
+        patch: operations["update_channel"];
+        trace?: never;
+    };
     "/api/v1/projects/{project}/media/{sha256}": {
         parameters: {
             query?: never;
@@ -1287,6 +1326,30 @@ export interface components {
             /** @description The replacement password. */
             new_password: string;
         };
+        /** @description The newest finished delivery of a channel. */
+        ChannelDelivery: {
+            /**
+             * Format: date-time
+             * @description When it finished.
+             */
+            at: string;
+            /** @description Why it failed. Never contains a URL, a secret or an address. */
+            error?: string;
+            /** @description `sent` or `failed`. */
+            status: components["schemas"]["DeliveryStatus"];
+        };
+        /**
+         * @description A notification channel's kind (D-K-6).
+         * @enum {string}
+         */
+        ChannelKind: "slack" | "webhook" | "email";
+        /** @description One page of results. `next_cursor` is null when there is no next page. */
+        ChannelPage: {
+            /** @description Items in this page. */
+            data: components["schemas"]["NotificationChannel"][];
+            /** @description Opaque cursor for the next page, or null when this is the last page. */
+            next_cursor: string | null;
+        };
         /**
          * @description One column of a logical view.
          *
@@ -1347,6 +1410,23 @@ export interface components {
             name?: string;
             /** @description Secret keys default to ingest, read, and write. Public keys default to feedback. */
             scopes?: components["schemas"]["ApiKeyScope"][];
+        };
+        /** @description Body of `POST /channels`. Send the fields of `kind` only. */
+        CreateChannelRequest: {
+            /** @description `webhook`: extra headers, at most 10. */
+            headers?: {
+                [key: string]: string;
+            };
+            /** @description The kind. Cannot change later. */
+            kind: components["schemas"]["ChannelKind"];
+            /** @description Display name, 1–100 characters after trimming. */
+            name: string;
+            /** @description `email`: 1–20 addresses. */
+            recipients?: string[];
+            /** @description `webhook`: the signing secret, 16–256 characters. */
+            secret?: string;
+            /** @description `slack` and `webhook`: the URL. */
+            url?: string;
         };
         /** @description `POST /api/v1/orgs/{org}/invites`. */
         CreateInviteRequest: {
@@ -1468,6 +1548,11 @@ export interface components {
             /** @description The stored token, without the secret. */
             token: components["schemas"]["PersonalToken"];
         };
+        /**
+         * @description A delivery's status.
+         * @enum {string}
+         */
+        DeliveryStatus: "pending" | "sent" | "failed";
         /**
          * @description User summary plus the most recent sessions.
          *
@@ -1934,6 +2019,38 @@ export interface components {
              * @description Sum of `total_tokens`. Omitted when every span omitted the field.
              */
             total_tokens?: number;
+        };
+        /** @description A notification channel. The URL, the secret and header values are never returned (D-K-6). */
+        NotificationChannel: {
+            /** @description False for an email channel while SMTP is not configured. */
+            available: boolean;
+            /**
+             * Format: date-time
+             * @description Creation time.
+             */
+            created_at: string;
+            /** @description Names of the extra webhook headers. Empty for other kinds. */
+            header_names: string[];
+            /**
+             * Format: uuid
+             * @description Channel id.
+             */
+            id: string;
+            /** @description `slack`, `webhook` or `email`. */
+            kind: components["schemas"]["ChannelKind"];
+            /** @description The newest finished delivery. Absent when none finished yet. */
+            last_delivery?: components["schemas"]["ChannelDelivery"];
+            /** @description Display name, unique in the project. */
+            name: string;
+            /** @description Email recipients. Empty for other kinds. */
+            recipients: string[];
+            /** @description Where it sends, without secrets: `hooks.slack.com/…/abcd`, a host, or the first address and `+N`. */
+            target_hint: string;
+            /**
+             * Format: date-time
+             * @description Last change.
+             */
+            updated_at: string;
         };
         /**
          * Format: uuid
@@ -3232,6 +3349,21 @@ export interface components {
             disabled?: boolean;
             /** @description Grant or remove instance admin. */
             is_instance_admin?: boolean;
+        };
+        /** @description Body of `PATCH /channels/{id}`. An absent field keeps its value; `headers` replaces the whole map. */
+        UpdateChannelRequest: {
+            /** @description `webhook`: the new header map. */
+            headers?: {
+                [key: string]: string;
+            };
+            /** @description New display name. */
+            name?: string;
+            /** @description `email`: the new recipient list. */
+            recipients?: string[];
+            /** @description `webhook`: a new signing secret. */
+            secret?: string;
+            /** @description `slack` and `webhook`: a new URL. */
+            url?: string;
         };
         /**
          * @description `PATCH /api/v1/orgs/{org}/llm-connections/{id}` body. Absent means
@@ -6429,6 +6561,297 @@ export interface operations {
             };
             /** @description The resource does not exist. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_channels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every channel of the project, by name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelPage"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_channel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateChannelRequest"];
+            };
+        };
+        responses: {
+            /** @description The created channel. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationChannel"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request conflicts with the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_channel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+                /** @description Channel id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. Rules that used it no longer do. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    update_channel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+                /** @description Channel id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateChannelRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated channel. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationChannel"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request conflicts with the current state. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

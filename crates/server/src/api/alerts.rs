@@ -2,8 +2,12 @@
 //!
 //! Spec 07 and spec 09 § Evaluation & alerts.
 
+use std::collections::BTreeMap;
+
+use llmobs_core::time_serde;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 /// What a rule measures (D-K-2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
@@ -251,4 +255,126 @@ pub struct AlertCondition {
     /// `score` only. Default `avg`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregation: Option<ScoreAggregation>,
+}
+
+/// A delivery's status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryStatus {
+    /// Waiting for its first or next attempt.
+    Pending,
+    /// The channel accepted it.
+    Sent,
+    /// Gave up: a permanent error, or 8 attempts.
+    Failed,
+}
+
+impl DeliveryStatus {
+    /// The stored spelling: `pending`, `sent`, `failed`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Sent => "sent",
+            Self::Failed => "failed",
+        }
+    }
+
+    /// Parses the stored spelling.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "pending" => Some(Self::Pending),
+            "sent" => Some(Self::Sent),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// The newest finished delivery of a channel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ChannelDelivery {
+    /// `sent` or `failed`.
+    pub status: DeliveryStatus,
+    /// When it finished.
+    #[serde(with = "time_serde")]
+    #[schema(value_type = String, format = DateTime)]
+    pub at: i64,
+    /// Why it failed. Never contains a URL, a secret or an address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// A notification channel. The URL, the secret and header values are never returned (D-K-6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct NotificationChannel {
+    /// Channel id.
+    pub id: Uuid,
+    /// Display name, unique in the project.
+    pub name: String,
+    /// `slack`, `webhook` or `email`.
+    pub kind: ChannelKind,
+    /// Where it sends, without secrets: `hooks.slack.com/…/abcd`, a host, or the first address and `+N`.
+    pub target_hint: String,
+    /// False for an email channel while SMTP is not configured.
+    pub available: bool,
+    /// Email recipients. Empty for other kinds.
+    pub recipients: Vec<String>,
+    /// Names of the extra webhook headers. Empty for other kinds.
+    pub header_names: Vec<String>,
+    /// The newest finished delivery. Absent when none finished yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_delivery: Option<ChannelDelivery>,
+    /// Creation time.
+    #[serde(with = "time_serde")]
+    #[schema(value_type = String, format = DateTime)]
+    pub created_at: i64,
+    /// Last change.
+    #[serde(with = "time_serde")]
+    #[schema(value_type = String, format = DateTime)]
+    pub updated_at: i64,
+}
+
+/// Body of `POST /channels`. Send the fields of `kind` only.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateChannelRequest {
+    /// Display name, 1–100 characters after trimming.
+    pub name: String,
+    /// The kind. Cannot change later.
+    pub kind: ChannelKind,
+    /// `slack` and `webhook`: the URL.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// `webhook`: the signing secret, 16–256 characters.
+    #[serde(default)]
+    pub secret: Option<String>,
+    /// `webhook`: extra headers, at most 10.
+    #[serde(default)]
+    pub headers: Option<BTreeMap<String, String>>,
+    /// `email`: 1–20 addresses.
+    #[serde(default)]
+    pub recipients: Option<Vec<String>>,
+}
+
+/// Body of `PATCH /channels/{id}`. An absent field keeps its value; `headers` replaces the whole map.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateChannelRequest {
+    /// New display name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `slack` and `webhook`: a new URL.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// `webhook`: a new signing secret.
+    #[serde(default)]
+    pub secret: Option<String>,
+    /// `webhook`: the new header map.
+    #[serde(default)]
+    pub headers: Option<BTreeMap<String, String>>,
+    /// `email`: the new recipient list.
+    #[serde(default)]
+    pub recipients: Option<Vec<String>>,
 }

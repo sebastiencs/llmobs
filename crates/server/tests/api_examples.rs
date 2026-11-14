@@ -15,6 +15,7 @@ use llmobs_server::api::account::{
     AuthConfig, Me, OrgMembership, OrgRole, Project, SetupResponse, SignupResponse,
 };
 use llmobs_server::api::admin::{AdminSettings, AdminUser, CreatedAdminUser};
+use llmobs_server::api::alerts::NotificationChannel;
 use llmobs_server::api::common::Page;
 use llmobs_server::api::connections::{
     CreateLlmConnectionRequest, LlmConnection, LlmConnectionTestResult,
@@ -371,6 +372,7 @@ fn static_files_match_their_types() {
     roundtrip::<Page<Project>>("static/projects.json");
     roundtrip::<Project>("static/project.json");
     roundtrip::<Page<ApiKey>>("static/api-keys.json");
+    roundtrip::<Page<NotificationChannel>>("static/channels.json");
     roundtrip::<CreatedApiKey>("static/api-key-created.json");
     roundtrip::<Page<LlmConnection>>("static/llm-connections.json");
     roundtrip::<LlmConnection>("static/llm-connection.json");
@@ -478,6 +480,7 @@ fn generated_files_roundtrip() {
             | "get_project"
             | "get_schema"
             | "list_saved_views"
+            | "list_channels"
             | "post_setup"
             | "post_login"
             | "post_signup"
