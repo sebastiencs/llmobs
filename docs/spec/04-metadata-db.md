@@ -41,7 +41,7 @@ CREATE TABLE web_sessions (
 
 CREATE TABLE orgs (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE,
-  limits TEXT NOT NULL DEFAULT '{}',  -- JSON, see 12 §Limits
+  limits TEXT NOT NULL DEFAULT '{}',  -- unused; track P's M2 drops it for org_entitlements (D179, D-P-9)
   state TEXT NOT NULL DEFAULT 'active', -- 'active' | 'deleting'
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
