@@ -68,6 +68,12 @@ pub(crate) enum ApiError {
         /// Which 403 this is.
         code: ProblemCode,
     },
+    /// The org's plan limit is reached (D178).
+    #[error("plan limit")]
+    PlanLimit {
+        /// Names the limit; never holds payload.
+        detail: String,
+    },
     /// The resource does not exist.
     #[error("not found")]
     NotFound,
@@ -139,6 +145,9 @@ impl ApiError {
             }
             Self::Unauthorized => Problem::new(ProblemCode::Unauthorized, None),
             Self::Forbidden { code } => Problem::new(*code, None),
+            Self::PlanLimit { detail } => {
+                Problem::new(ProblemCode::PlanLimit, Some(detail.clone()))
+            }
             Self::NotFound => not_found_problem(),
             Self::Conflict { detail } => {
                 Problem::new(ProblemCode::Conflict, Some((*detail).to_owned()))

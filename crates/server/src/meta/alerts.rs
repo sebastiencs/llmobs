@@ -4,16 +4,22 @@ use std::collections::HashMap;
 use std::fmt;
 
 use llmobs_core::ids::{OrgId, ProjectId};
+use serde::{Deserialize, Serialize};
 use sqlx::{SqliteConnection, SqlitePool};
 use uuid::Uuid;
 
 use super::{MetaError, unique_or};
-use crate::api::alerts::{AlertCondition, AlertState, ChannelKind};
+use crate::api::alerts::{
+    AlertCondition, AlertEventKind, AlertMetric, AlertState, AlertWindow, ChannelKind, Comparator,
+    DeliveryStatus,
+};
 
 /// Most channels per project (D-K-5).
 pub(crate) const MAX_CHANNELS: i64 = 20;
 /// Most rules per project (D-K-5).
 pub(crate) const MAX_RULES: i64 = 100;
+/// Most channels per rule (D-K-5).
+pub(crate) const MAX_RULE_CHANNELS: usize = 10;
 
 /// Conflict details (409 bodies, through `MetaError::Conflict`).
 pub(crate) const CHANNEL_NAME_TAKEN: &str = "a channel with this name already exists";
@@ -25,6 +31,7 @@ pub(crate) const UNKNOWN_CHANNEL: &str = "a channel does not exist in this proje
 const CHANNELS: &str = "notification_channels";
 const RULES: &str = "alert_rules";
 const LINKS: &str = "alert_rule_channels";
+const EVENTS: &str = "alert_events";
 const DELIVERIES: &str = "notification_deliveries";
 
 /// One stored channel. `config_enc` is sealed; open it with `alerts::channel::open_config`.
@@ -168,6 +175,78 @@ struct DeliveryRecord {
     status: String,
     updated_at: i64,
     last_error: Option<String>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct EventRecord {
+    id: String,
+    rule_id: String,
+    kind: String,
+    value: Option<f64>,
+    count: Option<i64>,
+    threshold: f64,
+    window_from: i64,
+    window_to: i64,
+    details: String,
+    created_at: i64,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct EventDeliveryRecord {
+    id: String,
+    event_id: String,
+    channel_id: String,
+    channel_name: String,
+    channel_kind: String,
+    status: String,
+    attempts: i64,
+    next_attempt_at: Option<i64>,
+    last_error: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+}
+
+/// The rule as it was when the event was recorded. Stored as `alert_events.details`, so the
+/// history survives later edits (D-K-10).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct EventDetails {
+    pub(crate) rule_name: String,
+    pub(crate) metric: AlertMetric,
+    pub(crate) comparator: Comparator,
+    pub(crate) window: AlertWindow,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) filter: Option<String>,
+}
+
+/// One stored event.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct EventRow {
+    pub(crate) id: Uuid,
+    pub(crate) rule_id: Uuid,
+    pub(crate) kind: AlertEventKind,
+    pub(crate) value: Option<f64>,
+    pub(crate) count: Option<i64>,
+    pub(crate) threshold: f64,
+    pub(crate) window_from: i64,
+    pub(crate) window_to: i64,
+    pub(crate) details: EventDetails,
+    pub(crate) created_at: i64,
+}
+
+/// One stored delivery with its channel's name and kind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeliveryRow {
+    pub(crate) id: Uuid,
+    pub(crate) event_id: Uuid,
+    pub(crate) channel_id: Uuid,
+    pub(crate) channel_name: String,
+    pub(crate) channel_kind: ChannelKind,
+    pub(crate) status: DeliveryStatus,
+    pub(crate) attempts: i64,
+    pub(crate) next_attempt_at: Option<i64>,
+    pub(crate) last_error: Option<String>,
+    pub(crate) created_at: i64,
+    pub(crate) updated_at: i64,
 }
 
 /// Inserts a channel. The project may hold [`MAX_CHANNELS`]; a name taken in the project is
@@ -632,6 +711,63 @@ pub(crate) async fn count_enabled_org_rules(
     Ok(count)
 }
 
+/// Events of `rule_id`, newest first (`created_at DESC, id DESC`), strictly before `before`
+/// when given, at most `limit` rows.
+///
+/// # Errors
+///
+/// Returns [`MetaError`] when the query fails or a stored value does not decode.
+pub(crate) async fn list_events(
+    pool: &SqlitePool,
+    rule_id: Uuid,
+    before: Option<(i64, Uuid)>,
+    limit: i64,
+) -> Result<Vec<EventRow>, MetaError> {
+    let before_at = before.map(|cursor| cursor.0);
+    let before_id = before.map(|cursor| cursor.1.to_string());
+    let records: Vec<EventRecord> = sqlx::query_as(
+        "SELECT id, rule_id, kind, value, count, threshold, window_from, window_to, details, \
+         created_at FROM alert_events WHERE rule_id = ?1 \
+         AND (?2 IS NULL OR created_at < ?2 OR (created_at = ?2 AND id < ?3)) \
+         ORDER BY created_at DESC, id DESC LIMIT ?4",
+    )
+    .bind(rule_id.to_string())
+    .bind(before_at)
+    .bind(before_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    records.iter().map(event_from).collect()
+}
+
+/// Deliveries of the given events, grouped in the order of `event_ids`, then by `created_at`,
+/// then `id`. Runs one query per event: a page holds at most 1 000 events.
+///
+/// # Errors
+///
+/// Returns [`MetaError`] when a query fails or a stored value does not decode.
+pub(crate) async fn deliveries_for_events(
+    pool: &SqlitePool,
+    event_ids: &[Uuid],
+) -> Result<Vec<DeliveryRow>, MetaError> {
+    let mut rows = Vec::new();
+    for event_id in event_ids {
+        let records: Vec<EventDeliveryRecord> = sqlx::query_as(
+            "SELECT d.id, d.event_id, d.channel_id, c.name AS channel_name, c.kind AS channel_kind, \
+             d.status, d.attempts, d.next_attempt_at, d.last_error, d.created_at, d.updated_at \
+             FROM notification_deliveries d JOIN notification_channels c ON c.id = d.channel_id \
+             WHERE d.event_id = ? ORDER BY d.created_at, d.id",
+        )
+        .bind(event_id.to_string())
+        .fetch_all(pool)
+        .await?;
+        for record in records {
+            rows.push(delivery_from(record)?);
+        }
+    }
+    Ok(rows)
+}
+
 /// The rule `id` of the project on `conn`, with its channel ids.
 async fn rule_on(
     conn: &mut SqliteConnection,
@@ -762,10 +898,47 @@ fn rule_from(record: RuleRecord, channel_ids: Vec<Uuid>) -> Result<RuleRow, Meta
     })
 }
 
+fn event_from(record: &EventRecord) -> Result<EventRow, MetaError> {
+    let kind = AlertEventKind::parse(&record.kind).ok_or_else(|| corrupt(EVENTS, "kind"))?;
+    let details: EventDetails =
+        serde_json::from_str(&record.details).map_err(|_| corrupt(EVENTS, "details"))?;
+    Ok(EventRow {
+        id: parse_uuid(&record.id, EVENTS, "id")?,
+        rule_id: parse_uuid(&record.rule_id, EVENTS, "rule_id")?,
+        kind,
+        value: record.value,
+        count: record.count,
+        threshold: record.threshold,
+        window_from: record.window_from,
+        window_to: record.window_to,
+        details,
+        created_at: record.created_at,
+    })
+}
+
+fn delivery_from(record: EventDeliveryRecord) -> Result<DeliveryRow, MetaError> {
+    let channel_kind =
+        ChannelKind::parse(&record.channel_kind).ok_or_else(|| corrupt(CHANNELS, "kind"))?;
+    let status =
+        DeliveryStatus::parse(&record.status).ok_or_else(|| corrupt(DELIVERIES, "status"))?;
+    Ok(DeliveryRow {
+        id: parse_uuid(&record.id, DELIVERIES, "id")?,
+        event_id: parse_uuid(&record.event_id, DELIVERIES, "event_id")?,
+        channel_id: parse_uuid(&record.channel_id, DELIVERIES, "channel_id")?,
+        channel_name: record.channel_name,
+        channel_kind,
+        status,
+        attempts: record.attempts,
+        next_attempt_at: record.next_attempt_at,
+        last_error: record.last_error,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::alerts::{AlertMetric, AlertWindow, Comparator};
     use crate::meta::orgs::insert_org;
     use crate::meta::projects::insert_project;
     use crate::meta::{MetaDb, test_db};
@@ -872,6 +1045,118 @@ mod tests {
         .execute(&mut *conn)
         .await?;
         Ok(())
+    }
+
+    /// Inserts an event of `rule` at `created_at` by SQL, and returns its id.
+    async fn insert_event(db: &MetaDb, rule: Uuid, created_at: i64) -> Uuid {
+        let id = Uuid::now_v7();
+        db.write(move |conn| {
+            Box::pin(async move {
+                sqlx::query(
+                    "INSERT INTO alert_events (id, rule_id, kind, threshold, window_from, window_to, \
+                     details, created_at) VALUES (?, ?, 'fired', 0.1, 0, 1, \
+                     '{\"rule_name\":\"r\",\"metric\":\"error_rate\",\"comparator\":\"gt\",\"window\":\"5m\"}', ?)",
+                )
+                .bind(id.to_string())
+                .bind(rule.to_string())
+                .bind(created_at)
+                .execute(&mut *conn)
+                .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+        id
+    }
+
+    #[tokio::test]
+    async fn events_page_newest_first() {
+        let (_dir, db) = test_db().await;
+        let (a, _) = two_projects(&db).await;
+        let rule = add_rule(&db, new_rule(a, "r", Vec::new()))
+            .await
+            .unwrap()
+            .id;
+        let mut ids = Vec::new();
+        for created_at in [10, 20, 30, 40, 50] {
+            ids.push(insert_event(&db, rule, created_at).await);
+        }
+
+        let first = list_events(db.reader(), rule, None, 2).await.unwrap();
+        let first_ids: Vec<Uuid> = first.iter().map(|event| event.id).collect();
+        assert_eq!(first_ids, [ids[4], ids[3]]);
+        assert_eq!(first[0].kind, AlertEventKind::Fired);
+        assert_eq!(first[0].details.rule_name, "r");
+        assert_eq!(first[0].details.metric, AlertMetric::ErrorRate);
+        assert_eq!(first[0].details.window, AlertWindow::M5);
+        assert_eq!(first[0].details.comparator, Comparator::Gt);
+        assert!(first[0].details.filter.is_none());
+
+        let second = list_events(db.reader(), rule, Some((40, ids[3])), 2)
+            .await
+            .unwrap();
+        let second_ids: Vec<Uuid> = second.iter().map(|event| event.id).collect();
+        assert_eq!(second_ids, [ids[2], ids[1]]);
+    }
+
+    #[tokio::test]
+    async fn deliveries_join_channel_names() {
+        let (_dir, db) = test_db().await;
+        let (a, _) = two_projects(&db).await;
+        let slack = add_channel(&db, new_channel(a, "Slack")).await.unwrap().id;
+        let mail = add_channel(&db, new_channel(a, "Mail")).await.unwrap().id;
+        let rule = add_rule(&db, new_rule(a, "r", Vec::new()))
+            .await
+            .unwrap()
+            .id;
+        let first = insert_event(&db, rule, 10).await;
+        let second = insert_event(&db, rule, 20).await;
+        let (late, early, other) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        db.write(move |conn| {
+            Box::pin(async move {
+                for (id, event, channel, status, created_at) in [
+                    (late, first, mail, "failed", 9),
+                    (early, first, slack, "sent", 3),
+                    (other, second, slack, "sent", 1),
+                ] {
+                    sqlx::query(
+                        "INSERT INTO notification_deliveries (id, event_id, channel_id, status, \
+                         attempts, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
+                    )
+                    .bind(id.to_string())
+                    .bind(event.to_string())
+                    .bind(channel.to_string())
+                    .bind(status)
+                    .bind(created_at)
+                    .bind(created_at)
+                    .execute(&mut *conn)
+                    .await?;
+                }
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+
+        let rows = deliveries_for_events(db.reader(), &[second, first])
+            .await
+            .unwrap();
+        let ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
+        assert_eq!(ids, [other, early, late]);
+        assert_eq!(rows[1].channel_name, "Slack");
+        assert_eq!(rows[1].channel_kind, ChannelKind::Webhook);
+        assert_eq!(rows[1].status, DeliveryStatus::Sent);
+        assert_eq!(rows[2].channel_name, "Mail");
+        assert_eq!(rows[2].status, DeliveryStatus::Failed);
+        assert_eq!(rows[2].event_id, first);
+
+        assert!(
+            deliveries_for_events(db.reader(), &[])
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

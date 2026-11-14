@@ -15,7 +15,7 @@ use llmobs_server::api::account::{
     AuthConfig, Me, OrgMembership, OrgRole, Project, SetupResponse, SignupResponse,
 };
 use llmobs_server::api::admin::{AdminSettings, AdminUser, CreatedAdminUser};
-use llmobs_server::api::alerts::NotificationChannel;
+use llmobs_server::api::alerts::{AlertEvent, AlertRule, NotificationChannel};
 use llmobs_server::api::common::Page;
 use llmobs_server::api::connections::{
     CreateLlmConnectionRequest, LlmConnection, LlmConnectionTestResult,
@@ -373,6 +373,9 @@ fn static_files_match_their_types() {
     roundtrip::<Project>("static/project.json");
     roundtrip::<Page<ApiKey>>("static/api-keys.json");
     roundtrip::<Page<NotificationChannel>>("static/channels.json");
+    roundtrip::<Page<AlertRule>>("static/alert-rules.json");
+    roundtrip::<AlertRule>("static/alert-rule.json");
+    roundtrip::<Page<AlertEvent>>("static/alert-events.json");
     roundtrip::<CreatedApiKey>("static/api-key-created.json");
     roundtrip::<Page<LlmConnection>>("static/llm-connections.json");
     roundtrip::<LlmConnection>("static/llm-connection.json");
@@ -481,6 +484,9 @@ fn generated_files_roundtrip() {
             | "get_schema"
             | "list_saved_views"
             | "list_channels"
+            | "list_alert_rules"
+            | "get_alert_rule"
+            | "list_alert_events"
             | "post_setup"
             | "post_login"
             | "post_signup"

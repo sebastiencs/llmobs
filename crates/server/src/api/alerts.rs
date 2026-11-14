@@ -378,3 +378,202 @@ pub struct UpdateChannelRequest {
     #[serde(default)]
     pub recipients: Option<Vec<String>>,
 }
+
+/// One alert rule (D-K-2, D-K-4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct AlertRule {
+    /// Rule id.
+    pub id: Uuid,
+    /// Display name, unique in the project.
+    pub name: String,
+    /// Disabled rules are not evaluated.
+    pub enabled: bool,
+    /// What is measured and when it breaches, with defaults filled in.
+    pub condition: AlertCondition,
+    /// Channels notified on fired, resolved and reminder events. Ordered by id.
+    pub channel_ids: Vec<Uuid>,
+    /// Minimum seconds between two reminders while firing.
+    pub cooldown_s: i64,
+    /// Send a reminder every `cooldown_s` while firing.
+    pub notify_while_firing: bool,
+    /// Current state.
+    pub state: AlertState,
+    /// Value of the last successful evaluation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_value: Option<f64>,
+    /// Sample count of the last successful evaluation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_count: Option<i64>,
+    /// Last evaluation, successful or not.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::api::keys::optional_time"
+    )]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub last_evaluated_at: Option<i64>,
+    /// Last `fired` event.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::api::keys::optional_time"
+    )]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub last_fired_at: Option<i64>,
+    /// Why the last evaluation failed. Absent after a successful one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Creation time.
+    #[serde(with = "time_serde")]
+    #[schema(value_type = String, format = DateTime)]
+    pub created_at: i64,
+    /// Last change.
+    #[serde(with = "time_serde")]
+    #[schema(value_type = String, format = DateTime)]
+    pub updated_at: i64,
+}
+
+/// Body of `POST /alert-rules`.
+#[derive(Debug, Clone, PartialEq, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateAlertRuleRequest {
+    /// 1–100 characters after trimming.
+    pub name: String,
+    /// The condition. Defaults are filled in.
+    pub condition: AlertCondition,
+    /// At most 10 channels of this project. Default none.
+    #[serde(default)]
+    pub channel_ids: Vec<Uuid>,
+    /// Default true.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// 300–604800. Default 3600.
+    #[serde(default)]
+    pub cooldown_s: Option<i64>,
+    /// Default false.
+    #[serde(default)]
+    pub notify_while_firing: Option<bool>,
+}
+
+/// Body of `PATCH /alert-rules/{id}`. An absent field keeps its value. A new
+/// `condition`, or a change of `enabled`, resets the state to `ok` (D-K-4).
+#[derive(Debug, Clone, PartialEq, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateAlertRuleRequest {
+    /// New display name, 1–100 characters after trimming.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// New condition. Defaults are filled in.
+    #[serde(default)]
+    pub condition: Option<AlertCondition>,
+    /// New channels of this project, at most 10. `[]` removes every channel.
+    #[serde(default)]
+    pub channel_ids: Option<Vec<Uuid>>,
+    /// New enabled flag.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// New cooldown, 300–604800 seconds.
+    #[serde(default)]
+    pub cooldown_s: Option<i64>,
+    /// New `notify_while_firing` flag.
+    #[serde(default)]
+    pub notify_while_firing: Option<bool>,
+}
+
+/// What an event records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AlertEventKind {
+    /// `ok` or `no_data` → `firing`.
+    Fired,
+    /// `firing` → `ok` or `no_data`.
+    Resolved,
+    /// Still firing, sent every `cooldown_s` when `notify_while_firing` is on.
+    Reminder,
+}
+
+impl AlertEventKind {
+    /// `fired`, `resolved`, `reminder`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fired => "fired",
+            Self::Resolved => "resolved",
+            Self::Reminder => "reminder",
+        }
+    }
+
+    /// Parses the stored spelling.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "fired" => Some(Self::Fired),
+            "resolved" => Some(Self::Resolved),
+            "reminder" => Some(Self::Reminder),
+            _ => None,
+        }
+    }
+}
+
+/// One delivery of an event to a channel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AlertDelivery {
+    /// Delivery id; the webhook's `X-Llmobs-Delivery`.
+    pub id: Uuid,
+    /// The channel.
+    pub channel_id: Uuid,
+    /// The channel's current name.
+    pub channel_name: String,
+    /// The channel's kind.
+    pub channel_kind: ChannelKind,
+    /// Where the delivery stands.
+    pub status: DeliveryStatus,
+    /// Attempts made so far.
+    pub attempts: i64,
+    /// The last attempt's error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Last change.
+    #[serde(with = "time_serde")]
+    #[schema(value_type = String, format = DateTime)]
+    pub updated_at: i64,
+}
+
+/// One fired, resolved or reminder event, with the rule as it was then.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct AlertEvent {
+    /// Event id; the webhook payload's `event_id`.
+    pub id: Uuid,
+    /// The rule.
+    pub rule_id: Uuid,
+    /// What happened.
+    pub kind: AlertEventKind,
+    /// The measured value. Absent when there was none (e.g. resolved by too few samples).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
+    /// The sample count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<i64>,
+    /// The threshold then.
+    pub threshold: f64,
+    /// The comparator then.
+    pub comparator: Comparator,
+    /// The metric then.
+    pub metric: AlertMetric,
+    /// The window then.
+    pub window: AlertWindow,
+    /// Window start.
+    #[serde(with = "time_serde")]
+    #[schema(value_type = String, format = DateTime)]
+    pub window_from: i64,
+    /// Window end (exclusive).
+    #[serde(with = "time_serde")]
+    #[schema(value_type = String, format = DateTime)]
+    pub window_to: i64,
+    /// When the event was recorded.
+    #[serde(with = "time_serde")]
+    #[schema(value_type = String, format = DateTime)]
+    pub created_at: i64,
+    /// One per channel the rule had then.
+    pub deliveries: Vec<AlertDelivery>,
+}

@@ -3629,6 +3629,596 @@
         }
       }
     },
+    "/api/v1/projects/{project}/alert-rules": {
+      "get": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "List alert rules",
+        "operationId": "list_alert_rules",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every rule of the project, by name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRulePage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Create an alert rule",
+        "description": "Needs role member. The filter is checked by the query layer (400 invalid_filter). At most 100 rules per project (409). An enabled rule beyond the org's plan limit is 403 plan_limit.",
+        "operationId": "create_alert_rule",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAlertRuleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created rule.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/alert-rules/{id}": {
+      "get": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Get an alert rule",
+        "operationId": "get_alert_rule",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Alert rule id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rule and its state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Delete an alert rule",
+        "operationId": "delete_alert_rule",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Alert rule id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted, with its events."
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Update an alert rule",
+        "description": "A new condition, or a change of enabled, resets the state to ok without an event. Re-enabling a rule beyond the org's plan limit is 403 plan_limit.",
+        "operationId": "update_alert_rule",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Alert rule id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAlertRuleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated rule.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with the current state.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/alert-rules/{id}/events": {
+      "get": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "List a rule's events",
+        "operationId": "list_alert_events",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Alert rule id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return (1–1000, default 50).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Limit",
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Events, newest first, with their deliveries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertEventPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project}/api-keys": {
       "get": {
         "tags": [
@@ -7723,6 +8313,368 @@
           }
         }
       },
+      "AlertCondition": {
+        "type": "object",
+        "description": "What a rule measures and when it breaches (D-K-2).\n\nFields that do not apply to `metric` must be absent. A stored or returned\ncondition always has its defaults filled in.",
+        "required": [
+          "metric",
+          "window",
+          "comparator",
+          "threshold"
+        ],
+        "properties": {
+          "aggregation": {
+            "$ref": "#/components/schemas/ScoreAggregation",
+            "description": "`score` only. Default `avg`."
+          },
+          "comparator": {
+            "$ref": "#/components/schemas/Comparator",
+            "description": "How the value is compared with `threshold`."
+          },
+          "filter": {
+            "type": "string",
+            "description": "Filter DSL expression over `traces`. Absent means every trace."
+          },
+          "metric": {
+            "$ref": "#/components/schemas/AlertMetric",
+            "description": "What is measured."
+          },
+          "min_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Fewer samples than this gives `no_data`. Not for `cost`. Defaults: 20, or 10 for `score`."
+          },
+          "score_name": {
+            "type": "string",
+            "description": "`score` only: the score name."
+          },
+          "target": {
+            "$ref": "#/components/schemas/LatencyTarget",
+            "description": "`latency_p95` only. Default `trace`."
+          },
+          "threshold": {
+            "type": "number",
+            "format": "double",
+            "description": "Fraction for `error_rate` and `pass_rate`, USD for `cost`, milliseconds for `latency_p95`."
+          },
+          "window": {
+            "$ref": "#/components/schemas/AlertWindow",
+            "description": "Sliding window."
+          }
+        },
+        "additionalProperties": false
+      },
+      "AlertDelivery": {
+        "type": "object",
+        "description": "One delivery of an event to a channel.",
+        "required": [
+          "id",
+          "channel_id",
+          "channel_name",
+          "channel_kind",
+          "status",
+          "attempts",
+          "updated_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Attempts made so far."
+          },
+          "channel_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The channel."
+          },
+          "channel_kind": {
+            "$ref": "#/components/schemas/ChannelKind",
+            "description": "The channel's kind."
+          },
+          "channel_name": {
+            "type": "string",
+            "description": "The channel's current name."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Delivery id; the webhook's `X-Llmobs-Delivery`."
+          },
+          "last_error": {
+            "type": "string",
+            "description": "The last attempt's error."
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeliveryStatus",
+            "description": "Where the delivery stands."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last change."
+          }
+        }
+      },
+      "AlertEvent": {
+        "type": "object",
+        "description": "One fired, resolved or reminder event, with the rule as it was then.",
+        "required": [
+          "id",
+          "rule_id",
+          "kind",
+          "threshold",
+          "comparator",
+          "metric",
+          "window",
+          "window_from",
+          "window_to",
+          "created_at",
+          "deliveries"
+        ],
+        "properties": {
+          "comparator": {
+            "$ref": "#/components/schemas/Comparator",
+            "description": "The comparator then."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The sample count."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the event was recorded."
+          },
+          "deliveries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlertDelivery"
+            },
+            "description": "One per channel the rule had then."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Event id; the webhook payload's `event_id`."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AlertEventKind",
+            "description": "What happened."
+          },
+          "metric": {
+            "$ref": "#/components/schemas/AlertMetric",
+            "description": "The metric then."
+          },
+          "rule_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The rule."
+          },
+          "threshold": {
+            "type": "number",
+            "format": "double",
+            "description": "The threshold then."
+          },
+          "value": {
+            "type": "number",
+            "format": "double",
+            "description": "The measured value. Absent when there was none (e.g. resolved by too few samples)."
+          },
+          "window": {
+            "$ref": "#/components/schemas/AlertWindow",
+            "description": "The window then."
+          },
+          "window_from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Window start."
+          },
+          "window_to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Window end (exclusive)."
+          }
+        }
+      },
+      "AlertEventKind": {
+        "type": "string",
+        "description": "What an event records.",
+        "enum": [
+          "fired",
+          "resolved",
+          "reminder"
+        ]
+      },
+      "AlertEventPage": {
+        "type": "object",
+        "description": "One page of results. `next_cursor` is null when there is no next page.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlertEvent"
+            },
+            "description": "Items in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
+      },
+      "AlertMetric": {
+        "type": "string",
+        "description": "What a rule measures (D-K-2).",
+        "enum": [
+          "error_rate",
+          "cost",
+          "latency_p95",
+          "score"
+        ]
+      },
+      "AlertRule": {
+        "type": "object",
+        "description": "One alert rule (D-K-2, D-K-4).",
+        "required": [
+          "id",
+          "name",
+          "enabled",
+          "condition",
+          "channel_ids",
+          "cooldown_s",
+          "notify_while_firing",
+          "state",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "channel_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Channels notified on fired, resolved and reminder events. Ordered by id."
+          },
+          "condition": {
+            "$ref": "#/components/schemas/AlertCondition",
+            "description": "What is measured and when it breaches, with defaults filled in."
+          },
+          "cooldown_s": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Minimum seconds between two reminders while firing."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Creation time."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Disabled rules are not evaluated."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Rule id."
+          },
+          "last_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sample count of the last successful evaluation."
+          },
+          "last_error": {
+            "type": "string",
+            "description": "Why the last evaluation failed. Absent after a successful one."
+          },
+          "last_evaluated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last evaluation, successful or not."
+          },
+          "last_fired_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last `fired` event."
+          },
+          "last_value": {
+            "type": "number",
+            "format": "double",
+            "description": "Value of the last successful evaluation."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name, unique in the project."
+          },
+          "notify_while_firing": {
+            "type": "boolean",
+            "description": "Send a reminder every `cooldown_s` while firing."
+          },
+          "state": {
+            "$ref": "#/components/schemas/AlertState",
+            "description": "Current state."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last change."
+          }
+        }
+      },
+      "AlertRulePage": {
+        "type": "object",
+        "description": "One page of results. `next_cursor` is null when there is no next page.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlertRule"
+            },
+            "description": "Items in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null when this is the last page."
+          }
+        }
+      },
+      "AlertState": {
+        "type": "string",
+        "description": "Where a rule stands (D-K-4).",
+        "enum": [
+          "ok",
+          "firing",
+          "no_data"
+        ]
+      },
+      "AlertWindow": {
+        "type": "string",
+        "description": "Sliding window length (D-K-3).",
+        "enum": [
+          "1m",
+          "5m",
+          "15m",
+          "1h",
+          "6h",
+          "24h"
+        ]
+      },
       "ApiKey": {
         "type": "object",
         "description": "A project API key. The secret is not a field.",
@@ -8037,6 +8989,16 @@
           "json"
         ]
       },
+      "Comparator": {
+        "type": "string",
+        "description": "How the value is compared with the threshold.",
+        "enum": [
+          "gt",
+          "gte",
+          "lt",
+          "lte"
+        ]
+      },
       "ConnectionStatus": {
         "type": "string",
         "description": "Whether the connection's last test reached the provider.",
@@ -8086,6 +9048,46 @@
           "name": {
             "type": "string",
             "description": "Display name. Absent when the admin does not set one."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateAlertRuleRequest": {
+        "type": "object",
+        "description": "Body of `POST /alert-rules`.",
+        "required": [
+          "name",
+          "condition"
+        ],
+        "properties": {
+          "channel_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "At most 10 channels of this project. Default none."
+          },
+          "condition": {
+            "$ref": "#/components/schemas/AlertCondition",
+            "description": "The condition. Defaults are filled in."
+          },
+          "cooldown_s": {
+            "type": "integer",
+            "format": "int64",
+            "description": "300–604800. Default 3600."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Default true."
+          },
+          "name": {
+            "type": "string",
+            "description": "1–100 characters after trimming."
+          },
+          "notify_while_firing": {
+            "type": "boolean",
+            "description": "Default false."
           }
         },
         "additionalProperties": false
@@ -8799,6 +9801,14 @@
           "latency_p95",
           "cost_total",
           "total_tokens"
+        ]
+      },
+      "LatencyTarget": {
+        "type": "string",
+        "description": "Which latency a `latency_p95` rule measures.",
+        "enum": [
+          "trace",
+          "llm_span"
         ]
       },
       "Limit": {
@@ -9677,6 +10687,7 @@
           "forbidden",
           "sso_required",
           "email_not_verified",
+          "plan_limit",
           "not_found",
           "method_not_allowed",
           "payload_too_large",
@@ -10098,6 +11109,14 @@
             "description": "The score value. Spec 01 `data_type`, `value_num`, `value_str`."
           }
         }
+      },
+      "ScoreAggregation": {
+        "type": "string",
+        "description": "How a `score` rule aggregates.",
+        "enum": [
+          "avg",
+          "pass_rate"
+        ]
       },
       "ScoreBatch": {
         "type": "object",
@@ -11777,6 +12796,42 @@
           "is_instance_admin": {
             "type": "boolean",
             "description": "Grant or remove instance admin."
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateAlertRuleRequest": {
+        "type": "object",
+        "description": "Body of `PATCH /alert-rules/{id}`. An absent field keeps its value. A new\n`condition`, or a change of `enabled`, resets the state to `ok` (D-K-4).",
+        "properties": {
+          "channel_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "New channels of this project, at most 10. `[]` removes every channel."
+          },
+          "condition": {
+            "$ref": "#/components/schemas/AlertCondition",
+            "description": "New condition. Defaults are filled in."
+          },
+          "cooldown_s": {
+            "type": "integer",
+            "format": "int64",
+            "description": "New cooldown, 300–604800 seconds."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "New enabled flag."
+          },
+          "name": {
+            "type": "string",
+            "description": "New display name, 1–100 characters after trimming."
+          },
+          "notify_while_firing": {
+            "type": "boolean",
+            "description": "New `notify_while_firing` flag."
           }
         },
         "additionalProperties": false

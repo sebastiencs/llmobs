@@ -34,8 +34,10 @@ use super::admin::{
     UpdateAdminUserRequest,
 };
 use super::alerts::{
-    ChannelDelivery, ChannelKind, CreateChannelRequest, DeliveryStatus, NotificationChannel,
-    UpdateChannelRequest,
+    AlertCondition, AlertDelivery, AlertEvent, AlertEventKind, AlertMetric, AlertRule, AlertState,
+    AlertWindow, ChannelDelivery, ChannelKind, Comparator, CreateAlertRuleRequest,
+    CreateChannelRequest, DeliveryStatus, LatencyTarget, NotificationChannel, ScoreAggregation,
+    UpdateAlertRuleRequest, UpdateChannelRequest,
 };
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
 use super::connections::{
@@ -199,6 +201,21 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<CreateChannelRequest>();
     set.insert::<UpdateChannelRequest>();
     set.insert_page::<NotificationChannel>("ChannelPage");
+    set.insert::<AlertMetric>();
+    set.insert::<AlertWindow>();
+    set.insert::<Comparator>();
+    set.insert::<LatencyTarget>();
+    set.insert::<ScoreAggregation>();
+    set.insert::<AlertState>();
+    set.insert::<AlertCondition>();
+    set.insert::<AlertRule>();
+    set.insert::<CreateAlertRuleRequest>();
+    set.insert::<UpdateAlertRuleRequest>();
+    set.insert::<AlertEventKind>();
+    set.insert::<AlertDelivery>();
+    set.insert::<AlertEvent>();
+    set.insert_page::<AlertRule>("AlertRulePage");
+    set.insert_page::<AlertEvent>("AlertEventPage");
     set
 }
 
@@ -567,6 +584,7 @@ fn paths() -> Paths {
     let paths = saved_view_paths(paths);
     let paths = sql_paths(paths);
     let paths = channel_paths(paths);
+    let paths = alert_rule_paths(paths);
     media_paths(paths).build()
 }
 
@@ -1820,6 +1838,104 @@ fn channel_paths(paths: PathsBuilder) -> PathsBuilder {
         .path(
             format!("{PROJECT}/channels/{{id}}"),
             PathItem::new(HttpMethod::Delete, delete),
+        )
+}
+
+fn alert_rule_paths(paths: PathsBuilder) -> PathsBuilder {
+    let list = operation("list_alert_rules", "alerts", "List alert rules")
+        .parameters(Some(vec![project_param()]))
+        .responses(responses(
+            "200",
+            json_named("AlertRulePage", "Every rule of the project, by name."),
+            AUTH_ERRORS,
+        ))
+        .build();
+    let create = operation("create_alert_rule", "alerts", "Create an alert rule")
+        .description(Some(
+            "Needs role member. The filter is checked by the query layer (400 invalid_filter). At most 100 rules per project (409). An enabled rule beyond the org's plan limit is 403 plan_limit.",
+        ))
+        .parameters(Some(vec![project_param()]))
+        .request_body(Some(json_body("CreateAlertRuleRequest")))
+        .responses(responses(
+            "201",
+            json_of::<AlertRule>("The created rule."),
+            &[400, 401, 403, 404, 409, 429, 503],
+        ))
+        .build();
+    let get = operation("get_alert_rule", "alerts", "Get an alert rule")
+        .parameters(Some(vec![
+            project_param(),
+            path_uuid("id", "Alert rule id."),
+        ]))
+        .responses(responses(
+            "200",
+            json_of::<AlertRule>("The rule and its state."),
+            &[400, 401, 403, 404, 429],
+        ))
+        .build();
+    let update = operation("update_alert_rule", "alerts", "Update an alert rule")
+        .description(Some(
+            "A new condition, or a change of enabled, resets the state to ok without an event. Re-enabling a rule beyond the org's plan limit is 403 plan_limit.",
+        ))
+        .parameters(Some(vec![project_param(), path_uuid("id", "Alert rule id.")]))
+        .request_body(Some(json_body("UpdateAlertRuleRequest")))
+        .responses(responses(
+            "200",
+            json_of::<AlertRule>("The updated rule."),
+            &[400, 401, 403, 404, 409, 429, 503],
+        ))
+        .build();
+    let delete = operation("delete_alert_rule", "alerts", "Delete an alert rule")
+        .parameters(Some(vec![
+            project_param(),
+            path_uuid("id", "Alert rule id."),
+        ]))
+        .responses(responses(
+            "204",
+            ResponseBuilder::new()
+                .description("Deleted, with its events.")
+                .build(),
+            &[400, 401, 403, 404, 429],
+        ))
+        .build();
+    let events = operation("list_alert_events", "alerts", "List a rule's events")
+        .parameters(Some(with_query::<PageParams>(vec![
+            project_param(),
+            path_uuid("id", "Alert rule id."),
+        ])))
+        .responses(responses(
+            "200",
+            json_named(
+                "AlertEventPage",
+                "Events, newest first, with their deliveries.",
+            ),
+            QUERY_ERRORS,
+        ))
+        .build();
+    paths
+        .path(
+            format!("{PROJECT}/alert-rules"),
+            PathItem::new(HttpMethod::Get, list),
+        )
+        .path(
+            format!("{PROJECT}/alert-rules"),
+            PathItem::new(HttpMethod::Post, create),
+        )
+        .path(
+            format!("{PROJECT}/alert-rules/{{id}}"),
+            PathItem::new(HttpMethod::Get, get),
+        )
+        .path(
+            format!("{PROJECT}/alert-rules/{{id}}"),
+            PathItem::new(HttpMethod::Patch, update),
+        )
+        .path(
+            format!("{PROJECT}/alert-rules/{{id}}"),
+            PathItem::new(HttpMethod::Delete, delete),
+        )
+        .path(
+            format!("{PROJECT}/alert-rules/{{id}}/events"),
+            PathItem::new(HttpMethod::Get, events),
         )
 }
 

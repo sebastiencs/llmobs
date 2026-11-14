@@ -654,6 +654,66 @@ export interface paths {
         patch: operations["patch_project"];
         trace?: never;
     };
+    "/api/v1/projects/{project}/alert-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List alert rules */
+        get: operations["list_alert_rules"];
+        put?: never;
+        /**
+         * Create an alert rule
+         * @description Needs role member. The filter is checked by the query layer (400 invalid_filter). At most 100 rules per project (409). An enabled rule beyond the org's plan limit is 403 plan_limit.
+         */
+        post: operations["create_alert_rule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project}/alert-rules/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get an alert rule */
+        get: operations["get_alert_rule"];
+        put?: never;
+        post?: never;
+        /** Delete an alert rule */
+        delete: operations["delete_alert_rule"];
+        options?: never;
+        head?: never;
+        /**
+         * Update an alert rule
+         * @description A new condition, or a change of enabled, resets the state to ok without an event. Re-enabling a rule beyond the org's plan limit is 403 plan_limit.
+         */
+        patch: operations["update_alert_rule"];
+        trace?: never;
+    };
+    "/api/v1/projects/{project}/alert-rules/{id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a rule's events */
+        get: operations["list_alert_events"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project}/api-keys": {
         parameters: {
             query?: never;
@@ -1220,6 +1280,213 @@ export interface components {
             /** @description Opaque cursor for the next page, or null when this is the last page. */
             next_cursor: string | null;
         };
+        /**
+         * @description What a rule measures and when it breaches (D-K-2).
+         *
+         *     Fields that do not apply to `metric` must be absent. A stored or returned
+         *     condition always has its defaults filled in.
+         */
+        AlertCondition: {
+            /** @description `score` only. Default `avg`. */
+            aggregation?: components["schemas"]["ScoreAggregation"];
+            /** @description How the value is compared with `threshold`. */
+            comparator: components["schemas"]["Comparator"];
+            /** @description Filter DSL expression over `traces`. Absent means every trace. */
+            filter?: string;
+            /** @description What is measured. */
+            metric: components["schemas"]["AlertMetric"];
+            /**
+             * Format: int64
+             * @description Fewer samples than this gives `no_data`. Not for `cost`. Defaults: 20, or 10 for `score`.
+             */
+            min_count?: number;
+            /** @description `score` only: the score name. */
+            score_name?: string;
+            /** @description `latency_p95` only. Default `trace`. */
+            target?: components["schemas"]["LatencyTarget"];
+            /**
+             * Format: double
+             * @description Fraction for `error_rate` and `pass_rate`, USD for `cost`, milliseconds for `latency_p95`.
+             */
+            threshold: number;
+            /** @description Sliding window. */
+            window: components["schemas"]["AlertWindow"];
+        };
+        /** @description One delivery of an event to a channel. */
+        AlertDelivery: {
+            /**
+             * Format: int64
+             * @description Attempts made so far.
+             */
+            attempts: number;
+            /**
+             * Format: uuid
+             * @description The channel.
+             */
+            channel_id: string;
+            /** @description The channel's kind. */
+            channel_kind: components["schemas"]["ChannelKind"];
+            /** @description The channel's current name. */
+            channel_name: string;
+            /**
+             * Format: uuid
+             * @description Delivery id; the webhook's `X-Llmobs-Delivery`.
+             */
+            id: string;
+            /** @description The last attempt's error. */
+            last_error?: string;
+            /** @description Where the delivery stands. */
+            status: components["schemas"]["DeliveryStatus"];
+            /**
+             * Format: date-time
+             * @description Last change.
+             */
+            updated_at: string;
+        };
+        /** @description One fired, resolved or reminder event, with the rule as it was then. */
+        AlertEvent: {
+            /** @description The comparator then. */
+            comparator: components["schemas"]["Comparator"];
+            /**
+             * Format: int64
+             * @description The sample count.
+             */
+            count?: number;
+            /**
+             * Format: date-time
+             * @description When the event was recorded.
+             */
+            created_at: string;
+            /** @description One per channel the rule had then. */
+            deliveries: components["schemas"]["AlertDelivery"][];
+            /**
+             * Format: uuid
+             * @description Event id; the webhook payload's `event_id`.
+             */
+            id: string;
+            /** @description What happened. */
+            kind: components["schemas"]["AlertEventKind"];
+            /** @description The metric then. */
+            metric: components["schemas"]["AlertMetric"];
+            /**
+             * Format: uuid
+             * @description The rule.
+             */
+            rule_id: string;
+            /**
+             * Format: double
+             * @description The threshold then.
+             */
+            threshold: number;
+            /**
+             * Format: double
+             * @description The measured value. Absent when there was none (e.g. resolved by too few samples).
+             */
+            value?: number;
+            /** @description The window then. */
+            window: components["schemas"]["AlertWindow"];
+            /**
+             * Format: date-time
+             * @description Window start.
+             */
+            window_from: string;
+            /**
+             * Format: date-time
+             * @description Window end (exclusive).
+             */
+            window_to: string;
+        };
+        /**
+         * @description What an event records.
+         * @enum {string}
+         */
+        AlertEventKind: "fired" | "resolved" | "reminder";
+        /** @description One page of results. `next_cursor` is null when there is no next page. */
+        AlertEventPage: {
+            /** @description Items in this page. */
+            data: components["schemas"]["AlertEvent"][];
+            /** @description Opaque cursor for the next page, or null when this is the last page. */
+            next_cursor: string | null;
+        };
+        /**
+         * @description What a rule measures (D-K-2).
+         * @enum {string}
+         */
+        AlertMetric: "error_rate" | "cost" | "latency_p95" | "score";
+        /** @description One alert rule (D-K-2, D-K-4). */
+        AlertRule: {
+            /** @description Channels notified on fired, resolved and reminder events. Ordered by id. */
+            channel_ids: string[];
+            /** @description What is measured and when it breaches, with defaults filled in. */
+            condition: components["schemas"]["AlertCondition"];
+            /**
+             * Format: int64
+             * @description Minimum seconds between two reminders while firing.
+             */
+            cooldown_s: number;
+            /**
+             * Format: date-time
+             * @description Creation time.
+             */
+            created_at: string;
+            /** @description Disabled rules are not evaluated. */
+            enabled: boolean;
+            /**
+             * Format: uuid
+             * @description Rule id.
+             */
+            id: string;
+            /**
+             * Format: int64
+             * @description Sample count of the last successful evaluation.
+             */
+            last_count?: number;
+            /** @description Why the last evaluation failed. Absent after a successful one. */
+            last_error?: string;
+            /**
+             * Format: date-time
+             * @description Last evaluation, successful or not.
+             */
+            last_evaluated_at?: string;
+            /**
+             * Format: date-time
+             * @description Last `fired` event.
+             */
+            last_fired_at?: string;
+            /**
+             * Format: double
+             * @description Value of the last successful evaluation.
+             */
+            last_value?: number;
+            /** @description Display name, unique in the project. */
+            name: string;
+            /** @description Send a reminder every `cooldown_s` while firing. */
+            notify_while_firing: boolean;
+            /** @description Current state. */
+            state: components["schemas"]["AlertState"];
+            /**
+             * Format: date-time
+             * @description Last change.
+             */
+            updated_at: string;
+        };
+        /** @description One page of results. `next_cursor` is null when there is no next page. */
+        AlertRulePage: {
+            /** @description Items in this page. */
+            data: components["schemas"]["AlertRule"][];
+            /** @description Opaque cursor for the next page, or null when this is the last page. */
+            next_cursor: string | null;
+        };
+        /**
+         * @description Where a rule stands (D-K-4).
+         * @enum {string}
+         */
+        AlertState: "ok" | "firing" | "no_data";
+        /**
+         * @description Sliding window length (D-K-3).
+         * @enum {string}
+         */
+        AlertWindow: "1m" | "5m" | "15m" | "1h" | "6h" | "24h";
         /** @description A project API key. The secret is not a field. */
         ApiKey: {
             /**
@@ -1373,6 +1640,11 @@ export interface components {
          */
         ColumnType: "string" | "integer" | "float" | "boolean" | "timestamp" | "string_list" | "string_map" | "json";
         /**
+         * @description How the value is compared with the threshold.
+         * @enum {string}
+         */
+        Comparator: "gt" | "gte" | "lt" | "lte";
+        /**
          * @description Whether the connection's last test reached the provider.
          * @enum {string}
          */
@@ -1399,6 +1671,24 @@ export interface components {
             is_instance_admin?: boolean;
             /** @description Display name. Absent when the admin does not set one. */
             name?: string;
+        };
+        /** @description Body of `POST /alert-rules`. */
+        CreateAlertRuleRequest: {
+            /** @description At most 10 channels of this project. Default none. */
+            channel_ids?: string[];
+            /** @description The condition. Defaults are filled in. */
+            condition: components["schemas"]["AlertCondition"];
+            /**
+             * Format: int64
+             * @description 300–604800. Default 3600.
+             */
+            cooldown_s?: number;
+            /** @description Default true. */
+            enabled?: boolean;
+            /** @description 1–100 characters after trimming. */
+            name: string;
+            /** @description Default false. */
+            notify_while_firing?: boolean;
         };
         /** @description `POST /api/v1/projects/{project}/api-keys` body. */
         CreateApiKeyRequest: {
@@ -1763,6 +2053,11 @@ export interface components {
          * @enum {string}
          */
         KpiMetric: "traces" | "error_rate" | "latency_p95" | "cost_total" | "total_tokens";
+        /**
+         * @description Which latency a `latency_p95` rule measures.
+         * @enum {string}
+         */
+        LatencyTarget: "trace" | "llm_span";
         /**
          * Format: int32
          * @description Page size. Default 50, accepted range 1–1000.
@@ -2208,7 +2503,7 @@ export interface components {
          *     Spec 09 § Conventions. Later endpoints add codes.
          * @enum {string}
          */
-        ProblemCode: "bad_request" | "invalid_filter" | "query_failed" | "query_timeout" | "query_too_large" | "busy" | "unauthorized" | "forbidden" | "sso_required" | "email_not_verified" | "not_found" | "method_not_allowed" | "payload_too_large" | "unsupported_media_type" | "range_not_satisfiable" | "conflict" | "rate_limited" | "internal";
+        ProblemCode: "bad_request" | "invalid_filter" | "query_failed" | "query_timeout" | "query_too_large" | "busy" | "unauthorized" | "forbidden" | "sso_required" | "email_not_verified" | "plan_limit" | "not_found" | "method_not_allowed" | "payload_too_large" | "unsupported_media_type" | "range_not_satisfiable" | "conflict" | "rate_limited" | "internal";
         /**
          * @description A project the caller can see.
          *
@@ -2439,6 +2734,11 @@ export interface components {
             /** @description The score value. Spec 01 `data_type`, `value_num`, `value_str`. */
             value: components["schemas"]["ScoreValue"];
         };
+        /**
+         * @description How a `score` rule aggregates.
+         * @enum {string}
+         */
+        ScoreAggregation: "avg" | "pass_rate";
         /** @description `POST …/scores` and `POST /api/v1/scores` body. */
         ScoreBatch: {
             /** @description Between 1 and 1000 scores. */
@@ -3349,6 +3649,27 @@ export interface components {
             disabled?: boolean;
             /** @description Grant or remove instance admin. */
             is_instance_admin?: boolean;
+        };
+        /**
+         * @description Body of `PATCH /alert-rules/{id}`. An absent field keeps its value. A new
+         *     `condition`, or a change of `enabled`, resets the state to `ok` (D-K-4).
+         */
+        UpdateAlertRuleRequest: {
+            /** @description New channels of this project, at most 10. `[]` removes every channel. */
+            channel_ids?: string[];
+            /** @description New condition. Defaults are filled in. */
+            condition?: components["schemas"]["AlertCondition"];
+            /**
+             * Format: int64
+             * @description New cooldown, 300–604800 seconds.
+             */
+            cooldown_s?: number;
+            /** @description New enabled flag. */
+            enabled?: boolean;
+            /** @description New display name, 1–100 characters after trimming. */
+            name?: string;
+            /** @description New `notify_while_firing` flag. */
+            notify_while_firing?: boolean;
         };
         /** @description Body of `PATCH /channels/{id}`. An absent field keeps its value; `headers` replaces the whole map. */
         UpdateChannelRequest: {
@@ -6317,6 +6638,460 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Project"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_alert_rules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every rule of the project, by name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertRulePage"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_alert_rule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAlertRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description The created rule. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertRule"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request conflicts with the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server is busy or a dependency is unavailable. Retry later. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_alert_rule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+                /** @description Alert rule id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rule and its state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertRule"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_alert_rule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+                /** @description Alert rule id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted, with its events. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    update_alert_rule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+                /** @description Alert rule id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAlertRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated rule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertRule"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request conflicts with the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server is busy or a dependency is unavailable. Retry later. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_alert_events: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of items to return (1–1000, default 50). */
+                limit?: components["schemas"]["Limit"];
+                /** @description Opaque cursor from a previous page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+                /** @description Alert rule id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Events, newest first, with their deliveries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertEventPage"];
                 };
             };
             /** @description The request is malformed or a filter is invalid. */
