@@ -20,9 +20,9 @@ use uuid::Uuid;
 use crate::http::AppState;
 use crate::meta::MetaError;
 use crate::meta::deletions::{
-    DeletionKind, DeletionRow, DeletionState, FailReason, clear_handover, mark_applied,
-    mark_dropped, mark_failed, mark_handed_over, open_deletions, scope_projects, scope_sessions,
-    scope_traces,
+    DeletionKind, DeletionRow, DeletionState, FailReason, clear_handover, log_undecodable,
+    mark_applied, mark_dropped, mark_failed, mark_handed_over, open_deletions, scope_projects,
+    scope_sessions, scope_traces,
 };
 use crate::meta::orgs::{delete_org, org_by_id};
 use crate::meta::projects::{delete_project, project_by_id, project_ids_of_org};
@@ -109,46 +109,72 @@ impl Default for Deletions {
     }
 }
 
-/// Why a step stopped.
+/// Why a step stopped. The `&str` is a static error kind for the log; the optional `String`
+/// is the text of a meta error (`MetaError` carries no payload), logged as `cause`.
 #[derive(Debug)]
 enum Step {
-    /// Try again later; a data row in `resolving` fails after `MAX_ATTEMPTS`.
-    /// The label is a static error kind for the log.
-    Retry(&'static str),
+    /// Try again later; a data row in `resolving` with no stored scope fails after `MAX_ATTEMPTS`.
+    Retry(&'static str, Option<String>),
     /// Try again later, never fail: storage already holds the deletion (any error after
     /// `register_deletion` returned `Ok`), or the row is a drop.
-    RetryForever(&'static str),
-    /// Give up: the row becomes `failed` (data kinds only).
+    RetryForever(&'static str, Option<String>),
+    /// Give up: the row becomes `failed` (data kinds only, and only without a stored scope).
     Fail(FailReason),
 }
 
-fn from_meta(_error: MetaError) -> Step {
-    Step::Retry("meta")
+fn from_meta(error: &MetaError) -> Step {
+    Step::Retry("meta", Some(error.to_string()))
+}
+
+fn forever_meta(error: &MetaError) -> Step {
+    Step::RetryForever("meta", Some(error.to_string()))
 }
 
 fn from_query(error: &QueryError) -> Step {
     match error {
-        QueryError::Busy => Step::Retry("busy"),
-        QueryError::DataFusion(_) => Step::Retry("query"),
+        QueryError::Busy => Step::Retry("busy", None),
+        QueryError::DataFusion(_) => Step::Retry("query", None),
     }
 }
 
-fn from_run(error: &RunError) -> Step {
+/// Maps a read's error. `RunError::Failed` is the user's filter text failing at execution (a
+/// failed cast, say) for a `filter` row, so it fails again; for the other kinds it is not the
+/// caller's input and is retried. `TooLarge` is the shared memory pool, which is transient.
+fn from_run(error: &RunError, kind: DeletionKind) -> Step {
     match error {
-        RunError::Timeout => Step::Retry("timeout"),
-        RunError::Internal(_) => Step::Retry("internal"),
-        RunError::Invalid(_)
-        | RunError::InvalidRequest(_)
-        | RunError::Failed(_)
-        | RunError::TooLarge => Step::Fail(FailReason::ResolutionFailed),
+        RunError::Timeout => Step::Retry("timeout", None),
+        RunError::Internal(_) => Step::Retry("internal", None),
+        RunError::TooLarge => Step::Retry("too_large", None),
+        RunError::Failed(_) if kind == DeletionKind::Filter => {
+            Step::Fail(FailReason::ResolutionFailed)
+        }
+        RunError::Failed(_) => Step::Retry("failed", None),
+        RunError::Invalid(_) | RunError::InvalidRequest(_) => {
+            Step::Fail(FailReason::ResolutionFailed)
+        }
     }
 }
 
 fn from_deletion(error: &DeletionError) -> Step {
     match error {
         DeletionError::Invalid { .. } => Step::Fail(FailReason::ResolutionFailed),
-        DeletionError::NotFound => Step::Retry("not_found"),
-        DeletionError::Catalog(_) => Step::Retry("catalog"),
+        DeletionError::NotFound => Step::Retry("not_found", None),
+        DeletionError::Catalog(_) => Step::Retry("catalog", None),
+    }
+}
+
+/// The processing order of a run (cheap rows first): drops; rows whose scope is stored or that
+/// are `pending`; `trace_ids` rows still to resolve; `filter` and `user` rows still to resolve.
+fn priority(row: &DeletionRow) -> u8 {
+    match row.kind {
+        DeletionKind::Project | DeletionKind::Org => 0,
+        DeletionKind::TraceIds | DeletionKind::Filter | DeletionKind::User
+            if row.trace_count.is_some() || row.state == DeletionState::Pending =>
+        {
+            1
+        }
+        DeletionKind::TraceIds => 2,
+        DeletionKind::Filter | DeletionKind::User => 3,
     }
 }
 
@@ -176,15 +202,24 @@ pub(crate) fn on_dropped(_state: &AppState, dropped: &Dropped) {
     }
 }
 
-/// Processes every open deletion once, oldest first. Errors on one row are logged and
-/// counted; they do not stop the others. Returns `Err` only when the open rows cannot be listed.
+/// Processes every open deletion once: drops first, then cheap rows (see [`priority`]), oldest
+/// first within each group. A row that does not decode is logged and skipped; errors on one
+/// row are logged and counted and do not stop the others. Returns `Err` only when the open
+/// rows cannot be listed.
 ///
 /// # Errors
 ///
 /// Returns [`MetaError`] when the open rows cannot be read.
 pub(crate) async fn run_once(state: &AppState) -> Result<(), MetaError> {
     state.deletions.guard.prune(state.clock.now_ns());
-    let rows = open_deletions(state.meta.reader()).await?;
+    let mut rows = Vec::new();
+    for listed in open_deletions(state.meta.reader()).await? {
+        match listed {
+            Ok(row) => rows.push(row),
+            Err((id, error)) => log_undecodable(id, &error),
+        }
+    }
+    rows.sort_by_key(priority);
     for row in rows {
         // Per row: a resolution read can take minutes.
         let now = state.clock.now_ns();
@@ -200,9 +235,9 @@ pub(crate) async fn run_once(state: &AppState) -> Result<(), MetaError> {
         };
         match result {
             Ok(()) => state.deletions.settled(row.id),
-            Err(Step::Retry(label)) => retry(state, &row, now, label, true).await,
-            Err(Step::RetryForever(label)) => retry(state, &row, now, label, false).await,
-            Err(Step::Fail(reason)) => fail(state, &row, now, reason).await,
+            Err(Step::Retry(label, cause)) => retry(state, &row, label, cause, true).await,
+            Err(Step::RetryForever(label, cause)) => retry(state, &row, label, cause, false).await,
+            Err(Step::Fail(reason)) => fail(state, &row, reason).await,
         }
     }
     Ok(())
@@ -210,12 +245,21 @@ pub(crate) async fn run_once(state: &AppState) -> Result<(), MetaError> {
 
 /// Records a failed step and, for a data row with no stored scope that has failed
 /// `MAX_ATTEMPTS` times in a row, gives up on it.
-async fn retry(state: &AppState, row: &DeletionRow, now: i64, label: &'static str, may_fail: bool) {
-    let failures = state.deletions.failed(row.id, now);
+async fn retry(
+    state: &AppState,
+    row: &DeletionRow,
+    label: &'static str,
+    cause: Option<String>,
+    may_fail: bool,
+) {
+    // The clock is read again: the step may have run for minutes.
+    let failures = state.deletions.failed(row.id, state.clock.now_ns());
+    let cause = cause.as_deref().unwrap_or("-");
     tracing::warn!(
         deletion_id = %row.id,
         kind = row.kind.as_str(),
         error = label,
+        cause = %cause,
         failures = failures,
         "deletion step failed"
     );
@@ -223,19 +267,29 @@ async fn retry(state: &AppState, row: &DeletionRow, now: i64, label: &'static st
         row.kind,
         DeletionKind::TraceIds | DeletionKind::Filter | DeletionKind::User
     );
-    // A row whose scope is stored keeps retrying: `failed` must mean nothing was hidden.
     if may_fail
         && data_kind
         && row.state == DeletionState::Resolving
         && row.trace_count.is_none()
         && failures >= MAX_ATTEMPTS
     {
-        fail(state, row, now, FailReason::ResolutionFailed).await;
+        fail(state, row, FailReason::ResolutionFailed).await;
     }
 }
 
-/// Marks a data row `failed`. Logs the audit event when the row changed.
-async fn fail(state: &AppState, row: &DeletionRow, now: i64, reason: FailReason) {
+/// Marks a data row `failed`. Logs the audit event when the row changed. A row with a stored
+/// scope never fails: storage may already hide its traces, so it keeps retrying (this holds
+/// for every caller, not only the retry path).
+async fn fail(state: &AppState, row: &DeletionRow, reason: FailReason) {
+    if row.trace_count.is_some() {
+        tracing::error!(
+            deletion_id = %row.id,
+            error = reason.as_str(),
+            "deletion with a stored scope cannot fail; it retries"
+        );
+        state.deletions.failed(row.id, state.clock.now_ns());
+        return;
+    }
     let id = row.id;
     let written = state
         .meta
@@ -252,11 +306,11 @@ async fn fail(state: &AppState, row: &DeletionRow, now: i64, reason: FailReason)
                 error = reason.as_str(),
                 "deletion step failed on a row that cannot fail"
             );
-            state.deletions.failed(row.id, now);
+            state.deletions.failed(row.id, state.clock.now_ns());
         }
         Err(error) => {
             tracing::warn!(deletion_id = %row.id, error = %error, "deletion failure could not be recorded");
-            state.deletions.failed(row.id, now);
+            state.deletions.failed(row.id, state.clock.now_ns());
         }
     }
 }
@@ -283,12 +337,18 @@ async fn data_step(state: &AppState, row: &DeletionRow, now: i64) -> Result<(), 
 
     // Superseded: the project or its org is being dropped (or is gone). The drop erases
     // everything, so the deletion is done without a storage call.
-    let project_row = project_by_id(reader, project).await.map_err(from_meta)?;
-    let org_row = org_by_id(reader, row.org_id).await.map_err(from_meta)?;
+    let project_row = project_by_id(reader, project)
+        .await
+        .map_err(|error| from_meta(&error))?;
+    let org_row = org_by_id(reader, row.org_id)
+        .await
+        .map_err(|error| from_meta(&error))?;
     let live = project_row.is_some_and(|row| row.state == "active")
         && org_row.is_some_and(|row| row.state == "active");
     if !live {
-        return applied_now(state, row, now).await.map_err(from_meta);
+        return applied_now(state, row, now)
+            .await
+            .map_err(|error| from_meta(&error));
     }
 
     // The guard learns the request even when a previous process stored it.
@@ -302,7 +362,9 @@ async fn data_step(state: &AppState, row: &DeletionRow, now: i64) -> Result<(), 
             }
         }
         DeletionKind::TraceIds if row.trace_count.is_none() => {
-            let requested = scope_traces(reader, row.id).await.map_err(from_meta)?;
+            let requested = scope_traces(reader, row.id)
+                .await
+                .map_err(|error| from_meta(&error))?;
             state
                 .deletions
                 .guard
@@ -335,15 +397,21 @@ async fn register(
     now: i64,
 ) -> Result<(), Step> {
     let reader = state.meta.reader();
-    let traces = scope_traces(reader, row.id).await.map_err(from_meta)?;
+    let traces = scope_traces(reader, row.id)
+        .await
+        .map_err(|error| from_meta(&error))?;
     let sessions = if row.kind == DeletionKind::User {
-        scope_sessions(reader, row.id).await.map_err(from_meta)?
+        scope_sessions(reader, row.id)
+            .await
+            .map_err(|error| from_meta(&error))?
     } else {
         Vec::new()
     };
     if matches!(row.kind, DeletionKind::TraceIds | DeletionKind::Filter) && traces.is_empty() {
         // Storage refuses an empty `Traces` scope: there is nothing to hide.
-        applied_now(state, row, now).await.map_err(from_meta)?;
+        applied_now(state, row, now)
+            .await
+            .map_err(|error| from_meta(&error))?;
         return Ok(());
     }
 
@@ -377,7 +445,18 @@ async fn register(
         .storage
         .register_deletion(deletion)
         .await
-        .map_err(|error| from_deletion(&error))?;
+        .map_err(|error| match error {
+            // A stored scope is never failed: storage refusing it is retried.
+            DeletionError::Invalid { .. } if row.trace_count.is_some() => {
+                tracing::error!(
+                    deletion_id = %row.id,
+                    error = "invalid",
+                    "storage refused a stored scope; it retries"
+                );
+                Step::RetryForever("invalid", None)
+            }
+            _ => from_deletion(&error),
+        })?;
 
     // Storage hides the rows from here on, so no error below may fail the row.
     let id = row.id;
@@ -385,7 +464,7 @@ async fn register(
         .meta
         .write(move |conn| Box::pin(async move { mark_handed_over(conn, id, now).await }))
         .await
-        .map_err(|_| Step::RetryForever("meta"))?;
+        .map_err(|error| forever_meta(&error))?;
     state.live.publish_resync(project);
     state.metrics_cache.clear_project(project);
     tracing::info!(
@@ -404,14 +483,14 @@ async fn poll(state: &AppState, row: &DeletionRow) -> Result<(), Step> {
         Ok(DeletionStatus::Pending) => Ok(()),
         Ok(DeletionStatus::Applied { applied_at }) => applied_now(state, row, applied_at)
             .await
-            .map_err(|_| Step::RetryForever("meta")),
+            .map_err(|error| forever_meta(&error)),
         Err(DeletionError::NotFound) => {
             let id = row.id;
             state
                 .meta
                 .write(move |conn| Box::pin(async move { clear_handover(conn, id).await }))
                 .await
-                .map_err(|_| Step::RetryForever("meta"))?;
+                .map_err(|error| forever_meta(&error))?;
             tracing::warn!(
                 deletion_id = %row.id,
                 "storage does not know a handed-over deletion; registering it again"
@@ -427,7 +506,7 @@ async fn poll(state: &AppState, row: &DeletionRow) -> Result<(), Step> {
 async fn drop_project_step(state: &AppState, row: &DeletionRow, now: i64) -> Result<(), Step> {
     let Some(project) = row.project_id else {
         tracing::error!(deletion_id = %row.id, "a project deletion has no project");
-        return Err(Step::RetryForever("corrupt"));
+        return Err(Step::RetryForever("corrupt", None));
     };
     if row.state != DeletionState::Pending || row.handed_over_at.is_some() {
         return Ok(());
@@ -436,7 +515,7 @@ async fn drop_project_step(state: &AppState, row: &DeletionRow, now: i64) -> Res
         .storage
         .drop_project(project)
         .await
-        .map_err(|_| Step::RetryForever("storage"))?;
+        .map_err(|_| Step::RetryForever("storage", None))?;
     let id = row.id;
     let dropped = state
         .meta
@@ -447,7 +526,7 @@ async fn drop_project_step(state: &AppState, row: &DeletionRow, now: i64) -> Res
             })
         })
         .await
-        .map_err(|_| Step::RetryForever("meta"))?;
+        .map_err(|error| forever_meta(&error))?;
     state.live.publish_resync(project);
     state.metrics_cache.clear_project(project);
     if dropped {
@@ -471,11 +550,11 @@ async fn drop_org_step(state: &AppState, row: &DeletionRow, now: i64) -> Result<
     let reader = state.meta.reader();
     let mut projects = scope_projects(reader, row.id)
         .await
-        .map_err(|_| Step::RetryForever("meta"))?;
+        .map_err(|error| forever_meta(&error))?;
     projects.extend(
         project_ids_of_org(reader, row.org_id)
             .await
-            .map_err(|_| Step::RetryForever("meta"))?,
+            .map_err(|error| forever_meta(&error))?,
     );
     projects.sort();
     projects.dedup();
@@ -485,14 +564,14 @@ async fn drop_org_step(state: &AppState, row: &DeletionRow, now: i64) -> Result<
             .storage
             .drop_project(*project)
             .await
-            .map_err(|_| Step::RetryForever("storage"))?;
+            .map_err(|_| Step::RetryForever("storage", None))?;
     }
     // Usage counted in memory for these projects must not land after their rows are gone.
     state
         .usage
         .flush(&state.meta)
         .await
-        .map_err(|_| Step::RetryForever("meta"))?;
+        .map_err(|error| forever_meta(&error))?;
     let id = row.id;
     let org = row.org_id;
     let dropped = state
@@ -505,7 +584,7 @@ async fn drop_org_step(state: &AppState, row: &DeletionRow, now: i64) -> Result<
             })
         })
         .await
-        .map_err(|_| Step::RetryForever("meta"))?;
+        .map_err(|error| forever_meta(&error))?;
     for project in &projects {
         state.live.publish_resync(*project);
         state.metrics_cache.clear_project(*project);
@@ -1301,5 +1380,199 @@ mod tests {
         for needle in ["user-secret-7", "session-secret-9", trace.as_str()] {
             assert!(!logs.contains(needle), "logs contain a scope value: {logs}");
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_corrupt_open_row_does_not_stop_the_worker() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let project = &seeded.project;
+        commit(&app, project, &trace_id(1), &span_id(1), |_| {}).await;
+        app.state.clock.advance(Duration::from_secs(1));
+
+        let bad = insert(
+            &app,
+            new_row(&app, project, DeletionKind::TraceIds),
+            &[trace(1)],
+        )
+        .await;
+        app.state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    sqlx::query("UPDATE deletions SET request = '{\"bogus\":1}' WHERE id = ?")
+                        .bind(bad.to_string())
+                        .execute(&mut *conn)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
+        let good = insert(
+            &app,
+            new_row(&app, project, DeletionKind::TraceIds),
+            &[trace(1)],
+        )
+        .await;
+
+        let ((), logs) = capture_logs(async { worker(&app).await }).await;
+        assert!(
+            logs.lines()
+                .any(|line| line.contains("deletion row does not decode")
+                    && line.contains(&bad.to_string())),
+            "{logs}"
+        );
+        assert_eq!(deletion_row(&app, good).await.state, DeletionState::Pending);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn trace_ids_rows_are_not_held_back_by_an_older_filter() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let project = &seeded.project;
+        commit(&app, project, &trace_id(1), &span_id(1), |row| {
+            row.name = "drop".to_owned();
+        })
+        .await;
+        commit(&app, project, &trace_id(2), &span_id(2), |_| {}).await;
+        app.state.clock.advance(Duration::from_secs(1));
+
+        // The older row is a filter that is not resolved yet.
+        let now = app.state.clock.now_ns();
+        let mut filter = new_row(&app, project, DeletionKind::Filter);
+        filter.created_at = now - 10;
+        filter.request = RequestDetails {
+            filter: Some("name = 'drop'".to_owned()),
+            from: Some(0),
+            to: Some(i64::MAX),
+            ..RequestDetails::default()
+        };
+        insert(&app, filter, &[]).await;
+        let newer = insert(
+            &app,
+            new_row(&app, project, DeletionKind::TraceIds),
+            &[trace(2)],
+        )
+        .await;
+
+        worker(&app).await;
+        assert_eq!(
+            deletion_row(&app, newer).await.state,
+            DeletionState::Pending
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn five_failures_fail_a_row_without_a_scope() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let id = insert(
+            &app,
+            new_row(&app, &seeded.project, DeletionKind::TraceIds),
+            &[trace(1)],
+        )
+        .await;
+
+        for _ in 1..MAX_ATTEMPTS {
+            let row = deletion_row(&app, id).await;
+            retry(&app.state, &row, "busy", None, true).await;
+            assert_eq!(deletion_row(&app, id).await.state, DeletionState::Resolving);
+        }
+        let row = deletion_row(&app, id).await;
+        retry(&app.state, &row, "busy", None, true).await;
+
+        let row = deletion_row(&app, id).await;
+        assert_eq!(row.state, DeletionState::Failed);
+        assert_eq!(row.error, Some(FailReason::ResolutionFailed));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stored_scope_is_never_failed() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let id = insert(
+            &app,
+            new_row(&app, &seeded.project, DeletionKind::TraceIds),
+            &[trace(1)],
+        )
+        .await;
+        app.state
+            .meta
+            .write(move |conn| Box::pin(async move { store_counts(conn, id, 1, None).await }))
+            .await
+            .unwrap();
+
+        for _ in 0..(MAX_ATTEMPTS + 2) {
+            let row = deletion_row(&app, id).await;
+            retry(&app.state, &row, "busy", None, true).await;
+            fail(&app.state, &row, FailReason::ResolutionFailed).await;
+        }
+
+        let row = deletion_row(&app, id).await;
+        assert_eq!(row.state, DeletionState::Resolving);
+        assert_eq!(row.error, None);
+        assert_eq!(row.trace_count, Some(1));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn superseded_when_the_org_is_deleting() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let org = seeded.org_id;
+        app.state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    sqlx::query("UPDATE orgs SET state = 'deleting' WHERE id = ?")
+                        .bind(org.to_string())
+                        .execute(&mut *conn)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
+
+        let mut new = new_row(&app, &seeded.project, DeletionKind::User);
+        new.user_id = Some("u1".to_owned());
+        let id = insert(&app, new, &[]).await;
+        worker(&app).await;
+
+        assert_eq!(deletion_row(&app, id).await.state, DeletionState::Applied);
+        assert!(matches!(
+            app.state.storage.deletion_status(id).await,
+            Err(DeletionError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn only_a_filter_failure_fails_at_once() {
+        let failed = RunError::Failed("cast".to_owned());
+        assert!(matches!(
+            from_run(&failed, DeletionKind::Filter),
+            Step::Fail(FailReason::ResolutionFailed)
+        ));
+        for kind in [DeletionKind::TraceIds, DeletionKind::User] {
+            assert!(matches!(
+                from_run(&failed, kind),
+                Step::Retry("failed", None)
+            ));
+        }
+        assert!(matches!(
+            from_run(&RunError::TooLarge, DeletionKind::Filter),
+            Step::Retry("too_large", None)
+        ));
+        assert!(matches!(
+            from_run(&RunError::Timeout, DeletionKind::User),
+            Step::Retry("timeout", None)
+        ));
+        assert!(matches!(
+            from_run(
+                &RunError::InvalidRequest("x".to_owned()),
+                DeletionKind::User
+            ),
+            Step::Fail(FailReason::ResolutionFailed)
+        ));
     }
 }

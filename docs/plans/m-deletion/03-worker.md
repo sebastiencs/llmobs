@@ -249,11 +249,20 @@ impl Deletions {
 ### `run_once`
 
 ```rust
-/// Processes every open deletion once, oldest first. Errors on one row are logged and
-/// counted; they do not stop the others. Returns `Err` only when the open rows cannot be listed.
+/// Processes every open deletion once: drops first, then cheap rows (see `priority`), oldest
+/// first within each group. A row that does not decode is logged and skipped; errors on one
+/// row are logged and counted and do not stop the others. Returns `Err` only when the open
+/// rows cannot be listed.
 pub(crate) async fn run_once(state: &AppState) -> Result<(), MetaError> {
     state.deletions.guard.prune(state.clock.now_ns());
-    let rows = crate::meta::deletions::open_deletions(state.meta.reader()).await?;
+    let mut rows = Vec::new();
+    for listed in open_deletions(state.meta.reader()).await? {
+        match listed {
+            Ok(row) => rows.push(row),
+            Err((id, error)) => log_undecodable(id, &error),
+        }
+    }
+    rows.sort_by_key(priority);
     for row in rows {
         // Per row: a resolution read can take minutes.
         let now = state.clock.now_ns();
@@ -267,57 +276,66 @@ pub(crate) async fn run_once(state: &AppState) -> Result<(), MetaError> {
         };
         match result {
             Ok(()) => state.deletions.settled(row.id),
-            Err(Step::Retry(label)) => retry(state, &row, now, label, true).await,
-            Err(Step::RetryForever(label)) => retry(state, &row, now, label, false).await,
-            Err(Step::Fail(reason)) => fail(state, &row, now, reason).await,
+            Err(Step::Retry(label, cause)) => retry(state, &row, label, cause, true).await,
+            Err(Step::RetryForever(label, cause)) => retry(state, &row, label, cause, false).await,
+            Err(Step::Fail(reason)) => fail(state, &row, reason).await,
         }
     }
     Ok(())
 }
 ```
 
+The order (`priority`): drops (`project`, `org`); then rows whose scope is stored (`trace_count` set) or that are `pending`; then `trace_ids` rows; then `filter` and `user` rows still to resolve. Within each group, oldest first.
+
+A row that does not decode (`open_deletions` gives `Err((id, error))`) is logged `tracing::error!(deletion_id, error, "deletion row does not decode")` and the others go on.
+
 ```rust
-/// Why a step stopped.
+/// Why a step stopped. The `&str` is a static error kind for the log; the optional `String`
+/// is the text of a meta error (`MetaError` carries no payload), logged as `cause`.
 enum Step {
-    /// Try again later; a data row in `resolving` fails after `MAX_ATTEMPTS`.
-    /// The label is a static error kind for the log.
-    Retry(&'static str),
+    /// Try again later; a data row in `resolving` with no stored scope fails after `MAX_ATTEMPTS`.
+    Retry(&'static str, Option<String>),
     /// Try again later, never fail: storage already holds the deletion (any error after
     /// `register_deletion` returned `Ok`), or the row is a drop.
-    RetryForever(&'static str),
-    /// Give up: the row becomes `failed` (data kinds only).
+    RetryForever(&'static str, Option<String>),
+    /// Give up: the row becomes `failed` (data kinds only, and only without a stored scope).
     Fail(FailReason),
 }
 ```
 
-Conversions into `Step`: private functions in `mod.rs` named `from_meta`, `from_query`, `from_run`, `from_deletion` and `from_storage`, not `From` impls, so each call site shows its choice. `resolve.rs` uses them and `Step` through `super::` (a child module sees the parent's private items).
+Conversions into `Step` are private functions in `mod.rs` named `from_meta`, `forever_meta`, `from_query`, `from_run`, `from_deletion`, and not `From` impls, so each call site shows its choice. `resolve.rs` uses them and `Step` through `super::` (a child module sees the parent's private items).
 
 | Error | `Step` |
 |---|---|
-| `MetaError` | `Retry("meta")` |
+| `MetaError` | `Retry("meta")`, with the error text as `cause`; `forever_meta` in a `RetryForever` context |
 | `QueryError::Busy` | `Retry("busy")` |
 | `QueryError::DataFusion(_)` | `Retry("query")` |
 | `RunError::Timeout` | `Retry("timeout")` |
 | `RunError::Internal(_)` | `Retry("internal")` |
-| `RunError::Invalid(_)`, `InvalidRequest(_)`, `Failed(_)`, `TooLarge` | `Fail(ResolutionFailed)` (`Failed` is an execution error in the caller's filter, such as a failed cast, so it will fail again) |
-| `DeletionError::Invalid { .. }` | `Fail(ResolutionFailed)` |
+| `RunError::TooLarge` | `Retry("too_large")` (the shared memory pool is transient) |
+| `RunError::Failed(_)` on a `filter` row | `Fail(ResolutionFailed)` (the user's filter text fails at execution, such as a failed cast, so it will fail again) |
+| `RunError::Failed(_)` on a `trace_ids` or `user` row | `Retry("failed")` |
+| `RunError::Invalid(_)`, `InvalidRequest(_)` | `Fail(ResolutionFailed)` |
+| `DeletionError::Invalid { .. }` | `Fail(ResolutionFailed)`; `RetryForever("invalid")` (logged at `error`) when the row has a stored scope |
 | `DeletionError::Catalog(_)` | `Retry("catalog")` |
 | `DeletionError::NotFound` | handled where it occurs (poll) |
-| `StorageError` (from `drop_project`) | `Retry("storage")` |
+| `StorageError` (from `drop_project`) | `RetryForever("storage")` |
 
-The table covers every variant of `RunError` (6), `QueryError` (2) and `DeletionError` (3).
+The table covers every variant of `RunError` (6), `QueryError` (2) and `DeletionError` (3). `from_run` takes the row's kind, since `Failed` depends on it.
+
+`fail` also refuses a row with a stored scope (`trace_count` set), whatever the caller: it logs at `error` and the row keeps retrying. So `failed` always means nothing was hidden or deleted.
 
 The drop steps return `RetryForever` for every error. So do the data steps for every error that happens after `register_deletion` returned `Ok`: the `mark_handed_over` write and what follows.
 
-`retry(state, row, now, label, may_fail)`:
-- `let failures = state.deletions.failed(row.id, now);`
-- Log `tracing::warn!(deletion_id = %row.id, kind = row.kind.as_str(), error = label, failures, "deletion step failed")`.
-- If `may_fail`, the kind is a data kind, `row.state == DeletionState::Resolving`, `row.trace_count.is_none()` (no scope stored yet, so no cascade ran) and `failures >= MAX_ATTEMPTS`, call `fail(state, row, now, FailReason::ResolutionFailed)`. A row whose scope is stored keeps retrying registration: `failed` must keep meaning "nothing was hidden or deleted". A `Pending` data row (storage holds it) and every drop keep retrying, once a minute.
+`retry(state, row, label, cause, may_fail)`:
+- `let failures = state.deletions.failed(row.id, state.clock.now_ns());` (the clock is read again: a step can take minutes).
+- Log `tracing::warn!(deletion_id = %row.id, kind = row.kind.as_str(), error = label, cause = %cause, failures, "deletion step failed")`, where `cause` is the meta error text, or `-`.
+- If `may_fail`, the kind is a data kind, `row.state == DeletionState::Resolving`, `row.trace_count.is_none()` (no scope stored yet, so no cascade ran) and `failures >= MAX_ATTEMPTS`, call `fail(state, row, FailReason::ResolutionFailed)`. A row whose scope is stored keeps retrying registration: `failed` must keep meaning "nothing was hidden or deleted". A `Pending` data row (storage holds it) and every drop keep retrying, once a minute.
 
-`fail(state, row, now, reason)`: `meta.write` → `mark_failed(row.id, reason)`.
+`fail(state, row, reason)`: a row with a stored scope is refused (see above). Otherwise `meta.write` → `mark_failed(row.id, reason)`.
 - `Ok(true)`: log the audit event `tracing::info!(target: "audit", deletion_id = %row.id, error = reason.as_str(), "deletion failed")`, then `state.deletions.settled(row.id)`.
-- `Ok(false)` (the row is not `resolving`, e.g. a `pending` row whose registration storage refused): `tracing::warn!(deletion_id = %row.id, error = reason.as_str(), "deletion step failed on a row that cannot fail")` and `state.deletions.failed(row.id, now)`, so it waits a minute; do not call `settled`.
-- `Err(error)`: log `error = %error`, call `state.deletions.failed(row.id, now)`; the row stays for later.
+- `Ok(false)` (the row is not `resolving`, e.g. a `pending` row whose registration storage refused): `tracing::warn!(deletion_id = %row.id, error = reason.as_str(), "deletion step failed on a row that cannot fail")` and `state.deletions.failed(row.id, state.clock.now_ns())`, so it waits a minute; do not call `settled`.
+- `Err(error)`: log `error = %error`, call `state.deletions.failed(row.id, state.clock.now_ns())`; the row stays for later.
 
 ### Data kinds: `data_step`
 
@@ -472,6 +490,8 @@ The `deletions` rows of those projects and of the org stay (no foreign keys, M1)
 ## Tests
 
 `deletion/mod.rs` `#[cfg(test)] mod tests` (worker), `deletion/guard.rs` tests (guard), and one test each in `live.rs`, `routes/streams.rs`, `routes/metrics.rs`.
+
+Review additions (M3 fixes): `a_corrupt_open_row_does_not_stop_the_worker` (a row with `request = '{"bogus":1}'` is logged and skipped; the good row is `pending`), `trace_ids_rows_are_not_held_back_by_an_older_filter`, `five_failures_fail_a_row_without_a_scope` and `a_stored_scope_is_never_failed` (both drive `retry`/`fail` directly), `superseded_when_the_org_is_deleting`, `only_a_filter_failure_fails_at_once` (the `from_run` mapping), and in `meta/deletions.rs`: `open_deletions_keep_going_past_a_corrupt_row` and `guard_entries_skip_corrupt_rows`.
 
 Test helpers in `deletion/mod.rs` tests:
 
