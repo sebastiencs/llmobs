@@ -1058,7 +1058,7 @@ fn aggregate(frame: DataFrame, grouped: bool) -> Result<DataFrame, RunError> {
         .map_err(classify)
 }
 
-fn percentile(column: &str, quantile: f64) -> Expr {
+pub(super) fn percentile(column: &str, quantile: f64) -> Expr {
     approx_percentile_cont(SortExpr::new(col(column), true, true), lit(quantile), None)
 }
 
@@ -1489,7 +1489,7 @@ fn score_of(row: Option<&Option<f64>>) -> Option<f64> {
     row.copied().flatten()
 }
 
-fn require<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a dyn Array, RunError> {
+pub(super) fn require<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a dyn Array, RunError> {
     match batch.column_by_name(name) {
         Some(column) => Ok(column.as_ref()),
         None => Err(missing_column(batch, name)),
@@ -1516,7 +1516,7 @@ fn time_at(column: &dyn Array, index: usize) -> Result<i64, RunError> {
     Ok(values.value(index))
 }
 
-fn i64_at(column: &dyn Array, index: usize) -> Result<i64, RunError> {
+pub(super) fn i64_at(column: &dyn Array, index: usize) -> Result<i64, RunError> {
     if let Some(values) = column.as_primitive_opt::<Int64Type>() {
         if values.is_null(index) {
             return Err(internal("aggregate count is null".to_owned()));
@@ -1551,7 +1551,7 @@ fn i64_opt(column: &dyn Array, index: usize) -> Result<Option<i64>, RunError> {
     Ok(Some(i64_at(column, index)?))
 }
 
-fn f64_at(column: &dyn Array, index: usize) -> Result<Option<f64>, RunError> {
+pub(super) fn f64_at(column: &dyn Array, index: usize) -> Result<Option<f64>, RunError> {
     if let Some(values) = column.as_primitive_opt::<Float64Type>() {
         return Ok((!values.is_null(index)).then(|| values.value(index)));
     }
@@ -1583,7 +1583,7 @@ fn string_at(column: &dyn Array, index: usize) -> Result<Option<String>, RunErro
     )))
 }
 
-fn internal(message: String) -> RunError {
+pub(super) fn internal(message: String) -> RunError {
     RunError::Internal(DataFusionError::Internal(message))
 }
 

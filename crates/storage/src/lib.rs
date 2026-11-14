@@ -79,12 +79,13 @@ pub use crate::media::{MediaBlob, MediaRead, MediaReport};
 pub use crate::read_cache::ReadCacheStats;
 pub use query_error::{InvalidQuery, Position, RunError};
 pub use reads::{
-    Bucket, BucketWidth, Kpi, KpiName, LATEST_SCORE_COLUMNS, ListScope, MAX_PAGE, MAX_REFRESH_IDS,
-    MAX_SESSION_TURNS, MAX_TRACE_SPANS, MAX_USER_SESSIONS, MetricsData, MetricsGroupBy,
-    MetricsRequest, ModelUsageRow, Page, Point, SPAN_LIST_COLUMNS, ScoreListRequest, ScoreTargets,
-    Series, SeriesName, SessionDetailData, SessionListRequest, SessionSort, SortOrder,
-    SpanListRequest, SpanSort, TraceDetailData, TraceListRequest, TraceRefreshRequest, TraceSort,
-    USER_COLUMNS, UserDetailData, UserListRequest, UserSort, latest_scores, metrics::metrics,
+    AlertMeasure, AlertValue, AlertValueRequest, Bucket, BucketWidth, Kpi, KpiName,
+    LATEST_SCORE_COLUMNS, ListScope, MAX_PAGE, MAX_REFRESH_IDS, MAX_SESSION_TURNS, MAX_TRACE_SPANS,
+    MAX_USER_SESSIONS, MetricsData, MetricsGroupBy, MetricsRequest, ModelUsageRow, Page, Point,
+    SPAN_LIST_COLUMNS, ScoreListRequest, ScoreTargets, Series, SeriesName, SessionDetailData,
+    SessionListRequest, SessionSort, SortOrder, SpanListRequest, SpanSort, TraceDetailData,
+    TraceListRequest, TraceRefreshRequest, TraceSort, USER_COLUMNS, UserDetailData,
+    UserListRequest, UserSort, alert_value, check_alert_filter, latest_scores, metrics::metrics,
     score_list, scores_by_id, session_detail, session_list, span_detail, span_list, trace_detail,
     trace_list, trace_list_plan, trace_refresh, user_detail, user_list,
 };

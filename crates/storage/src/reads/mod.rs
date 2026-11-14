@@ -4,6 +4,7 @@
 //! request's timeout. Lists return Arrow batches in view-column order.
 //! Dashboard metrics return plain structs. The server maps either to API types.
 
+mod alerts;
 mod cursor;
 pub(crate) mod metrics;
 mod scores;
@@ -19,6 +20,7 @@ use crate::filter::{FilterView, exclusions, time_window};
 use crate::query_error::{RunError, classify};
 use crate::views::{QueryContext, TimeWindow};
 
+pub use alerts::{AlertMeasure, AlertValue, AlertValueRequest, alert_value, check_alert_filter};
 pub use metrics::{
     Bucket, BucketWidth, Kpi, KpiName, MetricsData, MetricsGroupBy, MetricsRequest, ModelUsageRow,
     Point, Series, SeriesName,
