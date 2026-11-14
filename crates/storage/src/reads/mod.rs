@@ -5,6 +5,7 @@
 //! Dashboard metrics return plain structs. The server maps either to API types.
 
 mod cursor;
+mod deletions;
 pub(crate) mod metrics;
 mod scores;
 mod sessions;
@@ -19,6 +20,10 @@ use crate::filter::{FilterView, exclusions, time_window};
 use crate::query_error::{RunError, classify};
 use crate::views::{QueryContext, TimeWindow};
 
+pub use deletions::{
+    FilterDeletionRequest, MAX_FILTER_DELETION_TRACES, UserDeletionScope, eval_trace_ids,
+    filter_trace_ids, user_deletion_scope,
+};
 pub use metrics::{
     Bucket, BucketWidth, Kpi, KpiName, MetricsData, MetricsGroupBy, MetricsRequest, ModelUsageRow,
     Point, Series, SeriesName,
