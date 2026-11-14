@@ -1,6 +1,7 @@
 import { api } from "@/api/client";
 import { type Problem, problemOf } from "@/api/problem";
 import type { Schema } from "@/api/types";
+import { atLeast, type OrgRole } from "@/lib/roles";
 import { sqlProblemMessage } from "@/lib/sql/format";
 
 export type ExportFormat = "csv" | "ndjson" | "parquet";
@@ -33,7 +34,7 @@ export function exportName(disposition: string | null, fallback: string): string
   return name && !name.startsWith(".") ? name : fallback;
 }
 
-/** Saves `blob` as `name` through a temporary object URL, revoked on the next task. */
+/** Saves `blob` as `name` through a temporary object URL, revoked after the click settles. */
 export function saveBlob(blob: Blob, name: string): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -41,16 +42,28 @@ export function saveBlob(blob: Blob, name: string): void {
   link.download = name;
   link.rel = "noopener";
   document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
+  try {
+    link.click();
+  } finally {
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  }
 }
 
-export function exportProblemMessage(problem: Problem | undefined): string {
+/**
+ * A refusal is the member rule only for a caller below member; anyone else gets the
+ * problem's own message.
+ */
+export function exportProblemMessage(
+  problem: Problem | undefined,
+  role: OrgRole | undefined,
+): string {
   if (!problem) {
     return "The export could not be downloaded";
   }
-  return problem.code === "forbidden" ? EXPORT_ROLE_REASON : sqlProblemMessage(problem);
+  return problem.code === "forbidden" && !atLeast(role, "member")
+    ? EXPORT_ROLE_REASON
+    : sqlProblemMessage(problem);
 }
 
 export type ExportOutcome = { ok: true; name: string } | { ok: false; message: string };
@@ -60,6 +73,8 @@ export async function downloadSqlExport(input: {
   projectRef: string;
   body: Schema<"SqlQueryRequest">;
   format: ExportFormat;
+  /** The caller's project role, for the refusal message. */
+  role: OrgRole | undefined;
 }): Promise<ExportOutcome> {
   let blob: Blob;
   let disposition: string | null;
@@ -71,7 +86,7 @@ export async function downloadSqlExport(input: {
       parseAs: "blob",
     });
     if (error !== undefined || !response.ok) {
-      return { ok: false, message: exportProblemMessage(problemOf(error)) };
+      return { ok: false, message: exportProblemMessage(problemOf(error), input.role) };
     }
     blob = data ?? new Blob([]);
     disposition = response.headers.get("Content-Disposition");

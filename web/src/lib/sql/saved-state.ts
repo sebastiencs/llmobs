@@ -59,11 +59,17 @@ export function paramsKey(params: Record<string, string>): string {
 }
 
 /**
- * Whether `current` (from `savedStateOf`) matches `saved`. The range counts only when
- * `saved` stores one: an older query saved without a range matches under any range.
+ * Whether `current` (from `savedStateOf`) matches `saved`. The params compare after
+ * normalising `saved` to the ones its query uses, so a stored state with extra unused
+ * keys or a missing used one is not "modified" right after loading. The range counts
+ * only when `saved` stores one: an older query saved without a range matches under any
+ * range.
  */
 export function sameSavedState(current: SqlSavedState, saved: SqlSavedState): boolean {
-  if (current.query !== saved.query || paramsKey(current.params) !== paramsKey(saved.params)) {
+  if (
+    current.query !== saved.query ||
+    paramsKey(current.params) !== paramsKey(usedParams(saved.query, saved.params))
+  ) {
     return false;
   }
   if (!saved.range && !saved.from) {

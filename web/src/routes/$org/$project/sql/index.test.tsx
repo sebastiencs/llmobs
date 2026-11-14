@@ -112,6 +112,42 @@ it("runs the stored draft with Ctrl+Enter", async () => {
   });
 });
 
+it("sends one request for two fast Ctrl+Enter presses", async () => {
+  storeDraft("SELECT 1");
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const sql = captureSql(async () => {
+    await gate;
+    return HttpResponse.json(resultDocument);
+  });
+  await renderApp("/acme/support-bot/sql");
+  const content = await waitFor(editorContent);
+  content.focus();
+  // Two keydowns on one stack, outside act: React has not re-rendered, so the
+  // second press still sees `busy` false. Only the synchronous guard stops it.
+  const press = () =>
+    content.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
+    );
+  press();
+  press();
+  await waitFor(() => {
+    expect(sql.bodies).toHaveLength(1);
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(sql.bodies).toHaveLength(1);
+  expect(await screen.findByText("Running…")).toBeInTheDocument();
+  release();
+  await screen.findByRole("grid", { name: "Query results" });
+  // A run after the guard settled still works.
+  const run = screen.getByRole("button", { name: "Run" });
+  await waitFor(() => {
+    expect(run).toBeEnabled();
+  });
+});
+
 it("saves typing to the draft", async () => {
   storeDraft("");
   const { user } = await renderApp("/acme/support-bot/sql");
@@ -488,6 +524,89 @@ it("shows no dot for a view link without range", async () => {
   });
   await screen.findByRole("button", { name: /Cost per model per day/ });
   expect(screen.queryByRole("status", { name: "Unsaved changes" })).toBeNull();
+});
+
+it("shows no dot for a saved state with an extra unused param", async () => {
+  server.use(
+    ...savedViewHandlers([
+      sqlView({
+        shared: false,
+        state: { query: "SELECT {n:Int}", params: { n: "5", stale: "x" }, range: "24h" },
+      }),
+    ]),
+  );
+  await renderApp(`/acme/support-bot/sql?view=${SHARED_VIEW}`);
+  expect(await screen.findByLabelText("n (Int)")).toHaveValue("5");
+  await screen.findByRole("button", { name: /Shared one/ });
+  expect(screen.queryByRole("status", { name: "Unsaved changes" })).toBeNull();
+  await waitFor(() => {
+    expect(storedDraft()).toEqual({
+      query: "SELECT {n:Int}",
+      params: { n: "5" },
+      view: SHARED_VIEW,
+    });
+  });
+});
+
+it("navigating to another view loads its text, and back returns", async () => {
+  server.use(
+    ...savedViewHandlers([
+      sqlView({ shared: false, name: "First" }),
+      sqlView({
+        id: COST_VIEW,
+        shared: false,
+        name: "Second",
+        state: { query: "SELECT 2", params: {}, range: "24h" },
+      }),
+    ]),
+  );
+  const { router } = await renderApp(`/acme/support-bot/sql?view=${SHARED_VIEW}`);
+  await waitFor(() => {
+    expect(editorContent().textContent).toBe("SELECT 1");
+  });
+  await router.navigate({
+    to: "/$org/$project/sql",
+    params: { org: "acme", project: "support-bot" },
+    search: { view: COST_VIEW },
+  });
+  await waitFor(() => {
+    expect(editorContent().textContent).toBe("SELECT 2");
+    expect(router.state.location.search).toEqual({ range: "24h", view: COST_VIEW });
+  });
+  router.history.back();
+  await waitFor(() => {
+    expect(editorContent().textContent).toBe("SELECT 1");
+    expect(router.state.location.search).toEqual({ range: "24h", view: SHARED_VIEW });
+  });
+});
+
+it("a range-only back and forward does not reload the view and keeps edits", async () => {
+  const { router, user } = await renderApp(`/acme/support-bot/sql?view=${COST_VIEW}`);
+  await waitFor(() => {
+    expect(editorContent().textContent).toBe(SEED_QUERY);
+  });
+  editorContent().focus();
+  await user.keyboard("{Control>}{End}{/Control} LIMIT 9");
+  await router.navigate({
+    to: "/$org/$project/sql",
+    params: { org: "acme", project: "support-bot" },
+    search: { range: "7d", view: COST_VIEW },
+  });
+  await waitFor(() => {
+    expect(router.state.location.search).toEqual({ range: "7d", view: COST_VIEW });
+  });
+  router.history.back();
+  await waitFor(() => {
+    expect(router.state.location.search).toEqual({ range: "24h", view: COST_VIEW });
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(editorContent().textContent).toBe(`${SEED_QUERY} LIMIT 9`);
+  router.history.forward();
+  await waitFor(() => {
+    expect(router.state.location.search).toEqual({ range: "7d", view: COST_VIEW });
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(editorContent().textContent).toBe(`${SEED_QUERY} LIMIT 9`);
 });
 
 it("drops an unknown ?view=", async () => {
@@ -1036,9 +1155,10 @@ it("works when localStorage throws", async () => {
   }
 });
 
-let restoreDownloads: (() => void) | undefined;
-afterEach(() => {
-  restoreDownloads?.();
+/** `saveBlob` revokes after ~1 s; the restore must not put the stubs back before that. */
+let restoreDownloads: (() => Promise<void>) | undefined;
+afterEach(async () => {
+  await restoreDownloads?.();
   restoreDownloads = undefined;
 });
 
@@ -1059,7 +1179,14 @@ function captureDownloads() {
   ) {
     saved.push({ href: this.getAttribute("href") ?? "", download: this.download, rel: this.rel });
   });
-  restoreDownloads = () => {
+  restoreDownloads = async () => {
+    if (saved.length > 0) {
+      await waitFor(() => {
+        if (revoked.length < saved.length) {
+          throw new Error(`revoke pending: ${revoked.length}/${saved.length}`);
+        }
+      });
+    }
     click.mockRestore();
     for (const [key, value] of Object.entries(original)) {
       if (value === undefined) {
@@ -1221,14 +1348,22 @@ it("shows a refused export", async () => {
   server.use(
     http.post("*/api/v1/projects/:project/sql", () =>
       HttpResponse.json(
-        { type: "about:blank", title: "Forbidden", status: 403, code: "forbidden" },
+        {
+          type: "about:blank",
+          title: "Forbidden",
+          status: 403,
+          code: "forbidden",
+          detail: "the export was refused",
+        },
         { status: 403, headers: PROBLEM_JSON },
       ),
     ),
   );
   const { user } = await renderApp("/acme/support-bot/sql");
   await exportAs(user, "CSV");
-  expect(await screen.findByRole("alert")).toHaveTextContent(EXPORT_ROLE_REASON);
+  // The fixture caller is an owner, so a refusal is not explained as the member rule.
+  expect(await screen.findByRole("alert")).toHaveTextContent("the export was refused");
+  expect(screen.queryByText(EXPORT_ROLE_REASON)).toBeNull();
   expect(downloads.saved).toEqual([]);
 });
 
@@ -1248,18 +1383,24 @@ it("Run clears an export error", async () => {
   server.use(
     http.post("*/api/v1/projects/:project/sql", () =>
       HttpResponse.json(
-        { type: "about:blank", title: "Forbidden", status: 403, code: "forbidden" },
+        {
+          type: "about:blank",
+          title: "Forbidden",
+          status: 403,
+          code: "forbidden",
+          detail: "the export was refused",
+        },
         { status: 403, headers: PROBLEM_JSON },
       ),
     ),
   );
   const { user } = await renderApp("/acme/support-bot/sql");
   await exportAs(user, "CSV");
-  await screen.findByText(EXPORT_ROLE_REASON);
+  await screen.findByText("the export was refused");
   server.use(http.post("*/api/v1/projects/:project/sql", () => HttpResponse.json(resultDocument)));
   await user.click(screen.getByRole("button", { name: "Run" }));
   await waitFor(() => {
-    expect(screen.queryByText(EXPORT_ROLE_REASON)).toBeNull();
+    expect(screen.queryByText("the export was refused")).toBeNull();
   });
   await screen.findByRole("grid", { name: "Query results" });
 });
@@ -1374,6 +1515,23 @@ it("inserts names from the schema browser", async () => {
   );
   await waitFor(() => {
     expect(editorContent().textContent).toBe("cost_total model");
+  });
+});
+
+it("a schema insert after loading an example lands at the end", async () => {
+  storeDraft("SELECT 1");
+  const { user } = await renderApp("/acme/support-bot/sql");
+  const content = await waitFor(editorContent);
+  content.focus();
+  await user.click(screen.getByRole("button", { name: "Examples" }));
+  await user.click(await screen.findByRole("menuitem", { name: "Users by spend" }));
+  await waitFor(() => {
+    expect(editorContent().textContent).toContain("ORDER BY cost DESC");
+  });
+  const traces = screen.getByRole("list", { name: "traces columns" });
+  await user.click(within(traces).getByRole("button", { name: "Insert cost_total" }));
+  await waitFor(() => {
+    expect(editorContent().textContent?.endsWith("cost_total")).toBe(true);
   });
 });
 

@@ -149,7 +149,9 @@ export function isServerTimestamp(text: string): boolean {
   if (offsetHour > 23 || offsetMinute > 59) {
     return false;
   }
-  const date = new Date(Date.UTC(year, month - 1, day));
+  // `Date.UTC` reads years 0–99 as 1900–1999; `setUTCFullYear` does not.
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
   return (
     date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
   );

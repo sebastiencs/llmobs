@@ -1,3 +1,4 @@
+import { waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Schema } from "@/api/types";
@@ -21,9 +22,10 @@ const BODY: Schema<"SqlQueryRequest"> = {
 
 const PROBLEM_JSON = { "Content-Type": "application/problem+json" };
 
-let restoreDownloads: (() => void) | undefined;
-afterEach(() => {
-  restoreDownloads?.();
+/** `saveBlob` revokes after ~1 s; the restore must not put the stubs back before that. */
+let restoreDownloads: (() => Promise<void>) | undefined;
+afterEach(async () => {
+  await restoreDownloads?.();
   restoreDownloads = undefined;
 });
 
@@ -44,7 +46,14 @@ function captureDownloads() {
   ) {
     saved.push({ href: this.getAttribute("href") ?? "", download: this.download, rel: this.rel });
   });
-  restoreDownloads = () => {
+  restoreDownloads = async () => {
+    if (saved.length > 0) {
+      await waitFor(() => {
+        if (revoked.length < saved.length) {
+          throw new Error(`revoke pending: ${revoked.length}/${saved.length}`);
+        }
+      });
+    }
     click.mockRestore();
     for (const [key, value] of Object.entries(original)) {
       if (value === undefined) {
@@ -85,53 +94,74 @@ describe("exportName", () => {
 
 describe("exportProblemMessage", () => {
   it("covers a missing problem", () => {
-    expect(exportProblemMessage(undefined)).toBe("The export could not be downloaded");
+    expect(exportProblemMessage(undefined, "viewer")).toBe("The export could not be downloaded");
   });
 
-  it("explains the member rule for a refusal", () => {
+  it("explains the member rule for a refusal below member", () => {
     expect(
-      exportProblemMessage({
-        type: "about:blank",
-        title: "Forbidden",
-        status: 403,
-        code: "forbidden",
-      }),
+      exportProblemMessage(
+        {
+          type: "about:blank",
+          title: "Forbidden",
+          status: 403,
+          code: "forbidden",
+        },
+        "viewer",
+      ),
     ).toBe(EXPORT_ROLE_REASON);
+  });
+
+  it("shows the problem's message for a refusal at member or above", () => {
+    const refusal = {
+      type: "about:blank",
+      title: "Forbidden",
+      status: 403,
+      code: "forbidden",
+      detail: "exports are closed for this project",
+    } as const;
+    expect(exportProblemMessage(refusal, "member")).toBe("exports are closed for this project");
+    expect(exportProblemMessage({ ...refusal, detail: undefined }, "owner")).toBe("Forbidden");
   });
 
   it("prefers the first field error of an invalid_filter", () => {
     expect(
-      exportProblemMessage({
-        type: "about:blank",
-        title: "Bad Request",
-        status: 400,
-        code: "invalid_filter",
-        errors: [{ field: "query", message: "m" }],
-      }),
+      exportProblemMessage(
+        {
+          type: "about:blank",
+          title: "Bad Request",
+          status: 400,
+          code: "invalid_filter",
+          errors: [{ field: "query", message: "m" }],
+        },
+        "member",
+      ),
     ).toBe("m");
   });
 
   it("prefers the detail otherwise", () => {
     expect(
-      exportProblemMessage({
-        type: "about:blank",
-        title: "Unprocessable Entity",
-        status: 422,
-        code: "query_timeout",
-        detail: "d",
-      }),
+      exportProblemMessage(
+        {
+          type: "about:blank",
+          title: "Unprocessable Entity",
+          status: 422,
+          code: "query_timeout",
+          detail: "d",
+        },
+        "member",
+      ),
     ).toBe("d");
   });
 });
 
 describe("saveBlob", () => {
-  it("downloads through a temporary object URL, revoked on the next task", async () => {
+  it("downloads through a temporary object URL, revoked after a delay", async () => {
     const { saved, revoked } = captureDownloads();
     saveBlob(new Blob(["x"]), "a.csv");
     expect(saved).toEqual([{ href: "blob:test", download: "a.csv", rel: "noopener" }]);
     expect(document.querySelector("a[download]")).toBeNull();
     expect(revoked).toEqual([]);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
     expect(revoked).toEqual(["blob:test"]);
   });
 });
@@ -143,6 +173,7 @@ describe("downloadSqlExport", () => {
       projectRef: "acme/support-bot",
       body: BODY,
       format: "csv",
+      role: "member",
     });
     expect(outcome).toEqual({ ok: true, name: "query-20260101T100000Z.csv" });
     expect(saved).toEqual([
@@ -162,6 +193,7 @@ describe("downloadSqlExport", () => {
       projectRef: "acme/support-bot",
       body: BODY,
       format: "csv",
+      role: "member",
     });
     expect(outcome).toEqual({ ok: true, name: expect.stringMatching(/^query-\d{8}T\d{6}Z\.csv$/) });
   });
@@ -180,6 +212,7 @@ describe("downloadSqlExport", () => {
       projectRef: "acme/support-bot",
       body: BODY,
       format: "csv",
+      role: "viewer",
     });
     expect(outcome).toEqual({ ok: false, message: EXPORT_ROLE_REASON });
     expect(saved).toEqual([]);
@@ -192,6 +225,7 @@ describe("downloadSqlExport", () => {
       projectRef: "acme/support-bot",
       body: BODY,
       format: "csv",
+      role: "member",
     });
     expect(outcome).toEqual({ ok: false, message: EXPORT_CUT });
     expect(saved).toEqual([]);
@@ -215,6 +249,7 @@ describe("downloadSqlExport", () => {
         projectRef: "acme/support-bot",
         body: BODY,
         format: "csv",
+        role: "member",
       });
       expect(outcome).toEqual({ ok: false, message: EXPORT_CUT });
       expect(saved).toEqual([]);
@@ -232,6 +267,7 @@ describe("downloadSqlExport", () => {
       projectRef: "acme/support-bot",
       body: BODY,
       format: "csv",
+      role: "member",
     });
     expect(outcome).toEqual({ ok: false, message: EXPORT_NOT_SAVED });
   });

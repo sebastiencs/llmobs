@@ -65,6 +65,11 @@ export function SqlConsole({
   const [schemaOpen, setSchemaOpen] = useState(readSchemaPanelOpen);
   const [insert, setInsert] = useState<{ text: string; seq: number } | undefined>();
   const [tab, setTab] = useState<"table" | "chart">("table");
+  /**
+   * True from the moment a run or export starts until it settles, without waiting for a
+   * re-render: two fast Mod-Enter presses before `busy` updates must start one request.
+   */
+  const inFlight = useRef(false);
   const busy = run.isPending || exporting;
   const range = rangeFromSearch(search);
   const params = useMemo(() => sqlParams(draft.query), [draft.query]);
@@ -82,7 +87,11 @@ export function SqlConsole({
     const state = parseSavedState(view.state);
     draftView.current = view.id;
     setParamErrors({});
-    updateDraft(() => ({ query: state.query, params: state.params, view: view.id }));
+    updateDraft(() => ({
+      query: state.query,
+      params: usedParams(state.query, state.params),
+      view: view.id,
+    }));
     onSearch((previous) => searchOfSavedState(state, previous, view.id), { replace: true });
   }
 
@@ -133,7 +142,7 @@ export function SqlConsole({
   }
 
   function execute(text: string) {
-    if (text.trim().length === 0 || busy) {
+    if (text.trim().length === 0 || busy || inFlight.current) {
       return;
     }
     setExportError(undefined);
@@ -143,6 +152,7 @@ export function SqlConsole({
     }
     const used = usedParams(text, draft.params);
     const started = performance.now();
+    inFlight.current = true;
     setLastRun(undefined);
     setBadAnswer(false);
     run.mutate(
@@ -161,22 +171,27 @@ export function SqlConsole({
         onError: () => {
           pushHistory(ref, { query: text, params: used, ranAt: new Date().toISOString() });
         },
+        onSettled: () => {
+          inFlight.current = false;
+        },
       },
     );
   }
 
   /** Sends the same body as Run with the format's `Accept` and saves the file. */
   async function exportAs(format: ExportFormat) {
-    if (draft.query.trim().length === 0 || busy) {
+    if (draft.query.trim().length === 0 || busy || inFlight.current) {
       return;
     }
     const body = buildBody(draft.query);
     if (!body) {
       return;
     }
+    inFlight.current = true;
     setExporting(true);
     setExportError(undefined);
-    const outcome = await downloadSqlExport({ projectRef: ref, body, format });
+    const outcome = await downloadSqlExport({ projectRef: ref, body, format, role: data.role });
+    inFlight.current = false;
     setExporting(false);
     if (!outcome.ok) {
       setExportError(outcome.message);

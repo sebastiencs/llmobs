@@ -62,10 +62,10 @@ export function chartSpec(result: Schema<"SqlQueryResult">): ChartSpec | null {
   if (!xColumn) {
     return null;
   }
-  const numeric = columns.filter(
-    (column) =>
-      column.name !== xColumn.name && isNumericType(column.type) && !UNSAFE_KEYS.has(column.name),
+  const numericColumns = columns.filter(
+    (column) => column.name !== xColumn.name && isNumericType(column.type),
   );
+  const numeric = numericColumns.filter((column) => !UNSAFE_KEYS.has(column.name));
   const measure = numeric[0];
   if (!measure) {
     return null;
@@ -78,9 +78,10 @@ export function chartSpec(result: Schema<"SqlQueryResult">): ChartSpec | null {
   const x = { name: xColumn.name, kind: xKind };
   const kind = time ? "line" : "bar";
   const rows = (result.rows as Record<string, unknown>[]).slice(0, CHART_MAX_POINTS);
-  let clipped = result.rows.length > CHART_MAX_POINTS;
+  let clipped = result.rows.length > CHART_MAX_POINTS || numericColumns.length > numeric.length;
+  // The pivot needs exactly one numeric column among all of them, not among the safe ones.
   const pivotColumn =
-    kind === "line" && numeric.length === 1
+    kind === "line" && numericColumns.length === 1
       ? columns.find((column) => column.name !== xColumn.name && isTextType(column.type))
       : undefined;
   if (pivotColumn) {

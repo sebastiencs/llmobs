@@ -1,5 +1,6 @@
 import type { Problem } from "@/api/problem";
 import type { Schema } from "@/api/types";
+import { isRecord } from "@/lib/sql/draft";
 
 /** True for a JSON run answer. `run_sql` declares several media types, so narrow before use. */
 export function isSqlResult(value: unknown): value is Schema<"SqlQueryResult"> {
@@ -7,7 +8,9 @@ export function isSqlResult(value: unknown): value is Schema<"SqlQueryResult"> {
     typeof value === "object" &&
     value !== null &&
     Array.isArray((value as { columns?: unknown }).columns) &&
-    Array.isArray((value as { rows?: unknown }).rows)
+    Array.isArray((value as { rows?: unknown }).rows) &&
+    (value as { rows: unknown[] }).rows.every(isRecord) &&
+    typeof (value as { truncated?: unknown }).truncated === "boolean"
   );
 }
 

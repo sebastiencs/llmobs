@@ -90,6 +90,39 @@ it("does not pivot with two numeric columns", () => {
   expect(spec.series).toEqual(["a", "b"]);
 });
 
+it("does not pivot when the second numeric column is only dropped as unsafe", () => {
+  const spec = specOf(
+    result(
+      [
+        { name: "day", type: TS },
+        { name: "model", type: "Utf8" },
+        { name: "cost", type: "Float64" },
+        { name: "__proto__", type: "Float64" },
+      ],
+      [{ day: "2026-01-01T00:00:00.000000000Z", model: "m", cost: 1, ["__proto__"]: 9 }],
+    ),
+  );
+  expect(spec.pivot).toBeUndefined();
+  expect(spec.series).toEqual(["cost"]);
+  expect(spec.clipped).toBe(true);
+});
+
+it("keeps a dotted pivot value as its own series key", () => {
+  const spec = specOf(
+    result(
+      [
+        { name: "day", type: TS },
+        { name: "model", type: "Utf8" },
+        { name: "cost", type: "Float64" },
+      ],
+      [{ day: "2026-01-01T00:00:00.000000000Z", model: "gpt-4.1", cost: 1 }],
+    ),
+  );
+  expect(spec.pivot).toEqual({ column: "model", measure: "cost" });
+  expect(spec.series).toEqual(["gpt-4.1"]);
+  expect(spec.data).toEqual([{ __x: "2026-01-01T00:00:00.000000000Z", "gpt-4.1": 1 }]);
+});
+
 it("draws a bar chart over a text column", () => {
   const spec = specOf(
     result(

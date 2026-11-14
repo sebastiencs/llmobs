@@ -53,18 +53,31 @@ it("stores the used parameters and the effective range", () => {
 });
 
 it("compares saved and current states", () => {
-  const current = { query: "Q", params: { a: "1", b: "2" }, range: "1h" as const };
-  expect(sameSavedState(current, { query: "Q", params: { b: "2", a: "1" }, range: "1h" })).toBe(
-    true,
-  );
-  expect(sameSavedState(current, { query: "Q", params: { a: "1", b: "2" } })).toBe(true);
-  expect(sameSavedState(current, { query: "Q", params: { a: "1", b: "2" }, range: "7d" })).toBe(
+  const Q = "SELECT {a:Int}, {b:Int}";
+  const current = { query: Q, params: { a: "1", b: "2" }, range: "1h" as const };
+  expect(sameSavedState(current, { query: Q, params: { b: "2", a: "1" }, range: "1h" })).toBe(true);
+  expect(sameSavedState(current, { query: Q, params: { a: "1", b: "2" } })).toBe(true);
+  expect(sameSavedState(current, { query: Q, params: { a: "1", b: "2" }, range: "7d" })).toBe(
     false,
   );
   const pair = { query: "Q", params: {}, from: A, to: B };
   expect(sameSavedState(pair, { ...pair })).toBe(true);
   expect(sameSavedState({ query: "Q", params: {}, range: "24h" }, pair)).toBe(false);
   expect(sameSavedState(current, { query: "R", params: { a: "1", b: "2" } })).toBe(false);
+});
+
+it("ignores saved params the query does not use, and fills the missing used ones", () => {
+  const loaded = { query: "SELECT {a:Int}", params: { a: "1", stale: "x" }, range: "1h" as const };
+  expect(sameSavedState({ query: "SELECT {a:Int}", params: { a: "1" }, range: "1h" }, loaded)).toBe(
+    true,
+  );
+  const missing = { query: "SELECT {a:Int}", params: {}, range: "1h" as const };
+  expect(sameSavedState({ query: "SELECT {a:Int}", params: { a: "" }, range: "1h" }, missing)).toBe(
+    true,
+  );
+  expect(sameSavedState({ query: "SELECT {a:Int}", params: { a: "2" }, range: "1h" }, loaded)).toBe(
+    false,
+  );
 });
 
 it("opens a loaded state with its range, or the current one when it has none", () => {

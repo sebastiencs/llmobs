@@ -4,11 +4,20 @@ import { isSqlResult, resultStatus, runShortcutLabel, sqlProblemMessage } from "
 
 it("narrows a run answer to a SQL result", () => {
   expect(isSqlResult({ columns: [], rows: [], truncated: false })).toBe(true);
+  expect(
+    isSqlResult({ columns: [{ name: "a", type: "Utf8" }], rows: [{ a: null }], truncated: true }),
+  ).toBe(true);
   expect(isSqlResult("a,b")).toBe(false);
   expect(isSqlResult("")).toBe(false);
   expect(isSqlResult(undefined)).toBe(false);
   expect(isSqlResult(null)).toBe(false);
   expect(isSqlResult({ rows: [] })).toBe(false);
+  expect(isSqlResult({ columns: [], rows: [] })).toBe(false);
+  expect(isSqlResult({ columns: [], rows: [], truncated: "false" })).toBe(false);
+  expect(isSqlResult({ columns: [], rows: [], truncated: 0 })).toBe(false);
+  expect(isSqlResult({ columns: [], rows: ["a,b"], truncated: false })).toBe(false);
+  expect(isSqlResult({ columns: [], rows: [null], truncated: false })).toBe(false);
+  expect(isSqlResult({ columns: [], rows: [[]], truncated: false })).toBe(false);
 });
 
 it("shows the first field message for an invalid query, else the detail or title", () => {

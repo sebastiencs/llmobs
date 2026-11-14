@@ -116,6 +116,7 @@ it("accepts only the server's RFC 3339 timestamps", () => {
     "2026-01-01T00:00:00Z",
     "2026-01-01t00:00:00z",
     "2026-01-01T00:00:00.123456789+02:00",
+    "0050-01-01T00:00:00Z",
   ]) {
     expect(isServerTimestamp(text), text).toBe(true);
   }
@@ -127,6 +128,7 @@ it("accepts only the server's RFC 3339 timestamps", () => {
     "2026-01-01T24:00:00Z",
     "2026-01-01T00:00:60Z",
     "2026-01-01T00:00:00+24:00",
+    "0050-02-30T00:00:00Z",
   ]) {
     expect(isServerTimestamp(text), text).toBe(false);
   }

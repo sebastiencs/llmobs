@@ -211,3 +211,18 @@ it("appends when never focused, inserts at the cursor once focused", async () =>
     expect(editorText()).toBe("SELECT x FROM t x");
   });
 });
+
+it("separates an insert from the word that follows it", async () => {
+  const user = userEvent.setup();
+  render(<InsertHarness initial="SELECT FROM t" />);
+  const content = document.querySelector(".cm-content");
+  if (!(content instanceof HTMLElement)) {
+    throw new Error("SQL editor did not mount");
+  }
+  content.focus();
+  await user.keyboard("{Control>}{Home}{/Control}{ArrowRight>7/}");
+  await user.click(screen.getByRole("button", { name: "Insert" }));
+  await waitFor(() => {
+    expect(editorText()).toBe("SELECT x FROM t");
+  });
+});

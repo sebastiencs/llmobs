@@ -183,7 +183,12 @@ export function SqlEditor({
     if (!view || view.state.doc.toString() === value) {
       return;
     }
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
+    // The cursor goes to the end, so an insert after an example, history or saved-query
+    // load appends instead of landing at the position the old text had.
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: value },
+      selection: { anchor: value.length },
+    });
   }, [value]);
 
   useEffect(() => {
@@ -226,10 +231,13 @@ export function SqlEditor({
     const length = view.state.doc.length;
     const target = touched.current ? view.state.selection.main : { from: length, to: length };
     const before = view.state.sliceDoc(Math.max(0, target.from - 1), target.from);
-    const text = before !== "" && !/[\s(,.]/.test(before) ? ` ${insertText}` : insertText;
+    const after = view.state.sliceDoc(target.to, target.to + 1);
+    const leading = before !== "" && !/[\s(,.]/.test(before) ? " " : "";
+    const trailing = after !== "" && !/[\s),;]/.test(after) ? " " : "";
+    const text = `${leading}${insertText}${trailing}`;
     view.dispatch({
       changes: { from: target.from, to: target.to, insert: text },
-      selection: { anchor: target.from + text.length },
+      selection: { anchor: target.from + leading.length + insertText.length },
     });
     view.focus();
   }, [insertSeq, insertText]);
