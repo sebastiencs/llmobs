@@ -69,6 +69,31 @@ impl Api {
             .unwrap();
         read_json(response).await
     }
+
+    /// A `DELETE` with the same cookie and origin as `post`.
+    async fn delete(&self, path: &str) -> Value {
+        let response = self
+            .client
+            .delete(format!("{}{path}", self.base))
+            .header("cookie", &self.cookie)
+            .header("origin", ORIGIN)
+            .send()
+            .await
+            .unwrap();
+        read_json(response).await
+    }
+
+    /// The status of a cookie-authenticated `GET`, without asserting success.
+    async fn get_status(&self, path: &str) -> u16 {
+        self.client
+            .get(format!("{}{path}", self.base))
+            .header("cookie", &self.cookie)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16()
+    }
 }
 
 async fn read_json(response: reqwest::Response) -> Value {
@@ -277,6 +302,37 @@ async fn post_otlp_http(
         .unwrap();
     let status = response.status();
     assert!(status.is_success(), "OTLP/HTTP export: {status}");
+}
+
+/// Exports `request` over OTLP/HTTP with `INIT_KEY` and returns the status, without asserting it.
+async fn otlp_status(server: &Server, request: &ExportTraceServiceRequest) -> u16 {
+    server
+        .client
+        .post(format!("{}/v1/traces", server.http))
+        .header("authorization", format!("Bearer {INIT_KEY}"))
+        .header("content-type", "application/x-protobuf")
+        .body(request.encode_to_vec())
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .as_u16()
+}
+
+/// Reads `path` until `done` holds, every 100 ms, for at most `wait`. Returns the body.
+async fn poll_json(api: &Api, path: &str, done: impl Fn(&Value) -> bool, wait: Duration) -> Value {
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        let body = api.get(path).await;
+        if done(&body) {
+            return body;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{path} did not settle within {wait:?}: {body}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -622,6 +678,147 @@ async fn live_streams_and_every_read_route_work_end_to_end() {
     let bytes = media.bytes().await.unwrap();
     assert_eq!(bytes.len(), 70);
 
+    drop(server.api);
+    drop(server.client);
+    server.running.shutdown().await.unwrap();
+}
+
+/// Track M end to end: a user deletion hides that user's traces at once and applies once
+/// storage reports it; a project drop answers 404 and ends the project's data.
+#[tokio::test(flavor = "multi_thread")]
+async fn deletion_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = start(dir.path(), "").await;
+    let project = format!("/api/v1/projects/{}", server.proto_id);
+    let project_body = server.api.get(&project).await;
+    assert_eq!(project_body["slug"], "proto", "{project_body}");
+
+    // Two traces of the fixture with the end user `u-17`, and one without a user.
+    let user_traces = [format!("{:032x}", 11), format!("{:032x}", 12)];
+    let other_trace = format!("{:032x}", 13);
+    for (name, trace) in [
+        ("sdk-context", &user_traces[0]),
+        ("sdk-context", &user_traces[1]),
+        ("sdk-span-manual", &other_trace),
+    ] {
+        let request = fixture_request(name, trace);
+        post_otlp_http(
+            &server.client,
+            format!("{}/v1/traces", server.http),
+            INIT_KEY,
+            "application/x-protobuf",
+            request.encode_to_vec(),
+        )
+        .await;
+    }
+    assert_eq!(
+        server
+            .api
+            .get_status(&format!("{project}/traces/{}", user_traces[0]))
+            .await,
+        200
+    );
+
+    // The trace-list stream is open before the request, so its `resync` is live.
+    let mut traces = server
+        .api
+        .get_raw(&format!("{project}/traces/stream"), &[])
+        .await;
+    assert_eq!(traces.status(), 200);
+
+    let created = server
+        .api
+        .post(
+            &format!("{project}/deletions"),
+            &json!({"kind": "user", "user_id": "u-17"}),
+        )
+        .await;
+    assert_eq!(created["status"], "resolving", "{created}");
+    let deletion_id = created["id"].as_str().unwrap().to_owned();
+    let deletion_path = format!("{project}/deletions/{deletion_id}");
+    let pending = poll_json(
+        &server.api,
+        &deletion_path,
+        |body| body["status"] == "pending",
+        Duration::from_secs(10),
+    )
+    .await;
+    assert_eq!(pending["trace_count"], 2, "{pending}");
+
+    read_until(&mut traces, "event: resync", Duration::from_secs(5)).await;
+
+    // The user's traces are hidden from every read; the other trace is not.
+    for trace in &user_traces {
+        assert_eq!(
+            server
+                .api
+                .get_status(&format!("{project}/traces/{trace}"))
+                .await,
+            404
+        );
+    }
+    assert_eq!(
+        server
+            .api
+            .get_status(&format!("{project}/traces/{other_trace}"))
+            .await,
+        200
+    );
+    assert_eq!(
+        server
+            .api
+            .get_status(&format!("{project}/users/u-17"))
+            .await,
+        404
+    );
+
+    // The window of the SDK fixtures: only the trace without a user is left.
+    let preview = server
+        .api
+        .post(
+            &format!("{project}/deletions/preview"),
+            &json!({"from": "2025-12-31T00:00:00Z", "to": "2026-01-02T00:00:00Z"}),
+        )
+        .await;
+    assert_eq!(preview["matched_traces"], 1, "{preview}");
+
+    // Export once more with the init key right before the drop. This caches the key, so the
+    // project check (not the key check) answers after the drop.
+    let manual = fixture_request("sdk-span-manual", &other_trace);
+    assert_eq!(otlp_status(&server, &manual).await, 200);
+
+    let dropped = server
+        .api
+        .delete(&format!(
+            "/api/v1/projects/{}?confirm=proto",
+            server.proto_id
+        ))
+        .await;
+    assert_eq!(dropped["kind"], "project", "{dropped}");
+
+    assert_eq!(server.api.get_status(&project).await, 404);
+    assert_eq!(otlp_status(&server, &manual).await, 404);
+
+    // The drop applies the project deletion and, because the drop supersedes it, the user one.
+    let org_deletions = poll_json(
+        &server.api,
+        "/api/v1/orgs/acme/deletions",
+        |body| {
+            let rows = body["data"].as_array();
+            let applied = |kind: &str| {
+                rows.is_some_and(|rows| {
+                    rows.iter()
+                        .any(|row| row["kind"] == kind && row["status"] == "applied")
+                })
+            };
+            applied("project") && applied("user")
+        },
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(org_deletions["data"].is_array(), "{org_deletions}");
+
+    drop(traces);
     drop(server.api);
     drop(server.client);
     server.running.shutdown().await.unwrap();
