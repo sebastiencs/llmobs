@@ -6,6 +6,7 @@ pub(crate) mod api_keys;
 pub(crate) mod auth;
 pub(crate) mod connections;
 pub(crate) mod deletions;
+pub(crate) mod entitlements;
 pub(crate) mod feedback;
 pub(crate) mod invites;
 pub(crate) mod me;

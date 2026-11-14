@@ -68,7 +68,7 @@ pub(crate) enum ApiError {
         /// Which 403 this is.
         code: ProblemCode,
     },
-    /// The org's plan does not include the feature (D177). `detail` names it.
+    /// The org's plan does not include the feature (D177, D-P-14). `detail` names it.
     #[error("plan required")]
     PlanRequired {
         /// Static text shown as the problem `detail`.

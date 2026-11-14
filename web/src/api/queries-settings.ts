@@ -66,3 +66,7 @@ export function deletionsKey(org: string, project: string) {
     deletionsInit(org, project),
   ).queryKey;
 }
+
+export function orgEntitlementsQuery(org: string) {
+  return $api.queryOptions("get", "/api/v1/orgs/{org}/entitlements", orgInit(org));
+}

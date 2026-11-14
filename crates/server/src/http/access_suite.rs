@@ -14,10 +14,11 @@ use uuid::Uuid;
 use super::{Access, RouteDef, routes};
 use crate::api::account::{OrgRole, SignupPolicy};
 use crate::auth::roles::{self, KeyScope, ProjectPerm, Role};
+use crate::config::Secret;
 use crate::meta::MetaError;
 use crate::meta::members::add_org_member;
 use crate::meta::users::set_instance_admin;
-use crate::test_support::{TestApp, TestResponse, capture_logs};
+use crate::test_support::{TestApp, TestResponse, capture_logs, license_key};
 
 /// 43 characters of the base64url alphabet. Substituted for `{token}`.
 const TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -123,7 +124,11 @@ async fn every_route_against_every_principal() {
 }
 
 async fn suite() -> (Vec<String>, usize) {
-    let app = TestApp::with_config(|config| config.auth.signup = SignupPolicy::Open).await;
+    let app = TestApp::with_config(|config| {
+        config.auth.signup = SignupPolicy::Open;
+        config.license_key = Some(Secret::new(license_key(&["project_roles"])));
+    })
+    .await;
     let mut world = build(&app).await;
     assert_lists_omit_secrets(&app, &world).await;
     let checked = drive(&app, &mut world).await;

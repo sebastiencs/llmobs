@@ -30,8 +30,8 @@ use super::account::{
     UpdateMeRequest, UpdateOrgRequest, UpdateProjectRequest, User, VerifyEmailRequest,
 };
 use super::admin::{
-    AdminResetLink, AdminSettings, AdminUser, CreateAdminUserRequest, CreatedAdminUser,
-    UpdateAdminUserRequest,
+    AdminLicense, AdminResetLink, AdminSettings, AdminUser, CreateAdminUserRequest,
+    CreatedAdminUser, UpdateAdminUserRequest,
 };
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
 use super::connections::{
@@ -42,6 +42,7 @@ use super::connections::{
 use super::deletions::{
     CreateDeletion, Deletion, DeletionPreview, DeletionPreviewRequest, DropParams,
 };
+use super::entitlements::{Feature, OrgEntitlements};
 use super::invites::{CreateInviteRequest, CreatedInvite, Invite, InvitePreview};
 use super::keys::{
     ApiKey as ProjectApiKey, CreateApiKeyRequest, CreatePersonalTokenRequest, CreatedApiKey,
@@ -134,6 +135,9 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<UpdateAdminUserRequest>();
     set.insert::<AdminResetLink>();
     set.insert::<AdminSettings>();
+    set.insert::<AdminLicense>();
+    set.insert::<OrgEntitlements>();
+    set.insert::<Feature>();
     set.insert::<OrgMembership>();
     set.insert::<CreateOrgRequest>();
     set.insert::<UpdateOrgRequest>();
@@ -617,6 +621,14 @@ fn admin_paths(paths: PathsBuilder) -> PathsBuilder {
             &[401, 403, 429],
         ))
         .build();
+    let license = operation("get_admin_license", "admin", "Read the instance licence")
+        .securities(session.clone())
+        .responses(responses(
+            "200",
+            json_of::<AdminLicense>("The licence status. The key itself is never returned."),
+            &[401, 403, 429],
+        ))
+        .build();
     let test_email = operation(
         "post_admin_settings_test_email",
         "admin",
@@ -646,6 +658,10 @@ fn admin_paths(paths: PathsBuilder) -> PathsBuilder {
         .path(
             "/api/v1/admin/settings",
             PathItem::new(HttpMethod::Get, settings),
+        )
+        .path(
+            "/api/v1/admin/license",
+            PathItem::new(HttpMethod::Get, license),
         )
         .path(
             "/api/v1/admin/settings/test-email",
@@ -1059,6 +1075,21 @@ fn project_paths(paths: PathsBuilder) -> PathsBuilder {
             &[400, 401, 403, 404, 409, 429],
         ))
         .build();
+    let get_entitlements = operation(
+        "get_org_entitlements",
+        "orgs",
+        "Read the org's entitlements",
+    )
+    .description(Some(
+        "Features the org may use now and where Upgrade buttons go (D179). Any org member.",
+    ))
+    .parameters(Some(vec![path_string("org", "Org UUID or slug.")]))
+    .responses(responses(
+        "200",
+        json_of::<OrgEntitlements>("The org's entitlements."),
+        AUTH_ERRORS,
+    ))
+    .build();
     let mut org = PathItem::new(HttpMethod::Get, get_org);
     org.patch = Some(patch_org);
     org.delete = Some(delete_org);
@@ -1085,6 +1116,10 @@ fn project_paths(paths: PathsBuilder) -> PathsBuilder {
     paths
         .path("/api/v1/orgs", orgs)
         .path("/api/v1/orgs/{org}", org)
+        .path(
+            "/api/v1/orgs/{org}/entitlements",
+            PathItem::new(HttpMethod::Get, get_entitlements),
+        )
         .path("/api/v1/orgs/{org}/projects", projects)
         .path("/api/v1/projects/{project}", project)
 }

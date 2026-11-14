@@ -14,12 +14,13 @@ use llmobs_core::span::Span;
 use llmobs_server::api::account::{
     AuthConfig, Me, OrgMembership, OrgRole, Project, SetupResponse, SignupResponse,
 };
-use llmobs_server::api::admin::{AdminSettings, AdminUser, CreatedAdminUser};
+use llmobs_server::api::admin::{AdminLicense, AdminSettings, AdminUser, CreatedAdminUser};
 use llmobs_server::api::common::Page;
 use llmobs_server::api::connections::{
     CreateLlmConnectionRequest, LlmConnection, LlmConnectionTestResult,
 };
 use llmobs_server::api::deletions::{Deletion, DeletionPreview};
+use llmobs_server::api::entitlements::OrgEntitlements;
 use llmobs_server::api::invites::{CreatedInvite, Invite, InvitePreview};
 use llmobs_server::api::keys::{ApiKey, CreatedApiKey, CreatedPersonalToken, PersonalToken};
 use llmobs_server::api::members::{OrgMember, ProjectMember};
@@ -361,11 +362,13 @@ fn static_files_match_their_types() {
     roundtrip::<Me>("static/me.json");
     roundtrip::<Page<OrgMembership>>("static/orgs.json");
     roundtrip::<OrgMembership>("static/org.json");
+    roundtrip::<OrgEntitlements>("static/org-entitlements.json");
     roundtrip::<Page<OrgMember>>("static/org-members.json");
     roundtrip::<Page<Invite>>("static/invites.json");
     roundtrip::<Page<AdminUser>>("static/admin-users.json");
     roundtrip::<CreatedAdminUser>("static/admin-user-created.json");
     roundtrip::<AdminSettings>("static/admin-settings.json");
+    roundtrip::<AdminLicense>("static/admin-license.json");
     roundtrip::<CreatedInvite>("static/invite-created.json");
     roundtrip::<InvitePreview>("static/invite-preview.json");
     roundtrip::<Page<ProjectMember>>("static/project-members.json");
@@ -483,6 +486,7 @@ fn generated_files_roundtrip() {
             | "get_me"
             | "list_orgs"
             | "get_org"
+            | "get_org_entitlements"
             | "list_org_members"
             | "list_org_invites"
             | "post_org_invite"
@@ -497,7 +501,8 @@ fn generated_files_roundtrip() {
             | "post_signup"
             | "list_admin_users"
             | "post_admin_user"
-            | "get_admin_settings" => {}
+            | "get_admin_settings"
+            | "get_admin_license" => {}
             "list_llm_connections" => roundtrip::<Page<LlmConnection>>(&example.file),
             "get_llm_connection" | "post_llm_connection" => {
                 roundtrip::<LlmConnection>(&example.file);

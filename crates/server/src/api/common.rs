@@ -459,6 +459,7 @@ mod tests {
         );
         assert_eq!(ProblemCode::SsoRequired.status(), 403);
         assert_eq!(ProblemCode::EmailNotVerified.status(), 403);
+        assert_eq!(ProblemCode::PlanRequired.status(), 403);
         assert_eq!(ProblemCode::MethodNotAllowed.status(), 405);
         assert_eq!(ProblemCode::Conflict.status(), 409);
         assert_eq!(ProblemCode::PayloadTooLarge.status(), 413);

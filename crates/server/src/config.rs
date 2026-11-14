@@ -48,6 +48,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("LLMOBS_SMTP_URL", "smtp_url"),
     ("LLMOBS_EMAIL_FROM", "email_from"),
     ("LLMOBS_ENCRYPTION_KEY", "encryption_key"),
+    ("LLMOBS_LICENSE_KEY", "license_key"),
     ("LLMOBS_AUTH_SIGNUP", "auth.signup"),
     ("LLMOBS_AUTH_SIGNUP_DOMAINS", "auth.signup_domains"),
     ("LLMOBS_AUTH_DISABLE_PASSWORD", "auth.disable_password"),
@@ -496,6 +497,14 @@ pub struct SecurityConfig {
     pub allow_private_network_egress: bool,
 }
 
+/// `[entitlements]` (D-P-15). M2 adds `defaults`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct EntitlementsConfig {
+    /// Where Upgrade buttons go. `{org}` is replaced by the org id. Unset: no button.
+    pub upgrade_url: Option<String>,
+}
+
 /// Everything `llmobs serve` reads from the environment and `llmobs.toml`.
 ///
 /// Keys that spec 12 lists for later work (telemetry, compaction, gc, deletion,
@@ -548,9 +557,15 @@ pub struct ServerConfig {
     /// `[security]` settings.
     #[serde(default)]
     pub security: SecurityConfig,
+    /// `[entitlements]` settings (D-P-15).
+    #[serde(default)]
+    pub entitlements: EntitlementsConfig,
     /// 32 bytes in standard base64. Unset: `<data_dir>/secret.key` (D-I-1).
     #[serde(default)]
     pub encryption_key: Option<Secret<String>>,
+    /// Self-hosted licence key, a signed token (D172, D-P-7). Unset: no licence.
+    #[serde(default)]
+    pub license_key: Option<Secret<String>>,
     /// Sign-up policy and the auth flags from spec 08.
     #[serde(default)]
     pub auth: AuthSettings,
@@ -750,6 +765,7 @@ fn map_figment(error: figment::Error) -> ConfigError {
 fn secret_key(path: &[String]) -> Option<&'static str> {
     match path {
         [key] if key == "encryption_key" => Some("encryption_key"),
+        [key] if key == "license_key" => Some("license_key"),
         [key] if key == "smtp_url" => Some("smtp_url"),
         [parent, key] if parent == "init" && key == "admin_password" => Some("init.admin_password"),
         [parent, key] if parent == "init" && key == "secret_key" => Some("init.secret_key"),
@@ -777,6 +793,14 @@ fn validate(config: &mut ServerConfig) -> Result<(), ConfigError> {
         &mut config.auth.enforce_sso_domains,
     )?;
     validate_email(config)?;
+    validate_entitlements(&config.entitlements)?;
+    if config
+        .license_key
+        .as_ref()
+        .is_some_and(|key| key.expose().trim().is_empty())
+    {
+        config.license_key = None;
+    }
     if config.auth.require_email_verification && config.smtp_url.is_none() {
         return Err(ConfigError::Invalid {
             key: "auth.require_email_verification",
@@ -1241,6 +1265,34 @@ fn hex_digit(byte: u8) -> Result<u8, ()> {
     }
 }
 
+fn validate_entitlements(entitlements: &EntitlementsConfig) -> Result<(), ConfigError> {
+    let Some(template) = entitlements.upgrade_url.as_deref() else {
+        return Ok(());
+    };
+    let invalid = ConfigError::Invalid {
+        key: "entitlements.upgrade_url",
+        reason: "must be an http or https URL; {org} is the only placeholder",
+    };
+    let sample = template.replace("{org}", "00000000-0000-7000-8000-000000000000");
+    if sample.contains('{') || sample.contains('}') {
+        return Err(invalid);
+    }
+    // `url` reads `https:///host` as host `host`; the empty authority is refused here.
+    let has_authority = sample
+        .split_once("://")
+        .is_some_and(|(_, rest)| !rest.starts_with(['/', '\\']));
+    match url::Url::parse(&sample) {
+        Ok(url)
+            if has_authority
+                && matches!(url.scheme(), "http" | "https")
+                && url.host().is_some() =>
+        {
+            Ok(())
+        }
+        _ => Err(invalid),
+    }
+}
+
 fn validate_init(init: &InitConfig) -> Result<(), ConfigError> {
     let parts = [
         text_set(&init.admin_email),
@@ -1481,7 +1533,7 @@ fn env_value(dotted: &str, raw: &str) -> Value {
 fn is_secret_path(dotted: &str) -> bool {
     matches!(
         dotted,
-        "encryption_key" | "smtp_url" | "init.admin_password" | "init.secret_key"
+        "encryption_key" | "license_key" | "smtp_url" | "init.admin_password" | "init.secret_key"
     ) || dotted.ends_with(".client_secret")
 }
 
@@ -1913,6 +1965,40 @@ mod tests {
     }
 
     #[test]
+    fn license_key_comes_from_the_environment() {
+        let config = load_from(None, &[("LLMOBS_LICENSE_KEY", "abc")]).unwrap();
+        assert_eq!(
+            config.license_key.map(|key| key.expose().clone()),
+            Some("abc".to_owned())
+        );
+    }
+
+    #[test]
+    fn empty_license_key_is_unset() {
+        for value in ["", "   "] {
+            let config = load_from(None, &[("LLMOBS_LICENSE_KEY", value)]).unwrap();
+            assert!(config.license_key.is_none(), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn license_key_type_error_does_not_quote_the_value() {
+        let error = load_from(Some("license_key = 424242\n"), &[]).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ConfigError::Invalid {
+                    key: "license_key",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+        let text = error.to_string();
+        assert!(!text.contains("424242"), "{text}");
+    }
+
+    #[test]
     fn numeric_encryption_key_stays_a_string() {
         let config = load_from(None, &[("LLMOBS_ENCRYPTION_KEY", "12345678")]).unwrap();
         assert_eq!(
@@ -1939,6 +2025,55 @@ mod tests {
     }
 
     #[test]
+    fn upgrade_url_accepts_the_org_placeholder() {
+        let config = load_from(
+            Some("[entitlements]\nupgrade_url = \"https://app.example.com/orgs/{org}/billing\"\n"),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            config.entitlements.upgrade_url.as_deref(),
+            Some("https://app.example.com/orgs/{org}/billing")
+        );
+    }
+
+    #[test]
+    fn upgrade_url_rejects_other_placeholders_and_schemes() {
+        for value in [
+            "https://x.example/{plan}",
+            "ftp://x.example",
+            "not a url",
+            "https:///nohost",
+        ] {
+            let toml = format!("[entitlements]\nupgrade_url = \"{value}\"\n");
+            let error = load_from(Some(&toml), &[]).unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    ConfigError::Invalid {
+                        key: "entitlements.upgrade_url",
+                        ..
+                    }
+                ),
+                "{value}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn upgrade_url_from_env() {
+        let config = load_from(
+            None,
+            &[("LLMOBS_ENTITLEMENTS__UPGRADE_URL", "https://example.com/up")],
+        )
+        .unwrap();
+        assert_eq!(
+            config.entitlements.upgrade_url.as_deref(),
+            Some("https://example.com/up")
+        );
+    }
+
+    #[test]
     fn security_section_parses() {
         let config = load_from(
             Some("[security]\nallow_private_network_egress = true\n"),
@@ -1952,8 +2087,10 @@ mod tests {
     fn server_config_debug_hides_the_key() {
         let mut config = load_from(None, &[]).unwrap();
         config.encryption_key = Some(Secret::new("topsecretvalue".to_owned()));
+        config.license_key = Some(Secret::new("licensevalue".to_owned()));
         let text = format!("{config:?}");
         assert!(!text.contains("topsecretvalue"), "{text}");
+        assert!(!text.contains("licensevalue"), "{text}");
     }
 
     #[test]
