@@ -4,6 +4,7 @@ import {
   canChangeRole,
   canHaveOverride,
   canManageConnections,
+  canManageEvaluation,
   canRemoveMember,
   grantableRoles,
   overrideLabel,
@@ -63,4 +64,11 @@ it("overrides only members and viewers", () => {
   expect(canHaveOverride("viewer")).toBe(true);
   expect(canHaveOverride("admin")).toBe(false);
   expect(canHaveOverride("owner")).toBe(false);
+});
+
+it("lets members and above manage evaluation", () => {
+  expect(canManageEvaluation("admin")).toBe(true);
+  expect(canManageEvaluation("member")).toBe(true);
+  expect(canManageEvaluation("viewer")).toBe(false);
+  expect(canManageEvaluation(undefined)).toBe(false);
 });

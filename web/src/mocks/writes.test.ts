@@ -9,15 +9,7 @@ import { WRITE_OPERATIONS, writeHandlers } from "./writes";
 const PROJECT = "/api/v1/projects/acme%2Fsupport-bot";
 
 /** Writes that later sub-phases add under the covered prefixes. */
-const LATER_TRACKS: string[] = [
-  "post_evaluator",
-  "patch_evaluator",
-  "delete_evaluator",
-  "post_evaluator_test",
-  "post_score_definition",
-  "patch_score_definition",
-  "delete_score_definition",
-];
+const LATER_TRACKS: string[] = ["post_evaluator_test"];
 
 beforeEach(() => {
   server.use(...writeHandlers);

@@ -59,6 +59,11 @@ export function canManageConnections(role: OrgRole | undefined): boolean {
   return atLeast(role, "admin");
 }
 
+/** Mirrors `ProjectPerm::ManageEvaluation`: project members and above (D-I-24). */
+export function canManageEvaluation(role: OrgRole | undefined): boolean {
+  return atLeast(role, "member");
+}
+
 /** Overrides apply only to org members and viewers (D139). */
 export function canHaveOverride(orgRole: OrgRole): boolean {
   return orgRole === "member" || orgRole === "viewer";
