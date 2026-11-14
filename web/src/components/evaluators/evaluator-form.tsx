@@ -28,6 +28,7 @@ import {
   outputStateOfJudge,
   outputStateOfScore,
 } from "@/components/evaluators/output-fields";
+import { TestPanel } from "@/components/evaluators/test-panel";
 import { FormError } from "@/components/form/form-error";
 import { SubmitButton } from "@/components/form/submit-button";
 import { TextField } from "@/components/form/text-field";
@@ -91,6 +92,8 @@ interface FormValues {
   replaceWebhook: boolean;
   secret: string;
   scoreName: string;
+  /** The picked template's `default_mapping`, which prefills the test panel's mapping. */
+  defaultMapping: Schema<"TemplateMapping">[];
 }
 
 function stringOf(value: unknown): string {
@@ -132,6 +135,7 @@ function initialValues(evaluator: Schema<"Evaluator"> | undefined): FormValues {
     replaceWebhook: false,
     secret: "",
     scoreName: evaluator?.output_score.name ?? "",
+    defaultMapping: [],
   };
 }
 
@@ -284,6 +288,25 @@ function buildParts(values: FormValues, saved: boolean): Parts {
   return { name, config, outputScore: score, secret, errors };
 }
 
+/**
+ * The evaluator the test panel runs: the create body. An unreplaced saved webhook keeps `config`
+ * and `webhook_secret` out, so the server uses its sealed settings (D-I-21).
+ */
+function testBodyOf(values: FormValues, parts: Parts): Schema<"TestEvaluatorBody"> {
+  const body: Record<string, unknown> = {
+    kind: values.kind,
+    name: parts.name,
+    output_score: parts.outputScore,
+  };
+  if (parts.config !== undefined) {
+    body.config = parts.config;
+    if (values.kind === "webhook") {
+      body.webhook_secret = parts.secret;
+    }
+  }
+  return body as Schema<"TestEvaluatorBody">;
+}
+
 /** `{{ name }}` variables of a prompt, for display. The server is the authority. */
 function variablesOf(prompt: string): string[] {
   const names = new Set<string>();
@@ -423,6 +446,7 @@ export function EvaluatorForm({
       prompt: template.prompt,
       output: outputStateOfJudge(template.output),
       scoreName: template.output_score_name,
+      defaultMapping: template.default_mapping,
     });
   }
 
@@ -527,396 +551,415 @@ export function EvaluatorForm({
   const headerNames = Array.isArray(config.header_names)
     ? config.header_names.filter((item): item is string => typeof item === "string")
     : [];
+  const parts = buildParts(values, saved);
+  const testBody = Object.keys(parts.errors).length === 0 ? testBodyOf(values, parts) : null;
+  const dirty =
+    !saved ||
+    parts.name !== baseline.name ||
+    JSON.stringify(parts.config) !== JSON.stringify(baseline.config) ||
+    JSON.stringify(parts.outputScore) !== JSON.stringify(baseline.outputScore);
 
   return (
-    <form noValidate className="flex flex-col gap-6" onSubmit={onSubmit}>
-      <fieldset disabled={locked} className="flex min-w-0 flex-col gap-6">
-        {!saved && values.kind === "llm_judge" ? (
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="evaluator-template">Start from a template</Label>
-            <Select
-              value={templateId}
-              onValueChange={(id) => {
-                const template = templateList.find((item) => item.id === id);
-                if (template) {
-                  pickTemplate(template);
-                }
-              }}
-            >
-              <SelectTrigger id="evaluator-template" className="w-fit">
-                <SelectValue placeholder="Choose a template" />
-              </SelectTrigger>
-              <SelectContent>
-                {templateList.map((template) => (
-                  <SelectItem key={template.id} value={template.id}>
-                    {template.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">Replaces the name, prompt and output.</p>
-          </div>
-        ) : null}
-
-        <TextField
-          id="evaluator-name"
-          label="Name"
-          value={values.name}
-          maxLength={128}
-          error={errors.name}
-          onChange={(name) => {
-            set({ name });
-          }}
-        />
-
-        {saved ? (
-          <p className="text-sm text-muted-foreground">Kind: {KIND_LABELS[values.kind]}</p>
-        ) : (
-          <div className="flex flex-col gap-2">
-            <span className="text-sm leading-none font-medium">Kind</span>
-            <RadioGroup
-              aria-label="Kind"
-              value={values.kind}
-              onValueChange={(next) => {
-                set({ kind: kindOf(next) });
-              }}
-              className="flex-row gap-4"
-            >
-              {(["llm_judge", "check", "webhook"] as const).map((item) => (
-                <div key={item} className="flex items-center gap-2">
-                  <RadioGroupItem value={item} id={`evaluator-kind-${item}`} />
-                  <Label htmlFor={`evaluator-kind-${item}`}>{KIND_LABELS[item]}</Label>
-                </div>
-              ))}
-            </RadioGroup>
-          </div>
-        )}
-
-        {values.kind === "llm_judge" ? (
-          <section className="flex flex-col gap-6" aria-label="Judge">
+    <>
+      <form noValidate className="flex flex-col gap-6" onSubmit={onSubmit}>
+        <fieldset disabled={locked} className="flex min-w-0 flex-col gap-6">
+          {!saved && values.kind === "llm_judge" ? (
             <div className="flex flex-col gap-2">
-              <Label htmlFor="evaluator-connection">Connection</Label>
-              <Select value={values.connectionId} onValueChange={pickConnection}>
-                <SelectTrigger
-                  id="evaluator-connection"
-                  className="w-fit"
-                  aria-invalid={errors.connection ? true : undefined}
-                >
-                  <SelectValue placeholder="Choose a connection" />
+              <Label htmlFor="evaluator-template">Start from a template</Label>
+              <Select
+                value={templateId}
+                onValueChange={(id) => {
+                  const template = templateList.find((item) => item.id === id);
+                  if (template) {
+                    pickTemplate(template);
+                  }
+                }}
+              >
+                <SelectTrigger id="evaluator-template" className="w-fit">
+                  <SelectValue placeholder="Choose a template" />
                 </SelectTrigger>
                 <SelectContent>
-                  {connectionList.map((connection) => (
-                    <SelectItem key={connection.id} value={connection.id}>
-                      {connection.name}
+                  {templateList.map((template) => (
+                    <SelectItem key={template.id} value={template.id}>
+                      {template.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              {connections.isSuccess && connectionList.length === 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  No connections. An org admin adds them in{" "}
-                  <Link
-                    to="/$org/settings/llm-connections"
-                    params={{ org }}
-                    className="underline underline-offset-4"
+              <p className="text-xs text-muted-foreground">Replaces the name, prompt and output.</p>
+            </div>
+          ) : null}
+
+          <TextField
+            id="evaluator-name"
+            label="Name"
+            value={values.name}
+            maxLength={128}
+            error={errors.name}
+            onChange={(name) => {
+              set({ name });
+            }}
+          />
+
+          {saved ? (
+            <p className="text-sm text-muted-foreground">Kind: {KIND_LABELS[values.kind]}</p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <span className="text-sm leading-none font-medium">Kind</span>
+              <RadioGroup
+                aria-label="Kind"
+                value={values.kind}
+                onValueChange={(next) => {
+                  set({ kind: kindOf(next) });
+                }}
+                className="flex-row gap-4"
+              >
+                {(["llm_judge", "check", "webhook"] as const).map((item) => (
+                  <div key={item} className="flex items-center gap-2">
+                    <RadioGroupItem value={item} id={`evaluator-kind-${item}`} />
+                    <Label htmlFor={`evaluator-kind-${item}`}>{KIND_LABELS[item]}</Label>
+                  </div>
+                ))}
+              </RadioGroup>
+            </div>
+          )}
+
+          {values.kind === "llm_judge" ? (
+            <section className="flex flex-col gap-6" aria-label="Judge">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="evaluator-connection">Connection</Label>
+                <Select value={values.connectionId} onValueChange={pickConnection}>
+                  <SelectTrigger
+                    id="evaluator-connection"
+                    className="w-fit"
+                    aria-invalid={errors.connection ? true : undefined}
                   >
-                    Settings › LLM connections
-                  </Link>
-                  .
+                    <SelectValue placeholder="Choose a connection" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {connectionList.map((connection) => (
+                      <SelectItem key={connection.id} value={connection.id}>
+                        {connection.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {connections.isSuccess && connectionList.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No connections. An org admin adds them in{" "}
+                    <Link
+                      to="/$org/settings/llm-connections"
+                      params={{ org }}
+                      className="underline underline-offset-4"
+                    >
+                      Settings › LLM connections
+                    </Link>
+                    .
+                  </p>
+                ) : null}
+                <SectionError message={errors.connection} />
+              </div>
+              <TextField
+                id="evaluator-model"
+                label="Model"
+                value={values.model}
+                error={errors.model}
+                onChange={(model) => {
+                  set({ model });
+                }}
+              />
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="evaluator-prompt">Prompt</Label>
+                <Textarea
+                  id="evaluator-prompt"
+                  className="font-mono"
+                  rows={16}
+                  value={values.prompt}
+                  aria-invalid={errors.prompt ? true : undefined}
+                  aria-describedby="evaluator-prompt-variables"
+                  onChange={(event) => {
+                    set({ prompt: event.target.value });
+                  }}
+                />
+                <p id="evaluator-prompt-variables" className="text-xs text-muted-foreground">
+                  {variables.length > 0 ? `Variables: ${variables.join(", ")}` : "No variables."}
                 </p>
-              ) : null}
-              <SectionError message={errors.connection} />
-            </div>
-            <TextField
-              id="evaluator-model"
-              label="Model"
-              value={values.model}
-              error={errors.model}
-              onChange={(model) => {
-                set({ model });
-              }}
-            />
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="evaluator-prompt">Prompt</Label>
-              <Textarea
-                id="evaluator-prompt"
-                className="font-mono"
-                rows={16}
-                value={values.prompt}
-                aria-invalid={errors.prompt ? true : undefined}
-                aria-describedby="evaluator-prompt-variables"
-                onChange={(event) => {
-                  set({ prompt: event.target.value });
+                <SectionError message={errors.prompt} />
+              </div>
+              <div className="flex flex-col gap-2">
+                <span className="text-sm leading-none font-medium">Output</span>
+                <OutputFields
+                  judge
+                  value={values.output}
+                  errors={errors}
+                  onChange={(output) => {
+                    set({ output });
+                  }}
+                />
+                <SectionError message={errors.output ?? errors.dataType} />
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="evaluator-include-reason"
+                  size="sm"
+                  checked={values.includeReason}
+                  onCheckedChange={(includeReason) => {
+                    set({ includeReason });
+                  }}
+                />
+                <Label htmlFor="evaluator-include-reason">Include reason</Label>
+              </div>
+              <details
+                open={advancedOpen || advancedError}
+                onToggle={(event) => {
+                  setAdvancedOpen(event.currentTarget.open);
                 }}
-              />
-              <p id="evaluator-prompt-variables" className="text-xs text-muted-foreground">
-                {variables.length > 0 ? `Variables: ${variables.join(", ")}` : "No variables."}
-              </p>
-              <SectionError message={errors.prompt} />
-            </div>
-            <div className="flex flex-col gap-2">
-              <span className="text-sm leading-none font-medium">Output</span>
-              <OutputFields
-                judge
-                value={values.output}
+              >
+                <summary className="cursor-pointer text-sm font-medium">Advanced</summary>
+                <div className="mt-4 flex flex-col gap-4">
+                  <div className="flex flex-col gap-4 sm:flex-row">
+                    <TextField
+                      id="evaluator-max-output-tokens"
+                      type="number"
+                      label="Max output tokens"
+                      value={values.maxOutputTokens}
+                      placeholder="1024"
+                      error={errors.maxOutputTokens}
+                      onChange={(maxOutputTokens) => {
+                        set({ maxOutputTokens });
+                      }}
+                    />
+                    <TextField
+                      id="evaluator-timeout"
+                      type="number"
+                      label="Timeout ms"
+                      value={values.timeoutMs}
+                      placeholder="60000"
+                      error={errors.timeout}
+                      onChange={(timeoutMs) => {
+                        set({ timeoutMs });
+                      }}
+                    />
+                    <TextField
+                      id="evaluator-temperature"
+                      type="number"
+                      label="Temperature"
+                      value={values.temperature}
+                      placeholder="Provider default"
+                      error={errors.temperature}
+                      onChange={(temperature) => {
+                        set({ temperature });
+                      }}
+                    />
+                  </div>
+                  <SectionError message={errors.config} />
+                </div>
+              </details>
+            </section>
+          ) : null}
+
+          {values.kind === "check" ? (
+            <section className="flex flex-col gap-4" aria-label="Check">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="evaluator-check">Check</Label>
+                <Select
+                  value={values.check}
+                  onValueChange={(next) => {
+                    const check = checkOf(next);
+                    set({ check, checkParams: defaultCheckParams(check) });
+                  }}
+                >
+                  <SelectTrigger id="evaluator-check" className="w-fit">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CHECK_NAMES.map((item) => (
+                      <SelectItem key={item} value={item}>
+                        {CHECK_LABELS[item]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <CheckFields
+                check={values.check}
+                value={values.checkParams}
                 errors={errors}
-                onChange={(output) => {
-                  set({ output });
+                onChange={(checkParams) => {
+                  set({ checkParams });
                 }}
               />
-              <SectionError message={errors.output ?? errors.dataType} />
-            </div>
-            <div className="flex items-center gap-2">
-              <Switch
-                id="evaluator-include-reason"
-                size="sm"
-                checked={values.includeReason}
-                onCheckedChange={(includeReason) => {
-                  set({ includeReason });
-                }}
-              />
-              <Label htmlFor="evaluator-include-reason">Include reason</Label>
-            </div>
-            <details
-              open={advancedOpen || advancedError}
-              onToggle={(event) => {
-                setAdvancedOpen(event.currentTarget.open);
-              }}
-            >
-              <summary className="cursor-pointer text-sm font-medium">Advanced</summary>
-              <div className="mt-4 flex flex-col gap-4">
-                <div className="flex flex-col gap-4 sm:flex-row">
+              <p className="text-sm text-muted-foreground">
+                Output: {checkDataType(values.check) === "numeric" ? "Numeric" : "Boolean"}
+              </p>
+              <SectionError message={errors.config} />
+            </section>
+          ) : null}
+
+          {values.kind === "webhook" ? (
+            <section className="flex flex-col gap-4" aria-label="Webhook">
+              {saved ? (
+                <div className="flex flex-col gap-2 text-sm">
+                  <p>Endpoint host: {stringOf(config.url_host) || "—"}</p>
+                  <p>Headers: {headerNames.length > 0 ? headerNames.join(", ") : "none"}</p>
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="evaluator-replace-webhook"
+                      checked={values.replaceWebhook}
+                      onCheckedChange={(checked) => {
+                        set({ replaceWebhook: checked === true });
+                      }}
+                    />
+                    <Label htmlFor="evaluator-replace-webhook">Replace webhook settings</Label>
+                  </div>
+                </div>
+              ) : null}
+              {webhookSettingsShown ? (
+                <>
                   <TextField
-                    id="evaluator-max-output-tokens"
-                    type="number"
-                    label="Max output tokens"
-                    value={values.maxOutputTokens}
-                    placeholder="1024"
-                    error={errors.maxOutputTokens}
-                    onChange={(maxOutputTokens) => {
-                      set({ maxOutputTokens });
+                    id="evaluator-url"
+                    label="URL"
+                    value={values.url}
+                    error={errors.url}
+                    onChange={(url) => {
+                      set({ url });
                     }}
                   />
                   <TextField
-                    id="evaluator-timeout"
+                    id="evaluator-webhook-timeout"
                     type="number"
                     label="Timeout ms"
                     value={values.timeoutMs}
-                    placeholder="60000"
+                    placeholder="10000"
                     error={errors.timeout}
                     onChange={(timeoutMs) => {
                       set({ timeoutMs });
                     }}
                   />
-                  <TextField
-                    id="evaluator-temperature"
-                    type="number"
-                    label="Temperature"
-                    value={values.temperature}
-                    placeholder="Provider default"
-                    error={errors.temperature}
-                    onChange={(temperature) => {
-                      set({ temperature });
-                    }}
-                  />
-                </div>
-                <SectionError message={errors.config} />
-              </div>
-            </details>
-          </section>
-        ) : null}
-
-        {values.kind === "check" ? (
-          <section className="flex flex-col gap-4" aria-label="Check">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="evaluator-check">Check</Label>
-              <Select
-                value={values.check}
-                onValueChange={(next) => {
-                  const check = checkOf(next);
-                  set({ check, checkParams: defaultCheckParams(check) });
-                }}
-              >
-                <SelectTrigger id="evaluator-check" className="w-fit">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {CHECK_NAMES.map((item) => (
-                    <SelectItem key={item} value={item}>
-                      {CHECK_LABELS[item]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <CheckFields
-              check={values.check}
-              value={values.checkParams}
-              errors={errors}
-              onChange={(checkParams) => {
-                set({ checkParams });
-              }}
-            />
-            <p className="text-sm text-muted-foreground">
-              Output: {checkDataType(values.check) === "numeric" ? "Numeric" : "Boolean"}
-            </p>
-            <SectionError message={errors.config} />
-          </section>
-        ) : null}
-
-        {values.kind === "webhook" ? (
-          <section className="flex flex-col gap-4" aria-label="Webhook">
-            {saved ? (
-              <div className="flex flex-col gap-2 text-sm">
-                <p>Endpoint host: {stringOf(config.url_host) || "—"}</p>
-                <p>Headers: {headerNames.length > 0 ? headerNames.join(", ") : "none"}</p>
-                <div className="flex items-center gap-2">
-                  <Checkbox
-                    id="evaluator-replace-webhook"
-                    checked={values.replaceWebhook}
-                    onCheckedChange={(checked) => {
-                      set({ replaceWebhook: checked === true });
-                    }}
-                  />
-                  <Label htmlFor="evaluator-replace-webhook">Replace webhook settings</Label>
-                </div>
-              </div>
-            ) : null}
-            {webhookSettingsShown ? (
-              <>
-                <TextField
-                  id="evaluator-url"
-                  label="URL"
-                  value={values.url}
-                  error={errors.url}
-                  onChange={(url) => {
-                    set({ url });
-                  }}
-                />
-                <TextField
-                  id="evaluator-webhook-timeout"
-                  type="number"
-                  label="Timeout ms"
-                  value={values.timeoutMs}
-                  placeholder="10000"
-                  error={errors.timeout}
-                  onChange={(timeoutMs) => {
-                    set({ timeoutMs });
-                  }}
-                />
-                <fieldset className="flex flex-col gap-2">
-                  <legend className="text-sm leading-none font-medium">Headers</legend>
-                  <div className="flex items-center justify-end gap-2">
-                    {saved ? (
-                      <p className="mr-auto text-xs text-muted-foreground">
-                        Values are hidden. Set every header again to change them.
-                      </p>
-                    ) : null}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        set({ headers: [...values.headers, newHeaderRow("")] });
-                      }}
-                    >
-                      Add header
-                    </Button>
-                  </div>
-                  {values.headers.map((row, index) => (
-                    <div key={row.id} className="flex items-center gap-2">
-                      <Input
-                        aria-label={`Header name ${index + 1}`}
-                        aria-invalid={errors.headers ? true : undefined}
-                        value={row.name}
-                        onChange={(event) => {
-                          const name = event.target.value;
-                          set({
-                            headers: values.headers.map((item) =>
-                              item.id === row.id ? { ...item, name } : item,
-                            ),
-                          });
-                        }}
-                      />
-                      <Input
-                        aria-label={`Header value ${index + 1}`}
-                        aria-invalid={errors.headers ? true : undefined}
-                        type="password"
-                        autoComplete="off"
-                        value={row.value}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          set({
-                            headers: values.headers.map((item) =>
-                              item.id === row.id ? { ...item, value } : item,
-                            ),
-                          });
-                        }}
-                      />
+                  <fieldset className="flex flex-col gap-2">
+                    <legend className="text-sm leading-none font-medium">Headers</legend>
+                    <div className="flex items-center justify-end gap-2">
+                      {saved ? (
+                        <p className="mr-auto text-xs text-muted-foreground">
+                          Values are hidden. Set every header again to change them.
+                        </p>
+                      ) : null}
                       <Button
                         type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={`Remove header ${index + 1}`}
+                        variant="outline"
+                        size="sm"
                         onClick={() => {
-                          set({ headers: values.headers.filter((item) => item.id !== row.id) });
+                          set({ headers: [...values.headers, newHeaderRow("")] });
                         }}
                       >
-                        <X />
+                        Add header
                       </Button>
                     </div>
-                  ))}
-                  <SectionError message={errors.headers} />
-                </fieldset>
-              </>
-            ) : null}
-            <TextField
-              id="evaluator-secret"
-              label="Signing secret"
-              type="password"
-              autoComplete="new-password"
-              value={values.secret}
-              error={errors.secret}
-              placeholder={saved ? "Leave empty to keep the current secret" : undefined}
-              onChange={(secret) => {
-                set({ secret });
-              }}
-            />
-            <div className="flex flex-col gap-2">
-              <span className="text-sm leading-none font-medium">Output</span>
-              <OutputFields
-                judge={false}
-                value={values.output}
-                errors={errors}
-                onChange={(output) => {
-                  set({ output });
+                    {values.headers.map((row, index) => (
+                      <div key={row.id} className="flex items-center gap-2">
+                        <Input
+                          aria-label={`Header name ${index + 1}`}
+                          aria-invalid={errors.headers ? true : undefined}
+                          value={row.name}
+                          onChange={(event) => {
+                            const name = event.target.value;
+                            set({
+                              headers: values.headers.map((item) =>
+                                item.id === row.id ? { ...item, name } : item,
+                              ),
+                            });
+                          }}
+                        />
+                        <Input
+                          aria-label={`Header value ${index + 1}`}
+                          aria-invalid={errors.headers ? true : undefined}
+                          type="password"
+                          autoComplete="off"
+                          value={row.value}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            set({
+                              headers: values.headers.map((item) =>
+                                item.id === row.id ? { ...item, value } : item,
+                              ),
+                            });
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label={`Remove header ${index + 1}`}
+                          onClick={() => {
+                            set({ headers: values.headers.filter((item) => item.id !== row.id) });
+                          }}
+                        >
+                          <X />
+                        </Button>
+                      </div>
+                    ))}
+                    <SectionError message={errors.headers} />
+                  </fieldset>
+                </>
+              ) : null}
+              <TextField
+                id="evaluator-secret"
+                label="Signing secret"
+                type="password"
+                autoComplete="new-password"
+                value={values.secret}
+                error={errors.secret}
+                placeholder={saved ? "Leave empty to keep the current secret" : undefined}
+                onChange={(secret) => {
+                  set({ secret });
                 }}
               />
-              <SectionError message={errors.output ?? errors.dataType} />
-            </div>
-            <SectionError message={errors.config} />
-          </section>
-        ) : null}
+              <div className="flex flex-col gap-2">
+                <span className="text-sm leading-none font-medium">Output</span>
+                <OutputFields
+                  judge={false}
+                  value={values.output}
+                  errors={errors}
+                  onChange={(output) => {
+                    set({ output });
+                  }}
+                />
+                <SectionError message={errors.output ?? errors.dataType} />
+              </div>
+              <SectionError message={errors.config} />
+            </section>
+          ) : null}
 
-        <TextField
-          id="evaluator-score-name"
-          label="Score name"
-          value={values.scoreName}
-          error={errors.scoreName}
-          description="The score this evaluator writes. Its definition, if one exists, is checked on every write."
-          onChange={(scoreName) => {
-            set({ scoreName });
-          }}
+          <TextField
+            id="evaluator-score-name"
+            label="Score name"
+            value={values.scoreName}
+            error={errors.scoreName}
+            description="The score this evaluator writes. Its definition, if one exists, is checked on every write."
+            onChange={(scoreName) => {
+              set({ scoreName });
+            }}
+          />
+
+          <FormError message={formError} />
+          <div className="flex justify-end">
+            <DisabledReason reason={canEdit ? undefined : NO_PERMISSION}>
+              <SubmitButton pending={pending}>{saved ? "Save" : "Create evaluator"}</SubmitButton>
+            </DisabledReason>
+          </div>
+        </fieldset>
+      </form>
+      {canEdit ? (
+        <TestPanel
+          org={org}
+          project={project}
+          evaluatorId={evaluator?.id}
+          body={testBody}
+          dirty={dirty}
+          defaultMapping={values.defaultMapping}
         />
-
-        <FormError message={formError} />
-        <div className="flex justify-end">
-          <DisabledReason reason={canEdit ? undefined : NO_PERMISSION}>
-            <SubmitButton pending={pending}>{saved ? "Save" : "Create evaluator"}</SubmitButton>
-          </DisabledReason>
-        </div>
-      </fieldset>
-    </form>
+      ) : null}
+    </>
   );
 }
 
