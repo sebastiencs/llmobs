@@ -31,8 +31,9 @@ pub use sessions::{
     session_list,
 };
 pub use traces::{
-    MAX_TRACE_SPANS, SPAN_LIST_COLUMNS, SpanListRequest, SpanSort, TraceDetailData,
-    TraceListRequest, TraceSort, span_detail, span_list, trace_detail, trace_list, trace_list_plan,
+    MAX_REFRESH_IDS, MAX_TRACE_SPANS, SPAN_LIST_COLUMNS, SpanListRequest, SpanSort,
+    TraceDetailData, TraceListRequest, TraceRefreshRequest, TraceSort, span_detail, span_list,
+    trace_detail, trace_list, trace_list_plan, trace_refresh,
 };
 pub use users::{
     MAX_USER_SESSIONS, USER_COLUMNS, UserDetailData, UserListRequest, UserSort, user_detail,

@@ -14,9 +14,9 @@ use llmobs_core::schema::{spans, traces};
 
 use super::cursor::{after, assemble, decode, order_by};
 use super::{ListScope, Page, SortOrder, present};
-use crate::filter::{FilterView, exclusions, search, time_window};
+use crate::filter::{Filter, FilterView, exclusions, search, time_window};
 use crate::query_error::{RunError, classify};
-use crate::views::QueryContext;
+use crate::views::{QueryContext, TimeWindow};
 
 const LIST: &str = "traces";
 const SPANS: &str = "spans";
@@ -27,6 +27,26 @@ const SPAN_TIES: &[&str] = &[spans::SPAN_ID, spans::TRACE_ID];
 
 /// Most spans `trace_detail` returns for one trace.
 pub const MAX_TRACE_SPANS: usize = 20_000;
+
+/// Max ids of one [`trace_refresh`].
+pub const MAX_REFRESH_IDS: usize = 500;
+
+/// Traces the live stream re-reads (D-G-13, D-G-31).
+#[derive(Debug, Clone, Copy)]
+pub struct TraceRefreshRequest<'a> {
+    /// Filter text over `traces`. Empty or whitespace means no filter.
+    pub filter: Option<&'a str>,
+    /// Search text and the `start_time` window its spans must fall in (D-G-33).
+    pub search: Option<(&'a str, TimeWindow)>,
+    /// Trace ids, 32 hex digits, either case. At most [`MAX_REFRESH_IDS`].
+    pub trace_ids: &'a [&'a str],
+    /// Keep rows whose environment is the eval environment.
+    pub include_eval: bool,
+    /// Keep rows that belong to an experiment.
+    pub include_experiments: bool,
+    /// Time allowed for planning and running.
+    pub timeout: Duration,
+}
 
 /// Span list columns: [`llmobs_core::schema::SPANS_LIGHT_COLUMNS`] without
 /// `project_id`, with `duration_ms` after `duration_ns`.
@@ -245,6 +265,81 @@ pub async fn span_detail(
         Err(_) => Err(RunError::Timeout),
         Ok(result) => result,
     }
+}
+
+/// The traces-view rows (every column, no order) of `trace_ids` that pass the default
+/// exclusions, the filter and the search. No time window applies to the traces: the query
+/// scans the project's traces once per call.
+///
+/// An empty `trace_ids` parses the filter and returns no batches without running a query:
+/// the live stream validates its filter this way when it opens.
+///
+/// # Errors
+///
+/// [`RunError::Invalid`] for filter text; [`RunError::InvalidRequest`] for more than
+/// [`MAX_REFRESH_IDS`] ids or an id that is not 32 hex digits; [`RunError::Timeout`].
+pub async fn trace_refresh(
+    ctx: &QueryContext,
+    request: TraceRefreshRequest<'_>,
+) -> Result<Vec<RecordBatch>, RunError> {
+    let filter = match present(request.filter) {
+        Some(text) => Some(ctx.parse_filter(FilterView::Traces, text)?),
+        None => None,
+    };
+    if request.trace_ids.len() > MAX_REFRESH_IDS {
+        return Err(RunError::InvalidRequest(format!(
+            "at most {MAX_REFRESH_IDS} trace ids"
+        )));
+    }
+    let ids = request
+        .trace_ids
+        .iter()
+        .map(|id| hex_id(id, 32, "trace_id"))
+        .collect::<Result<Vec<_>, _>>()?;
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    match tokio::time::timeout(request.timeout, refresh(ctx, &request, filter, &ids)).await {
+        Err(_) => Err(RunError::Timeout),
+        Ok(result) => result,
+    }
+}
+
+async fn refresh(
+    ctx: &QueryContext,
+    request: &TraceRefreshRequest<'_>,
+    filter: Option<Filter>,
+    ids: &[String],
+) -> Result<Vec<RecordBatch>, RunError> {
+    let references_environment = filter
+        .as_ref()
+        .is_some_and(|filter| filter.references_environment);
+    let mut frame = ctx.session().table(LIST).await.map_err(classify)?;
+    let mut conjuncts = Vec::new();
+    if let Some(expr) = exclusions(
+        ctx,
+        FilterView::Traces,
+        request.include_eval,
+        request.include_experiments,
+        references_environment,
+    )? {
+        conjuncts.push(expr);
+    }
+    let literals = ids.iter().map(|id| lit(id.as_str())).collect();
+    conjuncts.push(col(traces::TRACE_ID).in_list(literals, false));
+    if let Some((text, window)) = request.search
+        && let Some(text) = present(Some(text))
+        && let Some(expr) = search(FilterView::Traces, text, Some(window), ctx).await?
+    {
+        conjuncts.push(expr);
+    }
+    if let Some(predicate) = conjuncts.into_iter().reduce(Expr::and) {
+        frame = frame.filter(predicate).map_err(classify)?;
+    }
+    if let Some(filter) = filter {
+        frame = filter.apply(frame, ctx).await.map_err(classify)?;
+    }
+    frame.collect().await.map_err(|error| ctx.fail(error))
 }
 
 struct ListPlan<'a> {
@@ -557,8 +652,9 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        SPAN_LIST_COLUMNS, SpanListRequest, SpanSort, TraceListRequest, TraceSort, span_detail,
-        span_list, trace_detail, trace_detail_limited, trace_frame, trace_list,
+        MAX_REFRESH_IDS, SPAN_LIST_COLUMNS, SpanListRequest, SpanSort, TraceListRequest,
+        TraceRefreshRequest, TraceSort, span_detail, span_list, trace_detail, trace_detail_limited,
+        trace_frame, trace_list, trace_refresh,
     };
     use crate::query_error::{Position, RunError};
     use crate::reads::{ListScope, Page, SortOrder};
@@ -719,6 +815,117 @@ mod tests {
         .into_iter()
         .flatten()
         .any(|text| text.to_lowercase().contains(&needle))
+    }
+
+    const ID_ANSWER: &str = "a1000000000000000000000000000001";
+    const ID_DELIVERY: &str = "a1000000000000000000000000000002";
+    const ID_QUESTION: &str = "a1000000000000000000000000000003";
+    const ID_EVAL: &str = "a1000000000000000000000000000005";
+
+    fn refresh_request<'a>(
+        trace_ids: &'a [&'a str],
+        filter: Option<&'a str>,
+        search: Option<(&'a str, TimeWindow)>,
+        include_eval: bool,
+    ) -> TraceRefreshRequest<'a> {
+        TraceRefreshRequest {
+            filter,
+            search,
+            trace_ids,
+            include_eval,
+            include_experiments: false,
+            timeout: TIMEOUT,
+        }
+    }
+
+    /// Trace ids of the rows `trace_refresh` returned, sorted.
+    fn refreshed_ids(batches: &[RecordBatch]) -> Vec<String> {
+        let mut ids: Vec<String> = json_rows(batches)
+            .iter()
+            .map(|row| row["trace_id"].as_str().expect("trace_id").to_owned())
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    #[tokio::test]
+    async fn refresh_keeps_the_listed_traces_and_the_default_exclusions() {
+        let ctx = context();
+        let ids = [ID_ANSWER, ID_QUESTION, ID_EVAL];
+        let batches = trace_refresh(&ctx, refresh_request(&ids, None, None, false))
+            .await
+            .expect("refresh");
+        assert_eq!(refreshed_ids(&batches), [ID_ANSWER, ID_QUESTION]);
+
+        let batches = trace_refresh(&ctx, refresh_request(&ids, None, None, true))
+            .await
+            .expect("refresh with eval");
+        assert_eq!(refreshed_ids(&batches), [ID_ANSWER, ID_QUESTION, ID_EVAL]);
+    }
+
+    #[tokio::test]
+    async fn refresh_applies_the_filter() {
+        let ctx = context();
+        let ids = [ID_ANSWER, ID_QUESTION];
+        let filter = "name = 'answer-question'";
+        let batches = trace_refresh(&ctx, refresh_request(&ids, Some(filter), None, false))
+            .await
+            .expect("filter");
+        assert_eq!(refreshed_ids(&batches), [ID_QUESTION]);
+    }
+
+    #[tokio::test]
+    async fn refresh_search_uses_its_window() {
+        let ctx = context();
+        let ids = [ID_ANSWER, ID_DELIVERY];
+        let inside = TimeWindow::new(nanos("2026-01-01T10:05:00Z"), nanos("2026-01-01T10:06:00Z"))
+            .expect("window");
+        let batches = trace_refresh(
+            &ctx,
+            refresh_request(&ids, None, Some(("delivery", inside)), false),
+        )
+        .await
+        .expect("search inside");
+        assert_eq!(refreshed_ids(&batches), [ID_DELIVERY]);
+
+        let before = TimeWindow::new(nanos("2026-01-01T10:00:00Z"), nanos("2026-01-01T10:01:00Z"))
+            .expect("window");
+        let batches = trace_refresh(
+            &ctx,
+            refresh_request(&ids, None, Some(("delivery", before)), false),
+        )
+        .await
+        .expect("search before");
+        assert!(refreshed_ids(&batches).is_empty());
+    }
+
+    #[tokio::test]
+    async fn refresh_without_ids_only_parses_the_filter() {
+        let ctx = context();
+        let batches = trace_refresh(&ctx, refresh_request(&[], Some("name = 'x'"), None, false))
+            .await
+            .expect("valid filter");
+        assert!(batches.is_empty());
+
+        match trace_refresh(&ctx, refresh_request(&[], Some("name ="), None, false)).await {
+            Err(RunError::Invalid(_)) => {}
+            other => panic!("expected an invalid filter, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_too_many_ids_and_bad_ids() {
+        let ctx = context();
+        let many = vec![ID_ANSWER; MAX_REFRESH_IDS + 1];
+        match trace_refresh(&ctx, refresh_request(&many, None, None, false)).await {
+            Err(RunError::InvalidRequest(_)) => {}
+            other => panic!("expected too many ids, got {other:?}"),
+        }
+        let bad = ["zz"];
+        match trace_refresh(&ctx, refresh_request(&bad, None, None, false)).await {
+            Err(RunError::InvalidRequest(_)) => {}
+            other => panic!("expected a bad id, got {other:?}"),
+        }
     }
 
     #[tokio::test]
