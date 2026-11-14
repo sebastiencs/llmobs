@@ -4,6 +4,7 @@
 //! own by a fresh [`McpServer`] that holds the caller. Only personal access tokens reach it.
 
 mod output;
+mod sql;
 mod tools;
 
 use std::sync::Arc;
@@ -126,6 +127,14 @@ impl ServerHandler for McpServer {
                 tools::GET_SCHEMA,
                 tools::get_schema(&self.state, &self.user, arguments).await,
             ),
+            sql::QUERY_SQL => (
+                sql::QUERY_SQL,
+                sql::query_sql(&self.state, &self.user, arguments).await,
+            ),
+            sql::LIST_SAVED_VIEWS => (
+                sql::LIST_SAVED_VIEWS,
+                sql::list_saved_views(&self.state, &self.user, arguments).await,
+            ),
             _ => return Err(McpError::invalid_params("unknown tool", None)),
         };
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -155,6 +164,10 @@ pub(crate) mod test_helpers {
 
     pub(crate) const V2025: &str = "2025-11-25";
     pub(crate) const V2026: &str = "2026-07-28";
+
+    /// A window covering the example dataset: all of 2026-01-01, UTC.
+    pub(crate) const FROM: &str = "2026-01-01T00:00:00Z";
+    pub(crate) const TO: &str = "2026-01-02T00:00:00Z";
 
     /// `POST /mcp` with `host` and `accept` set as every MCP client sends them, the optional
     /// bearer, an optional `mcp-protocol-version`, and `extra` headers.
@@ -281,7 +294,12 @@ mod tests {
     use crate::meta::users::{self, NewUser, insert_user};
     use crate::test_support::TestApp;
 
-    const TOOLS: [&str; 2] = ["list_projects", "get_schema"];
+    const TOOLS: [&str; 4] = [
+        "list_projects",
+        "get_schema",
+        "query_sql",
+        "list_saved_views",
+    ];
 
     fn init_body(version: &str) -> Value {
         json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -395,6 +413,11 @@ mod tests {
         }
         assert!(tools[0]["inputSchema"].get("required").is_none());
         assert_eq!(tools[1]["inputSchema"]["required"], json!(["project"]));
+        assert_eq!(
+            tools[2]["inputSchema"]["required"],
+            json!(["project", "query", "from", "to"])
+        );
+        assert_eq!(tools[3]["inputSchema"]["required"], json!(["project"]));
         assert!(body["result"].get("resultType").is_none());
     }
 

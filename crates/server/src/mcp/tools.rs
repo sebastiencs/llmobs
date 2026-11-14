@@ -45,6 +45,39 @@ pub(crate) fn tool_list() -> Vec<Tool> {
                 "additionalProperties": false
             }),
         ),
+        tool(
+            super::sql::QUERY_SQL,
+            "Run a SQL query",
+            "Run one read-only SQL query (SELECT, WITH, UNION, VALUES or EXPLAIN) over the views traces, spans, sessions and scores; get_schema lists their columns. `from` and `to` are required and at most 30 days apart: they bound start_time on spans and traces and created_at on scores, in every part of the query; sessions are built from the windowed traces. No rows are hidden: evaluation traces (environment 'llmobs-eval') and experiment traces are included. Returns columns, rows, row_count, truncated and notes; string cells longer than 2000 characters are cut.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string", "description": PROJECT_ARG},
+                    "query": {"type": "string", "description": "The SQL statement. Use {name:Type} placeholders (Type: String, Int, Float, Bool, Timestamp) with `params` instead of inlining values."},
+                    "params": {"type": "object", "description": "Values of the {name:Type} placeholders, by name."},
+                    "from": {"type": "string", "description": "Window start, inclusive: an RFC 3339 timestamp, or epoch milliseconds as a string."},
+                    "to": {"type": "string", "description": "Window end, exclusive: an RFC 3339 timestamp, or epoch milliseconds as a string. At most 30 days after from."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100, "description": "Most rows to return."},
+                    "max_chars": {"type": "integer", "minimum": 1000, "maximum": 100000, "default": 20000, "description": "Most characters in the result; later rows are left out beyond it."}
+                },
+                "required": ["project", "query", "from", "to"],
+                "additionalProperties": false
+            }),
+        ),
+        tool(
+            super::sql::LIST_SAVED_VIEWS,
+            "List saved views",
+            "Saved list views (kind traces, spans, sessions, users) and saved SQL queries (kind sql) you can see in the project: yours and the shared ones. A view's `state` holds its filter, search and range; a SQL query's holds `query` and `params`. Pass a traces view's name or id to search_traces as `view`.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string", "description": PROJECT_ARG},
+                    "kind": {"type": "string", "enum": ["traces", "spans", "sessions", "users", "sql"], "description": "Only views of this kind."}
+                },
+                "required": ["project"],
+                "additionalProperties": false
+            }),
+        ),
     ]
 }
 

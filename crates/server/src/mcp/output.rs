@@ -8,6 +8,10 @@ use crate::http::error::ApiError;
 /// The default `max_chars` of a tool result (D-H-10).
 pub(crate) const DEFAULT_MAX_CHARS: usize = 20_000;
 
+/// Lowest and highest `max_chars` a tool accepts (D-H-10).
+pub(crate) const MIN_MAX_CHARS: usize = 1_000;
+pub(crate) const MAX_MAX_CHARS: usize = 100_000;
+
 /// Compact JSON, as sent to the agent. `Value`'s `Display` cannot fail.
 pub(crate) fn render(value: &Value) -> String {
     value.to_string()
@@ -16,6 +20,35 @@ pub(crate) fn render(value: &Value) -> String {
 /// Length in characters (Unicode scalar values), the unit of every budget.
 pub(crate) fn char_len(text: &str) -> usize {
     text.chars().count()
+}
+
+/// `max_chars` as given, or [`DEFAULT_MAX_CHARS`].
+///
+/// # Errors
+///
+/// `400 bad_request` `max_chars must be between 1000 and 100000` outside that range
+/// (a negative number too: the argument is an `i64`).
+pub(crate) fn max_chars(given: Option<i64>) -> Result<usize, ApiError> {
+    let value = given.unwrap_or(DEFAULT_MAX_CHARS as i64);
+    match usize::try_from(value) {
+        Ok(value) if (MIN_MAX_CHARS..=MAX_MAX_CHARS).contains(&value) => Ok(value),
+        _ => Err(ApiError::BadRequest {
+            detail: Some("max_chars must be between 1000 and 100000".to_owned()),
+            errors: Vec::new(),
+        }),
+    }
+}
+
+/// `text` cut to its first `max` characters followed by `…`, or `None` when it has at most
+/// `max` characters. A cut string therefore has `max + 1` characters. Characters are Unicode
+/// scalar values, so a multibyte character is never split.
+pub(crate) fn cut(text: &str, max: usize) -> Option<String> {
+    if text.chars().count() <= max {
+        return None;
+    }
+    let mut out: String = text.chars().take(max).collect();
+    out.push('…');
+    Some(out)
 }
 
 /// A successful tool result: one text item holding `body` as compact JSON.
@@ -105,7 +138,7 @@ mod tests {
     use llmobs_storage::{InvalidQuery, Position, RunError};
     use serde_json::{Map, Value, json};
 
-    use super::{char_len, failure, fit_list, render};
+    use super::{char_len, cut, failure, fit_list, max_chars, render};
     use crate::http::error::ApiError;
 
     fn text_of(result: &rmcp::model::CallToolResult) -> &str {
@@ -155,6 +188,30 @@ mod tests {
         assert!(fit_list(&mut body, "items", 50, "cut"));
         assert_eq!(body["items"], json!([]));
         assert_eq!(body["truncated"], json!(true));
+    }
+
+    #[test]
+    fn cut_counts_characters() {
+        assert_eq!(cut("héllo", 5), None);
+        assert_eq!(cut("héllo", 2), Some("hé…".to_owned()));
+        assert_eq!(cut("", 0), None);
+        assert_eq!(cut(&"é".repeat(2000), 2000), None);
+        let long = cut(&"é".repeat(2001), 2000).expect("cut");
+        assert_eq!(long.chars().count(), 2001);
+        assert_eq!(long, format!("{}…", "é".repeat(2000)));
+    }
+
+    #[test]
+    fn max_chars_bounds() {
+        assert_eq!(max_chars(None).unwrap(), 20_000);
+        assert_eq!(max_chars(Some(1_000)).unwrap(), 1_000);
+        assert_eq!(max_chars(Some(100_000)).unwrap(), 100_000);
+        for value in [999, 100_001, -1] {
+            assert!(
+                matches!(max_chars(Some(value)), Err(ApiError::BadRequest { .. })),
+                "{value}"
+            );
+        }
     }
 
     #[test]
