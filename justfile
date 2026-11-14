@@ -31,9 +31,9 @@ test:
 eval-live:
     cargo test -p llmobs-eval --test live -- --ignored --test-threads 1
 
-# Supply-chain checks (licenses deferred, D57)
+# Supply-chain checks: advisories, bans, licences, sources (D-P-3)
 deny:
-    cargo deny check advisories bans sources
+    cargo deny check advisories bans licenses sources
 
 # Debug build
 build:
@@ -53,7 +53,7 @@ run *args:
     cargo run -p llmobs-cli -- {{args}}
 
 # Rust checks: format, lint, tests, supply chain
-check-rust: fmt-check lint test deny
+check-rust: fmt-check lint test deny check-ee
 
 # Install JS dependencies from the lockfile
 js-install:
@@ -110,6 +110,36 @@ check-workflows:
 # RustSec advisories only; run weekly by CI
 deny-advisories:
     cargo deny check advisories
+
+# Check the ee licence files and SPDX headers (D-P-2)
+check-ee:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    expected=6448026f2e06ab3da9ed8ddda686694bba37179e88db92dea6d4aab516c957ea
+    header='// SPDX-License-Identifier: Elastic-2.0'
+    status=0
+    for dir in crates/server/src/ee web/src/ee; do
+        if [ ! -f "$dir/LICENSE" ]; then
+            echo "$dir/LICENSE is missing"
+            status=1
+        elif [ "$(sha256sum "$dir/LICENSE" | cut -d' ' -f1)" != "$expected" ]; then
+            echo "$dir/LICENSE is not the Elastic License 2.0 text"
+            status=1
+        fi
+        while IFS= read -r -d '' file; do
+            if [ "$(head -n 1 "$file")" != "$header" ]; then
+                echo "$file: the first line must be '$header'"
+                status=1
+            fi
+        done < <(find "$dir" -type f \( -name '*.rs' -o -name '*.ts' -o -name '*.tsx' \) -print0)
+    done
+    while IFS= read -r file; do
+        case "$file" in
+            crates/server/src/ee/*|web/src/ee/*) ;;
+            *) echo "$file: Elastic-2.0 header outside an ee directory"; status=1 ;;
+        esac
+    done < <(git grep -l -F 'SPDX-License-Identifier: Elastic-2.0' -- '*.rs' '*.ts' '*.tsx' || true)
+    exit "$status"
 
 # Web dev server with mocked API (fixtures/api)
 web-dev: js-install
