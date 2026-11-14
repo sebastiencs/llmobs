@@ -127,6 +127,7 @@ Run everything through `just`:
 | `just check` | Rust, web, Python SDK, and TypeScript SDK (D79); **must pass before every commit** |
 | `just check-rust` | format check, clippy (`-D warnings`), tests, cargo-deny |
 | `just check-web` | web lint, types, tests, production build |
+| `just check-release` | build-release, then check the UI is embedded |
 | `just check-py` | Python SDK format, lint, types, tests |
 | `just check-ts` | TypeScript SDK lint, types, tests, package exports |
 | `just fmt` | format Rust, the web and TypeScript SDK (Biome), and the Python SDK (ruff) |

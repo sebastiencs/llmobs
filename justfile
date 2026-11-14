@@ -39,9 +39,14 @@ deny:
 build:
     cargo build --workspace
 
-# Release build of the binary
-build-release:
+# Build the web UI, then the release binary with the UI embedded (D-G-18)
+build-release: js-install
+    pnpm --dir web run build
     cargo build --release -p llmobs-cli
+
+# Build the release binary and check that the UI is embedded (D-G-37)
+check-release: build-release
+    ./target/release/llmobs version | grep -qx 'ui: embedded'
 
 # Run the binary with arguments, e.g. `just run --version`
 run *args:
