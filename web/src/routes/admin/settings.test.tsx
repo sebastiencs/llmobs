@@ -132,6 +132,27 @@ it("says when a licence is in its grace period", async () => {
   ).toBeInTheDocument();
 });
 
+it("says when a licence has expired", async () => {
+  server.use(
+    http.get("/api/v1/admin/license", () =>
+      HttpResponse.json({
+        status: "expired",
+        id: "01900000-0000-7000-8000-000000000510",
+        customer: "Example Corp",
+        features: ["project_roles"],
+        expires_at: "2025-11-01T00:00:00.000000000Z",
+        grace_ends_at: "2025-12-01T00:00:00.000000000Z",
+      }),
+    ),
+  );
+
+  await renderApp("/admin/settings");
+
+  expect(
+    await screen.findByText("Expired on 2025-11-01. Enterprise features are locked."),
+  ).toBeInTheDocument();
+});
+
 it("says when single sign-on is not enforced without a licence", async () => {
   server.use(withSettings({ enforce_sso_domains: ["sso.example"], enforce_sso_applied: false }));
 
@@ -141,6 +162,17 @@ it("says when single sign-on is not enforced without a licence", async () => {
   expect(settingValue("Single sign-on required for")).toHaveTextContent(
     "sso.example — not enforced: needs an enterprise licence",
   );
+});
+
+it("drops the not enforced note when single sign-on is enforced", async () => {
+  server.use(withSettings({ enforce_sso_domains: ["sso.example"], enforce_sso_applied: true }));
+
+  await renderApp("/admin/settings");
+  await screen.findByRole("heading", { name: "Settings", level: 2 });
+
+  const value = settingValue("Single sign-on required for");
+  expect(value).toHaveTextContent("sso.example");
+  expect(value).not.toHaveTextContent("not enforced");
 });
 
 it("shows the from address and lists", async () => {

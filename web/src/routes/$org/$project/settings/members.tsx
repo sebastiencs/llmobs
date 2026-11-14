@@ -35,7 +35,7 @@ function ProjectMembersPage() {
   const { data: me } = $api.useSuspenseQuery("get", "/api/auth/me");
   const queryClient = useQueryClient();
   const entitlements = useOrgEntitlements(org);
-  const locked = !entitlements.allows("project_roles");
+  const locked = entitlements.locked("project_roles");
   const [actionError, setActionError] = useState<string | undefined>();
   const query = $api.useInfiniteQuery(
     "get",

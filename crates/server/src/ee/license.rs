@@ -161,7 +161,7 @@ fn parse(key: &str) -> Result<License, InvalidLicense> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::sign_token;
+    use crate::test_support::{sign_raw, sign_token};
     use serde_json::{Value, json};
 
     const ACTIVE_TOKEN: &str = include_str!("../../../../fixtures/license/tokens/active.token");
@@ -276,6 +276,7 @@ mod tests {
             refused(&sign_token(&json!({"kind": "license"}))),
             InvalidLicense::Payload
         );
+        assert_eq!(refused(&sign_raw(b"not json")), InvalidLicense::Payload);
 
         let swapped = claims("2026-03-01T00:00:00Z", "2026-02-01T00:00:00Z");
         assert_eq!(refused(&sign_token(&swapped)), InvalidLicense::Fields);

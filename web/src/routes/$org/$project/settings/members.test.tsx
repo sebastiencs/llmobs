@@ -241,6 +241,22 @@ it("shows no lock when project roles are allowed", async () => {
   expect(screen.queryByRole("note", { name: "Locked feature" })).toBeNull();
 });
 
+it("shows no lock while the entitlements are loading", async () => {
+  server.use(http.get("/api/v1/orgs/:org/entitlements", () => new Promise<Response>(() => {})));
+
+  const { user } = await renderApp("/acme/support-bot/settings/members");
+  await screen.findByRole("table", { name: "Project members" });
+
+  expect(screen.queryByRole("note", { name: "Locked feature" })).toBeNull();
+  await user.click(screen.getByRole("combobox", { name: "Project access of bob@example.com" }));
+  for (const name of ["Admin", "Member", "No access"]) {
+    expect(await screen.findByRole("option", { name })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  }
+});
+
 it("shows the plan message from the server", async () => {
   server.use(
     http.put("/api/v1/projects/:project/members/:user", () =>
