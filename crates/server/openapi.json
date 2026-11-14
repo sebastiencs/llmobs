@@ -5358,6 +5358,139 @@
         }
       }
     },
+    "/api/v1/projects/{project}/sql": {
+      "post": {
+        "tags": [
+          "sql"
+        ],
+        "summary": "Run a SQL query",
+        "description": "Runs one read-only statement over the project's `spans`, `traces`, `sessions` and `scores` views (spec 05 § SQL console). `from` and `to` window `spans` and `traces` on `start_time` and `scores` on `created_at`. Without them the query reads all history. At most 10,000 rows; `truncated` says when more matched. SQL errors are `invalid_filter` on the `query` field, with a `position` when one is known.",
+        "operationId": "run_sql",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project UUID, URL-encoded org-slug/project-slug, or `current`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SqlQueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Columns and rows.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SqlQueryResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or a filter is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credentials, or the credentials are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credentials do not allow this operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is larger than the limit.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request body is not JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The query took longer than its time limit or needed more memory than allowed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is busy or a dependency is unavailable. Retry later.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project}/traces": {
       "get": {
         "tags": [
@@ -9749,6 +9882,95 @@
           }
         }
       },
+      "SqlColumnInfo": {
+        "type": "object",
+        "description": "One output column.",
+        "required": [
+          "name",
+          "type"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Output column name."
+          },
+          "type": {
+            "type": "string",
+            "description": "Arrow type as DataFusion prints it, for example `Int64` or `Utf8`."
+          }
+        }
+      },
+      "SqlQueryRequest": {
+        "type": "object",
+        "description": "Body of `POST /api/v1/projects/{project}/sql`.\n\nSpec 09 § Observability data, D-H-8.",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of the time window, RFC 3339, inclusive. Give both `from` and `to`, or neither."
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Most rows to return as JSON, 1–10,000. Default 10,000. Checked on every request; exports do not use it.",
+            "maximum": 10000,
+            "minimum": 1
+          },
+          "params": {
+            "type": "object",
+            "description": "Values for the placeholders, by name. Default empty."
+          },
+          "query": {
+            "type": "string",
+            "description": "One statement, with `{name:Type}` placeholders (spec 05 § Parameters)."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Time limit in milliseconds, 1,000–60,000. Default 60,000.",
+            "maximum": 60000,
+            "minimum": 1000
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the time window, RFC 3339, exclusive."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SqlQueryResult": {
+        "type": "object",
+        "description": "JSON answer of `POST …/sql` (D98).",
+        "required": [
+          "columns",
+          "rows",
+          "truncated"
+        ],
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SqlColumnInfo"
+            },
+            "description": "Output columns, in order."
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "One object per row, keyed by column name. Timestamps are RFC 3339 with 9 fractional\ndigits, binary is lowercase hex, maps are objects, NaN and infinities are null."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More rows matched than `limit`; `rows` holds the first `limit`."
+          }
+        }
+      },
       "TextPart": {
         "type": "object",
         "description": "Plain text.",
@@ -10411,6 +10633,10 @@
     {
       "name": "saved_views",
       "description": "Saved list views and SQL queries."
+    },
+    {
+      "name": "sql",
+      "description": "SQL console over the project's views."
     },
     {
       "name": "metrics",

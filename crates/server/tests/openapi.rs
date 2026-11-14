@@ -184,6 +184,7 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
         "/api/v1/projects/{project}/saved-views/{id}",
         "delete_saved_view",
     ),
+    ("post", "/api/v1/projects/{project}/sql", "run_sql"),
     ("get", "/api/v1/projects/{project}/metrics", "get_metrics"),
     (
         "get",
@@ -239,6 +240,7 @@ const TAGS: &[&str] = &[
     "scores",
     "schema",
     "saved_views",
+    "sql",
     "metrics",
     "media",
 ];
@@ -422,6 +424,8 @@ fn document_lint() {
             expected_errors.extend(["400", "401", "403", "404", "413", "429"]);
         } else if *id == "get_media" {
             expected_errors.extend(["401", "403", "404", "416", "429"]);
+        } else if *id == "run_sql" {
+            expected_errors.extend(["400", "401", "403", "404", "413", "415", "422", "429"]);
         } else if READ_OPERATIONS.contains(id) {
             expected_errors.extend(["400", "401", "403", "404", "422", "429"]);
         } else if *id != "get_auth_config" && QUERY_OR_BODY.contains(id) {

@@ -48,6 +48,7 @@ use super::scores::{
     ScoreWriteResult,
 };
 use super::sessions::{SessionDetail, SessionListParams, SessionSort, SessionSummary};
+use super::sql::{SqlColumnInfo, SqlQueryRequest, SqlQueryResult};
 use super::traces::{
     SpanDetail, SpanListParams, SpanSort, SpanSummary, TraceDetail, TraceDetailParams,
     TraceListParams, TraceSort, TraceStreamParams, TraceSummary,
@@ -156,6 +157,9 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<CreateSavedView>();
     set.insert::<UpdateSavedView>();
     set.insert::<MetricsResponse>();
+    set.insert::<SqlQueryRequest>();
+    set.insert::<SqlQueryResult>();
+    set.insert::<SqlColumnInfo>();
     set.insert_page::<TraceSummary>("TracePage");
     set.insert_page::<SpanSummary>("SpanPage");
     set.insert_page::<SessionSummary>("SessionPage");
@@ -247,6 +251,7 @@ pub fn openapi() -> OpenApi {
             tag("scores", "Scores attached to spans, traces, and sessions."),
             tag("schema", "Filter and SQL catalog."),
             tag("saved_views", "Saved list views and SQL queries."),
+            tag("sql", "SQL console over the project's views."),
             tag("metrics", "Dashboard metrics."),
             tag("media", "Extracted media blobs."),
         ]))
@@ -524,6 +529,7 @@ fn paths() -> Paths {
     let paths = session_paths(paths);
     let paths = score_paths(paths);
     let paths = saved_view_paths(paths);
+    let paths = sql_paths(paths);
     media_paths(paths).build()
 }
 
@@ -1521,6 +1527,25 @@ fn score_paths(paths: PathsBuilder) -> PathsBuilder {
             format!("{PROJECT}/metrics"),
             PathItem::new(HttpMethod::Get, metrics),
         )
+}
+
+fn sql_paths(paths: PathsBuilder) -> PathsBuilder {
+    let run = operation("run_sql", "sql", "Run a SQL query")
+        .description(Some(
+            "Runs one read-only statement over the project's `spans`, `traces`, `sessions` and `scores` views (spec 05 § SQL console). `from` and `to` window `spans` and `traces` on `start_time` and `scores` on `created_at`. Without them the query reads all history. At most 10,000 rows; `truncated` says when more matched. SQL errors are `invalid_filter` on the `query` field, with a `position` when one is known.",
+        ))
+        .parameters(Some(vec![project_param()]))
+        .request_body(Some(json_body("SqlQueryRequest")))
+        .responses(responses(
+            "200",
+            json_of::<SqlQueryResult>("Columns and rows."),
+            &[400, 401, 403, 404, 413, 415, 422, 429, 503],
+        ))
+        .build();
+    paths.path(
+        format!("{PROJECT}/sql"),
+        PathItem::new(HttpMethod::Post, run),
+    )
 }
 
 fn saved_view_paths(paths: PathsBuilder) -> PathsBuilder {

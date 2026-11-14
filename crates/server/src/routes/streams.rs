@@ -364,7 +364,7 @@ async fn refresh(
     batch: &Pending,
     matched: &mut HashSet<TraceId>,
 ) -> Result<Refreshed, RefreshError> {
-    let ctx = open_query_on(storage, project, None)
+    let ctx = open_query_on(storage, project, None, None)
         .await
         .map_err(|error| match error {
             ApiError::Unavailable { .. } => RefreshError::Retry,

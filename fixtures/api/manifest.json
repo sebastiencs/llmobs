@@ -560,5 +560,13 @@
     "status": 201,
     "content_type": "application/json",
     "file": "static/signup-response.json"
+  },
+  {
+    "operation_id": "run_sql",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/sql-result.json"
   }
 ]

@@ -9,11 +9,13 @@ use llmobs_core::ids::ProjectId;
 use llmobs_core::score::Score;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::api::common::Page;
 use crate::api::metrics::MetricsResponse;
 use crate::api::schema::SchemaResponse;
 use crate::api::sessions::{SessionDetail, SessionSummary};
+use crate::api::sql::SqlQueryResult;
 use crate::api::traces::{SpanDetail, SpanSummary, TraceDetail, TraceSummary};
 use crate::api::users::{EndUserDetail, EndUserSummary};
 use crate::test_support::{EXAMPLE_PROJECT, TestApp};
@@ -140,6 +142,29 @@ async fn fetch<T: Serialize + DeserializeOwned>(
     let response = app
         .request(Method::GET, &path)
         .header("cookie", cookie)
+        .send()
+        .await;
+    assert_eq!(
+        response.status,
+        StatusCode::OK,
+        "{path}: {}",
+        String::from_utf8_lossy(&response.body)
+    );
+    response.json()
+}
+
+/// `POST` of `body` to the example project's `path`. Asserts `200` and parses the body as `T`.
+async fn post_json<T: Serialize + DeserializeOwned>(
+    app: &TestApp,
+    cookie: &str,
+    path: &str,
+    body: &Value,
+) -> T {
+    let path = format!("/api/v1/projects/{EXAMPLE_PROJECT}{path}");
+    let response = app
+        .request(Method::POST, &path)
+        .header("cookie", cookie)
+        .json(body)
         .send()
         .await;
     assert_eq!(
@@ -280,6 +305,10 @@ async fn generate() -> (BTreeMap<String, String>, Vec<Example>) {
     )
     .await;
     out.add("get_metrics", &[], &[], "responses/metrics.json", &metrics);
+
+    let request: Value = read_json(&api_dir().join("requests/sql-query.json"));
+    let sql: SqlQueryResult = post_json(&app, cookie, "/sql", &request).await;
+    out.add("run_sql", &[], &[], "static/sql-result.json", &sql);
 
     // Checked against the static files, not written.
     let schema: SchemaResponse = fetch(&app, cookie, "/schema").await;
@@ -487,6 +516,12 @@ fn on_disk_files() -> BTreeMap<String, String> {
         let text = fs::read_to_string(&manifest)
             .unwrap_or_else(|error| panic!("{}: {error}", manifest.display()));
         files.insert("manifest.json".to_owned(), text);
+    }
+    let sql_result = api_dir().join("static/sql-result.json");
+    if sql_result.is_file() {
+        let text = fs::read_to_string(&sql_result)
+            .unwrap_or_else(|error| panic!("{}: {error}", sql_result.display()));
+        files.insert("static/sql-result.json".to_owned(), text);
     }
     files
 }

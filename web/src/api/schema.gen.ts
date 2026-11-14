@@ -858,6 +858,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project}/sql": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run a SQL query
+         * @description Runs one read-only statement over the project's `spans`, `traces`, `sessions` and `scores` views (spec 05 § SQL console). `from` and `to` window `spans` and `traces` on `start_time` and `scores` on `created_at`. Without them the query reads all history. At most 10,000 rows; `truncated` says when more matched. SQL errors are `invalid_filter` on the `query` field, with a `position` when one is known.
+         */
+        post: operations["run_sql"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project}/traces": {
         parameters: {
             query?: never;
@@ -2712,6 +2732,56 @@ export interface components {
             ttft_ns?: number;
             /** @description End-user id. */
             user_id?: string;
+        };
+        /** @description One output column. */
+        SqlColumnInfo: {
+            /** @description Output column name. */
+            name: string;
+            /** @description Arrow type as DataFusion prints it, for example `Int64` or `Utf8`. */
+            type: string;
+        };
+        /**
+         * @description Body of `POST /api/v1/projects/{project}/sql`.
+         *
+         *     Spec 09 § Observability data, D-H-8.
+         */
+        SqlQueryRequest: {
+            /**
+             * Format: date-time
+             * @description Start of the time window, RFC 3339, inclusive. Give both `from` and `to`, or neither.
+             */
+            from?: string;
+            /**
+             * Format: int64
+             * @description Most rows to return as JSON, 1–10,000. Default 10,000. Checked on every request; exports do not use it.
+             */
+            limit?: number;
+            /** @description Values for the placeholders, by name. Default empty. */
+            params?: Record<string, never>;
+            /** @description One statement, with `{name:Type}` placeholders (spec 05 § Parameters). */
+            query: string;
+            /**
+             * Format: int64
+             * @description Time limit in milliseconds, 1,000–60,000. Default 60,000.
+             */
+            timeout_ms?: number;
+            /**
+             * Format: date-time
+             * @description End of the time window, RFC 3339, exclusive.
+             */
+            to?: string;
+        };
+        /** @description JSON answer of `POST …/sql` (D98). */
+        SqlQueryResult: {
+            /** @description Output columns, in order. */
+            columns: components["schemas"]["SqlColumnInfo"][];
+            /**
+             * @description One object per row, keyed by column name. Timestamps are RFC 3339 with 9 fractional
+             *     digits, binary is lowercase hex, maps are objects, NaN and infinities are null.
+             */
+            rows: Record<string, never>[];
+            /** @description More rows matched than `limit`; `rows` holds the first `limit`. */
+            truncated: boolean;
         };
         /** @description Plain text. */
         TextPart: {
@@ -7028,6 +7098,114 @@ export interface operations {
             };
             /** @description The resource does not exist. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The query took longer than its time limit or needed more memory than allowed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server is busy or a dependency is unavailable. Retry later. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    run_sql: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SqlQueryRequest"];
+            };
+        };
+        responses: {
+            /** @description Columns and rows. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SqlQueryResult"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request body is larger than the limit. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request body is not JSON. */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };
