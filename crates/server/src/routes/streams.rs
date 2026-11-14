@@ -31,7 +31,7 @@ use crate::http::AppState;
 use crate::http::access::{Access, ProjectAccess, RouteDef};
 use crate::http::error::{self, ApiError};
 use crate::live::{LiveEvent, StreamOwner, StreamSlot, StreamTiming, shut};
-use crate::routes::read::{attach_trace_scores, open_query, open_query_on};
+use crate::routes::read::{attach_trace_scores, check_search, open_query, open_query_on};
 
 /// Events the task may have queued for one client before it waits.
 const CLIENT_BUFFER: usize = 16;
@@ -182,6 +182,7 @@ async fn stream_traces(
     error::Query(params): error::Query<TraceStreamParams>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    check_search(params.search.as_deref())?;
     let slot = take_slot(&state, &principal)?;
     // Subscribed before the filter is checked, so no event is missed. Both drop on an error.
     let bus = state.live.subscribe();
@@ -1023,6 +1024,34 @@ mod tests {
             .await;
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
         assert_eq!(response.json::<Value>()["code"], "invalid_filter");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_long_search_is_refused_before_the_stream_opens() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let response = app
+            .request(
+                axum::http::Method::GET,
+                &traces_stream_path(&seeded, &format!("?search={}", "a".repeat(1025))),
+            )
+            .header("cookie", &seeded.cookie)
+            .send()
+            .await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST);
+        assert_eq!(response.json::<Value>()["code"], "bad_request");
+
+        let owner = StreamOwner::User(user_id(&app).await);
+        let mut held = Vec::new();
+        for _ in 0..100 {
+            held.push(
+                app.state
+                    .live
+                    .acquire(owner)
+                    .expect("the refused request held no slot"),
+            );
+        }
+        drop(held);
     }
 
     #[tokio::test(flavor = "multi_thread")]
