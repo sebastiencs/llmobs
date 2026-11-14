@@ -339,15 +339,17 @@ use crate::http::error::ApiError;
 
 /// The most enabled alert rules `org_id` may have; `None` means no limit.
 ///
-/// Track P (D179) replaces this body with the value of the org's resolved `Entitlements`
-/// (its maximum number of alert rules). Until then every org is unlimited, which is
+/// Track P's M4 (D179) replaces this body with
+/// `entitlements::of(state, org_id).limits.max_alert_rules`. Until then every org is unlimited, which is
 /// the self-hosted behaviour (D172).
-pub(crate) fn rule_limit(_state: &AppState, _org_id: OrgId) -> Option<i64> {
+pub(crate) fn rule_limit(_state: &AppState, _org_id: OrgId) -> Option<u64> {
     None
 }
 
 /// `Err(ApiError::PlanLimit)` when one more enabled rule would exceed `limit`.
-pub(crate) fn check_rule_quota(enabled_rules: i64, limit: Option<i64>) -> Result<(), ApiError> {
+pub(crate) fn check_rule_quota(enabled_rules: i64, limit: Option<u64>) -> Result<(), ApiError> {
+    // A count is never negative; treat a corrupt negative count as 0.
+    let enabled_rules = u64::try_from(enabled_rules).unwrap_or(0);
     match limit {
         Some(limit) if enabled_rules >= limit => Err(ApiError::PlanLimit {
             detail: format!(
@@ -360,7 +362,7 @@ pub(crate) fn check_rule_quota(enabled_rules: i64, limit: Option<i64>) -> Result
 }
 ```
 
-**Error type.** In `api/common.rs`, add to `ProblemCode` after `EmailNotVerified`:
+**Error type.** Tracks I and P use the same `403 plan_limit`; whichever track merges first adds it. If `ProblemCode::PlanLimit` and `ApiError::PlanLimit { detail: String }` already exist on `main`, use them as they are and skip this step. Otherwise, in `api/common.rs`, add to `ProblemCode` after `EmailNotVerified`:
 
 ```rust
     /// The org's plan does not allow this (D178). The detail names the limit.
@@ -384,7 +386,7 @@ and in `problem()`: `Self::PlanLimit { detail } => Problem::new(ProblemCode::Pla
 
 ```rust
 /// Refuses one more enabled rule in `org` when `limit` is reached (D-K-14).
-async fn enforce_quota(state: &AppState, org: OrgId, limit: Option<i64>) -> Result<(), ApiError> {
+async fn enforce_quota(state: &AppState, org: OrgId, limit: Option<u64>) -> Result<(), ApiError> {
     if limit.is_none() {
         return Ok(());
     }
