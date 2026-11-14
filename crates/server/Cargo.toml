@@ -53,6 +53,7 @@ opentelemetry-proto.workspace = true
 tonic.workspace = true
 futures.workspace = true
 hex.workspace = true
+rmcp.workspace = true
 
 [dev-dependencies]
 datafusion.workspace = true

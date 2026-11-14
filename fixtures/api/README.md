@@ -7,13 +7,14 @@ Synthetic data for UI mocks, the OpenAPI examples, and later storage and API tes
 | Path | Written by |
 |---|---|
 | `dataset/spans.json`, `dataset/scores.json` | hand |
-| `static/*.json` | hand |
+| `static/*.json` | hand, except `static/sql-result.json` |
 | `media/<sha256>.png` | hand |
 | `responses/` | `just api-examples`: the real read handlers over `dataset/` |
 | `manifest.json` | `just api-examples` |
+| `static/sql-result.json` | `just api-examples`: the real `run_sql` handler's answer to `requests/sql-query.json` |
 | `requests/*.json` | hand | example request bodies, checked against their types and `openapi.json` |
 
-Do not edit `responses/` or `manifest.json` by hand. Regenerate them with `just api-examples`.
+Do not edit `responses/`, `manifest.json` or `static/sql-result.json` by hand. Regenerate them with `just api-examples`.
 
 `get_schema` is checked against `static/schema.json`, which A2's catalog test also reads. `get_metrics` is generated over `[2026-01-01T10:00:00Z, 11:00:00Z)` with `bucket=10m`. Its manifest query is empty, so the mocks serve it for any range.
 

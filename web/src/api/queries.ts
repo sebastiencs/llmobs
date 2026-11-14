@@ -323,3 +323,13 @@ export function savedViewsQuery(org: string, project: string, kind: Schema<"Save
     },
   });
 }
+
+/** Saved SQL queries, all in one page (D-H-13: 1,000 is the per-owner cap). */
+export function savedQueriesQuery(org: string, project: string) {
+  return $api.queryOptions("get", "/api/v1/projects/{project}/saved-views", {
+    params: {
+      path: { project: projectRef(org, project) },
+      query: { kind: "sql", limit: 1000 },
+    },
+  });
+}

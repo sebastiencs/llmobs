@@ -54,6 +54,25 @@ pub(crate) enum Access {
         /// The scope the key must hold.
         scope: KeyScope,
     },
+    /// A personal access token, read or read-write; sessions and API keys get 403.
+    /// No `{org}` or `{project}` in the path: the handler resolves projects itself (D-H-3).
+    Pat,
+}
+
+impl Access {
+    /// Whether this request is a read made with POST: a read-only PAT and a `read` key may
+    /// call it (D-H-4). Only POST counts; PUT, PATCH and DELETE on the same route stay writes.
+    /// `Pat` is `/mcp`, where every tool reads.
+    pub(crate) fn reads_by_post(self, method: &axum::http::Method) -> bool {
+        *method == axum::http::Method::POST
+            && matches!(
+                self,
+                Self::Project {
+                    perm: ProjectPerm::Query,
+                    ..
+                } | Self::Pat
+            )
+    }
 }
 
 /// One row of the route table.
@@ -122,10 +141,13 @@ pub(crate) fn routes() -> Vec<RouteDef> {
     routes.extend(crate::routes::users::routes());
     routes.extend(crate::routes::scores::routes());
     routes.extend(crate::routes::feedback::routes());
+    routes.extend(crate::routes::saved_views::routes());
+    routes.extend(crate::routes::sql::routes());
     routes.extend(crate::routes::schema::routes());
     routes.extend(crate::routes::metrics::routes());
     routes.extend(crate::routes::media::routes());
     routes.extend(crate::routes::otlp::routes());
+    routes.extend(crate::mcp::routes());
     routes
 }
 
@@ -204,12 +226,14 @@ async fn prepare(state: AppState, access: Access, request: Request) -> Result<Re
         return Err(ApiError::Unauthorized);
     };
     // A read PAT cannot call a write method. That is the token's scope, so it
-    // is 403 even when the resource would be 404.
+    // is 403 even when the resource would be 404. A POST that reads
+    // (Access::reads_by_post) is not a write.
     if let Principal::Pat { write: false, .. } = &principal
         && !matches!(
             parts.method,
             axum::http::Method::GET | axum::http::Method::HEAD
         )
+        && !access.reads_by_post(&parts.method)
     {
         return Err(forbidden());
     }
@@ -254,6 +278,11 @@ async fn prepare(state: AppState, access: Access, request: Request) -> Result<Re
                 return Err(forbidden());
             }
             grant_key_only_project(&state, &mut parts, *project_id).await?;
+        }
+        Access::Pat => {
+            if !matches!(principal, Principal::Pat { .. }) {
+                return Err(forbidden());
+            }
         }
     }
     parts.extensions.insert(principal);
@@ -370,13 +399,20 @@ async fn key_owns_project(
     }
 }
 
-async fn grant_session_project(
+/// The project `key` names, as `user` reaches it with `perm` (D138). `key` is a project UUID
+/// or `org-slug/project-slug`. 404 when the project or its org is missing or not active, when
+/// the user is not in the org, when an override hides it, and for `current` (a key's project);
+/// 403 when the effective role is below `perm.min_role()`.
+///
+/// # Errors
+///
+/// [`ApiError::NotFound`], [`ApiError::Forbidden`], or a `meta.db` failure.
+pub(crate) async fn user_project(
     state: &AppState,
-    parts: &mut Parts,
     user: &crate::auth::principal::AuthUser,
     key: &str,
     perm: ProjectPerm,
-) -> Result<(), ApiError> {
+) -> Result<ProjectAccess, ApiError> {
     if key == "current" {
         return Err(ApiError::NotFound);
     }
@@ -400,10 +436,21 @@ async fn grant_session_project(
     if role < perm.min_role() {
         return Err(forbidden());
     }
-    parts.extensions.insert(ProjectAccess {
+    Ok(ProjectAccess {
         project,
         role: Some(role),
-    });
+    })
+}
+
+async fn grant_session_project(
+    state: &AppState,
+    parts: &mut Parts,
+    user: &crate::auth::principal::AuthUser,
+    key: &str,
+    perm: ProjectPerm,
+) -> Result<(), ApiError> {
+    let access = user_project(state, user, key, perm).await?;
+    parts.extensions.insert(access);
     Ok(())
 }
 
@@ -421,11 +468,13 @@ async fn grant_key_project(
     if !scopes.contains(scope) {
         return Err(forbidden());
     }
+    let reads_by_post = perm == ProjectPerm::Query && parts.method == axum::http::Method::POST;
     if scope == KeyScope::Read
         && !matches!(
             parts.method,
             axum::http::Method::GET | axum::http::Method::HEAD
         )
+        && !reads_by_post
     {
         return Err(forbidden());
     }
@@ -523,7 +572,7 @@ mod tests {
     use axum::Json;
     use axum::extract::Extension;
     use axum::http::{Method, StatusCode};
-    use axum::routing::{get, post};
+    use axum::routing::{delete, get, patch, post, put};
     use serde_json::{Value, json};
     use utoipa::openapi::security::SecurityRequirement;
 
@@ -531,6 +580,7 @@ mod tests {
     use crate::auth::roles::{ProjectOverride, org_role_str};
     use crate::auth::secret::{self, KeyKind};
     use crate::auth::session::start_session;
+    use crate::meta::api_keys::{self, NewApiKey};
     use crate::meta::members::{add_org_member, set_project_override};
     use crate::meta::orgs::insert_org;
     use crate::meta::personal_tokens::{self, NewToken};
@@ -1097,6 +1147,402 @@ mod tests {
         assert_outcome(&used, StatusCode::NOT_FOUND, "denied-404", "used key");
     }
 
+    #[tokio::test]
+    async fn a_query_route_admits_read_credentials_on_post() {
+        let app = TestApp::with_route_table(vec![
+            route(
+                Method::POST,
+                "/t/projects/{project}/query",
+                Access::Project {
+                    perm: ProjectPerm::Query,
+                    session_only: false,
+                },
+                post(echo_project),
+            ),
+            route(
+                Method::PATCH,
+                "/t/projects/{project}/query",
+                Access::Project {
+                    perm: ProjectPerm::Query,
+                    session_only: false,
+                },
+                patch(echo_project),
+            ),
+            route(
+                Method::PUT,
+                "/t/projects/{project}/query",
+                Access::Project {
+                    perm: ProjectPerm::Query,
+                    session_only: false,
+                },
+                put(echo_project),
+            ),
+            route(
+                Method::DELETE,
+                "/t/projects/{project}/query",
+                Access::Project {
+                    perm: ProjectPerm::Query,
+                    session_only: false,
+                },
+                delete(echo_project),
+            ),
+            route(
+                Method::POST,
+                "/t/projects/{project}/view",
+                Access::Project {
+                    perm: ProjectPerm::View,
+                    session_only: false,
+                },
+                post(echo_project),
+            ),
+        ])
+        .await;
+        let seeded = app.seed().await;
+        let read_pat = personal_token(&app, "ada@example.com", vec![KeyScope::Read]).await;
+        let write_pat = personal_token(
+            &app,
+            "ada@example.com",
+            vec![KeyScope::Read, KeyScope::Write],
+        )
+        .await;
+        let (_other, other_key) = app.add_project(&seeded, "other-bot", None).await;
+        let now = app.state.clock.now_ns();
+        let ada_id = users::user_by_email(app.state.meta.reader(), "ada@example.com")
+            .await
+            .unwrap()
+            .expect("seeded user exists")
+            .id;
+        let minted = secret::new_key(KeyKind::Secret).unwrap();
+        let write_only = minted.plaintext.clone();
+        let (prefix, hash) = (minted.prefix, minted.hash);
+        let project_id = seeded.project.id;
+        app.state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    api_keys::insert_api_key(
+                        conn,
+                        NewApiKey {
+                            project_id,
+                            kind: "secret",
+                            scopes: vec![KeyScope::Write],
+                            name: None,
+                            prefix,
+                            hash,
+                            created_by: ada_id,
+                            expires_at: None,
+                        },
+                        now,
+                    )
+                    .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
+        let org_id = seeded.org_id;
+        let viewer_id = app
+            .state
+            .meta
+            .write(move |conn| {
+                Box::pin(async move {
+                    let viewer = insert_user(conn, user("viewer@example.com", false), now).await?;
+                    add_org_member(conn, org_id, viewer.id, OrgRole::Viewer, now).await?;
+                    Ok(viewer.id)
+                })
+            })
+            .await
+            .unwrap();
+        let viewer = cookie(&app, viewer_id).await.0;
+
+        let query = format!("/t/projects/{}/query", seeded.project.id);
+        let view = format!("/t/projects/{}/view", seeded.project.id);
+        let missing = "/t/projects/01900000-0000-7000-8000-000000009999/query";
+        let current = "/t/projects/current/query";
+        let ada = seeded.cookie.as_str();
+        let read_pat = read_pat.as_str();
+        let write_pat = write_pat.as_str();
+        let read_key = seeded.read_key.as_str();
+        let ingest_key = seeded.ingest_key.as_str();
+        let write_only = write_only.as_str();
+        let other_key = other_key.as_str();
+        let as_ada = json!({"org": null, "project": "support-bot", "role": "admin"});
+        let as_viewer = json!({"org": null, "project": "support-bot", "role": "viewer"});
+        let as_key = json!({"org": null, "project": "support-bot", "role": null});
+        let none = Value::Null;
+
+        // (case, method, path, cookie, bearer, status, marker, expected body or null).
+        type Case<'a> = (
+            &'a str,
+            Method,
+            &'a str,
+            Option<&'a str>,
+            Option<&'a str>,
+            StatusCode,
+            &'a str,
+            Value,
+        );
+        let cases: Vec<Case<'_>> = vec![
+            (
+                "anonymous query",
+                Method::POST,
+                query.as_str(),
+                None,
+                None,
+                StatusCode::UNAUTHORIZED,
+                "denied-401",
+                none.clone(),
+            ),
+            (
+                "session query",
+                Method::POST,
+                query.as_str(),
+                Some(ada),
+                None,
+                StatusCode::OK,
+                "allowed",
+                as_ada.clone(),
+            ),
+            (
+                "viewer session query",
+                Method::POST,
+                query.as_str(),
+                Some(viewer.as_str()),
+                None,
+                StatusCode::OK,
+                "allowed",
+                as_viewer,
+            ),
+            (
+                "read pat query",
+                Method::POST,
+                query.as_str(),
+                None,
+                Some(read_pat),
+                StatusCode::OK,
+                "allowed",
+                as_ada.clone(),
+            ),
+            (
+                "write pat query",
+                Method::POST,
+                query.as_str(),
+                None,
+                Some(write_pat),
+                StatusCode::OK,
+                "allowed",
+                as_ada.clone(),
+            ),
+            (
+                "read pat patch",
+                Method::PATCH,
+                query.as_str(),
+                None,
+                Some(read_pat),
+                StatusCode::FORBIDDEN,
+                "denied-403",
+                none.clone(),
+            ),
+            (
+                "read pat put",
+                Method::PUT,
+                query.as_str(),
+                None,
+                Some(read_pat),
+                StatusCode::FORBIDDEN,
+                "denied-403",
+                none.clone(),
+            ),
+            (
+                "read pat delete",
+                Method::DELETE,
+                query.as_str(),
+                None,
+                Some(read_pat),
+                StatusCode::FORBIDDEN,
+                "denied-403",
+                none.clone(),
+            ),
+            (
+                "write pat patch",
+                Method::PATCH,
+                query.as_str(),
+                None,
+                Some(write_pat),
+                StatusCode::OK,
+                "allowed",
+                as_ada.clone(),
+            ),
+            (
+                "read pat view",
+                Method::POST,
+                view.as_str(),
+                None,
+                Some(read_pat),
+                StatusCode::FORBIDDEN,
+                "denied-403",
+                none.clone(),
+            ),
+            (
+                "read pat missing project",
+                Method::POST,
+                missing,
+                None,
+                Some(read_pat),
+                StatusCode::NOT_FOUND,
+                "denied-404",
+                none.clone(),
+            ),
+            (
+                "session current",
+                Method::POST,
+                current,
+                Some(ada),
+                None,
+                StatusCode::NOT_FOUND,
+                "denied-404",
+                none.clone(),
+            ),
+            (
+                "pat current",
+                Method::POST,
+                current,
+                None,
+                Some(read_pat),
+                StatusCode::NOT_FOUND,
+                "denied-404",
+                none.clone(),
+            ),
+            (
+                "read key query",
+                Method::POST,
+                query.as_str(),
+                None,
+                Some(read_key),
+                StatusCode::OK,
+                "allowed",
+                as_key.clone(),
+            ),
+            (
+                "read key current",
+                Method::POST,
+                current,
+                None,
+                Some(read_key),
+                StatusCode::OK,
+                "allowed",
+                as_key.clone(),
+            ),
+            (
+                "read key patch",
+                Method::PATCH,
+                query.as_str(),
+                None,
+                Some(read_key),
+                StatusCode::FORBIDDEN,
+                "denied-403",
+                none.clone(),
+            ),
+            (
+                "read key put",
+                Method::PUT,
+                query.as_str(),
+                None,
+                Some(read_key),
+                StatusCode::FORBIDDEN,
+                "denied-403",
+                none.clone(),
+            ),
+            (
+                "read key delete",
+                Method::DELETE,
+                query.as_str(),
+                None,
+                Some(read_key),
+                StatusCode::FORBIDDEN,
+                "denied-403",
+                none.clone(),
+            ),
+            (
+                "read key view",
+                Method::POST,
+                view.as_str(),
+                None,
+                Some(read_key),
+                StatusCode::FORBIDDEN,
+                "denied-403",
+                none.clone(),
+            ),
+            (
+                "ingest key query",
+                Method::POST,
+                query.as_str(),
+                None,
+                Some(ingest_key),
+                StatusCode::FORBIDDEN,
+                "denied-403",
+                none.clone(),
+            ),
+            (
+                "write-only key query",
+                Method::POST,
+                query.as_str(),
+                None,
+                Some(write_only),
+                StatusCode::FORBIDDEN,
+                "denied-403",
+                none.clone(),
+            ),
+            (
+                "other project key",
+                Method::POST,
+                query.as_str(),
+                None,
+                Some(other_key),
+                StatusCode::NOT_FOUND,
+                "denied-404",
+                none.clone(),
+            ),
+        ];
+        for (case, method, path, cookie, bearer, status, marker, body) in cases {
+            let mut request = app.request(method, path).json(&json!({}));
+            if let Some(cookie) = cookie {
+                request = request.header("cookie", cookie);
+            }
+            if let Some(bearer) = bearer {
+                request = request.header("authorization", &format!("Bearer {bearer}"));
+            }
+            let response = request.send().await;
+            assert_outcome(&response, status, marker, case);
+            if body != Value::Null {
+                assert_eq!(response.json::<Value>(), body, "{case}");
+            }
+        }
+    }
+
+    #[test]
+    fn reads_by_post_needs_post_and_query() {
+        let query = Access::Project {
+            perm: ProjectPerm::Query,
+            session_only: false,
+        };
+        assert!(query.reads_by_post(&Method::POST));
+        for method in [Method::PATCH, Method::PUT, Method::DELETE] {
+            assert!(!query.reads_by_post(&method), "{method}");
+        }
+        let view = Access::Project {
+            perm: ProjectPerm::View,
+            session_only: false,
+        };
+        assert!(!view.reads_by_post(&Method::POST));
+        assert!(
+            !Access::User {
+                session_only: false
+            }
+            .reads_by_post(&Method::POST)
+        );
+    }
+
     #[test]
     fn route_table_matches_parameters_and_openapi_security() {
         let document = crate::api::openapi::openapi();
@@ -1158,7 +1604,8 @@ mod tests {
                 | Access::Project {
                     session_only: false,
                     ..
-                } => None,
+                }
+                | Access::Pat => None,
             };
             assert!(
                 operation.security == expected,

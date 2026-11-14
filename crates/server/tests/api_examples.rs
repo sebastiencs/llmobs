@@ -26,6 +26,7 @@ use llmobs_server::api::saved_views::SavedView;
 use llmobs_server::api::schema::SchemaResponse;
 use llmobs_server::api::scores::{FeedbackRequest, ScoreBatch};
 use llmobs_server::api::sessions::{SessionDetail, SessionSummary};
+use llmobs_server::api::sql::{SqlQueryRequest, SqlQueryResult};
 use llmobs_server::api::traces::{SpanDetail, SpanSummary, TraceDetail, TraceSummary};
 use llmobs_server::api::users::{EndUserDetail, EndUserSummary};
 use serde::de::DeserializeOwned;
@@ -372,12 +373,14 @@ fn static_files_match_their_types() {
     roundtrip::<CreatedPersonalToken>("static/personal-token-created.json");
     roundtrip::<SchemaResponse>("static/schema.json");
     roundtrip::<Page<SavedView>>("static/saved-views.json");
+    roundtrip::<SqlQueryResult>("static/sql-result.json");
 }
 
 #[test]
 fn request_examples_match_their_types_and_the_openapi_document() {
     roundtrip::<ScoreBatch>("requests/score-batch.json");
     roundtrip::<FeedbackRequest>("requests/feedback.json");
+    roundtrip::<SqlQueryRequest>("requests/sql-query.json");
     let document = read_json::<Value>(&contract_document());
     let registry = jsonschema::Registry::new()
         .add(OPENAPI_URI, document.clone())
@@ -387,6 +390,7 @@ fn request_examples_match_their_types_and_the_openapi_document() {
     let requests = [
         ("create_key_scores", "requests/score-batch.json"),
         ("post_feedback", "requests/feedback.json"),
+        ("run_sql", "requests/sql-query.json"),
     ];
     let mut failures = Vec::new();
     for (operation_id, file) in requests {
@@ -452,6 +456,7 @@ fn generated_files_roundtrip() {
             "list_personal_tokens" => roundtrip::<Page<PersonalToken>>(&example.file),
             "post_personal_token" => roundtrip::<CreatedPersonalToken>(&example.file),
             "get_metrics" => roundtrip::<MetricsResponse>(&example.file),
+            "run_sql" => roundtrip::<SqlQueryResult>(&example.file),
             "get_auth_config"
             | "get_me"
             | "list_orgs"

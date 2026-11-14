@@ -62,6 +62,31 @@ async fn plan_tokens(
     text: &str,
     tokens: Vec<TokenWithSpan>,
 ) -> Result<LogicalPlan, InvalidQuery> {
+    // The parser holds `Rc` state, so it must be gone before the first `.await`:
+    // the console futures must be `Send` to run in an axum handler.
+    let statement = parse_statement(ctx, text, tokens)?;
+    let plan = ctx
+        .session()
+        .state()
+        .statement_to_plan(DFStatement::Statement(Box::new(statement)))
+        .await
+        .map_err(|error| planning_failure(&error))?;
+    SQLOptions::new()
+        .with_allow_ddl(false)
+        .with_allow_dml(false)
+        .with_allow_statements(false)
+        .verify_plan(&plan)
+        .map_err(|_| invalid("only SELECT queries are allowed", None))?;
+    unique_names(&plan)?;
+    Ok(plan)
+}
+
+/// Parse exactly one statement from `tokens` and check it against the sandbox.
+fn parse_statement(
+    ctx: &QueryContext,
+    text: &str,
+    tokens: Vec<TokenWithSpan>,
+) -> Result<datafusion::sql::sqlparser::ast::Statement, InvalidQuery> {
     if let Some(pipe) = tokens
         .iter()
         .find(|token| token.token == Token::VerticalBarRightAngleBracket)
@@ -95,20 +120,7 @@ async fn plan_tokens(
         text,
         Some(position(start.span.start.line, start.span.start.column)),
     )?;
-    let plan = ctx
-        .session()
-        .state()
-        .statement_to_plan(DFStatement::Statement(Box::new(statement)))
-        .await
-        .map_err(|error| planning_failure(&error))?;
-    SQLOptions::new()
-        .with_allow_ddl(false)
-        .with_allow_dml(false)
-        .with_allow_statements(false)
-        .verify_plan(&plan)
-        .map_err(|_| invalid("only SELECT queries are allowed", None))?;
-    unique_names(&plan)?;
-    Ok(plan)
+    Ok(statement)
 }
 
 fn unique_names(plan: &LogicalPlan) -> Result<(), InvalidQuery> {
@@ -153,6 +165,30 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::datasource::memory::MemTable;
+
+    fn assert_send<T: Send>(_: &T) {}
+
+    /// The console entry points run inside axum handlers, so their futures must be `Send`.
+    #[test]
+    fn console_futures_are_send() {
+        let ctx = context();
+        let params = Map::new();
+        let request = SqlRequest {
+            query: "SELECT 1",
+            params: &params,
+            limit: 1,
+            timeout: std::time::Duration::from_secs(1),
+        };
+        assert_send(&plan_sql(&ctx, "SELECT 1"));
+        assert_send(&ctx.sql_json(request));
+        let request = SqlRequest {
+            query: "SELECT 1",
+            params: &params,
+            limit: 1,
+            timeout: std::time::Duration::from_secs(1),
+        };
+        assert_send(&ctx.sql_export(request, ExportFormat::Csv));
+    }
 
     const TABLES: &str =
         "the query reads more than 32 tables (each INTERSECT or EXCEPT counts as one)";
