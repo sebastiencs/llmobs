@@ -21,6 +21,55 @@ CREATE TABLE api_keys (
 index api_keys_project
 CREATE INDEX api_keys_project ON api_keys(project_id)
 
+table deletion_projects
+CREATE TABLE deletion_projects (
+    deletion_id TEXT NOT NULL REFERENCES deletions(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL,
+    PRIMARY KEY (deletion_id, project_id)
+)
+
+table deletion_sessions
+CREATE TABLE deletion_sessions (
+    deletion_id TEXT NOT NULL REFERENCES deletions(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL,
+    PRIMARY KEY (deletion_id, session_id)
+)
+
+table deletion_traces
+CREATE TABLE deletion_traces (
+    deletion_id TEXT NOT NULL REFERENCES deletions(id) ON DELETE CASCADE,
+    trace_id BLOB NOT NULL,
+    PRIMARY KEY (deletion_id, trace_id)
+)
+
+table deletions
+CREATE TABLE deletions (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    project_id TEXT,
+    kind TEXT NOT NULL,
+    user_id TEXT,
+    request TEXT NOT NULL,
+    requested_by_kind TEXT NOT NULL,
+    requested_by TEXT NOT NULL,
+    status TEXT NOT NULL,
+    trace_count INTEGER,
+    session_count INTEGER,
+    created_at INTEGER NOT NULL,
+    handed_over_at INTEGER,
+    applied_at INTEGER,
+    error TEXT
+)
+
+index deletions_open
+CREATE INDEX deletions_open ON deletions(created_at, id) WHERE status IN ('resolving', 'pending')
+
+index deletions_org
+CREATE INDEX deletions_org ON deletions(org_id, created_at, id)
+
+index deletions_project
+CREATE INDEX deletions_project ON deletions(project_id, created_at, id)
+
 table email_verifications
 CREATE TABLE email_verifications (
     token_hash TEXT PRIMARY KEY,
@@ -195,6 +244,14 @@ index sqlite_autoindex__sqlx_migrations_1
 index sqlite_autoindex_api_keys_1
 
 index sqlite_autoindex_api_keys_2
+
+index sqlite_autoindex_deletion_projects_1
+
+index sqlite_autoindex_deletion_sessions_1
+
+index sqlite_autoindex_deletion_traces_1
+
+index sqlite_autoindex_deletions_1
 
 index sqlite_autoindex_email_verifications_1
 

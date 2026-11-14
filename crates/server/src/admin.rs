@@ -521,13 +521,16 @@ mod tests {
     async fn schema_mismatch_names_the_versions() {
         let (_dir, config) = ready_config().await;
         let db = MetaDb::open(&config.data_dir).await.unwrap();
-        db.write(|connection| {
+        let expected = crate::meta::expected_version();
+        let future = expected + 1;
+        db.write(move |connection| {
             Box::pin(async move {
                 sqlx::query(
                     "INSERT INTO _sqlx_migrations \
                      (version, description, success, checksum, execution_time) \
-                     VALUES (5, 'future', 1, ?, 0)",
+                     VALUES (?, 'future', 1, ?, 0)",
                 )
+                .bind(future)
                 .bind(Vec::<u8>::new())
                 .execute(&mut *connection)
                 .await?;
@@ -538,7 +541,10 @@ mod tests {
         .unwrap();
         db.close().await;
         let error = list_users(&config).await.unwrap_err();
-        assert_eq!(error.to_string(), "this binary expects schema 4, found 5");
+        assert_eq!(
+            error.to_string(),
+            format!("this binary expects schema {expected}, found {future}")
+        );
     }
 
     #[tokio::test]

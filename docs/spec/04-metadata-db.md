@@ -157,29 +157,44 @@ The storage catalog (data files, WAL checkpoints, media) is in `catalog.db` (03 
 CREATE TABLE deletions (
     id TEXT PRIMARY KEY,
     org_id TEXT NOT NULL,
-    project_id TEXT,                    -- NULL for kind 'org'
-    kind TEXT NOT NULL,                 -- 'trace_ids' | 'filter' | 'user' | 'project' | 'org'
-    user_id TEXT,                       -- kind 'user'
-    request TEXT NOT NULL,              -- JSON: the filter selection, or the dropped project/org name and slug
-    requested_by_kind TEXT NOT NULL,    -- 'user' | 'api_key'
-    requested_by TEXT NOT NULL,         -- users.id or api_keys.id
-    status TEXT NOT NULL,               -- 'resolving' | 'pending' | 'applied' | 'failed'
-    trace_count INTEGER,                -- NULL until the scope is stored
+    project_id TEXT,
+    kind TEXT NOT NULL,
+    user_id TEXT,
+    request TEXT NOT NULL,
+    requested_by_kind TEXT NOT NULL,
+    requested_by TEXT NOT NULL,
+    status TEXT NOT NULL,
+    trace_count INTEGER,
     session_count INTEGER,
-    created_at INTEGER NOT NULL,        -- cut-off
-    handed_over_at INTEGER,             -- set once storage has registered it
+    created_at INTEGER NOT NULL,
+    handed_over_at INTEGER,
     applied_at INTEGER,
-    error TEXT                          -- 'too_many_traces' | 'resolution_failed'
+    error TEXT
 );
+
 CREATE INDEX deletions_project ON deletions(project_id, created_at, id);
+
 CREATE INDEX deletions_org ON deletions(org_id, created_at, id);
+
 CREATE INDEX deletions_open ON deletions(created_at, id) WHERE status IN ('resolving', 'pending');
-CREATE TABLE deletion_traces (deletion_id TEXT NOT NULL REFERENCES deletions(id) ON DELETE CASCADE,
-                              trace_id BLOB NOT NULL, PRIMARY KEY (deletion_id, trace_id));
-CREATE TABLE deletion_sessions (deletion_id TEXT NOT NULL REFERENCES deletions(id) ON DELETE CASCADE,
-                                session_id TEXT NOT NULL, PRIMARY KEY (deletion_id, session_id));
-CREATE TABLE deletion_projects (deletion_id TEXT NOT NULL REFERENCES deletions(id) ON DELETE CASCADE,
-                                project_id TEXT NOT NULL, PRIMARY KEY (deletion_id, project_id));
+
+CREATE TABLE deletion_traces (
+    deletion_id TEXT NOT NULL REFERENCES deletions(id) ON DELETE CASCADE,
+    trace_id BLOB NOT NULL,
+    PRIMARY KEY (deletion_id, trace_id)
+);
+
+CREATE TABLE deletion_sessions (
+    deletion_id TEXT NOT NULL REFERENCES deletions(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL,
+    PRIMARY KEY (deletion_id, session_id)
+);
+
+CREATE TABLE deletion_projects (
+    deletion_id TEXT NOT NULL REFERENCES deletions(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL,
+    PRIMARY KEY (deletion_id, project_id)
+);
 ```
 
 ## Pricing
