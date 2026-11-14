@@ -1,4 +1,4 @@
-Status: planned on 2026-11-14; K1–K11 not started
+Status: planned on 2026-11-14; K1–K12 not started
 
 # K · Alerts
 
@@ -6,17 +6,21 @@ Track K of Wave 2 adds alerting (spec 07, D28): per-project rules over four metr
 
 There is no design doc. The pieces exist: A2's query layer (filter DSL, exclusions, `QueryContext`), D's mailer, E's SSRF-guarded egress client and webhook signature, G's server wiring, I's sealed columns, and L's settings layout. The design below fits in this README. The user settled the product choices on 2026-11-14 (§ Decisions).
 
-The plan has 11 sub-phases, **K1–K11**, one file each. Each sub-phase is one commit, done in order by one agent working alone. The implementer is GLM; nothing in a phase file may need a guess. A sub-phase ends with `just check` green.
+The plan has 12 sub-phases, **K1–K12**, one file each. Each sub-phase is one commit, done in order by one agent working alone. The implementer is GLM; nothing in a phase file may need a guess. A sub-phase ends with `just check` green.
+
+Alerts are core (MIT), not `ee/` code: the Free plan includes one alert rule (D172, D178, D-K-15).
 
 ## Prerequisite
 
-**Track I's M1 must be merged into `main` before K4 starts** (`docs/plans/i-online-eval/01-m1-secrets-connections.md`). K uses what M1 adds:
+**Track I's M1** (`docs/plans/i-online-eval/01-m1-secrets-connections.md`) is merged on `main`. K uses what it added:
 - `crates/server/src/crypto.rs`: `SecretBox` (`seal`, `open`), `Aad { table, column, row_id }`, `CryptoError`, and `ENCRYPTED_COLUMNS` with its test `encrypted_columns_cover_the_schema`;
 - `AppInner.secrets: crate::crypto::SecretBox`;
 - the `llmobs-eval` dependency in `crates/server/Cargo.toml`, and `config.security.allow_private_network_egress`;
 - `crate::test_support::TestApp::with_config`.
 
-K1, K2 and K3 do not need it. K4 starts by checking that `crates/server/src/crypto.rs` has `pub(crate) struct SecretBox` and `pub(crate) const ENCRYPTED_COLUMNS`, and stops otherwise.
+- `AppInner.eval_runner: Arc<llmobs_eval::EvalRunner>`, built from that policy (also in `TestApp`).
+
+K4 still checks that `crates/server/src/crypto.rs` has `pub(crate) struct SecretBox` and `pub(crate) const ENCRYPTED_COLUMNS`, and stops otherwise.
 
 ## Read first, for every sub-phase
 
@@ -30,17 +34,18 @@ K1, K2 and K3 do not need it. K4 starts by checking that `crates/server/src/cryp
 
 | File | Sub-phase |
 |---|---|
-| [01-storage-read.md](01-storage-read.md) | K1 `alert_value`: one storage read per evaluation |
+| [01-storage-read.md](01-storage-read.md) | K1 `alert_value` and `check_alert_filter`: one storage read per evaluation |
 | [02-egress.md](02-egress.md) | K2 public egress client and payload signature in `llmobs-eval` |
-| [03-store.md](03-store.md) | K3 migration, `meta::alerts` store, `ProjectPerm::ManageAlerts`, sealed channel config |
-| [04-channels-api.md](04-channels-api.md) | K4 channel routes, OpenAPI, fixtures |
-| [05-rules-api.md](05-rules-api.md) | K5 rule routes, event history route, OpenAPI, fixtures |
-| [06-evaluate.md](06-evaluate.md) | K6 the evaluation step and the state machine (manual clock) |
-| [07-deliver.md](07-deliver.md) | K7 messages, delivery with retries, test send, pruning |
-| [08-wiring.md](08-wiring.md) | K8 background loops in `llmobs serve`, end-to-end test |
-| [09-web-channels.md](09-web-channels.md) | K9 API helpers and the Channels settings page |
-| [10-web-alerts.md](10-web-alerts.md) | K10 Alerts nav entry, rules list, rule detail with history |
-| [11-web-editor.md](11-web-editor.md) | K11 rule editor with the preview chart, dev write mocks, closeout |
+| [03-types.md](03-types.md) | K3 condition and channel config types, with validation |
+| [04-store.md](04-store.md) | K4 migration, `meta::alerts` store, `ProjectPerm::ManageAlerts`, sealed channel config |
+| [05-channels-api.md](05-channels-api.md) | K5 channel routes, OpenAPI, fixtures |
+| [06-rules-api.md](06-rules-api.md) | K6 rule routes, event history, the plan limit check, OpenAPI, fixtures |
+| [07-evaluate.md](07-evaluate.md) | K7 the evaluation step and the state machine (manual clock) |
+| [08-deliver.md](08-deliver.md) | K8 messages, delivery with retries, test send, pruning |
+| [09-wiring.md](09-wiring.md) | K9 background loops in `llmobs serve`, end-to-end test |
+| [10-web-channels.md](10-web-channels.md) | K10 API helpers and the Channels settings page |
+| [11-web-alerts.md](11-web-alerts.md) | K11 Alerts nav entry, rules list, rule detail with history |
+| [12-web-editor.md](12-web-editor.md) | K12 rule editor with the preview chart, dev write mocks, closeout |
 
 ## Design
 
@@ -67,13 +72,13 @@ every 60 s: evaluate_once(state, now)
           or last_evaluated_at + interval(window) − 5 s ≤ now
   for each rule (at most 4 at a time):
      window = [now − window, now)
-     storage::alert_value(ctx, AlertValueRequest{measure, window, filter}) → {count, value}
+     storage::alert_value(ctx, AlertValueRequest{measure, window, filter, timeout: 30 s}) → {count, value}
      step(rule state, outcome, now) → new state + optional event   (pure function)
      one meta.write: UPDATE alert_rules … WHERE id = ? AND updated_at = <read value>,
                      INSERT alert_events, INSERT notification_deliveries (one per channel)
 ```
 
-`interval(window)` is 60 s for windows up to 15 minutes, 300 s otherwise. The state machine is in § Decisions, D-K-4.
+`interval(window)` is 60 s for windows up to 15 minutes, 300 s otherwise. Only enabled rules of active projects in active orgs are due. The state machine is in § Decisions, D-K-4. The query goes through the normal query layer (`Storage::query` and `QueryContext`), so the plan's data-access window that track P will enforce there (D175) applies to alerts with no K code (D-K-16).
 
 ### Delivery (D-K-7, D-K-8)
 
@@ -92,28 +97,31 @@ Slack and the webhook go through `llmobs_eval::EgressClient` (K2, lent by `state
 ### Modules (end state)
 
 ```
-crates/storage/src/reads/alerts.rs     AlertMeasure, AlertValueRequest, AlertValue, alert_value (K1)
+crates/storage/src/reads/alerts.rs     AlertMeasure, AlertValueRequest, AlertValue, alert_value, check_alert_filter (K1)
 crates/eval/src/egress.rs              EgressClient, EgressRequest, EgressResponse made public (K2)
 crates/eval/src/webhook.rs             sign_payload, SIGNATURE_HEADER made public (K2)
-crates/server/migrations/meta/NNNN_alerts.sql                                              (K3)
-crates/server/src/meta/alerts.rs       rows, inserts, updates, lists for the 5 tables (K3, K6, K7)
-crates/server/src/api/alerts.rs        request and response types (K4, K5)
-crates/server/src/routes/channels.rs   channel CRUD and test send (K4, K7)
-crates/server/src/routes/alert_rules.rs  rule CRUD and events (K5)
-crates/server/src/alerts/mod.rs        AlertTiming, spawn_loops (K6, K8)
-crates/server/src/alerts/channel.rs    ChannelConfig: validate, seal, open, target_hint (K3)
-crates/server/src/alerts/evaluate.rs   step (pure), evaluate_once (K6)
-crates/server/src/alerts/message.rs    Slack, webhook and email bodies, links (K7)
-crates/server/src/alerts/deliver.rs    deliver_once, send_one, prune_once (K7)
-crates/server/src/email/templates/alert.{txt,html}                                        (K7)
-web/src/routes/$org/$project/alerts/{index,new,$ruleId/index,$ruleId/edit}.tsx       (K10, K11)
-web/src/routes/$org/$project/settings/channels.tsx                                       (K9)
-web/src/components/alerts/*                                                             (K9–K11)
+crates/server/src/api/alerts.rs        enums, AlertCondition (K3); channel types (K5); rule and event types (K6); ChannelTestResult (K8)
+crates/server/src/alerts/condition.rs  normalize_condition, measure (K3)
+crates/server/src/alerts/channel.rs    ChannelConfig: validate, target_hint (K3); seal_config, open_config (K4)
+crates/server/migrations/meta/NNNN_alerts.sql                                              (K4)
+crates/server/src/meta/alerts.rs       store for the 5 tables (K4; events read K6; evaluation K7; deliveries K8)
+crates/server/src/routes/channels.rs   channel CRUD (K5), test send (K8)
+crates/server/src/routes/alert_rules.rs  rule CRUD and events (K6)
+crates/server/src/alerts/quota.rs      rule_limit, check_rule_quota (K6, D-K-14)
+crates/server/src/alerts/evaluate.rs   step (pure), evaluate_once (K7)
+crates/server/src/alerts/message.rs    Slack, webhook and email bodies, links (K8)
+crates/server/src/alerts/deliver.rs    deliver_once, send_one, prune_once (K8)
+crates/server/src/alerts/mod.rs        AlertTiming, spawn_loops (K9)
+crates/server/src/email/templates/alert.{txt,html}                                        (K8)
+web/src/routes/$org/$project/settings/channels.tsx                                       (K10)
+web/src/routes/$org/$project/alerts/{index,$ruleId/index}.tsx                             (K11)
+web/src/routes/$org/$project/alerts/{new,$ruleId/edit}.tsx                                (K12)
+web/src/components/alerts/*                                                             (K10–K12)
 ```
 
 ### Migration number
 
-Tracks H and I add migrations in parallel. K's migration takes **the next free number when K3 is implemented**: the highest `NNNN` in `crates/server/migrations/meta/` plus one, zero-padded to four digits (`0008_alerts.sql` if `0007_backfills.sql` is the last). K3 explains the schema-version tests that change with it.
+Tracks H and I add migrations in parallel (`main` has `0004_connections.sql` today). K's migration takes **the next free number when K4 is implemented**: the highest `NNNN` in `crates/server/migrations/meta/` plus one, zero-padded to four digits (`0005_alerts.sql` if `0004_connections.sql` is still the last). K4 explains the schema-version tests that change with it.
 
 ## Decisions
 
@@ -134,6 +142,9 @@ The user settled these on 2026-11-14. They are written in `docs/mvp-decisions.md
 | D-K-11 | **Two additions outside `crates/server`.** `llmobs-storage` gets `alert_value`, one aggregate query per evaluation, because the dashboard `metrics` read runs nine collects and has no sample count. `llmobs-eval` makes its egress client public (`EgressClient`, lent by `EvalRunner::egress`) and exposes `sign_payload`, so alert deliveries share the SSRF guard and the signature format. (User's choice.) |
 | D-K-12 | **No online-judge pause alerts.** Spec 07's built-in pseudo-alert for paused judge rules is dropped from K; track I shows pauses as banners (D-I-14). |
 | D-K-13 | **The rule editor previews over buckets as wide as the window.** It calls `GET /metrics` with `bucket` equal to the rule's window (`24h` uses `1d`), over 24 h for windows up to 1 h, 3 days for `6h`, and 14 days for `24h`, and draws the threshold as a horizontal line. `latency_p95` with `target: llm_span` has no preview (the dashboard splits it by model). |
+| D-K-14 | **One plan-limit check for alert rules (D178).** Creating an enabled rule, and re-enabling a disabled one, call `alerts::quota::check_rule_quota(count_enabled_org_rules(org), alerts::quota::rule_limit(state, org))`. Over the limit is `403` with the new problem code `plan_limit` and a detail naming the limit ("Your plan allows 1 enabled alert rule."); the UI shows it with an upgrade line. Disabled rules do not count, and existing rules are never disabled by K. `rule_limit` returns `None` (no limit) until track P replaces its body with the org's resolved `Entitlements` value (D179); it is the only code P changes for alerts. The count is read before the write, so two concurrent creates can end one rule over; accepted. |
+| D-K-15 | **Alerts are core (MIT).** The Free plan includes one alert rule, so alerting is not `ee/` code (D172, D178). |
+| D-K-16 | **The plan's data window applies through the query layer.** Evaluations read through `Storage::query` and `QueryContext` like every other read, so the data-access window that track P enforces in A2's time window (D175) hides old data from alerts too; K adds nothing for it. |
 
 ## Contract gaps
 

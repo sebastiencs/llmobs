@@ -387,7 +387,7 @@ A deletion may cover rows of a `spans` or `scores` file only when its `deletion_
 
 - Dataset items whose `source_trace_id` is in scope are hard-deleted, all versions.
 - `experiment_items` and `eval_jobs` referencing those traces are deleted.
-- `alert_events` hold only aggregates and are kept.
+- `alert_events` hold only aggregates; they are pruned after 90 days with their deliveries (D-K-10).
 
 ### Physical erasure: the deletion rewriter
 

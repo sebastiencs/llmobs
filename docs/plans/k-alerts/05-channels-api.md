@@ -21,7 +21,7 @@ Adds `GET/POST /api/v1/projects/{project}/channels` and `PATCH/DELETE /api/v1/pr
 |---|---|
 | `crates/server/src/api/alerts.rs` | channel request and response types |
 | `crates/server/src/routes/channels.rs` | new |
-| `crates/server/src/routes/mod.rs` | `pub(crate) mod channels;` (alphabetical: after `auth`, before `feedback`) |
+| `crates/server/src/routes/mod.rs` | `pub(crate) mod channels;` (alphabetical: after `auth`, before `connections`) |
 | `crates/server/src/http/access.rs` | `routes.extend(crate::routes::channels::routes());` in `routes()`, after the `api_keys` line |
 | `crates/server/src/api/openapi.rs` | schemas, tag `alerts`, `channel_paths` |
 | `crates/server/tests/openapi.rs` | operations, tag, errors, pages |

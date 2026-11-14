@@ -43,7 +43,8 @@ No background task yet (K9).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MessageKind { Fired, Resolved, Reminder, Test }
 
-/// Everything a message shows. Built from an event (K8 `deliver_once`) or a sample (test send).
+/// Everything a message shows. Built from an event (`deliver_once`) or a sample (test send).
+/// Never log a `Notice`: it holds rule and project names and URLs.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Notice {
     pub(crate) kind: MessageKind,
@@ -80,7 +81,18 @@ pub(crate) fn rule_url(public_url: &PublicUrl, org_slug: &str, project_slug: &st
 pub(crate) fn traces_url(public_url: &PublicUrl, org_slug: &str, project_slug: &str, from: i64, to: i64, filter: Option<&str>) -> String;
 ```
 
-The times use `llmobs_core::time_serde` formatting (RFC 3339 UTC with 9 fractional digits; use the formatter the crate exposes, e.g. `time_serde::format_rfc3339` — read `crates/core/src/time_serde.rs` and use the function that `serialize` calls). The web's traces page accepts these (`web/src/lib/search/common.ts` `RFC3339`).
+The times are RFC 3339 UTC with 9 fractional digits, from a private helper in `message.rs` (`time_serde::format_rfc3339` is `pub(crate)` in `llmobs-core`, so it cannot be used; `chrono` is a server dependency):
+
+```rust
+fn rfc3339(ns: i64) -> String {
+    let nanos = u32::try_from(ns.rem_euclid(1_000_000_000)).unwrap_or(0);
+    chrono::DateTime::<chrono::Utc>::from_timestamp(ns.div_euclid(1_000_000_000), nanos)
+        .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true))
+        .unwrap_or_default()
+}
+```
+
+The web's traces page accepts these (`web/src/lib/search/common.ts` `RFC3339`), and its router decodes `+` in a query value as a space (form encoding); K12's tests do not depend on it.
 
 ### Value text
 
@@ -101,7 +113,7 @@ pub(crate) fn value_text(metric: AlertMetric, value: Option<f64>) -> String;
 | Reminder | `Still firing: <rule name>` |
 | Test | `Test notification from <PRODUCT>` (`llmobs_core::names::PRODUCT`) |
 
-The rule name is cut to 100 characters (`chars().take(100)`) in every title.
+The rule name is cut to 100 characters (`chars().take(100)`) in every title. Build titles with `fn title(kind: MessageKind, rule_name: &str) -> String`; Slack's `"text"` calls it with the escaped name (`&slack_escape(&notice.rule_name)`), the header with the raw name.
 
 ### Slack
 
@@ -130,7 +142,9 @@ pub(crate) fn slack_body(notice: &Notice) -> serde_json::Value;
 }
 ```
 
-Build it with `serde_json::json!`. In the `mrkdwn` texts and in `"text"`, escape the project and rule names with `fn slack_escape(text: &str) -> String` (`&` → `&amp;`, `<` → `&lt;`, `>` → `&gt;`, in that order). `plain_text` needs no escaping. The `—` is U+2014.
+Build it with `serde_json::json!`. In the `mrkdwn` texts and in `"text"`, escape the project name, the rule name **and the comparator symbol** with `fn slack_escape(text: &str) -> String` (`&` → `&amp;`, `<` → `&lt;`, `>` → `&gt;`, in that order): an unescaped leading `>` is a block quote in Slack and `<` starts a link. So the threshold field reads `*Threshold*\n&gt; 5.0%` for `gt`. `plain_text` needs no escaping. The `—` is U+2014.
+
+`slack_body` returns a `serde_json::Value`; the sender serializes it with `serde_json::to_vec(&value).unwrap_or_default()` (a `Value` always serializes; add that comment).
 
 ### Webhook
 
@@ -161,7 +175,7 @@ pub(crate) struct WebhookRule<'a> { pub(crate) id: Uuid, pub(crate) name: &'a st
 #[derive(Debug, Serialize)]
 pub(crate) struct WebhookProject<'a> { pub(crate) id: ProjectId, pub(crate) name: &'a str }
 
-pub(crate) fn webhook_body(notice: &Notice) -> Vec<u8>;   // serde_json::to_vec; cannot fail (comment the expect)
+pub(crate) fn webhook_body(notice: &Notice) -> Vec<u8>;   // serde_json::to_vec(..).unwrap_or_default(), with a comment: the payload holds strings, numbers and UUIDs only
 ```
 
 `value` and `count` are written as JSON `null` when absent (no `skip_serializing_if`), so receivers see every key.
@@ -253,7 +267,9 @@ pub(crate) async fn finish_delivery(conn: &mut SqliteConnection, id: Uuid, attem
 pub(crate) async fn prune(conn: &mut SqliteConnection, events_before: i64, deliveries_before: i64) -> Result<(u64, u64), MetaError>;
 ```
 
-`DueDelivery` implements `Debug` by hand without `config_enc` (as `ChannelRow`).
+`DueDelivery` implements `Debug` by hand and prints only `id`, `attempts`, `channel_id` and `channel_kind` (`finish_non_exhaustive`): its event holds the rule name and filter, which never reach a log.
+
+Decoding: a private `#[derive(sqlx::FromRow)] struct DueRecord` with one field per selected column (`String` for ids and texts, `Vec<u8>` for `config_enc`, `i64`/`Option<i64>`/`Option<f64>` as the column types). Parse `channel_kind` with `ChannelKind::parse`, `event_kind` with `AlertEventKind::parse`, `details` with `serde_json::from_str::<EventDetails>`, ids with `.parse()`. A failure → `MetaError::Corrupt { table: "notification_deliveries", column }` with `column` one of `"id"`, `"kind"`, `"details"`.
 
 `due_deliveries` SQL (one static query):
 
@@ -273,7 +289,7 @@ ORDER BY d.next_attempt_at, d.id
 LIMIT ?
 ```
 
-`finish_delivery`: one static `UPDATE notification_deliveries SET status = ?, attempts = attempts + 1, next_attempt_at = ?, last_error = ?, updated_at = ? WHERE id = ? AND status = 'pending'` with `('sent', NULL, NULL)`, `('pending', next, error)` or `('failed', NULL, error)`.
+`finish_delivery` takes `attempt` by value and `match`es it by value (moving `error` out). One static `UPDATE notification_deliveries SET status = ?, attempts = attempts + 1, next_attempt_at = ?, last_error = ?, updated_at = ? WHERE id = ? AND status = 'pending'` with `('sent', NULL, NULL)`, `('pending', next, error)` or `('failed', NULL, error)`.
 
 `prune`: `DELETE FROM alert_events WHERE created_at < ?`, then `DELETE FROM notification_deliveries WHERE status IN ('sent', 'failed') AND updated_at < ?`; `rows_affected()` of each.
 
@@ -306,7 +322,16 @@ pub(crate) const DELIVERY_HEADER: &str = "x-llmobs-delivery";
 pub(crate) fn backoff_ns(attempts: i64) -> i64;
 ```
 
-`attempts` is ≥ 1. 1 → 30 s, 2 → 60 s, 3 → 120 s, …, 7 → 1 920 s, 8 and more → 3 600 s. Compute with `checked_shl`/`saturating_mul` and `min`; no panic for large values.
+`attempts` is ≥ 1. 1 → 30 s, 2 → 60 s, 3 → 120 s, …, 7 → 1 920 s, 8 and more → 3 600 s. Exactly:
+
+```rust
+pub(crate) fn backoff_ns(attempts: i64) -> i64 {
+    const BASE: i64 = 30_000_000_000;
+    const CAP: i64 = 3_600_000_000_000;
+    let shift = u32::try_from(attempts.saturating_sub(1).clamp(0, 20)).unwrap_or(20);
+    BASE.saturating_mul(1_i64 << shift).min(CAP)
+}
+```
 
 ### One send
 
@@ -339,7 +364,7 @@ pub(crate) async fn send_one(state: &AppState, config: &ChannelConfig, notice: &
 | `EgressError::TooLarge { .. }` | false | `the response was too large` |
 
   (Match the real `EgressError` variants; if there are others, map them to retryable `the request failed`.)
-- **Email**: `state.mailer` is `None` → permanent `email is not configured`. Otherwise `let email = message::email(notice);` and for each recipient in order `mailer.send_now(recipient, &email).await`; stop at the first error. `MailError::Connect`, `Tls` and `Auth` → retryable; `Rejected`, `InvalidAddress`, `Template` → permanent. The message is the error's `Display` text (fixed strings without the address, `email/mod.rs`). D-K-7: a retry sends to every recipient again.
+- **Email**: `state.mailer` is `None` → permanent `email is not configured`. Otherwise `let email = message::email(notice);` and for each recipient in order `mailer.send_now(recipient, &email).await`; stop at the first error. Wrap the whole loop in `tokio::time::timeout(SEND_TIMEOUT, …)`; an elapsed timeout → retryable `the request timed out`. `MailError::Connect`, `Tls` and `Auth` → retryable; `Rejected`, `InvalidAddress`, `Template` → permanent. The message is the error's `Display` text (fixed strings without the address, `email/mod.rs`). D-K-7: a retry sends to every recipient again.
 
 ### A pass
 
@@ -351,14 +376,14 @@ pub(crate) struct DeliverReport { pub(crate) sent: usize, pub(crate) retried: us
 pub(crate) async fn deliver_once(state: &AppState, now: i64) -> Result<DeliverReport, MetaError>;
 ```
 
-For each `DueDelivery` (`futures::stream::iter(…).map(…).buffer_unordered(CONCURRENCY)`):
+For each `DueDelivery` (`futures::stream::iter(…).map(|due| Box::pin(deliver_one(state, due, now))).buffer_unordered(CONCURRENCY)`; boxed because reqwest futures are large):
 1. `open_config(&state.secrets, &due.channel_id, &due.config_enc)`; error → `Attempt::Failed { error: "the channel config could not be read".to_owned() }`.
-2. Build the `Notice`: `kind` from `due.event.kind` (`fired` → `Fired`, `resolved` → `Resolved`, `reminder` → `Reminder`); rule name, metric, comparator, window, filter from `due.event.details`; value, count, threshold, window bounds from the event; `occurred_at = due.event.created_at`; links from `rule_url(&state.config.public_url, &due.org_slug, &due.project_slug, due.event.rule_id)` and `traces_url(…, due.event.window_from, due.event.window_to, filter)`.
+2. Build the `Notice`: `kind` from `due.event.kind`, an `AlertEventKind` (`match due.event.kind { AlertEventKind::Fired => MessageKind::Fired, AlertEventKind::Resolved => MessageKind::Resolved, AlertEventKind::Reminder => MessageKind::Reminder }`); rule name, metric, comparator, window, filter from `due.event.details`; value, count, threshold, window bounds from the event; `occurred_at = due.event.created_at`; links from `rule_url(&state.config.public_url, &due.org_slug, &due.project_slug, due.event.rule_id)` and `traces_url(…, due.event.window_from, due.event.window_to, filter)`.
 3. `send_one(state, &config, &notice, due.id, now)`:
    - `Ok` → `Attempt::Sent`;
    - `Err(e)` with `e.retryable && due.attempts + 1 < MAX_ATTEMPTS` → `Attempt::Retry { error: e.message, next_attempt_at: now.saturating_add(backoff_ns(due.attempts + 1)) }`;
    - otherwise → `Attempt::Failed { error: e.message }`.
-4. `state.meta.write(… finish_delivery(conn, due.id, attempt, now) …)`. A write error is logged and the pass continues (the row stays `pending` and is retried next pass).
+4. `state.meta.write(… finish_delivery(conn, due.id, attempt, now) …)`. The report counts the outcome (`sent`, `retried`, `failed`) whether or not `finish_delivery` returned `true`. A write error is logged, not counted, and the pass continues (the row stays `pending` and is retried next pass).
 5. Log: `tracing::info!(delivery_id = %due.id, channel_id = %due.channel_id, kind = due.channel_kind.as_str(), attempt = due.attempts + 1, outcome, "alert delivery")` where `outcome` is `"sent"`, `"retry"` or `"failed"`; for a failure add `error = %message` (the fixed message, which holds no secret).
 
 ### Pruning
@@ -386,14 +411,25 @@ pub struct ChannelTestResult {
 }
 ```
 
-`routes/channels.rs`: a fifth `RouteDef` — `POST /api/v1/projects/{project}/channels/{id}/test`, `ProjectPerm::ManageAlerts`, not session-only, documented, handler `test_channel`:
+`routes/channels.rs`: a fifth `RouteDef` — `POST /api/v1/projects/{project}/channels/{id}/test`, `ProjectPerm::ManageAlerts`, not session-only, documented, handler:
+
+```rust
+async fn test_channel(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Extension(access): Extension<ProjectAccess>,
+    error::Path(ChannelPath { id }): error::Path<ChannelPath>,
+) -> Result<error::Json<ChannelTestResult>, ApiError>
+```
+
+`let now = state.clock.now_ns();`
 
 1. `session_user`; `alerts::channel_by_id` (404 when absent); `open_config` (error → `200 {ok: false, error: "the channel config could not be read"}`).
-2. Build a sample `Notice`: `kind Test`, `event_id = Uuid::now_v7()`, `rule_id = Uuid::nil()`, `rule_name "Test alert"`, `metric ErrorRate`, `comparator Gt`, `threshold 0.05`, `window M5`, `filter None`, `value Some(0.125)`, `count Some(48)`, `window_from = now − 5 min`, `window_to = now`, `occurred_at = now`, the project's id and name (`access.project.name`), `rule_url = state.config.public_url.join(&format!("/{org}/{project}/alerts"))` (the list page; slugs from `access.project.slug` and the org's slug — load it with the existing org lookup in `meta::orgs`, e.g. `org_by_id`; read the module for its name), `traces_url` over the sample window without a filter.
-3. `send_one(&state, &config, &notice, Uuid::now_v7(), now)` → `200 {ok: true}` or `200 {ok: false, error}`. Nothing is stored.
+2. Build a sample `Notice`: `kind Test`, `event_id = Uuid::now_v7()`, `rule_id = Uuid::nil()`, `rule_name "Test alert"`, `metric ErrorRate`, `comparator Gt`, `threshold 0.05`, `window M5`, `filter None`, `value Some(0.125)`, `count Some(48)`, `window_from = now − 5 min`, `window_to = now`, `occurred_at = now`, the project's id and name (`access.project.name`), `rule_url = state.config.public_url.join(&format!("/{org_slug}/{project_slug}/alerts"))` (the list page; `project_slug = access.project.slug`; the org slug from `crate::meta::orgs::org_by_id(state.meta.reader(), access.project.org_id)`, where `None` → `ApiError::NotFound`), `traces_url` over the sample window without a filter.
+3. `Box::pin(send_one(&state, &config, &notice, Uuid::now_v7(), now)).await` → `200 {ok: true}` or `200 {ok: false, error}`. Nothing is stored.
 4. Audit log `"alert channel tested"` with `channel_id`, `project_id`, `user_id`, `ok`.
 
-OpenAPI: `test_channel` — POST `{PROJECT}/channels/{id}/test`, summary `Send a test notification`, description `"Sends one sample message now and reports the result. Nothing is stored. Needs role member."`, `200` `json_of::<ChannelTestResult>("Whether the channel accepted the message.")`, errors `&[400, 401, 403, 404, 429]`; `set.insert::<ChannelTestResult>()`. `tests/openapi.rs`: the operation in `OPERATIONS`, and `test_channel` in the `["400", "401", "403", "404", "429"]` branch. `just openapi`.
+OpenAPI: `test_channel` — POST `{PROJECT}/channels/{id}/test`, tag `"alerts"`, `.parameters(Some(vec![project_param(), path_uuid("id", "Channel id.")]))` (copy K5's `delete_channel` builder), summary `Send a test notification`, description `"Sends one sample message now and reports the result. Nothing is stored. Needs role member."`, `200` `json_of::<ChannelTestResult>("Whether the channel accepted the message.")`, errors `&[400, 401, 403, 404, 429]`; `set.insert::<ChannelTestResult>()`. `tests/openapi.rs`: the operation in `OPERATIONS`, and `test_channel` in the `["400", "401", "403", "404", "429"]` branch. `just openapi`.
 
 ## 5. Test receiver (`test_support/hook_receiver.rs`)
 
@@ -428,10 +464,27 @@ Tests that send to it need `TestApp::with_config(|config| config.security.allow_
 
 ## 6. Tests
 
+Shared test helpers (in `alerts::deliver::tests`, `pub(super)` where `message::tests` needs them):
+
+```rust
+/// A sample notice: error_rate, gt 0.05, 5m, value 0.125, count 48, window [now − 5 min, now).
+fn sample_notice(kind: MessageKind, now: i64) -> Notice;
+
+/// Seeds a project (`app.seed()`), inserts a channel with `config` sealed by `seal_config`,
+/// a rule (error_rate, 5m, gt 0.05) using it, and records a `Fired` evaluation at `now`
+/// through `record_evaluation` (`Step { state: Firing, clear_streak: 0, event: Some(Fired),
+/// fired: true, notified: true }`, count 48, value 0.125, threshold 0.05,
+/// window [now − 300 s, now)), so one delivery is `pending` with `next_attempt_at = now`.
+/// Returns (delivery id, channel id, event id).
+async fn seed_delivery(app: &TestApp, config: ChannelConfig, now: i64) -> (Uuid, Uuid, Uuid);
+```
+
+`PublicUrl` has no public constructor: build one with `serde_json::from_str::<PublicUrl>("\"https://obs.example.com\"").expect("url")`.
+
 `alerts::message::tests`:
-1. `links`: `rule_url` with public URL `https://obs.example.com` → `https://obs.example.com/acme/bot/alerts/<id>`; `traces_url` with filter `environment = 'prod' & x` → the query contains `filter=environment+%3D+%27prod%27+%26+x` (form encoding) and `from=`/`to=` with 9 fractional digits.
+1. `links`: `rule_url` with public URL `https://obs.example.com` → `https://obs.example.com/acme/bot/alerts/<id>`; `traces_url` with filter `environment = 'prod' & x`, `from = 0`, `to = 300_000_000_000` → the query contains `filter=environment+%3D+%27prod%27+%26+x`, `from=1970-01-01T00%3A00%3A00.000000000Z` and `to=1970-01-01T00%3A05%3A00.000000000Z` (form encoding turns `:` into `%3A`).
 2. `value_texts`: `error_rate 0.125` → `12.5%`; `cost 3.754` → `$3.75`; `latency_p95 820.4` → `820 ms`; `score 0.7` → `0.700`; `None` → `no data`.
-3. `slack_body_shape`: the header text is `Firing: <name>`; there are 6 fields; the two buttons carry the URLs; a rule named `<b>&` appears escaped as `&lt;b&gt;&amp;` in `"text"` and unescaped in the header.
+3. `slack_body_shape`: the header text is `Firing: <name>`; there are 6 fields; the two buttons carry the URLs; a rule named `<b>&` appears escaped as `&lt;b&gt;&amp;` in `"text"` and unescaped in the header; the threshold field is `*Threshold*\n&gt; 5.0%` for `gt` and contains `&lt;=` for `lte`; `"text"` contains `(&gt; 5.0%)`.
 4. `webhook_body_shape`: `type "alert.resolved"`, `event_id`, `rule.metric "error_rate"`, `comparator "gt"`, `window "5m"`, `value null` and `count null` present when absent, times as RFC 3339 strings.
 
 `alerts::deliver::tests`:
@@ -440,15 +493,17 @@ Tests that send to it need `TestApp::with_config(|config| config.security.allow_
 7. `slack_posts_block_kit`: receiver `[200]`; a Slack channel whose URL is the receiver's (http is fine for the test: only validation requires https) → `Ok`, the body parses as JSON with `blocks`.
 8. `statuses_are_classified`: receiver `[503]` → `Err { retryable: true, message: "the endpoint answered 503" }`; `[404]` → retryable false; `[429]` → retryable true.
 9. `private_addresses_are_denied_by_default`: `TestApp::new()` (policy default) → sending to the receiver gives `Err { retryable: false, message: "the address is not allowed (security.allow_private_network_egress)" }`.
-10. `deliver_once_retries_then_fails`: insert a rule, a webhook channel pointing at the receiver `[500]`, an event and one pending delivery due now (through `record_evaluation` with a `Fired` step, or by SQL). Call `deliver_once` at `now`: `retried 1`, the row is `pending` with `attempts 1`, `next_attempt_at = now + 30 s`, `last_error "the endpoint answered 500"`. Calling at `now + 29 s` sends nothing (`DeliverReport::default()`). Loop 7 more times at the row's `next_attempt_at`: after the 8th attempt the row is `failed`, `next_attempt_at NULL`; the receiver got 8 requests.
+10. `deliver_once_retries_then_fails`: `seed_delivery` with a webhook channel pointing at the receiver `[500]`. Call `deliver_once` at `now`: `retried 1`, the row is `pending` with `attempts 1`, `next_attempt_at = now + 30 s`, `last_error "the endpoint answered 500"`. Calling at `now + 29 s` sends nothing (`DeliverReport::default()`). Loop 7 more times at the row's `next_attempt_at`: after the 8th attempt the row is `failed`, `next_attempt_at NULL`; the receiver got 8 requests.
 11. `deliver_once_sends`: receiver `[200]` → `sent 1`, row `sent`, `attempts 1`; a second pass sends nothing.
-12. `email_delivery_sends_to_each_recipient`: `with_mailer`; email channel `["a@x.io","b@x.io"]` → `deliver_once` → `app.sent()` has 2 messages, subject `[<PRODUCT>] Firing: <rule name>`; with `mailer.fail_next(1)` the delivery is retried (`pending`, attempts 1).
-13. `email_without_smtp_fails_at_once`: `TestApp::new()`, an email channel row inserted directly → `failed`, `last_error "email is not configured"`.
-14. `prune_keeps_recent_history`: events at `now − 91 d` and `now − 1 d`, finished deliveries at `now − 31 d` and `now − 1 d`, a pending delivery at `now − 40 d` on the recent event → `prune_once` deletes the old event (and its deliveries) and the old finished delivery; the pending one stays.
-15. `delivery_logs_hold_no_secrets`: wrap test 6's send and a failing send in `assert_logs_clean(&["0123456789abcdef", "core", "/hook"], …)`.
+12. `email_delivery_sends_to_each_recipient`: `with_mailer`; email channel `["a@x.io","b@x.io"]` → `deliver_once` → `app.sent()` has 2 messages, subject `[<PRODUCT>] Firing: <rule name>`; with `mailer.fail_next(1)` (it fails the first recipient, so `app.sent()` gets nothing from that pass) the delivery is retried (`pending`, attempts 1).
+13. `email_without_smtp_fails_at_once`: `TestApp::new()`, `seed_delivery` with an email config → `failed`, `last_error "email is not configured"`.
+14. `prune_keeps_recent_history`: an old event (`created_at = now − 91 d`) with one `sent` delivery; a recent event (`now − 1 d`) with a `sent` delivery updated `now − 31 d`, a `failed` delivery updated `now − 1 d`, and a `pending` delivery updated `now − 40 d` (insert them by SQL). `prune_once` returns `(1, 1)` (cascaded deletes are not counted by SQLite); afterwards the old event and its delivery are gone, and the recent event, its `failed` delivery and the `pending` one remain.
+17. `finish_delivery_is_fenced`: after `Attempt::Sent`, a second `finish_delivery(…, Attempt::Failed { … })` returns `false` and `attempts` stays 1.
+18. `due_deliveries_order_and_filter`: three pending deliveries with `next_attempt_at` 30, 10, 20 and one `sent` → `due_deliveries(now = 25, limit 10)` returns the ones at 10 and 20, in that order; `limit 1` returns one; after setting the project's `state = 'deleting'`, none.
+15. `delivery_logs_hold_no_secrets` (a default current-thread `#[tokio::test]`): `seed_delivery` with a webhook (path `/hook`, secret `0123456789abcdef`, header `X-Team: core`) to a receiver `[500]`, and wrap `deliver_once` in `assert_logs_clean(&["0123456789abcdef", "\"core\"", "/hook"], …)`; then use `capture_logs` around a second pass to assert the logs contain `alert delivery`.
 
 `routes::channels::tests`:
-16. `send_test_reports_the_result`: receiver `[200]` → `POST …/channels/{id}/test` → `200 {"ok": true}` and the receiver got a body with `"type":"alert.test"`; receiver `[500]` → `{"ok": false, "error": "the endpoint answered 500"}`; a viewer → `403`; an unknown id → `404`.
+16. `send_test_reports_the_result`: `TestApp::with_config(|config| config.security.allow_private_network_egress = true)`; two receivers, `[200]` and `[500]`; create two webhook channels over `POST /channels` (`http://127.0.0.1:<port>/hook`, secret `0123456789abcdef`), one per receiver. Testing the first → `200 {"ok": true}` and its receiver got a body with `"type":"alert.test"`; the second → `{"ok": false, "error": "the endpoint answered 500"}`; a viewer → `403`; an unknown id → `404`.
 
 ## Commands
 
@@ -479,4 +534,4 @@ just check
 ## Done when
 
 - Deliveries are sent with the classification and backoff above, a channel test answers synchronously, and pruning keeps 90 and 30 days.
-- The 16 tests and the updated `templates_render` pass; `just check` is green.
+- The 18 tests and the updated `templates_render` pass; `just check` is green. If clippy's `large_futures` flags another await on a reqwest or DataFusion future, wrap it in `Box::pin(…)` as above.

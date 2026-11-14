@@ -75,11 +75,26 @@ export function conditionFromForm(form: RuleFormValues):
   | { ok: false; errors: Record<string, string> };
 ```
 
+The client range checks below go beyond D-L-11's "presence only" on purpose: the percent ↔ fraction conversion has to parse the number before anything is sent, so the form reports what it already knows. The server stays the authority.
+
+Values are trimmed first: `name.trim()`, `filter.trim()` (empty → omitted), `scoreName.trim()`.
+
 Client checks in `conditionFromForm` (messages exact):
-- `threshold`: not a finite number → `"Enter a number."`; percent metrics outside 0–100 → `"Enter a percentage from 0 to 100."`; cost below 0 → `"Enter 0 or more."`; latency ≤ 0 → `"Enter a duration above 0."`. Percent values are divided by 100.
+- `threshold`: `form.threshold.trim() === ""` or `!Number.isFinite(Number(form.threshold))` → `"Enter a number."` (`Number("")` is 0, so the blank check comes first); percent metrics outside 0–100 → `"Enter a percentage from 0 to 100."`; cost below 0 → `"Enter 0 or more."`; latency ≤ 0 → `"Enter a duration above 0."`. Percent values are divided with `Number((p / 100).toPrecision(12))` (so `0.07` gives `0.0007`, not `0.0007000000000000001`).
 - `minCount` (not cost): an integer from 1 to 1 000 000, else `"Enter a whole number from 1 to 1,000,000."`.
 - `scoreName` (score): blank → `"Enter a score name."`.
-- `cooldownMinutes`: an integer from 5 to 10 080, else `"Enter 5 to 10,080 minutes."`; `cooldownS = minutes * 60`.
+- `cooldownMinutes`: checked only when `notifyWhileFiring` is on: an integer from 5 to 10 080, else `"Enter 5 to 10,080 minutes."`; `cooldownS = minutes * 60`. When reminders are off, `cooldownS` is 3600 on create and is not sent on PATCH.
+
+```ts
+/** A full condition for labels and axes, also while the form is invalid: an unparsable
+ *  threshold becomes 0, a blank score name stays blank. Never sent. */
+export function previewCondition(form: RuleFormValues): Schema<"AlertCondition">;
+
+/** The condition-related form fields of `a` and `b` differ (metric, window, trimmed filter,
+ *  comparator, threshold, minCount, target, trimmed scoreName, aggregation, compared as
+ *  strings after trimming). Used to decide whether a PATCH sends `condition`. */
+export function conditionChanged(a: RuleFormValues, b: RuleFormValues): boolean;
+```
 
 ```ts
 /** D-K-13: the bucket equal to the window, and the preview range. */
@@ -95,7 +110,7 @@ export function previewSeries(condition: Pick<RuleFormValues, "metric" | "target
 
 `previewParams`: bucket `1m`→`1m`, `5m`→`5m`, `15m`→`15m`, `1h`→`1h`, `6h`→`6h`, `24h`→`1d`; range `[now − 24 h, now)` for windows up to `1h`, `[now − 3 d, now)` for `6h`, `[now − 14 d, now)` for `24h`; `from`/`to` as `new Date(ms).toISOString()`.
 
-Tests in `alerts.test.ts`: `conditionFromForm` for each metric (defaults → `{"metric":"error_rate","window":"5m","comparator":"gt","threshold":0.05,"min_count":20}` exactly); each error message; `formFromRule` of each fixture rule round-trips through `conditionFromForm` to the same condition; `previewParams("6h", Date.parse("2026-01-04T00:00:00Z"))` → `{ bucket: "6h", from: "2026-01-01T00:00:00.000Z", to: "2026-01-04T00:00:00.000Z" }`; `previewSeries` for the five cases.
+Tests in `alerts.test.ts`: `thresholdUnit` and `thresholdInPercent` for each metric and aggregation; `conditionFromForm` with threshold `""` and `"abc"` → `"Enter a number."`; `formFromRule` of a rule with threshold 0.07 (error rate) → threshold `"7"`; `conditionChanged` false for `formFromRule(rule)` against itself; `conditionFromForm` for each metric (defaults → `{"metric":"error_rate","window":"5m","comparator":"gt","threshold":0.05,"min_count":20}` exactly); each error message; `formFromRule` of each fixture rule round-trips through `conditionFromForm` to the same condition; `previewParams("6h", Date.parse("2026-01-04T00:00:00Z"))` → `{ bucket: "6h", from: "2026-01-01T00:00:00.000Z", to: "2026-01-04T00:00:00.000Z" }`; `previewSeries` for the five cases (score avg and score pass rate both use `score_avg` with the score name as group).
 
 ## 2. `components/alerts/rule-preview.tsx`
 
@@ -104,16 +119,18 @@ export function RulePreview(props: {
   org: string;
   project: string;
   values: RuleFormValues;
-}): JSX.Element;
+})
 ```
 
-- `previewSeries(values)` undefined → a muted box: "No preview for LLM span latency. The dashboard shows it per model."
-- Otherwise, debounce `values.filter` by 500 ms (`useEffect` + `setTimeout`) and query `$api.useQuery("get", "/api/v1/projects/{project}/metrics", { params: { path: { project: projectRef(org, project) }, query: { from, to, bucket, ...(filter ? { filter } : {}) } } }, { staleTime: 60_000, placeholderData: keepPreviousData })`. Compute `from`/`to` once per window change (`useMemo` on `values.window`, with `Date.now()`), so the query key does not change every render.
-- Data: `seriesByMetric(response).get(metric)`, filtered to the entry whose `group` equals `previewSeries(...).group` when one is given (else the entry without a group); `toChartRows([series], response.bucket_ns)` (check `MetricsResponse`'s bucket field name in `schema.gen.ts`). Latency values are ns: divide by 1 000 000 for display; error rate and pass rate are fractions.
-- Threshold for the line: the converted threshold of `conditionFromForm(values)` when it is `ok` (`condition.threshold`, in the series unit: fraction, USD, ms, raw); none when the form has errors.
-- Chart: `ChartContainer` (`config={{ value: { label: metricLabel(…), color: "var(--chart-1)" } }}`, `initialDimension={{ width: 640, height: 160 }}`, `className="aspect-auto h-40 w-full"`) around a `ComposedChart` with `XAxis dataKey="time"` (ticks with `formatTimestamp`), `YAxis` (ticks with `formatAlertValue` of a condition built from the form), one `Line dataKey="value"` (rename the series key to `value` when building rows), `isAnimationActive={false}`, and, when there is a threshold, `<ReferenceLine y={threshold} stroke="var(--destructive)" strokeDasharray="4 4" ifOverflow="extendDomain" label={{ value: "Threshold", position: "insideTopRight", fontSize: 11 }} />`. Wrap it in `figure` with `aria-label="Preview of the metric over the last <24 hours|3 days|14 days>"`.
+No return type annotations on components anywhere in K12 (React 19 has no global `JSX` namespace).
+
+- Hooks run unconditionally. `const series = previewSeries(values);` When it is undefined, the component renders a muted box: "No preview for LLM span latency. The dashboard shows it per model." (the query below is disabled).
+- Debounce: `const [filter, setFilter] = useState(values.filter.trim());` and `useEffect(() => { const timer = setTimeout(() => setFilter(values.filter.trim()), 500); return () => clearTimeout(timer); }, [values.filter]);` (the first render does not wait). Then query `$api.useQuery("get", "/api/v1/projects/{project}/metrics", { params: { path: { project: projectRef(org, project) }, query: { from, to, bucket, ...(filter ? { filter } : {}) } } }, { staleTime: 60_000, placeholderData: keepPreviousData, enabled: series !== undefined })` (`keepPreviousData` from `@tanstack/react-query`). Compute `from`/`to` once per window change, `const params = useMemo(() => previewParams(values.window, Date.now()), [values.window]);`, so the query key does not change every render.
+- Data: `seriesByMetric(response).get(series.metric)`, the entry whose `group` equals `series.group` when one is given (else the entry without a group). For latency, map its points to `{ ...point, value: point.value === undefined ? undefined : point.value / 1_000_000 }` (ns → ms; keep the point type of `MetricSeries`). Then `toChartRows([{ ...entry, group: undefined }], response.bucket_ns)`; without a group the row key is `all` (read `toChartRows` to confirm the key and use what it produces). Error rate and pass rate stay fractions.
+- Threshold for the line: the `condition.threshold` of `conditionFromForm(values)` when it is `ok` (in the series unit: fraction, USD, ms, raw); none when the form has errors.
+- Chart: `ChartContainer` with `data-chart-container=""` (the test layout sizes charts by this attribute), `config={{ all: { label: metricLabel(previewCondition(values)), color: "var(--chart-1)" } }}`, `initialDimension={{ width: 640, height: 160 }}`, `className="aspect-auto h-40 w-full"`, around a `ComposedChart` with `XAxis dataKey="time"` and `tickFormatter={(ms) => formatTimestamp(new Date(ms).toISOString(), zone, "datetime")}` (`const zone = useTimeZone();` at the top of the component), `YAxis` with `tickFormatter={(value) => formatAlertValue(previewCondition(values), typeof value === "number" ? value : undefined)}`, one `Line dataKey="all"`, `isAnimationActive={false}`, and, when there is a threshold, `<ReferenceLine y={threshold} stroke="var(--destructive)" strokeDasharray="4 4" ifOverflow="extendDomain" label={{ value: "Threshold", position: "insideTopRight", fontSize: 11 }} />`. Wrap it in `figure` with `aria-label="Preview of the metric over the last <24 hours|3 days|14 days>"`.
 - Under the chart: "Each point is the metric over one window, as the rule sees it. Minimum samples are not shown." in `text-xs text-muted-foreground`.
-- Query states: loading → `Skeleton className="h-40 w-full"`; `invalid_filter` problem → the filter message in `FormError` ("The filter is invalid: <message>", message from `filterMessage` in `components/filter-bar/logic.ts` if exported, else `problemMessage`); other errors → "The preview could not be loaded."; no point with a value → "No data in this range."
+- Query states: loading → `Skeleton className="h-40 w-full"`; a problem with `problemOf(error)?.code === "invalid_filter"` → `FormError` with `The filter is invalid: ${filterMessage(problem)}` (`filterMessage` is exported by `components/filter-bar/logic.ts`); other errors → "The preview could not be loaded."; no point with a value → "No data in this range."
 
 ## 3. `components/alerts/rule-form.tsx`
 
@@ -126,26 +143,28 @@ export function RuleForm(props: {
   /** Called with the saved rule. */
   onSaved: (rule: Schema<"AlertRule">) => void;
   onCancel: () => void;
-}): JSX.Element;
+})
 ```
 
 A `<form noValidate>` (no nested forms: the filter is a plain `Textarea`, not the filter bar) with two columns on wide screens (fields left, `RulePreview` right; one column below `lg`). Sections and fields (ids prefixed `rule-`):
 
 1. **Name** (`TextField`, max 100).
-2. **What to measure**: `Select` "Metric" (Error rate, Cost, p95 latency, Score); for latency a `Select` "Latency of" (Whole traces, LLM spans); for score a `TextField` "Score name" and a `Select` "Aggregation" (Average, Pass rate of a boolean score); `Select` "Window" (1 minute, 5 minutes, 15 minutes, 1 hour, 6 hours, 24 hours) with the description "Checked every minute for windows up to 15 minutes, every 5 minutes otherwise."
-3. **Filter**: `Textarea` labelled "Filter" (`font-mono`, 2 rows, max 4096), description "A traces filter, e.g. environment = 'production'. Empty: every trace." Errors with field `filter` (the server's `invalid_filter`) show under it.
-4. **Condition**: `Select` "Comparator" (above, at or above, below, at or below → gt, gte, lt, lte); `TextField` "Threshold" with the unit from `thresholdUnit` as a suffix; `TextField` "Minimum samples" (hidden for cost) with description "Fewer samples in the window gives No data, which never fires."
-5. **Notifications**: a checkbox list of `useQuery(channelsQuery(org, project))` channels (`Checkbox` + label `<name> (<Kind>)`), at most 10 checked (disable the others at 10); no channels → "No channels yet." and a link "Add a channel" to `/$org/$project/settings/channels`. `Switch` "Remind while firing" and, when on, `TextField` "Remind every (minutes)".
+Every `Select` has a `Label htmlFor="rule-<field>"` and `SelectTrigger id="rule-<field>"` (fields: `metric`, `target`, `aggregation`, `window`, `comparator`), so tests reach it with `getByRole("combobox", { name: "<label>" })`; options are reached with `findByRole("option", { name })`.
+
+2. **What to measure**: `Select` "Metric" (options exactly: `Error rate`, `Cost`, `p95 latency`, `Score`); for latency a `Select` "Latency of" (`Whole traces`, `LLM spans`); for score a `TextField` "Score name" and a `Select` "Aggregation" (`Average`, `Pass rate`; the select's description says "Pass rate counts true among boolean scores."); `Select` "Window" (`1 minute`, `5 minutes`, `15 minutes`, `1 hour`, `6 hours`, `24 hours`) with the description "Checked every minute for windows up to 15 minutes, every 5 minutes otherwise."
+3. **Filter**: a `Label htmlFor="rule-filter"` "Filter" and a `Textarea id="rule-filter"` (`font-mono`, 2 rows, max 4096), described by "A traces filter, e.g. environment = 'production'. Empty: every trace." Errors with field `filter` (the server's `invalid_filter`) show under it, wired like `text-field.tsx`.
+4. **Condition**: `Select` "Comparator" (`Above`, `At or above`, `Below`, `At or below` → gt, gte, lt, lte); `TextField` "Threshold" (`inputMode="decimal"`, default text type) whose description is the unit: "Percent." (rates), "USD." (cost), "Milliseconds." (latency) or "Raw score." (score average) — `TextField` has no suffix slot; do not change it; `TextField` "Minimum samples" (hidden for cost) with description "Fewer samples in the window gives No data, which never fires."
+5. **Notifications**: a checkbox list of `useQuery(channelsQuery(org, project))` channels (`Checkbox id="rule-channel-<id>"` + `Label` reading `<name> (<Kind>)`, e.g. `Team Slack (Slack)`), at most 10 checked (disable the others at 10); no channels → "No channels yet." and a link "Add a channel" to `/$org/$project/settings/channels`. `Switch` "Remind while firing" and, when on, `TextField` "Remind every (minutes)".
 6. **Enabled**: `Switch` "Enabled" (create only; the detail page toggles it for an existing rule).
 
-Changing the metric resets `threshold` to the metric's default (`5` for error rate, `100` for cost, `5000` for latency, `0.5` for score avg, `90` for pass rate), `comparator` to `gt` (`lt` for score), and `minCount` to `"20"` (`"10"` for score).
+Changing the aggregation sets `threshold` to `"90"` (pass rate) or `"0.5"` (average). Changing the metric resets `threshold` to the metric's default (`5` for error rate, `100` for cost, `5000` for latency, `0.5` for score avg, `90` for pass rate), `comparator` to `gt` (`lt` for score), and `minCount` to `"20"` (`"10"` for score).
 
 Submit:
 1. `conditionFromForm`; errors → shown on the fields, nothing sent. Name blank → `"Enter a name."`.
-2. Create: `POST …/alert-rules` with `{ name, condition, channel_ids, enabled, cooldown_s, notify_while_firing }` (`Schema<"CreateAlertRuleRequest">`). Edit: `PATCH …/alert-rules/{id}` with only the changed top-level fields (`condition` is sent whole when any of its fields changed, compared with `JSON.stringify` of the stored and the new condition).
+2. Create: `POST …/alert-rules` with `{ name, condition, channel_ids, enabled, cooldown_s, notify_while_firing }` (`Schema<"CreateAlertRuleRequest">`). Edit: `PATCH …/alert-rules/{id}` with only the changed top-level fields, compared with `const initial = formFromRule(rule)`: `name` when the trimmed name differs; `condition` (sent whole) when `conditionChanged(initial, form)`; `channel_ids` when the sorted id lists differ (the server returns them sorted); `notify_while_firing` when it differs; `cooldown_s` when reminders are on and the minutes differ numerically. A PATCH with no field navigates back without a request.
 3. On success: invalidate `alertRulesQuery(org, project).queryKey`, set `alertRuleQuery(org, project, id)` data to the response, call `onSaved(rule)`.
-4. Errors: `fieldErrors` mapped by field name (`name`, `filter`, `condition.threshold`, `condition.min_count`, `condition.score_name`, `condition.target`, `condition.aggregation`, `channel_ids`, `cooldown_s`); `409` → form error `problemMessage(error, "A rule with this name already exists.")`; `503` → `"The server is busy. Try again."`; else `problemMessage(error, "Could not save the rule.")`.
-5. In edit mode, when the condition changed, show above the buttons: "Saving a new condition resets the rule to OK." (D-K-4).
+4. Errors: `fieldErrors` mapped by field name (`name`, `filter`, `condition.filter`, `condition.threshold`, `condition.min_count`, `condition.score_name`, `channel_ids`, `cooldown_s`; `condition.target` and `condition.aggregation` have no own message slot and fall through to the form error); when any mapped field error exists, set no form error. A `403` whose problem `code` is `"plan_limit"` (D-K-14) → form error with the problem's `detail` plus "Upgrade your plan, disable another rule, or save this one disabled."; `409` → form error `problemMessage(error, "A rule with this name already exists.")`; `503` → `"The server is busy. Try again."`; else `problemMessage(error, "Could not save the rule.")`.
+5. In edit mode, when `conditionChanged(initial, form)`, show above the buttons: "Saving a new condition resets the rule to OK." (D-K-4).
 
 Buttons: `Cancel` (`variant="outline"`, calls `onCancel`) and `SubmitButton` "Create rule" or "Save".
 
@@ -153,8 +172,8 @@ Buttons: `Cancel` (`variant="outline"`, calls `onCancel`) and `SubmitButton` "Cr
 
 - `alerts/new.tsx`: `createFileRoute("/$org/$project/alerts/new")({ component: NewRulePage })`. Members and above: `h1` "New alert rule" and `RuleForm` with `onSaved={(rule) => navigate({ to: "/$org/$project/alerts/$ruleId", params: { org, project, ruleId: rule.id } })}` and `onCancel` back to `/$org/$project/alerts`. Viewers: `<Forbidden description="Only project members and above can create alert rules." />`.
 - `alerts/$ruleId/edit.tsx`: `createFileRoute("/$org/$project/alerts/$ruleId/edit")` with the same loader as the detail page (404 → `notFound()`); viewers get `Forbidden`; `h1` "Edit <name>"; `RuleForm rule={…}`; saved or cancelled → the rule page.
-- `alerts/index.tsx`: a "New rule" `Button` (a `Link` to `/$org/$project/alerts/new`, `Plus` icon) in the header, disabled with `DisabledReason` "Only project members and above can manage alerts" for viewers; the empty state gets the same button below it.
-- `alerts/$ruleId/index.tsx`: an "Edit" `Button` (link to `…/edit`) next to "Delete rule", disabled the same way.
+- `alerts/index.tsx`: a "New rule" button in the header. Members and above: `<Button asChild><Link to="/$org/$project/alerts/new" params={{ org, project }}><Plus /> New rule</Link></Button>`. Viewers: `<DisabledReason reason="Only project members and above can manage alerts"><Button disabled><Plus /> New rule</Button></DisabledReason>` (a link cannot be disabled). `EmptyState` takes no children: render the same button in a centered `div` after it.
+- `alerts/$ruleId/index.tsx`: an "Edit" button next to "Delete rule", built the same way (a link to `/$org/$project/alerts/$ruleId/edit` for members, a disabled button for viewers).
 
 ## 5. Dev write mocks (`mocks/writes.ts`)
 
@@ -166,33 +185,42 @@ Add to `WRITE_OPERATIONS`: `create_channel` (post `/api/v1/projects/{project}/ch
 - `update_alert_rule`: the rule of `params.id` (or `data[1]`) merged with the body's top-level fields.
 - `delete_channel`, `delete_alert_rule`: `noContent()`.
 
-`writes.test.ts`: extend `covered` with `path.startsWith("/api/v1/projects/{project}/channels") || path.startsWith("/api/v1/projects/{project}/alert-rules")`, and add one test like the existing ones that a create of each returns `201` with the submitted name.
+`writes.test.ts`: extend `covered` with `path.startsWith("/api/v1/projects/{project}/channels") || path.startsWith("/api/v1/projects/{project}/alert-rules")` (`LATER_TRACKS` stays empty), and add one test like the existing ones, using the file's `PROJECT` constant (`/api/v1/projects/acme%2Fsupport-bot`): a create of a channel and of a rule each return `201` with the submitted name, and `test_channel` returns `200 { ok: true }`.
 
 ## 6. Tests
 
 `alerts/new.test.tsx` (`renderApp("/acme/support-bot/alerts/new")`):
-1. `creates an error rate rule`: type the name, check `Team Slack`, submit → POST body `{ name: "Errors", condition: { metric: "error_rate", window: "5m", comparator: "gt", threshold: 0.05, min_count: 20 }, channel_ids: ["01900000-0000-7000-8000-000000000500"], enabled: true, cooldown_s: 3600, notify_while_firing: false }`; answer `201` with the `High error rate` fixture → the URL becomes the rule page.
+Viewers: `http.get("/api/v1/projects/:project", () => HttpResponse.json({ ...projectFixture, role: "viewer" }))`. URL checks: `await waitFor(() => expect(router.state.location.pathname).toBe(…))`. Use real timers (MSW and user-event hang with fake timers).
+
+1. `creates an error rate rule`: type the name, check `getByRole("checkbox", { name: "Team Slack (Slack)" })`, submit → POST body `{ name: "Errors", condition: { metric: "error_rate", window: "5m", comparator: "gt", threshold: 0.05, min_count: 20 }, channel_ids: ["01900000-0000-7000-8000-000000000500"], enabled: true, cooldown_s: 3600, notify_while_firing: false }`; answer `201` with the `High error rate` fixture → the pathname becomes `/acme/support-bot/alerts/01900000-0000-7000-8000-000000000510`.
 2. `score fields`: choose Score, aggregation Pass rate, score name `ok`, threshold `90`, comparator below → body condition `{ metric: "score", window: "5m", comparator: "lt", threshold: 0.9, min_count: 10, score_name: "ok", aggregation: "pass_rate" }`.
-3. `client errors`: clear the threshold → "Enter a number." and no POST (a `server.use` POST handler that fails the test if called, or a call counter that stays 0).
+3. `client errors`: clear the threshold → "Enter a number." and no POST (a call counter on a `server.use` POST handler stays 0).
+3b. `plan limit`: the POST answers `problemResponse(403, "plan_limit", { detail: "Your plan allows 1 enabled alert rule." })` → that detail and "Upgrade your plan, disable another rule, or save this one disabled." are shown.
 4. `server filter errors`: the POST answers `problemResponse(400, "invalid_filter", { errors: [{ field: "filter", message: "unexpected end of input" }] })` → the message shows under Filter.
 5. `preview asks for window-wide buckets`: capture the `/metrics` request (`server.events.on("request:start", …)`) → `bucket=5m` and a 24 h range; choose window `24h` → a request with `bucket=1d` and a 14-day range.
-6. `no preview for llm spans`: choose p95 latency, Latency of LLM spans → "No preview for LLM span latency." and no new `/metrics` request.
+6. `no preview for llm spans`: wait for the first `/metrics` request to settle and record the count; choose p95 latency, then Latency of LLM spans → `getByText(/No preview for LLM span latency/)` and the count is unchanged.
+6b. `debounces the filter`: type `error_count > 0` into Filter → `waitFor` a `/metrics` request whose `filter` is `error_count > 0`; exactly one request carries a filter.
+6c. `preview states`: `/metrics` answering `problemResponse(400, "invalid_filter", { errors: [{ field: "filter", message: "bad" }] })` → "The filter is invalid: bad"; a response with no points → "No data in this range."; the figure is labelled "Preview of the metric over the last 24 hours".
 7. `viewers cannot create`: role `viewer` → Forbidden.
 
 `alerts/$ruleId/edit.test.tsx` (`renderApp("/acme/support-bot/alerts/01900000-0000-7000-8000-000000000510/edit")`):
 8. `edits the name only`: the form starts with the fixture values (threshold `5`, filter `environment = 'production'`, both channels checked, reminders on with `60` minutes); change the name → PATCH body exactly `{ name: "Errors 2" }`; answered with the rule → the URL becomes the rule page.
-9. `warns that a new condition resets the state`: change the threshold → the warning text shows; submit → the PATCH body has `condition` with `threshold: 0.1` and no other top-level field but `condition`.
+9. `warns that a new condition resets the state`: change only the name → no warning; then change the threshold to `10` → the warning text shows; submit → the PATCH body has `name` and `condition` (with `threshold: 0.1`) and no other field.
 
-`alerts/index.test.tsx` and `$ruleId/index.test.tsx`: add `New rule is disabled for viewers` and `Edit links to the editor`.
+`alerts/index.test.tsx` and `$ruleId/index.test.tsx`: add `New rule is disabled for viewers` (`getByRole("button", { name: "New rule" })` is disabled and there is no link of that name) and `Edit links to the editor`.
 
 ## 7. Closeout
 
-`docs/roadmap.md`, row K: set Plan to `[plans/k-alerts/](plans/k-alerts/) (K1–K12)`, Status to `**Implemented.** K1–K12.` (leave PR numbers for the coordinator), Decisions to `D-K-1–D-K-13`. Also set `Status:` at the top of `docs/plans/k-alerts/README.md` to `implemented on <date>`.
+`docs/roadmap.md`, row K: Status becomes `**Done.** K1–K12.` (leave PR numbers for the coordinator); if the "Order" paragraph below the table still lists K as next, drop it from there. The first line of `docs/plans/k-alerts/README.md` becomes `Status: K1–K12 done on <date +%F>`.
 
 ## Commands
 
 ```bash
 export PATH=$HOME/.local/share/nvm/v26.13.0/bin:$PATH
+```
+
+```bash
+pnpm --dir web gen:routes
 ```
 
 ```bash

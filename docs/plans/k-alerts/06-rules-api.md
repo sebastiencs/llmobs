@@ -31,6 +31,8 @@ It also adds the store reads for events and deliveries (K7 and K8 write them).
 | `crates/server/src/api/alerts.rs` | rule and event types |
 | `crates/server/src/meta/alerts.rs` | `EventDetails`, `EventRow`, `DeliveryRow`, `list_events`, `deliveries_for_events` |
 | `crates/server/src/routes/alert_rules.rs` | new |
+| `crates/server/src/alerts/quota.rs`, `alerts/mod.rs` | the plan limit check (D-K-14) |
+| `crates/server/src/api/common.rs`, `crates/server/src/http/error.rs` | `ProblemCode::PlanLimit`, `ApiError::PlanLimit` |
 | `crates/server/src/routes/mod.rs` | `pub(crate) mod alert_rules;` (alphabetical: before `api_keys`) |
 | `crates/server/src/http/access.rs` | `routes.extend(crate::routes::alert_rules::routes());` |
 | `crates/server/src/api/openapi.rs`, `crates/server/tests/openapi.rs` | as K5 |
@@ -67,11 +69,11 @@ pub struct AlertRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_count: Option<i64>,
     /// Last evaluation, successful or not.
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "optional_time")]
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::api::keys::optional_time")]
     #[schema(value_type = Option<String>, format = DateTime)]
     pub last_evaluated_at: Option<i64>,
     /// Last `fired` event.
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "optional_time")]
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::api::keys::optional_time")]
     #[schema(value_type = Option<String>, format = DateTime)]
     pub last_fired_at: Option<i64>,
     /// Why the last evaluation failed. Absent after a successful one.
@@ -215,7 +217,7 @@ pub struct AlertEvent {
 
 Add `///` doc lines to every field of `UpdateAlertRuleRequest` (copy the matching ones of `CreateAlertRuleRequest`, prefixed with "New ").
 
-`optional_time`: move the private module `optional_time` of `api/keys.rs` into `api/common.rs` as `pub(crate) mod optional_time`, with its two functions `pub(crate)` (not `pub(super)`) and `use llmobs_core::time_serde;` instead of `use super::time_serde;`. Delete the copy in `keys.rs` and add `optional_time` to its `use super::common::{…}` line; `keys.rs` keeps `with = "optional_time"` and its own `time_serde` import (still used by `created_at`). In `alerts.rs`, import it the same way (`use super::common::optional_time;`) and write `with = "optional_time"`.
+`optional_time`: reuse `crate::api::keys::optional_time` (already `pub(crate)`; `api/connections.rs` uses it): write `#[serde(default, skip_serializing_if = "Option::is_none", with = "crate::api::keys::optional_time")]` on `last_evaluated_at` and `last_fired_at`. Do not move it.
 
 `AlertEvent` exposes the snapshot's `metric`, `comparator` and `window` only; the rule name and filter stay in the stored `details` (K8's messages use them).
 
@@ -321,6 +323,84 @@ Write the cursor encode/decode as two private functions in this file, `encode_cu
 
 `rule_json(row: &RuleRow) -> AlertRule` copies the fields (`state`, `last_*` included; `last_notified_at` and `clear_streak` are not exposed).
 
+## 3b. Plan limit (D-K-14, D178)
+
+On the cloud Free plan an org may have 1 enabled alert rule; paid plans and self-hosted instances have no limit (D178). Track P owns entitlements (D179) and is not built yet. K adds the one check P will feed, so P changes a single function body and nothing else.
+
+**`crate::alerts::quota`** (new file `alerts/quota.rs`; `pub(crate) mod quota;` in `alerts/mod.rs`):
+
+```rust
+//! The per-org alert rule limit (D178, D-K-14).
+
+use llmobs_core::ids::OrgId;
+
+use crate::http::AppState;
+use crate::http::error::ApiError;
+
+/// The most enabled alert rules `org_id` may have; `None` means no limit.
+///
+/// Track P (D179) replaces this body with the value of the org's resolved `Entitlements`
+/// (its maximum number of alert rules). Until then every org is unlimited, which is
+/// the self-hosted behaviour (D172).
+pub(crate) fn rule_limit(_state: &AppState, _org_id: OrgId) -> Option<i64> {
+    None
+}
+
+/// `Err(ApiError::PlanLimit)` when one more enabled rule would exceed `limit`.
+pub(crate) fn check_rule_quota(enabled_rules: i64, limit: Option<i64>) -> Result<(), ApiError> {
+    match limit {
+        Some(limit) if enabled_rules >= limit => Err(ApiError::PlanLimit {
+            detail: format!(
+                "Your plan allows {limit} enabled alert {}.",
+                if limit == 1 { "rule" } else { "rules" }
+            ),
+        }),
+        _ => Ok(()),
+    }
+}
+```
+
+**Error type.** In `api/common.rs`, add to `ProblemCode` after `EmailNotVerified`:
+
+```rust
+    /// The org's plan does not allow this (D178). The detail names the limit.
+    PlanLimit,
+```
+
+with status `403` (add it to the `Self::Forbidden | Self::SsoRequired | Self::EmailNotVerified` arm of `status`, and give it the same reason phrase as `Forbidden` in `reason_phrase` or whichever match the compiler reports). In `http/error.rs`, add to `ApiError` after `Forbidden`:
+
+```rust
+    /// The org's plan limit is reached (D178).
+    #[error("plan limit")]
+    PlanLimit {
+        /// Names the limit; never holds payload.
+        detail: String,
+    },
+```
+
+and in `problem()`: `Self::PlanLimit { detail } => Problem::new(ProblemCode::PlanLimit, Some(detail.clone())),`. Fix any other exhaustive `match` on `ApiError` or `ProblemCode` the compiler reports the same way. The OpenAPI `ProblemCode` enum gains `plan_limit` (regenerated by `just openapi`); spec 09's code list already names it (planning commit).
+
+**Where it runs** (only when the result is an enabled rule):
+- `create_rule`, after `checked_cooldown` and before the insert, when `body.enabled.unwrap_or(true)`:
+
+```rust
+let limit = quota::rule_limit(&state, access.project.org_id);
+if limit.is_some() {
+    let enabled = alerts::count_enabled_org_rules(state.meta.reader(), access.project.org_id).await?;
+    quota::check_rule_quota(enabled, limit)?;
+}
+```
+
+- `update_rule`, when the body has `enabled: Some(true)` and the stored rule is disabled, with the same code before the update.
+
+Two concurrent requests can both pass and leave the org one rule over its limit; that is accepted (the next re-enable or create is refused).
+
+**Tests** (`alerts::quota::tests` and `http::error` tests):
+- `no_limit_allows_everything`: `check_rule_quota(5, None)` is `Ok`.
+- `limit_one`: `check_rule_quota(0, Some(1))` is `Ok`; `check_rule_quota(1, Some(1))` is `Err(ApiError::PlanLimit { detail })` with `detail == "Your plan allows 1 enabled alert rule."`; `check_rule_quota(3, Some(3))` names `3 enabled alert rules`.
+- `plan_limit_problem`: `ApiError::PlanLimit { detail: "x".into() }.problem()` has `status 403`, `code PlanLimit` (serialized `"plan_limit"`) and `detail "x"`.
+- Route test 12 below: with `rule_limit` returning `None`, a second enabled rule is created (`201`): self-hosted has no limit.
+
 ## 4. OpenAPI
 
 `collect_schemas`: `AlertMetric`, `AlertWindow`, `Comparator`, `LatencyTarget`, `ScoreAggregation`, `AlertState`, `AlertCondition`, `AlertRule`, `CreateAlertRuleRequest`, `UpdateAlertRuleRequest`, `AlertEventKind`, `AlertDelivery`, `AlertEvent`, and `insert_page::<AlertRule>("AlertRulePage")`, `insert_page::<AlertEvent>("AlertEventPage")`.
@@ -336,7 +416,7 @@ Write the cursor encode/decode as two private functions in this file, `encode_cu
 | `delete_alert_rule` | DELETE `{PROJECT}/alert-rules/{id}` | `Delete an alert rule` | `204` `"Deleted, with its events."` | `&[400, 401, 403, 404, 429]` |
 | `list_alert_events` | GET `{PROJECT}/alert-rules/{id}/events` | `List a rule's events` | `200` `json_named("AlertEventPage", "Events, newest first, with their deliveries.")` | `QUERY_ERRORS` |
 
-Every operation: tag `"alerts"`, no `.securities(...)`, and `.parameters(Some(vec![project_param()]))`, plus `path_uuid("id", "Alert rule id.")` on the `{id}` paths. `create_alert_rule` has `.request_body(Some(json_body("CreateAlertRuleRequest")))` and `update_alert_rule` `json_body("UpdateAlertRuleRequest")`. The 204 is `ResponseBuilder::new().description("Deleted, with its events.").build()`. `list_alert_events` has `.parameters(Some(with_query::<PageParams>(vec![project_param(), path_uuid("id", "Alert rule id.")])))`; the `{id}` routes `path_uuid("id", "Alert rule id.")`. `create_alert_rule` gets `.description(Some("Needs role member. The filter is checked by the query layer (400 invalid_filter). At most 100 rules per project (409)."))`; `update_alert_rule` `.description(Some("A new condition, or a change of enabled, resets the state to ok without an event."))`.
+Every operation: tag `"alerts"`, no `.securities(...)`, and `.parameters(Some(vec![project_param()]))`, plus `path_uuid("id", "Alert rule id.")` on the `{id}` paths. `create_alert_rule` has `.request_body(Some(json_body("CreateAlertRuleRequest")))` and `update_alert_rule` `json_body("UpdateAlertRuleRequest")`. The 204 is `ResponseBuilder::new().description("Deleted, with its events.").build()`. `list_alert_events` has `.parameters(Some(with_query::<PageParams>(vec![project_param(), path_uuid("id", "Alert rule id.")])))`; the `{id}` routes `path_uuid("id", "Alert rule id.")`. `create_alert_rule` gets `.description(Some("Needs role member. The filter is checked by the query layer (400 invalid_filter). At most 100 rules per project (409). An enabled rule beyond the org's plan limit is 403 plan_limit."))`; `update_alert_rule` `.description(Some("A new condition, or a change of enabled, resets the state to ok without an event. Re-enabling a rule beyond the org's plan limit is 403 plan_limit."))`.
 
 `problem(code)` already describes 503. In `tests/openapi.rs`:
 - `OPERATIONS`: the six entries.
@@ -500,6 +580,7 @@ Only rule `…0510` has detail and event examples, so in `just web-dev` the othe
 8. `names_are_unique`: duplicate name on create → `409`; renaming a rule to another rule's name → `409`.
 9. `delete_and_404s`: DELETE → `204`; GET, PATCH, DELETE again → `404`; GET `…/alert-rules/not-a-uuid` → `400`.
 10. `events_are_paged_with_deliveries`: insert 3 events by SQL for the rule (times 1, 2, 3) and two deliveries on the newest; GET `…/events?limit=2` → the events at 3 and 2, the newest with 2 deliveries carrying `channel_name`; `next_cursor` present; GET with that cursor → the event at 1 and `next_cursor null`; `?cursor=garbage` → `400` field `cursor`; `?limit=0` → `400`; a rule inserted in the other project, read through the seeded project's path → `404`.
+12. `no_plan_limit_by_default`: two enabled rules in the project → both `201`; disable one and re-enable it → `200`.
 11. `roles`: viewer GETs list, rule and events (`200`) but POST/PATCH/DELETE → `403`; member POST → `201`; `read_key` GET → `200`, POST → `403`.
 
 ## Commands

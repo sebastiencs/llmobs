@@ -341,7 +341,12 @@ pub(crate) async fn list_rules(pool: &SqlitePool, project_id: ProjectId) -> Resu
 pub(crate) async fn rule_by_id(pool: &SqlitePool, project_id: ProjectId, id: Uuid) -> Result<Option<RuleRow>, MetaError>;
 pub(crate) async fn update_rule(conn: &mut SqliteConnection, project_id: ProjectId, id: Uuid, patch: RulePatch, now: i64) -> Result<Option<RuleRow>, MetaError>;
 pub(crate) async fn delete_rule(conn: &mut SqliteConnection, project_id: ProjectId, id: Uuid) -> Result<bool, MetaError>;
+
+/// Enabled alert rules in every project of `org_id` (D178's per-org limit, D-K-14).
+pub(crate) async fn count_enabled_org_rules(pool: &SqlitePool, org_id: OrgId) -> Result<i64, MetaError>;
 ```
+
+`count_enabled_org_rules`: `SELECT COUNT(*) FROM alert_rules r JOIN projects p ON p.id = r.project_id WHERE p.org_id = ? AND r.enabled = 1` (`OrgId` is `llmobs_core::ids::OrgId`, bound as `.to_string()`). Disabled rules do not count, so an org at its limit can keep disabled rules.
 
 Behaviour:
 
@@ -394,6 +399,7 @@ Create one org and two projects inside one `db.write`, as `meta/projects.rs`'s t
 8. `disabling_resets_state`: the same with `enabled Some(false)`; then `enabled Some(true)` keeps `Ok`.
 9. `deleting_a_channel_unlinks_it`: a rule with channel C; `delete_channel(C)` → the rule's `channel_ids` is empty.
 10. `last_deliveries_picks_the_newest_finished`: insert a rule with `insert_rule`, then an event by SQL: `INSERT INTO alert_events (id, rule_id, kind, threshold, window_from, window_to, details, created_at) VALUES (?, ?, 'fired', 1.0, 0, 1, '{}', 1)`, and deliveries with `INSERT INTO notification_deliveries (id, event_id, channel_id, status, last_error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)` (`pending` at t=30, `failed` at t=10 with `last_error 'timeout'`, `sent` at t=20) → `LastDelivery { status: "sent", at: 20, error: None }`; a channel with only `pending` deliveries is absent from the map.
+12. `enabled_rules_are_counted_per_org`: two projects A and B of one org with 2 enabled rules and 1 disabled rule in all, and one enabled rule in a project of another org → `count_enabled_org_rules(org)` is 2.
 11. `corrupt_rows_are_reported`: `UPDATE alert_rules SET state = 'weird'` → `list_rules` is `Err(MetaError::Corrupt { table: "alert_rules", column: "state" })`.
 
 ## Commands
@@ -417,4 +423,4 @@ just check
 ## Done when
 
 - The migration, store, permission and sealing exist exactly as above; the schema snapshot shows only the new tables and indexes.
-- `encrypted_columns_cover_the_schema`, `permissions_follow_the_spec_table` and the 13 new tests pass; `just check` is green.
+- `encrypted_columns_cover_the_schema`, `permissions_follow_the_spec_table` and the 14 new tests pass; `just check` is green.
