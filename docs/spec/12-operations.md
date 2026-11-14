@@ -21,7 +21,11 @@ GitHub and Google also accept the split form (`LLMOBS_AUTH__GITHUB__CLIENT_ID`, 
 | `storage.s3.allow_http` | | `false` |
 | `encryption_key` | `LLMOBS_ENCRYPTION_KEY` | unset: read `<data_dir>/secret.key`, generated on the first start of a new data directory (D-I-1) |
 | `license_key` | `LLMOBS_LICENSE_KEY` | unset: no licence, enterprise features locked (D172, D-P-7) |
-| `entitlements.defaults` | | track P's M2: the instance's default features (core only) and limits for orgs without a token; unset = unlimited (D-P-10) |
+| `entitlements.defaults.plan_name` | | `"Self-hosted"`: the plan name shown for orgs without a token (D-P-10) |
+| `entitlements.defaults.features` | | unset: every core feature (`retention_management`); a list grants only those; `ee` names are refused (D-P-10) |
+| `entitlements.defaults.<limit>` | | unset = unlimited, for each of `units_included`, `units_cap`, `ingest_spans_per_sec`, `ingest_burst`, `data_access_days`, `max_seats`, `max_projects`, `max_alert_rules`, `max_active_online_rules` (D-P-13) |
+| `orgs.user_create` | | `true`; `false` on a cloud cell: users cannot create orgs, the control plane does (D-P-31) |
+| `orgs.create_url` | | unset: where "New organization" links when `orgs.user_create` is false (D-P-31) |
 | `entitlements.upgrade_url` | | unset: no Upgrade button. `{org}` is replaced by the org id (D-P-15) |
 | `smtp_url`, `email_from` | `LLMOBS_SMTP_URL`, `LLMOBS_EMAIL_FROM` | unset (email off) |
 | `auth.*` | see 08 | |
@@ -79,13 +83,13 @@ The design is `docs/plans/p-entitlements/00-design.md` (D169–D179, D-P-1–D-P
 
 **Open core.** The core is MIT. `crates/server/src/ee/`, `web/src/ee/` and `tools/license/` are under the Elastic License 2.0 and compiled into the same binary (D172, D-P-1, D-P-2). Every source file there starts with `// SPDX-License-Identifier: Elastic-2.0`; `just check-ee` checks the headers and the licence files.
 
-**Signed tokens.** Licence keys, org entitlement tokens and control-plane requests share one format: `llmobs1.<kid>.<base64url JSON payload>.<base64url ed25519 signature>`, the signature covering `llmobs1.<kid>.<payload>`, at most 16 KiB. Release builds trust only the public keys compiled into the binary; debug builds also trust the development key `dev-1` (D-P-5, D-P-6).
+**Signed tokens.** Licence keys, org entitlement tokens and control-plane requests share one format, implemented once in the `llmobs-token` crate (Elastic-2.0, D-P-26): `llmobs1.<kid>.<base64url JSON payload>.<base64url ed25519 signature>`, the signature covering `llmobs1.<kid>.<payload>`, at most 16 KiB. Release builds trust only the public keys compiled into the binary, each bound to the kinds it may sign: `prod-1` licences; `cloud-1` (and its offline spare `cloud-2`) org and control-plane tokens. Debug builds also trust the development key `dev-1` for every kind (D-P-5, D-P-6, D-P-27).
 
 **Licence key** (`LLMOBS_LICENSE_KEY`, self-hosted). Payload: `kind: "license"`, `id`, `issued_at`, `customer`, `features`, `expires_at`, `grace_ends_at`. Active before `expires_at`, in grace (features on, warnings) before `grace_ends_at`, expired after. A refused key is logged by reason and the server runs without a licence. Without a key: every core feature, no limits, enterprise features locked. Licences carry no limits in the MVP (D-P-7). When a licence lapses, restrictions already set keep applying (D-P-8).
 
 **Entitlements.** One value per org, resolved in memory at every check: instance defaults (`[entitlements.defaults]`, from track P's M2), replaced by the org's valid token, plus the licence's features (D-P-10). Features: `retention_management`, `project_roles`, `sso_enforcement`, `org_sso`. Limits: `units_included`, `units_cap`, `ingest_spans_per_sec`, `ingest_burst`, `data_access_days`, `max_seats`, `max_projects`, `max_alert_rules`, `max_active_online_rules`; none means unlimited (D-P-12, D-P-13). There is no org judge-spend limit.
 
-**Org tokens (cloud).** The control plane owns the plan catalog and per-org overrides and `PUT`s a signed `kind: "org"` token, whose `audience` is the cell's `public_url`, to `/api/internal/v1/orgs/{org}/entitlements` on the org's cell; the newest `issued_at` wins and an expired token falls back to the instance defaults (D-P-9, D-P-11).
+**Org tokens (cloud).** The control plane owns the plan catalog and per-org overrides and `PUT`s a signed `kind: "org"` token, whose `audience` is the cell's `public_url`, to `/api/internal/v1/orgs/{org_id}/entitlements` on the org's cell; the newest `issued_at` wins, an expired token falls back to the instance defaults, and every shrink of the data window is recorded so retention uses the largest window of the last 30 days (D-P-9, D-P-11, D-P-30). The control plane creates orgs on a cell with `POST /api/internal/v1/orgs` (D-P-29).
 
 **Enforcement.**
 - Monthly units (spans + scores, judge-trace spans excluded) per UTC calendar month, from `usage_daily` plus unflushed counts. At `units_cap`, OTLP HTTP, score writes and feedback answer `402 quota_exceeded` (gRPC `RESOURCE_EXHAUSTED` without `RetryInfo`; score deletions are never refused); warnings at 80 % and 100 % of `units_included` (banner, one email to owners) (D-P-16–D-P-18).
@@ -94,7 +98,7 @@ The design is `docs/plans/p-entitlements/00-design.md` (D169–D179, D-P-1–D-P
 - Data older than `data_access_days` is hidden from every read by `QueryOptions::visible_from` in the storage query (media blobs too); deletion scope reads are exempt; retention and the ingest age check use the window plus 30 days (D175, D-P-21, D-P-22).
 - Feature gates answer `403 plan_required`; count limits (alert rules, active online rules) answer `403 plan_limit` (D-P-14, D-P-23).
 
-**Metering.** `usage_daily` (spans, bytes, scores, judge tokens and cost) per org, project and day is the billing source. It is exposed in org settings → Usage, through `GET /api/v1/orgs/{org}/usage`, and to the control plane through `GET /api/internal/v1/usage` with a `kind: "control_plane"` bearer token (D-P-24).
+**Metering.** `usage_daily` (spans, bytes, scores, judge tokens and cost) per org, project and day is the billing source. It is exposed on the org's Plan page (track P's M3), through `GET /api/v1/orgs/{org}/usage`, and to the control plane through `GET /api/internal/v1/usage` with a `kind: "control_plane"` bearer token (D-P-24).
 
 ## Self-monitoring
 
