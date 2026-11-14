@@ -8,8 +8,13 @@ import { WRITE_OPERATIONS, writeHandlers } from "./writes";
 
 const PROJECT = "/api/v1/projects/acme%2Fsupport-bot";
 
-/** Writes that later tracks add under the covered prefixes (none today). */
-const LATER_TRACKS: string[] = [];
+/** Writes that later sub-phases add under the covered prefixes. */
+const LATER_TRACKS: string[] = [
+  "post_llm_connection",
+  "patch_llm_connection",
+  "delete_llm_connection",
+  "post_llm_connection_test",
+];
 
 beforeEach(() => {
   server.use(...writeHandlers);

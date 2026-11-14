@@ -34,6 +34,11 @@ use super::admin::{
     UpdateAdminUserRequest,
 };
 use super::common::{ExclusionParams, Limit, Page, PageParams, Problem, SortOrder, TimeParam};
+use super::connections::{
+    ConnectionStatus, CreateLlmConnectionRequest, LlmAdapter, LlmConnection,
+    LlmConnectionTestError, LlmConnectionTestResult, StructuredOutputMode, TestErrorClass,
+    TestLlmConnectionRequest, UpdateLlmConnectionRequest,
+};
 use super::invites::{CreateInviteRequest, CreatedInvite, Invite, InvitePreview};
 use super::keys::{
     ApiKey as ProjectApiKey, CreateApiKeyRequest, CreatePersonalTokenRequest, CreatedApiKey,
@@ -136,6 +141,17 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<PersonalToken>();
     set.insert::<CreatedPersonalToken>();
     set.insert::<CreatePersonalTokenRequest>();
+    set.insert::<LlmAdapter>();
+    set.insert::<StructuredOutputMode>();
+    set.insert::<ConnectionStatus>();
+    set.insert::<TestErrorClass>();
+    set.insert::<LlmConnection>();
+    set.insert::<CreateLlmConnectionRequest>();
+    set.insert::<UpdateLlmConnectionRequest>();
+    set.insert::<TestLlmConnectionRequest>();
+    set.insert::<LlmConnectionTestError>();
+    set.insert::<LlmConnectionTestResult>();
+    set.insert_page::<LlmConnection>("LlmConnectionPage");
     set.insert::<TraceSummary>();
     set.insert::<SpanSummary>();
     set.insert::<TraceDetail>();
@@ -239,6 +255,10 @@ pub fn openapi() -> OpenApi {
                 "Instance administrators: accounts and the effective settings.",
             ),
             tag("orgs", "Organizations the caller belongs to."),
+            tag(
+                "llm_connections",
+                "LLM provider connections that evaluators use. Keys are write-only.",
+            ),
             tag("projects", "Projects the caller can see."),
             tag("traces", "Trace list, detail, and live streams."),
             tag("spans", "Span list and detail."),
@@ -518,6 +538,7 @@ fn paths() -> Paths {
     let paths = invite_paths(paths);
     let paths = project_paths(paths);
     let paths = member_paths(paths);
+    let paths = connection_paths(paths);
     let paths = api_key_paths(paths);
     let paths = token_paths(paths);
     let paths = trace_paths(paths);
@@ -1116,6 +1137,111 @@ fn member_paths(paths: PathsBuilder) -> PathsBuilder {
         .path(
             "/api/v1/projects/{project}/members/{user}",
             PathItem::new(HttpMethod::Delete, delete_project),
+        )
+}
+
+fn connection_paths(paths: PathsBuilder) -> PathsBuilder {
+    let org = path_string("org", "Org UUID or slug.");
+    let id = path_uuid("id", "Connection id.");
+    let list = operation(
+        "list_llm_connections",
+        "llm_connections",
+        "List LLM connections",
+    )
+    .description(Some("Any member of the organization."))
+    .parameters(Some(with_query::<PageParams>(vec![org.clone()])))
+    .responses(responses(
+        "200",
+        json_named(
+            "LlmConnectionPage",
+            "One page of connections, ordered by name. Keys and header values are not included.",
+        ),
+        QUERY_ERRORS,
+    ))
+    .build();
+    let create = operation(
+        "post_llm_connection",
+        "llm_connections",
+        "Create an LLM connection",
+    )
+    .description(Some("Organization admins and owners."))
+    .parameters(Some(vec![org.clone()]))
+    .request_body(Some(json_body("CreateLlmConnectionRequest")))
+    .responses(responses(
+        "201",
+        json_of::<LlmConnection>("The connection."),
+        &[400, 401, 403, 404, 409, 429],
+    ))
+    .build();
+    let get = operation(
+        "get_llm_connection",
+        "llm_connections",
+        "Get an LLM connection",
+    )
+    .description(Some("Any member of the organization."))
+    .parameters(Some(vec![org.clone(), id.clone()]))
+    .responses(responses(
+        "200",
+        json_of::<LlmConnection>("The connection."),
+        &[400, 401, 403, 404, 429],
+    ))
+    .build();
+    let patch = operation(
+        "patch_llm_connection",
+        "llm_connections",
+        "Update an LLM connection",
+    )
+    .description(Some("Organization admins and owners."))
+    .parameters(Some(vec![org.clone(), id.clone()]))
+    .request_body(Some(json_body("UpdateLlmConnectionRequest")))
+    .responses(responses(
+        "200",
+        json_of::<LlmConnection>("The connection."),
+        &[400, 401, 403, 404, 409, 429],
+    ))
+    .build();
+    let delete = operation(
+        "delete_llm_connection",
+        "llm_connections",
+        "Delete an LLM connection",
+    )
+    .description(Some("Organization admins and owners."))
+    .parameters(Some(vec![org.clone(), id.clone()]))
+    .responses(responses(
+        "204",
+        ResponseBuilder::new()
+            .description("The connection is deleted.")
+            .build(),
+        &[400, 401, 403, 404, 429],
+    ))
+    .build();
+    let test = operation(
+        "post_llm_connection_test",
+        "llm_connections",
+        "Test an LLM connection",
+    )
+    .description(Some("Organization admins and owners."))
+    .parameters(Some(vec![org, id]))
+    .request_body(Some(json_body("TestLlmConnectionRequest")))
+    .responses(responses(
+        "200",
+        json_of::<LlmConnectionTestResult>(
+            "The outcome. A provider failure is ok: false, not an error status.",
+        ),
+        &[400, 401, 403, 404, 429],
+    ))
+    .build();
+    let mut collection = PathItem::new(HttpMethod::Get, list);
+    collection.post = Some(create);
+    let mut connection = PathItem::new(HttpMethod::Get, get);
+    connection.patch = Some(patch);
+    connection.delete = Some(delete);
+    paths
+        .path("/api/v1/orgs/{org}/llm-connections", collection)
+        .path("/api/v1/orgs/{org}/llm-connections/{id}", connection)
+        .path(
+            "/api/v1/orgs/{org}/llm-connections/{id}/test",
+            PathItem::new(HttpMethod::Post, test),
         )
 }
 

@@ -26,6 +26,17 @@
     "file": "static/invite-preview.json"
   },
   {
+    "operation_id": "get_llm_connection",
+    "path_params": {
+      "id": "01900000-0000-7000-8000-000000000400",
+      "org": "acme"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/llm-connection.json"
+  },
+  {
     "operation_id": "get_me",
     "path_params": {},
     "query": {},
@@ -372,6 +383,16 @@
     "file": "static/api-keys.json"
   },
   {
+    "operation_id": "list_llm_connections",
+    "path_params": {
+      "org": "acme"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/llm-connections.json"
+  },
+  {
     "operation_id": "list_org_invites",
     "path_params": {
       "org": "acme"
@@ -518,6 +539,27 @@
     "status": 201,
     "content_type": "application/json",
     "file": "static/api-key-created.json"
+  },
+  {
+    "operation_id": "post_llm_connection",
+    "path_params": {
+      "org": "acme"
+    },
+    "query": {},
+    "status": 201,
+    "content_type": "application/json",
+    "file": "static/llm-connection.json"
+  },
+  {
+    "operation_id": "post_llm_connection_test",
+    "path_params": {
+      "id": "01900000-0000-7000-8000-000000000400",
+      "org": "acme"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/llm-connection-test.json"
   },
   {
     "operation_id": "post_login",

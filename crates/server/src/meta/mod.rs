@@ -7,6 +7,7 @@
 #![cfg_attr(not(test), allow(dead_code))] // `llmobs serve` opens this from P5 on
 
 pub(crate) mod api_keys;
+pub(crate) mod connections;
 pub(crate) mod email_verifications;
 pub(crate) mod identities;
 pub(crate) mod instance_settings;

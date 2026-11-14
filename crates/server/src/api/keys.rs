@@ -163,13 +163,13 @@ pub struct CreatePersonalTokenRequest {
     pub expires_at: Option<TimeParam>,
 }
 
-mod optional_time {
+pub(crate) mod optional_time {
     use serde::de::Error;
     use serde::{Deserialize, Deserializer, Serializer};
 
     use super::time_serde;
 
-    pub(super) fn serialize<S: Serializer>(
+    pub(crate) fn serialize<S: Serializer>(
         value: &Option<i64>,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
@@ -179,7 +179,7 @@ mod optional_time {
         }
     }
 
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Option<i64>, D::Error> {
         match Option::<String>::deserialize(deserializer)? {
