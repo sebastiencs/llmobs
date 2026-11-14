@@ -178,13 +178,88 @@ it("shows the wait message when the rate limit answers", async () => {
   expect(await screen.findByText("Too many tests. Wait a minute.")).toBeInTheDocument();
 });
 
-it("shows no test panel to a viewer", async () => {
+it("shows a viewer the test heading and no controls", async () => {
   server.use(projectAs("viewer"));
   await renderApp(EVALUATOR_URL);
 
   expect(await screen.findByLabelText("Name")).toBeDisabled();
-  const panel = screen.queryByRole("region", { name: "Test" });
-  expect(panel).toBeNull();
+  const panel = screen.getByRole("region", { name: "Test" });
+  expect(within(panel).getByText("Only members can run tests.")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Run test" })).toBeNull();
   expect(within(document.body).queryByLabelText("Trace ID")).toBeNull();
+});
+
+it("names the missing evaluator on a 404, and says not found without a detail", async () => {
+  captureRun(() => problemResponse(404, "not_found", { detail: "evaluator not found" }));
+  const { user } = await renderApp(EVALUATOR_URL);
+
+  await user.type(await screen.findByLabelText("Trace ID"), TRACE_ID);
+  await user.click(screen.getByRole("button", { name: "Run test" }));
+  expect(await screen.findByText("evaluator not found")).toBeInTheDocument();
+  expect(screen.queryByText("Trace not found.")).toBeNull();
+});
+
+it("says not found for a 404 with no detail", async () => {
+  captureRun(() => problemResponse(404, "not_found"));
+  const { user } = await renderApp(EVALUATOR_URL);
+
+  await user.type(await screen.findByLabelText("Trace ID"), TRACE_ID);
+  await user.click(screen.getByRole("button", { name: "Run test" }));
+  expect(await screen.findByText("Not found.")).toBeInTheDocument();
+});
+
+it("shows the cost with at most six significant digits", async () => {
+  captureRun(() =>
+    HttpResponse.json({
+      ...resultFixture,
+      usage: { ...resultFixture.usage, cost_usd: 0.00012000000000000002 },
+    }),
+  );
+  const { user } = await renderApp(EVALUATOR_URL);
+
+  await user.type(await screen.findByLabelText("Trace ID"), TRACE_ID);
+  await user.click(screen.getByRole("button", { name: "Run test" }));
+  expect(await screen.findByText(/120 in · 18 out · \$0\.00012 · /)).toBeInTheDocument();
+  expect(screen.queryByText(/0\.00012000000/)).toBeNull();
+});
+
+it("clears a shown result when the form or the mode changes", async () => {
+  captureRun();
+  const { user } = await renderApp(EVALUATOR_URL);
+
+  await user.type(await screen.findByLabelText("Trace ID"), TRACE_ID);
+  await user.click(screen.getByRole("button", { name: "Run test" }));
+  expect(await screen.findByText("0.900")).toBeInTheDocument();
+
+  await user.type(screen.getByLabelText("Score name"), "2");
+  expect(screen.queryByRole("region", { name: "Test result" })).toBeNull();
+
+  await user.click(screen.getByRole("button", { name: "Run test" }));
+  expect(await screen.findByText("0.900")).toBeInTheDocument();
+  await user.click(screen.getByRole("tab", { name: "Variables" }));
+  expect(screen.queryByRole("region", { name: "Test result" })).toBeNull();
+});
+
+it("shows the signing secret of a saved webhook only while its settings are replaced", async () => {
+  server.use(
+    http.get("/api/v1/projects/:project/evaluators/:id", () => HttpResponse.json(WEBHOOK)),
+  );
+  const run = captureRun();
+  const { user } = await renderApp(`/acme/support-bot/evaluators/${WEBHOOK.id}`);
+
+  const toggle = await screen.findByRole("checkbox", { name: "Replace webhook settings" });
+  expect(screen.queryByLabelText("Signing secret")).toBeNull();
+  await user.click(toggle);
+  await user.type(screen.getByLabelText("Signing secret"), "fedcba9876543210");
+  // Turning the toggle off drops the typed secret, so nothing is silently left out.
+  await user.click(toggle);
+  expect(screen.queryByLabelText("Signing secret")).toBeNull();
+  await user.click(toggle);
+  expect(screen.getByLabelText("Signing secret")).toHaveValue("");
+  await user.click(toggle);
+
+  await user.click(screen.getByRole("tab", { name: "Variables" }));
+  await user.click(screen.getByRole("button", { name: "Run test" }));
+  await waitFor(() => expect(run.calls()).toBe(1));
+  expect(JSON.stringify(run.body())).not.toContain("fedcba9876543210");
 });

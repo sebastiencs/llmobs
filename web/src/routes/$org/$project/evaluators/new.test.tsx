@@ -70,6 +70,48 @@ it("creates a judge from a template and opens it", async () => {
   );
 });
 
+/** The test panel's mapping rows, as `[variable, expression]` pairs in order. */
+function mappingRows(): [string, string][] {
+  return screen
+    .queryAllByLabelText(/^Mapping variable \d+$/)
+    .map((variable, index): [string, string] => [
+      (variable as HTMLInputElement).value,
+      (screen.getByLabelText(`Mapping expression ${index + 1}`) as HTMLInputElement).value,
+    ]);
+}
+
+it("seeds the test panel's mapping from the picked template", async () => {
+  const hallucination = templatesFixture.data.find((template) => template.id === "hallucination");
+  if (!hallucination) {
+    throw new Error("the hallucination template is missing from the fixtures");
+  }
+  const { user } = await renderApp("/acme/support-bot/evaluators/new");
+
+  await choose(user, "Start from a template", "Hallucination");
+  expect(mappingRows()).toEqual(
+    hallucination.default_mapping.map((row) => [row.variable, row.expression]),
+  );
+});
+
+it("re-seeds the mapping from the prompt until the rows are edited", async () => {
+  const { user } = await renderApp("/acme/support-bot/evaluators/new");
+
+  // user-event reads `{` as a key, so each brace of the prompt is doubled.
+  await user.type(screen.getByLabelText("Prompt"), "Ask {{{{ question }} about {{{{ topic }}.");
+  expect(mappingRows()).toEqual([
+    ["question", ""],
+    ["topic", ""],
+  ]);
+
+  // Once a row is edited, a template pick no longer replaces the rows.
+  await user.type(screen.getByLabelText("Mapping expression 1"), "trace.input");
+  await choose(user, "Start from a template", "Relevance");
+  expect(mappingRows()).toEqual([
+    ["question", "trace.input"],
+    ["topic", ""],
+  ]);
+});
+
 it("creates a contains check that needs all of its texts", async () => {
   const created = captureCreate();
   const { user } = await renderApp("/acme/support-bot/evaluators/new");

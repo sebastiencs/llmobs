@@ -1895,6 +1895,39 @@ mod tests {
             !logs.contains("private-answer-xyz"),
             "logs show the payload: {logs}"
         );
+
+        // A judge run: the rendered prompt and the provider's answer must stay out of the logs.
+        let mock = MockLlm::start(vec![completion(
+            r#"{"explanation": "MODEL-ANSWER-TEXT-7731", "value": 0.9}"#,
+        )])
+        .await;
+        let connection = mocked_connection(&app, &seeded.cookie, &mock).await;
+        let (judged, logs) = capture_logs(run_test(
+            &app,
+            &seeded,
+            &seeded.cookie,
+            &json!({
+                "evaluator": judge_on(connection),
+                "variables": {"input": "PROMPT-TEXT-PRIVATE-4412", "output": "a"}
+            }),
+        ))
+        .await;
+        assert_eq!(judged.status, 200, "{}", text(&judged));
+        let answer: Value = judged.json();
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert_eq!(answer["reason"], "MODEL-ANSWER-TEXT-7731", "{answer}");
+        let prompt = answer["prompt"].as_str().expect("a rendered prompt");
+        assert!(prompt.contains("PROMPT-TEXT-PRIVATE-4412"), "{prompt}");
+        assert!(logs.contains("evaluator tested"), "{logs}");
+        assert!(
+            !logs.contains("PROMPT-TEXT-PRIVATE-4412"),
+            "logs show the prompt: {logs}"
+        );
+        assert!(!logs.contains(prompt), "logs show the prompt: {logs}");
+        assert!(
+            !logs.contains("MODEL-ANSWER-TEXT-7731"),
+            "logs show the provider answer: {logs}"
+        );
     }
 
     #[tokio::test]
@@ -2112,6 +2145,153 @@ mod tests {
             [(
                 "evaluator".to_owned(),
                 "give evaluator_id, evaluator, or both".to_owned()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn variables_are_capped_at_256_kib() {
+        let (app, seeded) = test_app().await;
+        let big = "y".repeat(90_000);
+        let body = json!({
+            "evaluator": same_check(),
+            "variables": {"a": big, "b": big, "c": big}
+        });
+        assert_eq!(
+            field_errors(&run_test(&app, &seeded, &seeded.cookie, &body).await),
+            [(
+                "variables".to_owned(),
+                "variables must be at most 256 KiB in total".to_owned()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn levenshtein_inputs_are_capped_at_64_kib() {
+        let (app, seeded) = test_app().await;
+        let body = json!({
+            "evaluator": {
+                "kind": "check",
+                "config": {"check": "levenshtein"},
+                "output_score": {"name": "similar", "data_type": "numeric"}
+            },
+            "variables": {"output": "x".repeat(64 * 1024 + 1), "expected": "x"}
+        });
+        assert_eq!(
+            field_errors(&run_test(&app, &seeded, &seeded.cookie, &body).await),
+            [(
+                "variables".to_owned(),
+                "levenshtein inputs must be at most 64 KiB each".to_owned()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn all_zero_trace_id_is_refused() {
+        let (app, seeded) = test_app().await;
+        let body = trace_run(
+            &"0".repeat(32),
+            None,
+            &json!({"output": "trace.output", "expected": "trace.output"}),
+        );
+        assert_eq!(
+            field_errors(&run_test(&app, &seeded, &seeded.cookie, &body).await),
+            [(
+                "trace_id".to_owned(),
+                "trace_id must be 32 hex digits".to_owned()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_evaluator_is_404() {
+        let (app, seeded) = test_app().await;
+        let response = run_test(
+            &app,
+            &seeded,
+            &seeded.cookie,
+            &json!({
+                "evaluator_id": "01900000-0000-7000-8000-000000000999",
+                "variables": {"output": "a", "expected": "a"}
+            }),
+        )
+        .await;
+        assert_eq!(response.status, 404, "{}", text(&response));
+    }
+
+    #[tokio::test]
+    async fn config_is_required_without_evaluator_id() {
+        let (app, seeded) = test_app().await;
+        let body = json!({
+            "evaluator": {
+                "kind": "check",
+                "output_score": {"name": "same", "data_type": "boolean"}
+            },
+            "variables": {"output": "a", "expected": "a"}
+        });
+        assert_eq!(
+            field_errors(&run_test(&app, &seeded, &seeded.cookie, &body).await),
+            [(
+                "evaluator.config".to_owned(),
+                "config is required without evaluator_id".to_owned()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn new_webhook_config_needs_a_secret_with_evaluator_id() {
+        let hook = MockWebhook::start(200, json!({"value": 0.5})).await;
+        let (app, seeded) = test_app().await;
+        let created = create_ok(&app, &seeded, &webhook_body("Hooked")).await;
+        let response = run_test(
+            &app,
+            &seeded,
+            &seeded.cookie,
+            &json!({
+                "evaluator_id": id_of(&created),
+                "evaluator": {
+                    "kind": "webhook",
+                    "config": {"url": hook.url()},
+                    "output_score": {"name": "hook", "data_type": "numeric"}
+                },
+                "variables": {"output": "x"}
+            }),
+        )
+        .await;
+        assert_eq!(
+            field_errors(&response),
+            [(
+                "evaluator.webhook_secret".to_owned(),
+                "webhook_secret is required with config".to_owned()
+            )]
+        );
+        assert!(hook.requests().is_empty(), "the saved secret never signs");
+    }
+
+    #[tokio::test]
+    async fn new_webhook_config_needs_a_secret_without_evaluator_id() {
+        // Without `evaluator_id` the body rule of § Test run contract applies, not the
+        // "with config" message, which is only for a saved evaluator.
+        let (app, seeded) = test_app().await;
+        let response = run_test(
+            &app,
+            &seeded,
+            &seeded.cookie,
+            &json!({
+                "evaluator": {
+                    "kind": "webhook",
+                    "config": {"url": "https://hooks.example.com/unsent"},
+                    "output_score": {"name": "hook", "data_type": "numeric"}
+                },
+                "variables": {"output": "x"}
+            }),
+        )
+        .await;
+        assert_eq!(
+            field_errors(&response),
+            [(
+                "evaluator.webhook_secret".to_owned(),
+                "webhook_secret is required".to_owned()
             )]
         );
     }

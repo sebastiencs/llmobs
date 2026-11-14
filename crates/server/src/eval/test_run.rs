@@ -193,7 +193,7 @@ pub(crate) async fn run(
         })
     {
         return Err(bad_request(vec![field_error(
-            "evaluator.variables",
+            "variables",
             "levenshtein inputs must be at most 64 KiB each",
         )]));
     }

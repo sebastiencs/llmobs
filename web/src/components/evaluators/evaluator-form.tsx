@@ -28,7 +28,7 @@ import {
   outputStateOfJudge,
   outputStateOfScore,
 } from "@/components/evaluators/output-fields";
-import { TestPanel } from "@/components/evaluators/test-panel";
+import { TestPanel, TestPanelLocked } from "@/components/evaluators/test-panel";
 import { FormError } from "@/components/form/form-error";
 import { SubmitButton } from "@/components/form/submit-button";
 import { TextField } from "@/components/form/text-field";
@@ -274,7 +274,9 @@ function buildParts(values: FormValues, saved: boolean): Parts {
       }
       config = webhook;
     }
-    if (!saved || replacing || values.secret.length > 0) {
+    // The secret is only typed, and so only sent, while the settings are replaced (its input is
+    // hidden otherwise, and the toggle clears it).
+    if (replacing) {
       const problem = secretProblem(values.secret);
       if (problem !== undefined) {
         errors.secret = problem;
@@ -807,7 +809,11 @@ export function EvaluatorForm({
                       id="evaluator-replace-webhook"
                       checked={values.replaceWebhook}
                       onCheckedChange={(checked) => {
-                        set({ replaceWebhook: checked === true });
+                        // Turning the toggle off drops a typed secret: it would not be sent.
+                        set({
+                          replaceWebhook: checked === true,
+                          ...(checked === true ? {} : { secret: "" }),
+                        });
                       }}
                     />
                     <Label htmlFor="evaluator-replace-webhook">Replace webhook settings</Label>
@@ -902,18 +908,19 @@ export function EvaluatorForm({
                   </fieldset>
                 </>
               ) : null}
-              <TextField
-                id="evaluator-secret"
-                label="Signing secret"
-                type="password"
-                autoComplete="new-password"
-                value={values.secret}
-                error={errors.secret}
-                placeholder={saved ? "Leave empty to keep the current secret" : undefined}
-                onChange={(secret) => {
-                  set({ secret });
-                }}
-              />
+              {webhookSettingsShown ? (
+                <TextField
+                  id="evaluator-secret"
+                  label="Signing secret"
+                  type="password"
+                  autoComplete="new-password"
+                  value={values.secret}
+                  error={errors.secret}
+                  onChange={(secret) => {
+                    set({ secret });
+                  }}
+                />
+              ) : null}
               <div className="flex flex-col gap-2">
                 <span className="text-sm leading-none font-medium">Output</span>
                 <OutputFields
@@ -956,9 +963,12 @@ export function EvaluatorForm({
           evaluatorId={evaluator?.id}
           body={testBody}
           dirty={dirty}
+          prompt={values.kind === "llm_judge" ? values.prompt : ""}
           defaultMapping={values.defaultMapping}
         />
-      ) : null}
+      ) : (
+        <TestPanelLocked />
+      )}
     </>
   );
 }

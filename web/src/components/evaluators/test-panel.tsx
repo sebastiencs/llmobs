@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { X } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { $api } from "@/api/client";
 import { fieldErrors, problemMessage, problemOf } from "@/api/problem";
 import { projectRef } from "@/api/project-ref";
@@ -48,12 +48,6 @@ function newMappingRow(variable: string, expression: string): MappingRow {
 function newVariableRow(): VariableRow {
   rowId += 1;
   return { id: rowId, name: "", value: "" };
-}
-
-/** The prompt of a body. The body is `null` while the form has client errors. */
-function promptOf(body: Body | null): string {
-  const prompt = (body?.config as Record<string, unknown> | undefined)?.prompt;
-  return typeof prompt === "string" ? prompt : "";
 }
 
 /** `{{ name }}` variables of a prompt, as in evaluator-form.tsx. */
@@ -114,6 +108,14 @@ function formatValue(value: Schema<"ScoreValue">): string {
   }
 }
 
+/** A cost in dollars with at most 6 significant digits and no trailing zeros. */
+function formatCost(cost: number): string {
+  const text = cost.toPrecision(6);
+  const [mantissa, exponent] = text.split("e");
+  const trimmed = (mantissa ?? text).replace(/\.?0+$/, "");
+  return exponent === undefined ? trimmed : `${trimmed}e${exponent}`;
+}
+
 function usageLine(usage: Schema<"EvaluatorTestUsage">): string {
   const parts: string[] = [];
   if (usage.input_tokens !== undefined) {
@@ -123,19 +125,19 @@ function usageLine(usage: Schema<"EvaluatorTestUsage">): string {
     parts.push(`${usage.output_tokens} out`);
   }
   if (usage.cost_usd !== undefined) {
-    parts.push(`$${usage.cost_usd}`);
+    parts.push(`$${formatCost(usage.cost_usd)}`);
   }
   return parts.join(" · ");
 }
 
-/** The message of a failed run. The rate limit and a missing trace have their own wording. */
+/** The message of a failed run. The rate limit has its own wording; a 404 names what is missing. */
 function failureMessage(error: unknown): string {
   const problem = problemOf(error);
   if (problem?.status === 429) {
     return "Too many tests. Wait a minute.";
   }
   if (problem?.status === 404) {
-    return "Trace not found.";
+    return problem.detail ?? "Not found.";
   }
   const messages = Object.values(fieldErrors(error));
   if (messages.length > 0) {
@@ -154,6 +156,7 @@ export function TestPanel({
   evaluatorId,
   body,
   dirty,
+  prompt,
   defaultMapping,
 }: {
   org: string;
@@ -163,14 +166,19 @@ export function TestPanel({
   body: Body | null;
   /** Whether the form differs from the saved evaluator. Always true on new. */
   dirty: boolean;
+  /** The judge's prompt in the form, or `""` for a kind without one. Read even when `body` is `null`. */
+  prompt: string;
+  /** The picked template's mapping, or `[]`. */
   defaultMapping: Mapping[];
 }) {
   const [mode, setMode] = useState<"trace" | "variables">("trace");
   const [traceId, setTraceId] = useState("");
   const [spanId, setSpanId] = useState("");
   const [mapping, setMapping] = useState<MappingRow[]>(() =>
-    initialMapping(defaultMapping, promptOf(body)),
+    initialMapping(defaultMapping, prompt),
   );
+  // Until the user edits the rows, a template pick or a prompt change re-seeds them.
+  const [mappingTouched, setMappingTouched] = useState(false);
   const [variables, setVariables] = useState<VariableRow[]>(() => [newVariableRow()]);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const test = $api.useMutation("post", "/api/v1/projects/{project}/evaluators/test", {
@@ -185,6 +193,27 @@ export function TestPanel({
     },
     [resetTest],
   );
+
+  useEffect(() => {
+    if (!mappingTouched) {
+      setMapping(initialMapping(defaultMapping, prompt));
+    }
+  }, [defaultMapping, prompt, mappingTouched]);
+
+  // A result describes the evaluator and mode it ran with; a change to either clears it.
+  const panelKey = `${mode}\n${JSON.stringify(body)}`;
+  const shownFor = useRef(panelKey);
+  useEffect(() => {
+    if (shownFor.current !== panelKey) {
+      shownFor.current = panelKey;
+      resetTest();
+    }
+  }, [panelKey, resetTest]);
+
+  function editMapping(next: MappingRow[]) {
+    setMappingTouched(true);
+    setMapping(next);
+  }
 
   function runFields(): RunFields {
     const problems: Record<string, string> = {};
@@ -319,7 +348,7 @@ export function TestPanel({
                     value={row.variable}
                     onChange={(event) => {
                       const variable = event.target.value;
-                      setMapping(
+                      editMapping(
                         mapping.map((item) => (item.id === row.id ? { ...item, variable } : item)),
                       );
                     }}
@@ -330,7 +359,7 @@ export function TestPanel({
                     value={row.expression}
                     onChange={(event) => {
                       const expression = event.target.value;
-                      setMapping(
+                      editMapping(
                         mapping.map((item) =>
                           item.id === row.id ? { ...item, expression } : item,
                         ),
@@ -343,7 +372,7 @@ export function TestPanel({
                     size="icon-xs"
                     aria-label={`Remove mapping ${index + 1}`}
                     onClick={() => {
-                      setMapping(mapping.filter((item) => item.id !== row.id));
+                      editMapping(mapping.filter((item) => item.id !== row.id));
                     }}
                   >
                     <X />
@@ -356,7 +385,7 @@ export function TestPanel({
                   variant="outline"
                   size="sm"
                   onClick={() => {
-                    setMapping([...mapping, newMappingRow("", "")]);
+                    editMapping([...mapping, newMappingRow("", "")]);
                   }}
                 >
                   Add variable
@@ -433,6 +462,18 @@ export function TestPanel({
         </div>
       </form>
       {result ? <TestResult org={org} project={project} result={result} /> : null}
+    </section>
+  );
+}
+
+/** What a viewer sees in place of the panel: its heading and why it has no controls. */
+export function TestPanelLocked() {
+  return (
+    <section aria-labelledby="test-panel-title" className="flex flex-col gap-2 border-t pt-6">
+      <h2 id="test-panel-title" className="text-base font-medium">
+        Test
+      </h2>
+      <p className="text-sm text-muted-foreground">Only members can run tests.</p>
     </section>
   );
 }
