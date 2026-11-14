@@ -1,0 +1,97 @@
+---
+source: crates/cli/tests/e2e.rs
+expression: protobuf
+---
+{
+  "trace": {
+    "trace": {
+      "trace_id": "0000000000000000000000000000000a",
+      "root_span_id": "0000000000000001",
+      "has_root": true,
+      "name": "search_docs",
+      "start_time": "2025-12-31T23:59:50.001000000Z",
+      "end_time": "2025-12-31T23:59:50.999000000Z",
+      "duration_ns": 998000000,
+      "status": "unset",
+      "tags": [],
+      "metadata": {},
+      "input_preview": "{\"query\":\"pricing\",\"limit\":2}",
+      "output_preview": "[\"doc-1\",\"doc-2\"]",
+      "span_count": 1,
+      "error_count": 0,
+      "llm_count": 0,
+      "models": [],
+      "scores": []
+    },
+    "spans": [
+      {
+        "depth": 0,
+        "detached": false,
+        "span": {
+          "trace_id": "0000000000000000000000000000000a",
+          "span_id": "0000000000000001",
+          "name": "search_docs",
+          "span_kind": "tool",
+          "start_time": "2025-12-31T23:59:50.001000000Z",
+          "end_time": "2025-12-31T23:59:50.999000000Z",
+          "duration_ns": 998000000,
+          "status": "unset",
+          "service_name": "conformance",
+          "tags": [],
+          "metadata": {},
+          "input_preview": "{\"query\":\"pricing\",\"limit\":2}",
+          "output_preview": "[\"doc-1\",\"doc-2\"]"
+        }
+      }
+    ],
+    "truncated": false
+  },
+  "spans": [
+    {
+      "trace_id": "0000000000000000000000000000000a",
+      "span_id": "0000000000000001",
+      "name": "search_docs",
+      "span_kind": "tool",
+      "start_time": "2025-12-31T23:59:50.001000000Z",
+      "end_time": "2025-12-31T23:59:50.999000000Z",
+      "duration_ns": 998000000,
+      "status": "unset",
+      "service_name": "conformance",
+      "tags": [],
+      "metadata": {},
+      "input": {
+        "format": "json",
+        "value": {
+          "query": "pricing",
+          "limit": 2
+        }
+      },
+      "output": {
+        "format": "json",
+        "value": [
+          "doc-1",
+          "doc-2"
+        ]
+      },
+      "input_preview": "{\"query\":\"pricing\",\"limit\":2}",
+      "output_preview": "[\"doc-1\",\"doc-2\"]",
+      "attributes": {
+        "llmobs.span.kind": "tool"
+      },
+      "resource_attributes": {
+        "telemetry.distro.name": "llmobs"
+      },
+      "scope_name": "llmobs",
+      "scope_version": "0.0.0",
+      "events": [],
+      "links": [],
+      "media_refs": [],
+      "truncated": [],
+      "conventions": [
+        "llmobs"
+      ],
+      "ingest_time": "[redacted]",
+      "schema_version": 1
+    }
+  ]
+}

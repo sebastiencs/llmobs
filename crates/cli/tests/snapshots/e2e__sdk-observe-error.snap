@@ -1,0 +1,97 @@
+---
+source: crates/cli/tests/e2e.rs
+expression: protobuf
+---
+{
+  "trace": {
+    "trace": {
+      "trace_id": "00000000000000000000000000000008",
+      "root_span_id": "0000000000000001",
+      "has_root": true,
+      "name": "fails",
+      "start_time": "2025-12-31T23:59:50.001000000Z",
+      "end_time": "2025-12-31T23:59:50.999000000Z",
+      "duration_ns": 998000000,
+      "status": "error",
+      "tags": [],
+      "metadata": {},
+      "input_preview": "{\"x\":1}",
+      "span_count": 1,
+      "error_count": 1,
+      "llm_count": 0,
+      "models": [],
+      "scores": []
+    },
+    "spans": [
+      {
+        "depth": 0,
+        "detached": false,
+        "span": {
+          "trace_id": "00000000000000000000000000000008",
+          "span_id": "0000000000000001",
+          "name": "fails",
+          "span_kind": "chain",
+          "start_time": "2025-12-31T23:59:50.001000000Z",
+          "end_time": "2025-12-31T23:59:50.999000000Z",
+          "duration_ns": 998000000,
+          "status": "error",
+          "status_message": "ScenarioError: boom",
+          "service_name": "conformance",
+          "tags": [],
+          "metadata": {},
+          "input_preview": "{\"x\":1}"
+        }
+      }
+    ],
+    "truncated": false
+  },
+  "spans": [
+    {
+      "trace_id": "00000000000000000000000000000008",
+      "span_id": "0000000000000001",
+      "name": "fails",
+      "span_kind": "chain",
+      "start_time": "2025-12-31T23:59:50.001000000Z",
+      "end_time": "2025-12-31T23:59:50.999000000Z",
+      "duration_ns": 998000000,
+      "status": "error",
+      "status_message": "ScenarioError: boom",
+      "service_name": "conformance",
+      "tags": [],
+      "metadata": {},
+      "input": {
+        "format": "json",
+        "value": {
+          "x": 1
+        }
+      },
+      "input_preview": "{\"x\":1}",
+      "attributes": {
+        "llmobs.span.kind": "chain"
+      },
+      "resource_attributes": {
+        "telemetry.distro.name": "llmobs"
+      },
+      "scope_name": "llmobs",
+      "scope_version": "0.0.0",
+      "events": [
+        {
+          "time": "2025-12-31T23:59:50.999000000Z",
+          "name": "exception",
+          "attributes": {
+            "exception.message": "boom",
+            "exception.type": "ScenarioError"
+          }
+        }
+      ],
+      "links": [],
+      "media_refs": [],
+      "truncated": [],
+      "conventions": [
+        "llmobs"
+      ],
+      "ingest_time": "[redacted]",
+      "schema_version": 1
+    }
+  ]
+}

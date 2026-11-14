@@ -1,0 +1,77 @@
+---
+source: crates/cli/tests/e2e.rs
+expression: protobuf
+---
+{
+  "trace": {
+    "trace": {
+      "trace_id": "00000000000000000000000000000001",
+      "root_span_id": "0000000000000001",
+      "has_root": true,
+      "name": "lookup",
+      "start_time": "2025-12-31T23:59:50.001000000Z",
+      "end_time": "2025-12-31T23:59:50.999000000Z",
+      "duration_ns": 998000000,
+      "status": "unset",
+      "tags": [],
+      "metadata": {},
+      "span_count": 1,
+      "error_count": 0,
+      "llm_count": 0,
+      "models": [],
+      "scores": []
+    },
+    "spans": [
+      {
+        "depth": 0,
+        "detached": false,
+        "span": {
+          "trace_id": "00000000000000000000000000000001",
+          "span_id": "0000000000000001",
+          "name": "lookup",
+          "span_kind": "tool",
+          "start_time": "2025-12-31T23:59:50.001000000Z",
+          "end_time": "2025-12-31T23:59:50.999000000Z",
+          "duration_ns": 998000000,
+          "status": "unset",
+          "service_name": "conformance",
+          "tags": [],
+          "metadata": {}
+        }
+      }
+    ],
+    "truncated": false
+  },
+  "spans": [
+    {
+      "trace_id": "00000000000000000000000000000001",
+      "span_id": "0000000000000001",
+      "name": "lookup",
+      "span_kind": "tool",
+      "start_time": "2025-12-31T23:59:50.001000000Z",
+      "end_time": "2025-12-31T23:59:50.999000000Z",
+      "duration_ns": 998000000,
+      "status": "unset",
+      "service_name": "conformance",
+      "tags": [],
+      "metadata": {},
+      "attributes": {
+        "llmobs.span.kind": "tool"
+      },
+      "resource_attributes": {
+        "telemetry.distro.name": "llmobs"
+      },
+      "scope_name": "llmobs",
+      "scope_version": "0.0.0",
+      "events": [],
+      "links": [],
+      "media_refs": [],
+      "truncated": [],
+      "conventions": [
+        "llmobs"
+      ],
+      "ingest_time": "[redacted]",
+      "schema_version": 1
+    }
+  ]
+}

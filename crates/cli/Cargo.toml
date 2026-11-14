@@ -31,3 +31,10 @@ tracing-subscriber.workspace = true
 [[bin]]
 name = "llmobs"
 path = "src/main.rs"
+
+[dev-dependencies]
+insta.workspace = true
+opentelemetry-proto.workspace = true
+prost.workspace = true
+tempfile.workspace = true
+tonic.workspace = true
