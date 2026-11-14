@@ -17,6 +17,9 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   RUST_BACKTRACE: short
+  # Link with mold instead of the default rust-lld (Rust >= 1.90). Changing
+  # RUSTFLAGS changes every kache cache key: expect one cold run after a change.
+  RUSTFLAGS: -Clinker-features=-lld -Clink-arg=-fuse-ld=mold
   # Kache permits PR uploads only to a separate prefix; protected main ignores it.
   KACHE_PULL_REQUEST_PREFIX: kache-pr-v2
   # Only main and owner-authored, owner-triggered same-repository PRs may use the S3 cache.
@@ -77,7 +80,7 @@ jobs:
       - uses: ./.github/actions/rust # zizmor: ignore[self-repository] actionlint 1.7.12 rejects the $/ form
         with:
           cache: "false"
-      - run: just deny
+      - run: just deny check-ee
       - run: just assert-clean
 
   web:

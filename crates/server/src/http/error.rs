@@ -74,6 +74,12 @@ pub(crate) enum ApiError {
         /// Names the limit; never holds payload.
         detail: String,
     },
+    /// The org's plan does not include the feature (D177, D-P-14). `detail` names it.
+    #[error("plan required")]
+    PlanRequired {
+        /// Static text shown as the problem `detail`.
+        detail: &'static str,
+    },
     /// The resource does not exist.
     #[error("not found")]
     NotFound,
@@ -147,6 +153,9 @@ impl ApiError {
             Self::Forbidden { code } => Problem::new(*code, None),
             Self::PlanLimit { detail } => {
                 Problem::new(ProblemCode::PlanLimit, Some(detail.clone()))
+            }
+            Self::PlanRequired { detail } => {
+                Problem::new(ProblemCode::PlanRequired, Some((*detail).to_owned()))
             }
             Self::NotFound => not_found_problem(),
             Self::Conflict { detail } => {

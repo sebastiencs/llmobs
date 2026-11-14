@@ -134,7 +134,8 @@ Run everything through `just`:
 | `just lint` | clippy, warnings as errors |
 | `just test` | all Rust tests |
 | `just eval-live` | opt-in live provider tests; ignored by `just check` (D167) |
-| `just deny` | supply-chain checks (advisories, bans, sources; licenses deferred, D57) |
+| `just deny` | supply-chain checks (advisories, bans, licences, sources; D-P-3) |
+| `just check-ee` | the `ee` licence files and SPDX headers (D-P-2) |
 | `just deny-advisories` | RustSec advisories only |
 | `just assert-clean` | fail if the working tree changed; CI runs it after each job |
 | `just ts-smoke <tarball>` | load a packed TS SDK from ESM and CommonJS |

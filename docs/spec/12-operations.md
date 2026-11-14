@@ -20,6 +20,13 @@ GitHub and Google also accept the split form (`LLMOBS_AUTH__GITHUB__CLIENT_ID`, 
 | `storage.s3.force_path_style` | | `false` |
 | `storage.s3.allow_http` | | `false` |
 | `encryption_key` | `LLMOBS_ENCRYPTION_KEY` | unset: read `<data_dir>/secret.key`, generated on the first start of a new data directory (D-I-1) |
+| `license_key` | `LLMOBS_LICENSE_KEY` | unset: no licence, enterprise features locked (D172, D-P-7) |
+| `entitlements.defaults.plan_name` | | `"Self-hosted"`: the plan name shown for orgs without a token (D-P-10) |
+| `entitlements.defaults.features` | | unset: every core feature (`retention_management`); a list grants only those; `ee` names are refused (D-P-10) |
+| `entitlements.defaults.<limit>` | | unset = unlimited, for each of `units_included`, `units_cap`, `ingest_spans_per_sec`, `ingest_burst`, `data_access_days`, `max_seats`, `max_projects`, `max_alert_rules`, `max_active_online_rules` (D-P-13) |
+| `orgs.user_create` | | `true`; `false` on a cloud cell: users cannot create orgs, the control plane does (D-P-31) |
+| `orgs.create_url` | | unset: where "New organization" links when `orgs.user_create` is false (D-P-31) |
+| `entitlements.upgrade_url` | | unset: no Upgrade button. `{org}` is replaced by the org id (D-P-15) |
 | `smtp_url`, `email_from` | `LLMOBS_SMTP_URL`, `LLMOBS_EMAIL_FROM` | unset (email off) |
 | `auth.*` | see 08 | |
 | `init.admin_email` | `LLMOBS_INIT_ADMIN_EMAIL` | unset |
@@ -70,19 +77,28 @@ A file lock (`flock` on `<data_dir>/LOCK`) prevents two processes from opening t
 - **Shutdown (SIGTERM/SIGINT):** stop accepting connections, drain in-flight requests (≤ 20 s), flush memtables (best effort ≤ 30 s), stop workers (leases expire and are re-queued), close SQLite.
 - `/healthz`: process alive. `/readyz`: WAL writable, SQLite reachable, object store reachable (cached 10 s), free disk above threshold.
 
-## Limits & metering (cloud-ready from day one)
+## Licence keys, plans and entitlements (track P)
 
-Per-org `limits` JSON (04 `orgs.limits`), all optional; instance-wide defaults in config:
+The design is `docs/plans/p-entitlements/00-design.md` (D169–D179, D-P-1–D-P-25).
 
-```json
-{"ingest_spans_per_sec": 20000, "ingest_burst": 100000,
- "spans_per_month": null, "max_projects": null, "max_members": null,
- "max_retention_days": null, "judge_usd_per_month": null}
-```
+**Open core.** The core is MIT. `crates/server/src/ee/`, `web/src/ee/` and `tools/license/` are under the Elastic License 2.0 and compiled into the same binary (D172, D-P-1, D-P-2). Every source file there starts with `// SPDX-License-Identifier: Elastic-2.0`; `just check-ee` checks the headers and the licence files.
 
-- Rate limits: token bucket per org in memory (GCRA); exceeding → 429 with `Retry-After`.
-- Monthly quotas: checked against `usage_daily` aggregates cached in memory; exceeding `spans_per_month` → 429 with a clear message (hard limit) — soft-limit warnings logged/notified at 80 % and 100 %.
-- Metering: `usage_daily` (spans, bytes, scores, judge tokens/cost) per org/project/day — the future billing source. Exposed in org settings → usage and via API.
+**Signed tokens.** Licence keys, org entitlement tokens and control-plane requests share one format, implemented once in the `llmobs-token` crate (Elastic-2.0, D-P-26): `llmobs1.<kid>.<base64url JSON payload>.<base64url ed25519 signature>`, the signature covering `llmobs1.<kid>.<payload>`, at most 16 KiB. Release builds trust only the public keys compiled into the binary, each bound to the kinds it may sign: `prod-1` licences; `cloud-1` (and its offline spare `cloud-2`) org and control-plane tokens. Debug builds also trust the development key `dev-1` for every kind (D-P-5, D-P-6, D-P-27).
+
+**Licence key** (`LLMOBS_LICENSE_KEY`, self-hosted). Payload: `kind: "license"`, `id`, `issued_at`, `customer`, `features`, `expires_at`, `grace_ends_at`. Active before `expires_at`, in grace (features on, warnings) before `grace_ends_at`, expired after. A refused key is logged by reason and the server runs without a licence. Without a key: every core feature, no limits, enterprise features locked. Licences carry no limits in the MVP (D-P-7). When a licence lapses, restrictions already set keep applying (D-P-8).
+
+**Entitlements.** One value per org, resolved in memory at every check: instance defaults (`[entitlements.defaults]`, from track P's M2), replaced by the org's valid token, plus the licence's features (D-P-10). Features: `retention_management`, `project_roles`, `sso_enforcement`, `org_sso`. Limits: `units_included`, `units_cap`, `ingest_spans_per_sec`, `ingest_burst`, `data_access_days`, `max_seats`, `max_projects`, `max_alert_rules`, `max_active_online_rules`; none means unlimited (D-P-12, D-P-13). There is no org judge-spend limit.
+
+**Org tokens (cloud).** The control plane owns the plan catalog and per-org overrides and `PUT`s a signed `kind: "org"` token, whose `audience` is the cell's `public_url`, to `/api/internal/v1/orgs/{org_id}/entitlements` on the org's cell; the newest `issued_at` wins, an expired token falls back to the instance defaults, and every shrink of the data window is recorded so retention uses the largest window of the last 30 days (D-P-9, D-P-11, D-P-30). The control plane creates orgs on a cell with `POST /api/internal/v1/orgs` (D-P-29).
+
+**Enforcement.**
+- Monthly units (spans + scores, judge-trace spans excluded) per UTC calendar month, from `usage_daily` plus unflushed counts. At `units_cap`, OTLP HTTP, score writes and feedback answer `402 quota_exceeded` (gRPC `RESOURCE_EXHAUSTED` without `RetryInfo`; score deletions are never refused); warnings at 80 % and 100 % of `units_included` (banner, one email to owners) (D-P-16–D-P-18).
+- Ingest rate: a per-org token bucket (GCRA) over accepted spans; `429 rate_limited` with `Retry-After` (D-P-19).
+- Seats (owner, admin and member memberships plus pending invites with those roles) and active projects: `403 plan_limit` on invite, role change, accept and project create (D-P-20).
+- Data older than `data_access_days` is hidden from every read by `QueryOptions::visible_from` in the storage query (media blobs too); deletion scope reads are exempt; retention and the ingest age check use the window plus 30 days (D175, D-P-21, D-P-22).
+- Feature gates answer `403 plan_required`; count limits (alert rules, active online rules) answer `403 plan_limit` (D-P-14, D-P-23).
+
+**Metering.** `usage_daily` (spans, bytes, scores, judge tokens and cost) per org, project and day is the billing source. It is exposed on the org's Plan page (track P's M3), through `GET /api/v1/orgs/{org}/usage`, and to the control plane through `GET /api/internal/v1/usage` with a `kind: "control_plane"` bearer token (D-P-24).
 
 ## Self-monitoring
 
@@ -124,7 +140,7 @@ llmobs admin backup --to /backups/llmobs-$(date +%F)   # online, consistent
 - Request size limits everywhere; JSON depth limit 128.
 - Credentials are never taken from query strings. Request logs carry the matched route template, not the raw URI (D150).
 - Content-Security-Policy on the UI: `default-src 'self'; img-src 'self' blob: data:; media-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`, with `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`; payloads rendered as text (no HTML injection from trace content).
-- `cargo deny` (advisories, bans, sources) on every CI run and `cargo deny check advisories` weekly (RustSec, the database `cargo audit` uses); Dependabot alerts for JS and Python; dependency licenses compatible with any license we later pick (license check enabled once D9 is decided, D57).
+- `cargo deny` (advisories, bans, sources) on every CI run and `cargo deny check advisories` weekly (RustSec, the database `cargo audit` uses); Dependabot alerts for JS and Python; `cargo deny` checks dependency licences against a permissive allow-list (D-P-3).
 
 ## Documentation deliverables (part of the MVP)
 

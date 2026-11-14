@@ -21,6 +21,16 @@ runs:
       # No arguments: rustup installs the channel and components in rust-toolchain.toml.
       run: rustup toolchain install
 
+    - name: Install mold 3.0.0
+      shell: bash
+      # Pinned release, not apt: ubuntu 24.04 ships mold 2.30. The jobs link with
+      # mold via RUSTFLAGS in ci.yml (-Clinker-features=-lld -Clink-arg=-fuse-ld=mold).
+      run: |
+        set -euo pipefail
+        curl -fsSL -o /tmp/mold.tar.gz \
+          https://github.com/rui314/mold/releases/download/v3.0.0/mold-3.0.0-x86_64-linux.tar.gz
+        sudo tar -xzf /tmp/mold.tar.gz --strip-components=1 -C /usr/local
+
     - name: Cache Rust compilation with kache and Garage
       # The caller enables caching and supplies credentials only for trusted runs.
       if: inputs.cache == 'true' && inputs.s3-access-key-id != '' && inputs.s3-secret-access-key != ''

@@ -36,6 +36,7 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
         "post_admin_user_reset_link",
     ),
     ("get", "/api/v1/admin/settings", "get_admin_settings"),
+    ("get", "/api/v1/admin/license", "get_admin_license"),
     (
         "post",
         "/api/v1/admin/settings/test-email",
@@ -63,6 +64,11 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
     ("get", "/api/v1/orgs", "list_orgs"),
     ("post", "/api/v1/orgs", "post_org"),
     ("get", "/api/v1/orgs/{org}", "get_org"),
+    (
+        "get",
+        "/api/v1/orgs/{org}/entitlements",
+        "get_org_entitlements",
+    ),
     ("patch", "/api/v1/orgs/{org}", "patch_org"),
     ("get", "/api/v1/orgs/{org}/members", "list_org_members"),
     (
@@ -434,6 +440,7 @@ fn document_lint() {
                 | "patch_admin_user"
                 | "post_admin_user_reset_link"
                 | "get_admin_settings"
+                | "get_admin_license"
                 | "post_admin_settings_test_email"
         ) {
             let security = operation_security.unwrap_or_else(|| panic!("{id}"));
@@ -498,7 +505,7 @@ fn document_lint() {
             expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
         } else if *id == "list_admin_users" || *id == "post_admin_settings_test_email" {
             expected_errors.extend(["400", "401", "403", "429"]);
-        } else if *id == "get_admin_settings" {
+        } else if *id == "get_admin_settings" || *id == "get_admin_license" {
             expected_errors.extend(["401", "403", "429"]);
         } else if *id == "post_admin_user" {
             expected_errors.extend(["400", "401", "403", "409", "429"]);

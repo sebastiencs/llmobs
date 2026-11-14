@@ -1,5 +1,13 @@
 [
   {
+    "operation_id": "get_admin_license",
+    "path_params": {},
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/admin-license.json"
+  },
+  {
     "operation_id": "get_admin_settings",
     "path_params": {},
     "query": {},
@@ -81,6 +89,16 @@
     "status": 200,
     "content_type": "application/json",
     "file": "static/org.json"
+  },
+  {
+    "operation_id": "get_org_entitlements",
+    "path_params": {
+      "org": "acme"
+    },
+    "query": {},
+    "status": 200,
+    "content_type": "application/json",
+    "file": "static/org-entitlements.json"
   },
   {
     "operation_id": "get_project",

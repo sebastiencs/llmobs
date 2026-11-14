@@ -190,3 +190,97 @@ it("is read-only for a viewer", async () => {
   expect(projectNav().getByRole("link", { name: "Members" })).toBeInTheDocument();
   expect(projectNav().queryByRole("link", { name: "API keys" })).toBeNull();
 });
+
+const projectRolesLocked = () =>
+  http.get("/api/v1/orgs/:org/entitlements", () =>
+    HttpResponse.json({ features: [], upgrade_url: "https://up.example/billing" }),
+  );
+
+it("shows the lock and keeps removal when project roles are locked", async () => {
+  const users: string[] = [];
+  server.use(
+    projectRolesLocked(),
+    http.delete("/api/v1/projects/:project/members/:user", ({ params }) => {
+      users.push(String(params.user));
+      return new HttpResponse(null, { status: 204 });
+    }),
+  );
+
+  const { user } = await renderApp("/acme/support-bot/settings/members");
+  await screen.findByRole("table", { name: "Project members" });
+
+  expect(await screen.findByRole("note", { name: "Locked feature" })).toHaveTextContent(
+    "Available with the Teams add-on or an enterprise licence.",
+  );
+  expect(screen.getByRole("link", { name: "Upgrade" })).toHaveAttribute(
+    "href",
+    "https://up.example/billing",
+  );
+
+  await user.click(screen.getByRole("combobox", { name: "Project access of bob@example.com" }));
+  for (const name of ["Admin", "Member", "No access"]) {
+    expect(await screen.findByRole("option", { name })).toHaveAttribute("aria-disabled", "true");
+  }
+  expect(screen.getByRole("option", { name: "Inherit org role" })).not.toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  expect(screen.getByRole("option", { name: "Viewer" })).not.toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+
+  await user.click(screen.getByRole("option", { name: "Inherit org role" }));
+  await waitFor(() => expect(users).toEqual([BOB_ID]));
+});
+
+it("shows no lock when project roles are allowed", async () => {
+  await renderApp("/acme/support-bot/settings/members");
+  await screen.findByRole("table", { name: "Project members" });
+
+  expect(screen.queryByRole("note", { name: "Locked feature" })).toBeNull();
+});
+
+it("shows no lock while the entitlements are loading", async () => {
+  server.use(http.get("/api/v1/orgs/:org/entitlements", () => new Promise<Response>(() => {})));
+
+  const { user } = await renderApp("/acme/support-bot/settings/members");
+  await screen.findByRole("table", { name: "Project members" });
+
+  expect(screen.queryByRole("note", { name: "Locked feature" })).toBeNull();
+  await user.click(screen.getByRole("combobox", { name: "Project access of bob@example.com" }));
+  for (const name of ["Admin", "Member", "No access"]) {
+    expect(await screen.findByRole("option", { name })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  }
+});
+
+it("shows the plan message from the server", async () => {
+  server.use(
+    http.put("/api/v1/projects/:project/members/:user", () =>
+      problemResponse(403, "plan_required", {
+        detail: "Per-project roles need the Teams add-on or an enterprise licence.",
+      }),
+    ),
+  );
+
+  const { user } = await renderApp("/acme/support-bot/settings/members");
+  await screen.findByRole("table", { name: "Project members" });
+  await user.click(screen.getByRole("combobox", { name: "Project access of bob@example.com" }));
+  await user.click(await screen.findByRole("option", { name: "Admin" }));
+
+  expect(
+    await screen.findByText("Per-project roles need the Teams add-on or an enterprise licence."),
+  ).toBeInTheDocument();
+});
+
+it("shows no lock to a viewer", async () => {
+  server.use(projectAs("viewer"), projectRolesLocked());
+
+  await renderApp("/acme/support-bot/settings/members");
+  await screen.findByRole("combobox", { name: "Project access of bob@example.com" });
+
+  expect(screen.queryByRole("note", { name: "Locked feature" })).toBeNull();
+});

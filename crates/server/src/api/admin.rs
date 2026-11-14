@@ -8,6 +8,8 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::account::{AuthProvider, SignupPolicy};
+use super::entitlements::Feature;
+use super::keys::optional_time;
 
 /// One account, as an instance admin sees it.
 ///
@@ -100,6 +102,8 @@ pub struct AdminSettings {
     pub email_verification_required: bool,
     /// Domains that must use SSO. Empty means SSO is not required.
     pub enforce_sso_domains: Vec<String>,
+    /// Whether `enforce_sso_domains` is applied: it needs a licence listing `sso_enforcement`.
+    pub enforce_sso_applied: bool,
     /// SMTP is configured.
     pub smtp_enabled: bool,
     /// `From` mailbox. Omitted when SMTP is not configured.
@@ -109,4 +113,54 @@ pub struct AdminSettings {
     pub providers: Vec<AuthProvider>,
     /// Proxy CIDRs whose `X-Forwarded-For` is trusted.
     pub trusted_proxies: Vec<String>,
+}
+
+/// Where the instance licence stands (D-P-7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LicenseStatus {
+    /// No key is configured.
+    None,
+    /// A key is configured and was refused.
+    Invalid,
+    /// Before `expires_at`.
+    Active,
+    /// Expired, before `grace_ends_at`: features still on.
+    Grace,
+    /// After `grace_ends_at`: enterprise features are locked.
+    Expired,
+}
+
+/// `GET /api/v1/admin/license`. Never contains the key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AdminLicense {
+    /// The status now.
+    pub status: LicenseStatus,
+    /// Why the key was refused. Only with `invalid`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Licence id. Omitted with `none` and `invalid`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Uuid>,
+    /// Customer name. Omitted with `none` and `invalid`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub customer: Option<String>,
+    /// Features the licence lists, known to this build, expired or not. Empty with `none` and `invalid`.
+    pub features: Vec<Feature>,
+    /// Omitted with `none` and `invalid`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_time"
+    )]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub expires_at: Option<i64>,
+    /// Omitted with `none` and `invalid`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_time"
+    )]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub grace_ends_at: Option<i64>,
 }

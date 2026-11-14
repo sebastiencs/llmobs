@@ -16,12 +16,34 @@ ignore = [
 ]
 
 [licenses]
-# D57: license policy deferred until our own license is chosen.
-# Do not remove this section; replace `allow` with the real policy then.
+# D172 settled D9: the core is MIT, `ee/` directories are Elastic-2.0 (D-P-2, D-P-3).
+# The allow-list is the set of licences in the dependency graph on 2026-11-14.
+# Adding a licence here is a review decision; copyleft licences other than MPL-2.0
+# (file-level, used by `option-ext`) are not allowed.
 version = 2
-allow = []
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
 confidence-threshold = 0.8
-# The `licenses` check is NOT run (see justfile `deny` recipe), so an empty allow-list is fine for now.
+
+[licenses.private]
+# Workspace crates are unpublished (`publish = false`); their own licences are in LICENSE.
+ignore = true
 
 [bans]
 multiple-versions = "warn"

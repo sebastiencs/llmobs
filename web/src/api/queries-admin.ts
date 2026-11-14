@@ -10,3 +10,5 @@ export function adminUsersKey() {
 }
 
 export const adminSettingsQuery = $api.queryOptions("get", "/api/v1/admin/settings");
+
+export const adminLicenseQuery = $api.queryOptions("get", "/api/v1/admin/license");

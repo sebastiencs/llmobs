@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+license = "MIT AND Elastic-2.0"
 
 [lints]
 workspace = true
@@ -42,6 +43,7 @@ subtle.workspace = true
 sha2.workspace = true
 chrono.workspace = true
 base64.workspace = true
+ed25519-dalek.workspace = true
 openidconnect.workspace = true
 oauth2.workspace = true
 reqwest.workspace = true
