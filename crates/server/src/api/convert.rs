@@ -640,7 +640,6 @@ pub(crate) fn span(batch: &RecordBatch, project_id: ProjectId) -> Result<Span, C
 
 /// Every row of `batches`, in order. Batches without rows add nothing. Columns are
 /// extracted once per batch.
-#[allow(dead_code)] // test runs use it from I2.7 on
 pub(crate) fn spans(
     batches: &[RecordBatch],
     project_id: ProjectId,

@@ -3,6 +3,7 @@
 
 pub(crate) mod mock_idp;
 pub(crate) mod mock_llm;
+pub(crate) mod mock_webhook;
 
 use std::future::Future;
 use std::io::{self, Write};

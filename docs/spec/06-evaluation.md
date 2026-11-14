@@ -26,6 +26,8 @@ Validation: `data_type` ∈ {numeric, boolean, categorical, text}; numeric must 
 
 Stored in SQLite `evaluators` (04). Three kinds.
 
+**Test runs** (D-I-21): `POST /evaluators/test` runs a saved or unsaved evaluator once on a stored trace with a mapping, or on literal variables. It writes the judge trace and the judge usage, writes no score, and answers the outcome, the resolved variables, the rendered prompt and the usage; 10 per minute per user.
+
 ### `llm_judge`
 
 ```json

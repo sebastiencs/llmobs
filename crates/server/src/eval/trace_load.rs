@@ -17,26 +17,20 @@ use crate::http::AppState;
 use crate::routes::read::READ_TIMEOUT;
 
 /// At most this many spans besides the required ones (D-I-23).
-#[allow(dead_code)] // test runs use it from I2.7 on
 pub(crate) const MAX_SPANS: usize = 5_000;
 /// At most this many required spans (parentless ones and the target). More is `TooLarge`.
-#[allow(dead_code)] // test runs use it from I2.7 on
 pub(crate) const MAX_REQUIRED: usize = 1_000;
 /// At most this many payload bytes in all (D-I-23).
-#[allow(dead_code)] // test runs use it from I2.7 on
 pub(crate) const MAX_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
 /// Loads running at once (D-I-23).
-#[allow(dead_code)] // test runs use it from I2.7 on
 pub(crate) const MAX_LOADS: u32 = 4;
 
 /// Permits for trace loads, shared by test runs (M2) and jobs (M3).
-#[allow(dead_code)] // test runs use it from I2.7 on
 #[derive(Debug)]
 pub(crate) struct TraceLoads(tokio::sync::Semaphore);
 
 impl TraceLoads {
     /// `MAX_LOADS` permits.
-    #[allow(dead_code)] // test runs use it from I2.7 on
     pub(crate) fn new() -> Self {
         Self(tokio::sync::Semaphore::new(
             usize::try_from(MAX_LOADS).unwrap_or(4),
@@ -44,7 +38,6 @@ impl TraceLoads {
     }
 
     /// The permits, for `load_trace` and for tests that hold them.
-    #[allow(dead_code)] // test runs use it from I2.7 on
     pub(crate) fn semaphore(&self) -> &tokio::sync::Semaphore {
         &self.0
     }
@@ -57,7 +50,6 @@ impl Default for TraceLoads {
 }
 
 /// One loaded trace. `Span` holds prompts and answers, so `Debug` prints counts only.
-#[allow(dead_code)] // test runs use it from I2.7 on
 pub(crate) struct LoadedTrace {
     /// Deduplicated spans: the target first, then the other parentless spans, then the others,
     /// each group in start order.
@@ -76,7 +68,6 @@ impl fmt::Debug for LoadedTrace {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)] // test runs use it from I2.7 on
 pub(crate) enum LoadError {
     #[error("trace not found")]
     NotFound,
@@ -95,7 +86,6 @@ pub(crate) enum LoadError {
 }
 
 /// Loads `trace_id` of `project` for an evaluator, with D-I-23's caps and D-I-17's guard.
-#[allow(dead_code)] // test runs use it from I2.7 on
 pub(crate) async fn load_trace(
     state: &AppState,
     project: ProjectId,
@@ -108,7 +98,6 @@ pub(crate) async fn load_trace(
 
 /// [`load_trace`] with the span cap as a parameter, so a test can reach `truncated` with a few
 /// spans. `load_trace` passes [`MAX_SPANS`].
-#[allow(dead_code)] // test runs use it from I2.7 on
 async fn load_trace_capped(
     state: &AppState,
     project: ProjectId,
@@ -178,7 +167,6 @@ async fn load_trace_capped(
 
 /// One span per id: the copy with the greatest `ingest_time` (a retried export can store a
 /// span twice). The result is ordered by span id.
-#[allow(dead_code)] // test runs use it from I2.7 on
 fn dedupe(spans: Vec<Span>) -> Vec<Span> {
     let mut latest: BTreeMap<SpanId, Span> = BTreeMap::new();
     for span in spans {
@@ -202,7 +190,6 @@ fn dedupe(spans: Vec<Span>) -> Vec<Span> {
 /// # Errors
 ///
 /// [`LoadError::TooLarge`] when the target alone is over `max_bytes`.
-#[allow(dead_code)] // test runs use it from I2.7 on
 fn cap(
     spans: Vec<Span>,
     target: Option<SpanId>,
@@ -244,7 +231,6 @@ fn cap(
 
 /// The payload bytes of a span: its text columns, its attribute maps (keys and values) and
 /// its events and links as JSON. Columns that are not payload (ids, times, tokens) do not count.
-#[allow(dead_code)] // test runs use it from I2.7 on
 fn payload_bytes(span: &Span) -> usize {
     fn text(value: Option<&String>) -> usize {
         value.map_or(0, String::len)

@@ -13,14 +13,15 @@ use uuid::Uuid;
 
 use crate::api::common::{FieldError, Page, PageParams};
 use crate::api::evaluators::{
-    CreateEvaluatorRequest, Evaluator, EvaluatorKind, EvaluatorTemplateList, OutputScoreBody,
-    UpdateEvaluatorRequest, builtin_template_list,
+    CreateEvaluatorRequest, Evaluator, EvaluatorKind, EvaluatorTemplateList, EvaluatorTestRequest,
+    EvaluatorTestResult, OutputScoreBody, UpdateEvaluatorRequest, builtin_template_list,
 };
 use crate::auth::principal::{self, Principal};
 use crate::auth::roles::ProjectPerm;
 use crate::crypto::{Aad, SecretBox};
 use crate::eval::definitions::fits_definition;
 use crate::eval::evaluator::{self, EvaluatorError, Prepared, WebhookSecrets};
+use crate::eval::test_run;
 use crate::http::AppState;
 use crate::http::access::{Access, ProjectAccess, RouteDef};
 use crate::http::error::{self, ApiError};
@@ -54,6 +55,16 @@ pub(crate) fn routes() -> Vec<RouteDef> {
             },
             documented: true,
             handler: post(create_evaluator),
+        },
+        RouteDef {
+            method: axum::http::Method::POST,
+            path: "/api/v1/projects/{project}/evaluators/test",
+            access: Access::Project {
+                perm: ProjectPerm::ManageEvaluation,
+                session_only: false,
+            },
+            documented: true,
+            handler: post(test_evaluator),
         },
         RouteDef {
             method: axum::http::Method::GET,
@@ -346,6 +357,18 @@ async fn delete_evaluator(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Runs one evaluator once and answers the outcome. It writes no score (D-I-21).
+async fn test_evaluator(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Extension(access): Extension<ProjectAccess>,
+    error::Json(body): error::Json<EvaluatorTestRequest>,
+) -> Result<error::Json<EvaluatorTestResult>, ApiError> {
+    let user = principal::session_user(&principal)?;
+    let result = test_run::run(&state, &access.project, user.id, body).await?;
+    Ok(error::Json(result))
+}
+
 async fn list_evaluator_templates() -> error::Json<EvaluatorTemplateList> {
     error::Json(builtin_template_list())
 }
@@ -526,7 +549,12 @@ mod tests {
     use crate::auth::roles::OrgRole;
     use crate::meta::connections::{ConnectionFields, insert_connection};
     use crate::meta::orgs::insert_org;
-    use crate::test_support::{Seeded, TestApp, TestResponse, capture_logs};
+    use crate::test_support::mock_llm::{MockLlm, Reply, completion};
+    use crate::test_support::mock_webhook::MockWebhook;
+    use crate::test_support::{Seeded, TestApp, TestResponse, capture_logs, dataset_span};
+    use llmobs_core::enums::PayloadFormat;
+    use llmobs_core::ids::{SpanId, TraceId};
+    use llmobs_core::span::Span;
 
     /// The fixture judge's connection (`fixtures/api/README.md`).
     const FIXTURE_CONNECTION: &str = "01900000-0000-7000-8000-000000000400";
@@ -1388,5 +1416,636 @@ mod tests {
         ] {
             assert!(!logs.contains(sealed), "logs show {sealed}");
         }
+    }
+
+    /// The trace of the test-run tests, and its root, child and evaluation-trace ids.
+    const RUN_TRACE: &str = "a1000000000000000000000000000001";
+    const EVAL_TRACE: &str = "a1000000000000000000000000000002";
+    const ROOT: &str = "b100000000000001";
+    const CHILD: &str = "b100000000000002";
+    const QUESTION: &str = "What is the refund window?";
+    const ANSWER: &str = "30 days.";
+
+    /// A test app that may reach mocks on `127.0.0.1`. The clock is set to the real time before
+    /// anything is seeded, so the judge trace's span times and the session cookie agree with it
+    /// (`crate::eval::test_run`, § Conventions).
+    async fn test_app() -> (TestApp, Seeded) {
+        let app = TestApp::with_config(|config| {
+            config.security.allow_private_network_egress = true;
+        })
+        .await;
+        let real_now = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        )
+        .unwrap();
+        app.state.clock.set(real_now);
+        let seeded = app.seed().await;
+        (app, seeded)
+    }
+
+    /// A stored span of `dataset_span(0)`'s shape, with the given ids and payloads.
+    fn stored_span(
+        trace: &str,
+        span: &str,
+        parent: Option<&str>,
+        input: &str,
+        output: &str,
+        environment: &str,
+    ) -> Span {
+        let mut row = dataset_span(0);
+        row.trace_id = trace.parse::<TraceId>().unwrap();
+        row.span_id = span.parse::<SpanId>().unwrap();
+        row.parent_span_id = parent.map(|id| id.parse::<SpanId>().unwrap());
+        row.input = Some(input.to_owned());
+        row.input_format = Some(PayloadFormat::Text);
+        row.output = Some(output.to_owned());
+        row.output_format = Some(PayloadFormat::Text);
+        row.environment = Some(environment.to_owned());
+        row
+    }
+
+    /// The root span of `RUN_TRACE`: the refund question and its answer.
+    fn root_span() -> Span {
+        stored_span(RUN_TRACE, ROOT, None, QUESTION, ANSWER, "production")
+    }
+
+    /// Creates a connection of `acme` that reaches `mock`, with the default model `gpt-test`.
+    async fn mocked_connection(app: &TestApp, cookie: &str, mock: &MockLlm) -> Uuid {
+        let response = app
+            .request(Method::POST, "/api/v1/orgs/acme/llm-connections")
+            .header(header::COOKIE.as_str(), cookie)
+            .json(&json!({
+                "name": "Mocked",
+                "adapter": "openai",
+                "api_key": "sk-test-key-0123456789",
+                "base_url": mock.base_url(),
+                "default_model": "gpt-test"
+            }))
+            .send()
+            .await;
+        assert_eq!(response.status, 201, "{}", text(&response));
+        Uuid::from_str(&id_of(&response.json::<Value>())).unwrap()
+    }
+
+    /// The judge of `fixtures/api/requests/evaluator-create.json`, on `connection` and `gpt-test`.
+    fn judge_on(connection: Uuid) -> Value {
+        let mut config = judge_body()["config"].clone();
+        config["connection_id"] = json!(connection);
+        config["model"] = json!("gpt-test");
+        json!({
+            "kind": "llm_judge",
+            "config": config,
+            "output_score": {"name": "relevance", "data_type": "numeric"}
+        })
+    }
+
+    /// An `exact_match` check that writes a boolean named `same`.
+    fn same_check() -> Value {
+        json!({
+            "kind": "check",
+            "config": {"check": "exact_match"},
+            "output_score": {"name": "same", "data_type": "boolean"}
+        })
+    }
+
+    /// A trace-mode body with `same_check` over `mapping`.
+    fn trace_run(trace: &str, span: Option<&str>, mapping: &Value) -> Value {
+        let mut body = json!({
+            "evaluator": same_check(),
+            "trace_id": trace,
+            "variable_mapping": mapping
+        });
+        if let Some(span) = span {
+            body["span_id"] = json!(span);
+        }
+        body
+    }
+
+    /// `POST …/evaluators/test`.
+    async fn run_test(app: &TestApp, seeded: &Seeded, cookie: &str, body: &Value) -> TestResponse {
+        app.request(Method::POST, &format!("{}/test", path(seeded.project.id)))
+            .header(header::COOKIE.as_str(), cookie)
+            .json(body)
+            .send()
+            .await
+    }
+
+    /// `run_test` that must answer 200, as JSON.
+    async fn run_ok(app: &TestApp, seeded: &Seeded, body: &Value) -> Value {
+        let response = run_test(app, seeded, &seeded.cookie, body).await;
+        assert_eq!(response.status, 200, "{}", text(&response));
+        response.json()
+    }
+
+    /// The judge trace's id of an answer.
+    fn judge_trace_of(answer: &Value) -> String {
+        answer["judge_trace_id"].as_str().unwrap().to_owned()
+    }
+
+    #[tokio::test]
+    async fn judge_test_on_a_trace() {
+        let mock = MockLlm::start(vec![completion(
+            r#"{"explanation": "Relevant.", "value": 0.9}"#,
+        )])
+        .await;
+        let (app, seeded) = test_app().await;
+        let connection = mocked_connection(&app, &seeded.cookie, &mock).await;
+        app.commit_spans(&seeded.project, vec![root_span()]).await;
+
+        let answer = run_ok(
+            &app,
+            &seeded,
+            &json!({
+                "evaluator": judge_on(connection),
+                "trace_id": RUN_TRACE,
+                "variable_mapping": {"input": "trace.input", "output": "trace.output"}
+            }),
+        )
+        .await;
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert_eq!(
+            answer["value"],
+            json!({"data_type": "numeric", "value": 0.9})
+        );
+        assert_eq!(answer["reason"], "Relevant.");
+        assert_eq!(answer["variables"]["input"], QUESTION);
+        assert!(answer["prompt"].as_str().unwrap().contains(QUESTION));
+        assert_eq!(answer["usage"]["input_tokens"], 10);
+        assert_eq!(answer["trace_truncated"], false);
+        let judge = judge_trace_of(&answer);
+
+        let read = app
+            .request(
+                Method::GET,
+                &format!("/api/v1/projects/{}/traces/{judge}", seeded.project.id),
+            )
+            .header(header::COOKIE.as_str(), &seeded.cookie)
+            .send()
+            .await;
+        assert_eq!(read.status, 200, "{}", text(&read));
+        assert!(
+            text(&read).contains("llmobs-eval"),
+            "the judge trace is in llmobs-eval"
+        );
+
+        app.state
+            .usage
+            .flush(&app.state.meta)
+            .await
+            .expect("usage flushes");
+        let counted: (i64, i64) = sqlx::query_as(
+            "SELECT COALESCE(SUM(judge_input_tokens), 0), COALESCE(SUM(spans), 0) \
+             FROM usage_daily WHERE project_id = ?",
+        )
+        .bind(seeded.project.id.to_string())
+        .fetch_one(app.state.meta.reader())
+        .await
+        .unwrap();
+        assert_eq!(
+            counted,
+            (10, 1),
+            "the target span counts, the judge spans do not"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_with_literal_variables() {
+        let mock = MockLlm::start(vec![completion(
+            r#"{"explanation": "Relevant.", "value": 0.4}"#,
+        )])
+        .await;
+        let (app, seeded) = test_app().await;
+        let connection = mocked_connection(&app, &seeded.cookie, &mock).await;
+        let answer = run_ok(
+            &app,
+            &seeded,
+            &json!({
+                "evaluator": judge_on(connection),
+                "variables": {"input": "a literal question", "output": "a literal answer"}
+            }),
+        )
+        .await;
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert_eq!(
+            answer["value"],
+            json!({"data_type": "numeric", "value": 0.4})
+        );
+        assert_eq!(answer["variables"]["input"], "a literal question");
+        assert_eq!(answer["trace_truncated"], false);
+        assert!(answer.get("judge_trace_id").is_some());
+    }
+
+    #[tokio::test]
+    async fn unsaved_evaluator_runs_without_saving() {
+        let (app, seeded) = test_app().await;
+        let answer = run_ok(
+            &app,
+            &seeded,
+            &json!({"evaluator": same_check(), "variables": {"output": "a", "expected": "a"}}),
+        )
+        .await;
+        assert_eq!(answer["ok"], true, "{answer}");
+        let saved: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM evaluators")
+            .fetch_one(app.state.meta.reader())
+            .await
+            .unwrap();
+        assert_eq!(saved, 0);
+    }
+
+    #[tokio::test]
+    async fn check_test_runs_without_a_provider() {
+        let (app, seeded) = test_app().await;
+        let answer = run_ok(
+            &app,
+            &seeded,
+            &json!({"evaluator": same_check(), "variables": {"output": "a", "expected": "a"}}),
+        )
+        .await;
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert_eq!(
+            answer["value"],
+            json!({"data_type": "boolean", "value": true})
+        );
+        assert!(answer.get("usage").is_none(), "a check makes no LLM call");
+    }
+
+    #[tokio::test]
+    async fn mapping_error_has_no_judge_trace() {
+        let (app, seeded) = test_app().await;
+        app.commit_spans(&seeded.project, vec![root_span()]).await;
+        // `span.input` has no target span without `span_id`.
+        let answer = run_ok(
+            &app,
+            &seeded,
+            &trace_run(
+                RUN_TRACE,
+                None,
+                &json!({"output": "span.output", "expected": "span.output"}),
+            ),
+        )
+        .await;
+        assert_eq!(answer["ok"], false, "{answer}");
+        assert_eq!(answer["error"]["class"], "permanent");
+        assert!(answer.get("judge_trace_id").is_none());
+        assert_eq!(answer["variables"], json!({}));
+        assert_eq!(answer["trace_truncated"], false);
+    }
+
+    #[tokio::test]
+    async fn evaluation_trace_is_refused() {
+        let (app, seeded) = test_app().await;
+        app.commit_spans(
+            &seeded.project,
+            vec![stored_span(
+                EVAL_TRACE,
+                ROOT,
+                None,
+                "judge input",
+                "judge output",
+                "llmobs-eval",
+            )],
+        )
+        .await;
+        let response = run_test(
+            &app,
+            &seeded,
+            &seeded.cookie,
+            &trace_run(
+                EVAL_TRACE,
+                None,
+                &json!({"output": "trace.output", "expected": "trace.output"}),
+            ),
+        )
+        .await;
+        assert_eq!(response.status, 400, "{}", text(&response));
+        assert!(text(&response).contains("target is an evaluation trace"));
+    }
+
+    #[tokio::test]
+    async fn unknown_trace_is_404() {
+        let (app, seeded) = test_app().await;
+        let response = run_test(
+            &app,
+            &seeded,
+            &seeded.cookie,
+            &trace_run(
+                "a1000000000000000000000000000009",
+                None,
+                &json!({"output": "trace.output", "expected": "trace.output"}),
+            ),
+        )
+        .await;
+        assert_eq!(response.status, 404, "{}", text(&response));
+    }
+
+    #[tokio::test]
+    async fn provider_failure_is_reported() {
+        let mock = MockLlm::start(vec![Reply {
+            status: 500,
+            body: json!({"error": {"message": "boom"}}),
+        }])
+        .await;
+        let (app, seeded) = test_app().await;
+        let connection = mocked_connection(&app, &seeded.cookie, &mock).await;
+        let answer = run_ok(
+            &app,
+            &seeded,
+            &json!({
+                "evaluator": judge_on(connection),
+                "variables": {"input": "q", "output": "a"}
+            }),
+        )
+        .await;
+        assert_eq!(answer["ok"], false, "{answer}");
+        assert_eq!(answer["error"]["class"], "retryable");
+    }
+
+    #[tokio::test]
+    async fn long_variables_are_cut() {
+        let (app, seeded) = test_app().await;
+        let long = "x".repeat(3_000);
+        let answer = run_ok(
+            &app,
+            &seeded,
+            &json!({"evaluator": same_check(), "variables": {"output": long, "expected": "x"}}),
+        )
+        .await;
+        assert_eq!(answer["ok"], true, "{answer}");
+        let shown = answer["variables"]["output"].as_str().unwrap();
+        assert_eq!(shown.chars().count(), 2_001);
+        assert!(shown.ends_with('…'));
+        assert_eq!(answer["variables"]["expected"], "x");
+    }
+
+    #[tokio::test]
+    async fn test_runs_are_rate_limited() {
+        let (app, seeded) = test_app().await;
+        let body =
+            json!({"evaluator": same_check(), "variables": {"output": "a", "expected": "a"}});
+        for _ in 0..10 {
+            let response = run_test(&app, &seeded, &seeded.cookie, &body).await;
+            assert_eq!(response.status, 200, "{}", text(&response));
+        }
+        let limited = run_test(&app, &seeded, &seeded.cookie, &body).await;
+        assert_eq!(limited.status, 429, "{}", text(&limited));
+    }
+
+    #[tokio::test]
+    async fn viewer_cannot_test() {
+        let (app, seeded) = test_app().await;
+        let viewer = app
+            .add_member(&seeded, "viewer@example.com", OrgRole::Viewer)
+            .await;
+        let response = run_test(
+            &app,
+            &seeded,
+            &viewer.cookie,
+            &json!({"evaluator": same_check(), "variables": {"output": "a", "expected": "a"}}),
+        )
+        .await;
+        assert_eq!(response.status, 403, "{}", text(&response));
+    }
+
+    #[tokio::test]
+    async fn no_payload_in_logs() {
+        let (app, seeded) = test_app().await;
+        let (answer, logs) = capture_logs(run_test(
+            &app,
+            &seeded,
+            &seeded.cookie,
+            &json!({
+                "evaluator": same_check(),
+                "variables": {"output": "private-answer-xyz", "expected": "private-answer-xyz"}
+            }),
+        ))
+        .await;
+        assert_eq!(answer.status, 200, "{}", text(&answer));
+        assert!(logs.contains("evaluator tested"), "{logs}");
+        assert!(
+            !logs.contains("private-answer-xyz"),
+            "logs show the payload: {logs}"
+        );
+    }
+
+    #[tokio::test]
+    async fn webhook_test_signs_with_the_saved_secret() {
+        let hook = MockWebhook::start(200, json!({"value": 0.5})).await;
+        let (app, seeded) = test_app().await;
+        let created = create_ok(
+            &app,
+            &seeded,
+            &json!({
+                "name": "Hooked",
+                "kind": "webhook",
+                "config": {"url": hook.url()},
+                "output_score": {"name": "hook", "data_type": "numeric"},
+                "webhook_secret": "0123456789abcdef"
+            }),
+        )
+        .await;
+        let answer = run_ok(
+            &app,
+            &seeded,
+            &json!({"evaluator_id": id_of(&created), "variables": {"output": "x"}}),
+        )
+        .await;
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert_eq!(
+            answer["value"],
+            json!({"data_type": "numeric", "value": 0.5})
+        );
+        let requests = hook.requests();
+        assert_eq!(requests.len(), 1);
+        let signature = requests[0]
+            .0
+            .get("x-llmobs-signature")
+            .expect("a signature header")
+            .to_str()
+            .unwrap();
+        assert!(signature.starts_with("t="), "{signature}");
+        assert!(signature.contains("v1="), "{signature}");
+    }
+
+    #[tokio::test]
+    async fn both_given_takes_the_saved_webhook_values() {
+        let hook = MockWebhook::start(200, json!({"value": 0.5})).await;
+        let (app, seeded) = test_app().await;
+        let created = create_ok(
+            &app,
+            &seeded,
+            &json!({
+                "name": "Hooked",
+                "kind": "webhook",
+                "config": {"url": hook.url()},
+                "output_score": {"name": "hook", "data_type": "numeric"},
+                "webhook_secret": "0123456789abcdef"
+            }),
+        )
+        .await;
+        let answer = run_ok(
+            &app,
+            &seeded,
+            &json!({
+                "evaluator_id": id_of(&created),
+                "evaluator": {
+                    "kind": "webhook",
+                    "output_score": {"name": "other", "data_type": "numeric"}
+                },
+                "variables": {"output": "x"}
+            }),
+        )
+        .await;
+        assert_eq!(answer["ok"], true, "{answer}");
+        let requests = hook.requests();
+        assert_eq!(requests.len(), 1, "the saved URL was called");
+        assert!(requests[0].0.get("x-llmobs-signature").is_some());
+    }
+
+    #[tokio::test]
+    async fn both_given_with_another_kind_is_400() {
+        let hook = MockWebhook::start(200, json!({"value": 0.5})).await;
+        let (app, seeded) = test_app().await;
+        let created = create_ok(
+            &app,
+            &seeded,
+            &json!({
+                "name": "Hooked",
+                "kind": "webhook",
+                "config": {"url": hook.url()},
+                "output_score": {"name": "hook", "data_type": "numeric"},
+                "webhook_secret": "0123456789abcdef"
+            }),
+        )
+        .await;
+        let response = run_test(
+            &app,
+            &seeded,
+            &seeded.cookie,
+            &json!({
+                "evaluator_id": id_of(&created),
+                "evaluator": {
+                    "kind": "check",
+                    "output_score": {"name": "same", "data_type": "boolean"}
+                },
+                "variables": {"output": "a", "expected": "a"}
+            }),
+        )
+        .await;
+        assert_eq!(
+            field_errors(&response),
+            [(
+                "evaluator.kind".to_owned(),
+                "kind must match the saved evaluator".to_owned()
+            )]
+        );
+        assert!(hook.requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn span_target_resolves_span_variables() {
+        let (app, seeded) = test_app().await;
+        app.commit_spans(
+            &seeded.project,
+            vec![
+                root_span(),
+                stored_span(
+                    RUN_TRACE,
+                    CHILD,
+                    Some(ROOT),
+                    "child question",
+                    "child answer",
+                    "production",
+                ),
+            ],
+        )
+        .await;
+        let answer = run_ok(
+            &app,
+            &seeded,
+            &trace_run(
+                RUN_TRACE,
+                Some(CHILD),
+                &json!({"output": "span.output", "expected": "span.output"}),
+            ),
+        )
+        .await;
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert_eq!(answer["variables"]["output"], "child answer");
+    }
+
+    #[tokio::test]
+    async fn trace_start_is_accepted() {
+        let (app, seeded) = test_app().await;
+        app.commit_spans(&seeded.project, vec![root_span()]).await;
+        let start_ms = dataset_span(0).start_time / 1_000_000;
+        let mut body = trace_run(
+            RUN_TRACE,
+            None,
+            &json!({"output": "trace.output", "expected": "trace.output"}),
+        );
+        body["trace_start"] = json!(start_ms.to_string());
+        let answer = run_ok(&app, &seeded, &body).await;
+        assert_eq!(answer["ok"], true, "{answer}");
+    }
+
+    #[tokio::test]
+    async fn body_rules() {
+        let (app, seeded) = test_app().await;
+        let check = same_check();
+
+        let many: serde_json::Map<String, Value> = (0..33)
+            .map(|index| (format!("v{index}"), json!("a")))
+            .collect();
+        let errors = field_errors(
+            &run_test(
+                &app,
+                &seeded,
+                &seeded.cookie,
+                &json!({"evaluator": check, "variables": many}),
+            )
+            .await,
+        );
+        assert!(
+            errors.contains(&("variables".to_owned(), "at most 32 variables".to_owned())),
+            "{errors:?}"
+        );
+
+        let short_trace = trace_run(
+            "a100000000000000000000000000001",
+            None,
+            &json!({"output": "trace.output", "expected": "trace.output"}),
+        );
+        assert_eq!(
+            field_errors(&run_test(&app, &seeded, &seeded.cookie, &short_trace).await),
+            [(
+                "trace_id".to_owned(),
+                "trace_id must be 32 hex digits".to_owned()
+            )]
+        );
+
+        let span_only = json!({
+            "evaluator": same_check(),
+            "span_id": ROOT,
+            "variables": {"output": "a", "expected": "a"}
+        });
+        assert_eq!(
+            field_errors(&run_test(&app, &seeded, &seeded.cookie, &span_only).await),
+            [(
+                "trace_id".to_owned(),
+                "trace_id is required with span_id and trace_start".to_owned()
+            )]
+        );
+
+        let neither = json!({"variables": {"output": "a", "expected": "a"}});
+        assert_eq!(
+            field_errors(&run_test(&app, &seeded, &seeded.cookie, &neither).await),
+            [(
+                "evaluator".to_owned(),
+                "give evaluator_id, evaluator, or both".to_owned()
+            )]
+        );
     }
 }

@@ -89,7 +89,6 @@ impl Usage {
     /// Adds one judge call's tokens and cost to the day of `now_ns` (UTC) (D-I-31). A zero call
     /// changes nothing. A NaN, infinite or negative cost counts as 0, so it cannot break the
     /// `judge_cost_usd` column and every later flush.
-    #[allow(dead_code)] // test runs call it from I2.7 on
     pub(crate) fn add_judge(
         &self,
         org_id: OrgId,
