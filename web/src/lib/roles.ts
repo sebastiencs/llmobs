@@ -54,6 +54,11 @@ export function canRemoveMember(
   return target !== "owner" || actor === "owner";
 }
 
+/** Mirrors `OrgPerm::ManageConnections`: org admins and owners (D-I-24). */
+export function canManageConnections(role: OrgRole | undefined): boolean {
+  return atLeast(role, "admin");
+}
+
 /** Overrides apply only to org members and viewers (D139). */
 export function canHaveOverride(orgRole: OrgRole): boolean {
   return orgRole === "member" || orgRole === "viewer";
