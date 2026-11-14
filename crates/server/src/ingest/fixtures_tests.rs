@@ -436,6 +436,7 @@ fn serve_config(data_dir: &Path) -> ServerConfig {
         http_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
         trusted_proxies: Vec::new(),
         otlp_http_addr: None,
+        grpc_addr: None,
         storage: StorageConfig {
             data_dir: data_dir.to_path_buf(),
             object_store: None,
@@ -529,7 +530,7 @@ async fn shutdown_keeps_every_acknowledged_span() {
     let dir = tempfile::tempdir().expect("temp dir");
     let config = serve_config(dir.path());
     let storage_config = config.storage_config();
-    let running = serve::bind(config).await.expect("server binds");
+    let running = serve::bind(config, None).await.expect("server binds");
     let addr = running.local_addr;
     let now = Clock::System.now_ns();
 

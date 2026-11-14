@@ -23,14 +23,17 @@ pub use metrics::{
     Bucket, BucketWidth, Kpi, KpiName, MetricsData, MetricsGroupBy, MetricsRequest, ModelUsageRow,
     Point, Series, SeriesName,
 };
-pub use scores::{LATEST_SCORE_COLUMNS, ScoreListRequest, ScoreTargets, latest_scores, score_list};
+pub use scores::{
+    LATEST_SCORE_COLUMNS, ScoreListRequest, ScoreTargets, latest_scores, score_list, scores_by_id,
+};
 pub use sessions::{
     MAX_SESSION_TURNS, SessionDetailData, SessionListRequest, SessionSort, session_detail,
     session_list,
 };
 pub use traces::{
-    MAX_TRACE_SPANS, SPAN_LIST_COLUMNS, SpanListRequest, SpanSort, TraceDetailData,
-    TraceListRequest, TraceSort, span_detail, span_list, trace_detail, trace_list, trace_list_plan,
+    MAX_REFRESH_IDS, MAX_TRACE_SPANS, SPAN_LIST_COLUMNS, SpanListRequest, SpanSort,
+    TraceDetailData, TraceListRequest, TraceRefreshRequest, TraceSort, span_detail, span_list,
+    trace_detail, trace_list, trace_list_plan, trace_refresh,
 };
 pub use users::{
     MAX_USER_SESSIONS, USER_COLUMNS, UserDetailData, UserListRequest, UserSort, user_detail,

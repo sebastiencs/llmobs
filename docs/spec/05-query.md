@@ -80,7 +80,7 @@ The search box on list pages adds a conjunct:
 
 On the `traces` view, search runs on `spans` first (semi-join: `trace_id IN (SELECT trace_id FROM spans WHERE <search> AND <time window>)`). Search **requires a time window** (default: the page's time picker, max 30 days unless the user confirms "search all") because it is a scan. DataFusion's `ILIKE` on Utf8 runs on the arrow string kernels; with column projection only the needed heavy columns are read.
 
-**On the live trace stream** (`GET /traces/stream`, 09), `search` is checked against each arriving span, on the same columns with the same escaping as the `spans`-view search. The stream sends a trace from its first matching span on, and every later update of that trace while the stream stays open. Spans that arrived before the stream opened are not checked; the client's refetch on `resync` covers them. There is no time window (D-C-5).
+**On the live trace stream** (`GET /traces/stream`, 09), `search` is checked against each arriving span, on the same columns with the same escaping as the `spans`-view search. The stream sends a trace from its first matching span on, and every later update of that trace while the stream stays open. Spans that arrived before the stream opened are not checked; the client's refetch on `resync` covers them. The check runs as the `traces`-view search with its window set to the arriving spans' `start_time` range (narrowed to its last 24 h), so only spans in that range can match (D-C-5, D-G-33).
 
 Later (post-MVP): Tantivy index per partition built at compaction.
 

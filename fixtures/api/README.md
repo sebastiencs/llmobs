@@ -11,6 +11,7 @@ Synthetic data for UI mocks, the OpenAPI examples, and later storage and API tes
 | `media/<sha256>.png` | hand |
 | `responses/` | `just api-examples`: the real read handlers over `dataset/` |
 | `manifest.json` | `just api-examples` |
+| `requests/*.json` | hand | example request bodies, checked against their types and `openapi.json` |
 
 Do not edit `responses/` or `manifest.json` by hand. Regenerate them with `just api-examples`.
 

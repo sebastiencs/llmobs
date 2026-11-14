@@ -155,6 +155,14 @@ const OPERATIONS: &[(&str, &str, &str)] = &[
         "get_user",
     ),
     ("get", "/api/v1/projects/{project}/scores", "list_scores"),
+    ("post", "/api/v1/projects/{project}/scores", "create_scores"),
+    (
+        "delete",
+        "/api/v1/projects/{project}/scores/{score_id}",
+        "delete_score",
+    ),
+    ("post", "/api/v1/scores", "create_key_scores"),
+    ("post", "/api/public/feedback", "post_feedback"),
     ("get", "/api/v1/projects/{project}/schema", "get_schema"),
     (
         "get",
@@ -192,7 +200,7 @@ const QUERY_OR_BODY: &[&str] = &[
     "list_api_keys",
     "list_personal_tokens",
     "list_traces",
-    "stream_traces",
+    "stream_trace",
     "get_trace",
     "list_spans",
     "list_sessions",
@@ -209,6 +217,7 @@ const QUERY_OR_BODY: &[&str] = &[
 /// Read operations with a handler (D-G-23): their errors include 422.
 const READ_OPERATIONS: &[&str] = &[
     "list_traces",
+    "stream_traces",
     "get_trace",
     "get_span",
     "list_spans",
@@ -293,7 +302,12 @@ fn document_lint() {
         );
 
         let operation_security = operation.get("security").and_then(Value::as_array);
-        if matches!(
+        if matches!(*id, "create_key_scores" | "post_feedback") {
+            let security = operation_security.unwrap_or_else(|| panic!("{id}"));
+            assert_eq!(security.len(), 1, "{id}");
+            assert!(security[0].get("bearer").is_some(), "{id}");
+            assert!(security[0].get("session").is_none(), "{id}");
+        } else if matches!(
             *id,
             "get_auth_config"
                 | "get_oauth_authorize"
@@ -399,6 +413,12 @@ fn document_lint() {
             expected_errors.extend(["400", "401", "403", "404", "409", "429"]);
         } else if *id == "post_logout" {
             // The handler always answers 204. CSRF is the shared origin check.
+        } else if *id == "create_scores" || *id == "create_key_scores" {
+            expected_errors.extend(["400", "401", "403", "404", "413", "429"]);
+        } else if *id == "delete_score" {
+            expected_errors.extend(["400", "401", "403", "404", "429"]);
+        } else if *id == "post_feedback" {
+            expected_errors.extend(["400", "401", "403", "404", "413", "429"]);
         } else if *id == "get_media" {
             expected_errors.extend(["401", "403", "404", "416", "429"]);
         } else if READ_OPERATIONS.contains(id) {

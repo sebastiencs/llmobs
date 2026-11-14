@@ -384,7 +384,7 @@ mod tests {
             .fetch_one(db.reader())
             .await
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, 2);
         let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
             .fetch_one(db.reader())
             .await
@@ -408,7 +408,7 @@ mod tests {
                 sqlx::query(
                     "INSERT INTO _sqlx_migrations \
                      (version, description, success, checksum, execution_time) \
-                     VALUES (2, 'future', 1, ?, 0)",
+                     VALUES (3, 'future', 1, ?, 0)",
                 )
                 .bind(Vec::<u8>::new())
                 .execute(&mut *connection)
@@ -423,8 +423,8 @@ mod tests {
         let error = MetaDb::open_existing(dir.path()).await.unwrap_err();
         match error {
             MetaError::SchemaMismatch { found, expected } => {
-                assert_eq!(found, 2);
-                assert_eq!(expected, 1);
+                assert_eq!(found, 3);
+                assert_eq!(expected, 2);
             }
             other => panic!("{other}"),
         }

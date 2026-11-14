@@ -42,6 +42,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("LLMOBS_PUBLIC_URL", "public_url"),
     ("LLMOBS_HTTP_ADDR", "http_addr"),
     ("LLMOBS_OTLP_HTTP_ADDR", "otlp_http_addr"),
+    ("LLMOBS_GRPC_ADDR", "grpc_addr"),
     ("LLMOBS_TRUSTED_PROXIES", "trusted_proxies"),
     ("LLMOBS_OBJECT_STORE", "storage.object_store"),
     ("LLMOBS_SMTP_URL", "smtp_url"),
@@ -418,6 +419,8 @@ pub struct IngestConfig {
     pub max_attribute_bytes: ByteSize,
     /// Decompressed bytes processed at once, all requests (D-G-5). Default 256 MiB.
     pub max_inflight_bytes: ByteSize,
+    /// Decoded gRPC message cap. Default 32 MiB.
+    pub max_grpc_message_bytes: ByteSize,
 }
 
 impl Default for IngestConfig {
@@ -427,6 +430,7 @@ impl Default for IngestConfig {
             max_spans_per_request: 50_000,
             max_attribute_bytes: ByteSize::mib(8),
             max_inflight_bytes: ByteSize::mib(256),
+            max_grpc_message_bytes: ByteSize::mib(32),
         }
     }
 }
@@ -466,9 +470,9 @@ impl Default for MediaConfig {
 
 /// Everything `llmobs serve` reads from the environment and `llmobs.toml`.
 ///
-/// Keys that spec 12 lists for later work (gRPC listen address, encryption key,
-/// evaluation workers, telemetry, compaction, gc, deletion, anchor) are not
-/// fields. Setting one is an unknown-key error.
+/// Keys that spec 12 lists for later work (encryption key, evaluation workers,
+/// telemetry, compaction, gc, deletion, anchor) are not fields. Setting one is
+/// an unknown-key error.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
@@ -493,6 +497,12 @@ pub struct ServerConfig {
         deserialize_with = "deserialize_optional_socket_addr"
     )]
     pub otlp_http_addr: Option<SocketAddr>,
+    /// OTLP/gRPC listener (D-G-21, D-G-29). `None` when the value is an empty string.
+    #[serde(
+        default = "default_grpc_addr",
+        deserialize_with = "deserialize_optional_socket_addr"
+    )]
+    pub grpc_addr: Option<SocketAddr>,
     /// `[storage]` table. `data_dir` is copied from the top-level field.
     ///
     /// `StorageConfig` requires `data_dir` and denies unknown fields, so the
@@ -592,6 +602,10 @@ fn default_http_addr() -> SocketAddr {
 
 fn default_otlp_http_addr() -> Option<SocketAddr> {
     Some(SocketAddr::from(([0, 0, 0, 0], 4318)))
+}
+
+fn default_grpc_addr() -> Option<SocketAddr> {
+    Some(SocketAddr::from(([0, 0, 0, 0], 4317)))
 }
 
 fn default_signup() -> SignupPolicy {
@@ -740,6 +754,18 @@ fn validate(config: &mut ServerConfig) -> Result<(), ConfigError> {
             reason: "must differ from http_addr",
         });
     }
+    if config.grpc_addr == Some(config.http_addr) {
+        return Err(ConfigError::Invalid {
+            key: "grpc_addr",
+            reason: "must differ from http_addr",
+        });
+    }
+    if config.grpc_addr.is_some() && config.grpc_addr == config.otlp_http_addr {
+        return Err(ConfigError::Invalid {
+            key: "grpc_addr",
+            reason: "must differ from otlp_http_addr",
+        });
+    }
     validate_ingest(&config.ingest, &config.media)?;
     config.storage.validate().map_err(|error| match error {
         llmobs_storage::error::ConfigError::Invalid { field, rule } => ConfigError::Invalid {
@@ -756,6 +782,10 @@ fn validate_ingest(ingest: &IngestConfig, media: &MediaConfig) -> Result<(), Con
         ("ingest.max_request_bytes", ingest.max_request_bytes),
         ("ingest.max_attribute_bytes", ingest.max_attribute_bytes),
         ("ingest.max_inflight_bytes", ingest.max_inflight_bytes),
+        (
+            "ingest.max_grpc_message_bytes",
+            ingest.max_grpc_message_bytes,
+        ),
         ("media.min_bytes", media.min_bytes),
         ("media.max_bytes", media.max_bytes),
     ];
@@ -793,6 +823,19 @@ fn validate_ingest(ingest: &IngestConfig, media: &MediaConfig) -> Result<(), Con
         return Err(invalid_size(
             "ingest.max_inflight_bytes",
             "must be at least max_request_bytes and below 4GiB",
+        ));
+    }
+    let grpc = ingest.max_grpc_message_bytes;
+    if grpc < ByteSize::kib(1) || grpc > ByteSize::gib(1) {
+        return Err(invalid_size(
+            "ingest.max_grpc_message_bytes",
+            "must be between 1KiB and 1GiB",
+        ));
+    }
+    if grpc > inflight {
+        return Err(invalid_size(
+            "ingest.max_grpc_message_bytes",
+            "must be at most max_inflight_bytes",
         ));
     }
     if media.min_bytes < ByteSize::b(1) || media.min_bytes > media.max_bytes {
@@ -2152,6 +2195,7 @@ link_existing_by_email = true
                 max_spans_per_request: 50_000,
                 max_attribute_bytes: ByteSize::mib(8),
                 max_inflight_bytes: ByteSize::mib(256),
+                max_grpc_message_bytes: ByteSize::mib(32),
             }
         );
         assert_eq!(
@@ -2162,6 +2206,7 @@ link_existing_by_email = true
             }
         );
         assert_eq!(config.otlp_http_addr, Some(socket("0.0.0.0:4318")));
+        assert_eq!(config.grpc_addr, Some(socket("0.0.0.0:4317")));
 
         let limits = config.ingest.limits(&config.media);
         assert_eq!(limits.max_attribute_bytes, 8 * 1024 * 1024);
@@ -2203,14 +2248,30 @@ link_existing_by_email = true
     }
 
     #[test]
+    fn grpc_addr_empty_disables_the_listener() {
+        let toml = load_from(Some("grpc_addr = \"\"\n"), &[]).unwrap();
+        assert_eq!(toml.grpc_addr, None);
+
+        let env = load_from(None, &[("LLMOBS_GRPC_ADDR", "")]).unwrap();
+        assert_eq!(env.grpc_addr, None);
+
+        let blank = load_from(None, &[("LLMOBS_GRPC_ADDR", "  ")]).unwrap();
+        assert_eq!(blank.grpc_addr, None);
+
+        let set = load_from(None, &[("LLMOBS_GRPC_ADDR", "127.0.0.1:9998")]).unwrap();
+        assert_eq!(set.grpc_addr, Some(socket("127.0.0.1:9998")));
+
+        let error = load_from(None, &[("LLMOBS_GRPC_ADDR", "nope")]).unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("invalid socket address"), "{text}");
+        assert!(text.contains("grpc_addr"), "{text}");
+        assert!(!text.contains("nope"), "{text}");
+    }
+
+    #[test]
     fn ingest_and_media_reject_unknown_keys() {
-        // A spec 12 key for later work is still an unknown key here.
-        let ingest =
-            load_from(Some("[ingest]\nmax_grpc_message_bytes = \"1MiB\"\n"), &[]).unwrap_err();
-        assert!(
-            ingest.to_string().contains("max_grpc_message_bytes"),
-            "{ingest}"
-        );
+        let ingest = load_from(Some("[ingest]\nmax_widgets = \"1MiB\"\n"), &[]).unwrap_err();
+        assert!(ingest.to_string().contains("max_widgets"), "{ingest}");
 
         let media = load_from(Some("[media]\nnope = 1\n"), &[]).unwrap_err();
         assert!(media.to_string().contains("nope"), "{media}");
@@ -2251,6 +2312,21 @@ link_existing_by_email = true
                 "8GiB",
             ),
             (
+                "[ingest]\nmax_grpc_message_bytes = \"512B\"\n",
+                "ingest.max_grpc_message_bytes: must be between 1KiB and 1GiB",
+                "512B",
+            ),
+            (
+                "[ingest]\nmax_grpc_message_bytes = \"2GiB\"\n",
+                "ingest.max_grpc_message_bytes: must be between 1KiB and 1GiB",
+                "2GiB",
+            ),
+            (
+                "[ingest]\nmax_grpc_message_bytes = \"512MiB\"\n",
+                "ingest.max_grpc_message_bytes: must be at most max_inflight_bytes",
+                "512MiB",
+            ),
+            (
                 "[media]\nmin_bytes = \"0B\"\n",
                 "media.min_bytes: must be at least 1 byte and at most media.max_bytes",
                 "0B",
@@ -2270,6 +2346,16 @@ link_existing_by_email = true
                 "otlp_http_addr: must differ from http_addr",
                 "7070",
             ),
+            (
+                "http_addr = \"127.0.0.1:7072\"\ngrpc_addr = \"127.0.0.1:7072\"\n",
+                "grpc_addr: must differ from http_addr",
+                "7072",
+            ),
+            (
+                "otlp_http_addr = \"127.0.0.1:7073\"\ngrpc_addr = \"127.0.0.1:7073\"\n",
+                "grpc_addr: must differ from otlp_http_addr",
+                "7073",
+            ),
         ];
         for (toml, expected, rejected) in cases {
             let error = load_from(Some(toml), &[]).unwrap_err();
@@ -2283,7 +2369,7 @@ link_existing_by_email = true
     fn ingest_and_media_accept_the_edges() {
         let config = load_from(
             Some(
-                "[ingest]\nmax_request_bytes = \"1KiB\"\nmax_attribute_bytes = \"1KiB\"\nmax_inflight_bytes = \"1KiB\"\n\n[media]\nmin_bytes = \"1B\"\nmax_bytes = \"1GiB\"\n",
+                "[ingest]\nmax_request_bytes = \"1KiB\"\nmax_attribute_bytes = \"1KiB\"\nmax_inflight_bytes = \"1KiB\"\nmax_grpc_message_bytes = \"1KiB\"\n\n[media]\nmin_bytes = \"1B\"\nmax_bytes = \"1GiB\"\n",
             ),
             &[],
         )

@@ -43,7 +43,10 @@ use super::members::{OrgMember, ProjectMember, SetProjectOverrideRequest, Update
 use super::metrics::{MetricsBucket, MetricsGroupBy, MetricsParams, MetricsResponse};
 use super::saved_views::{CreateSavedView, SavedView, SavedViewListParams, UpdateSavedView};
 use super::schema::SchemaResponse;
-use super::scores::ScoreListParams;
+use super::scores::{
+    FeedbackRequest, FeedbackResult, FeedbackValue, ScoreBatch, ScoreCreate, ScoreListParams,
+    ScoreWriteResult,
+};
 use super::sessions::{SessionDetail, SessionListParams, SessionSort, SessionSummary};
 use super::traces::{
     SpanDetail, SpanListParams, SpanSort, SpanSummary, TraceDetail, TraceDetailParams,
@@ -142,6 +145,12 @@ pub(crate) fn collect_schemas() -> SchemaSet {
     set.insert::<EndUserSummary>();
     set.insert::<EndUserDetail>();
     set.insert::<Score>();
+    set.insert::<ScoreCreate>();
+    set.insert::<ScoreBatch>();
+    set.insert::<ScoreWriteResult>();
+    set.insert::<FeedbackRequest>();
+    set.insert::<FeedbackValue>();
+    set.insert::<FeedbackResult>();
     set.insert::<SchemaResponse>();
     set.insert::<SavedView>();
     set.insert::<CreateSavedView>();
@@ -487,7 +496,7 @@ fn components(schemas: &SchemaSet) -> Components {
                 HttpBuilder::new()
                     .scheme(HttpAuthScheme::Bearer)
                     .description(Some(
-                        "A personal access token (`pat-…`) or a secret key (`sk-…`).",
+                        "A personal access token (`pat-…`), a secret key (`sk-…`), or a public key (`pk-…`, feedback only).",
                     ))
                     .build(),
             ),
@@ -1246,7 +1255,7 @@ fn trace_paths(paths: PathsBuilder) -> PathsBuilder {
         .responses(responses(
             "200",
             sse("Live trace summaries."),
-            QUERY_ERRORS,
+            READ_ERRORS,
         ))
         .build();
     let detail = operation("get_trace", "traces", "Get a trace")
@@ -1274,7 +1283,7 @@ fn trace_paths(paths: PathsBuilder) -> PathsBuilder {
         .responses(responses(
             "200",
             sse("Live spans of one trace."),
-            AUTH_ERRORS,
+            QUERY_ERRORS,
         ))
         .build();
     let span = operation("get_span", "spans", "Get a span")
@@ -1402,6 +1411,66 @@ fn score_paths(paths: PathsBuilder) -> PathsBuilder {
             READ_ERRORS,
         ))
         .build();
+    let create = operation("create_scores", "scores", "Write scores")
+        .description(Some(
+            "Writes 1–1000 scores in one batch. The answer has one id per item, in input order.",
+        ))
+        .parameters(Some(vec![project_param()]))
+        .request_body(Some(json_body("ScoreBatch")))
+        .responses(responses(
+            "200",
+            json_of::<ScoreWriteResult>("The id of each written score, in input order."),
+            &[400, 401, 403, 404, 413, 429, 503],
+        ))
+        .build();
+    let delete = operation("delete_score", "scores", "Delete a score")
+        .description(Some(
+            "Appends a deleted version of the score. Its `created_at` is kept.",
+        ))
+        .parameters(Some(vec![
+            project_param(),
+            path_uuid("score_id", "Score id."),
+        ]))
+        .responses(responses(
+            "204",
+            ResponseBuilder::new().description("Deleted.").build(),
+            &[400, 401, 403, 404, 429, 503],
+        ))
+        .build();
+    let key_create = operation(
+        "create_key_scores",
+        "scores",
+        "Write scores with an ingest key",
+    )
+    .description(Some(
+        "Writes 1–1000 scores in one batch. The answer has one id per item, in input order. The project comes from the `sk` key, which needs the `ingest` scope.",
+    ))
+    .securities(Some(vec![SecurityRequirement::new(
+        "bearer",
+        [] as [&str; 0],
+    )]))
+    .request_body(Some(json_body("ScoreBatch")))
+    .responses(responses(
+        "200",
+        json_of::<ScoreWriteResult>("The id of each written score, in input order."),
+        &[400, 401, 403, 404, 413, 429, 503],
+    ))
+    .build();
+    let feedback = operation("post_feedback", "scores", "Send end-user feedback")
+        .description(Some(
+            "Needs a `pk` key with the `feedback` scope. CORS allows any origin. At most 4 KiB, 10 requests per second per key and client IP.",
+        ))
+        .securities(Some(vec![SecurityRequirement::new(
+            "bearer",
+            [] as [&str; 0],
+        )]))
+        .request_body(Some(json_body("FeedbackRequest")))
+        .responses(responses(
+            "200",
+            json_of::<FeedbackResult>("The stored feedback score."),
+            &[400, 401, 403, 404, 413, 429],
+        ))
+        .build();
     let schema = operation("get_schema", "schema", "Get the schema")
         .parameters(Some(vec![project_param()]))
         .responses(responses(
@@ -1427,6 +1496,22 @@ fn score_paths(paths: PathsBuilder) -> PathsBuilder {
         .path(
             format!("{PROJECT}/scores"),
             PathItem::new(HttpMethod::Get, scores),
+        )
+        .path(
+            format!("{PROJECT}/scores"),
+            PathItem::new(HttpMethod::Post, create),
+        )
+        .path(
+            format!("{PROJECT}/scores/{{score_id}}"),
+            PathItem::new(HttpMethod::Delete, delete),
+        )
+        .path(
+            "/api/v1/scores".to_owned(),
+            PathItem::new(HttpMethod::Post, key_create),
+        )
+        .path(
+            "/api/public/feedback".to_owned(),
+            PathItem::new(HttpMethod::Post, feedback),
         )
         .path(
             format!("{PROJECT}/schema"),
@@ -1703,6 +1788,7 @@ fn problem(code: u16) -> Response {
         403 => "The credentials do not allow this operation.",
         404 => "The resource does not exist.",
         409 => "The request conflicts with the current state.",
+        413 => "The request body is larger than the limit.",
         416 => "The Range header does not overlap the blob.",
         422 => "The query took longer than its time limit or needed more memory than allowed.",
         429 => "Too many requests.",

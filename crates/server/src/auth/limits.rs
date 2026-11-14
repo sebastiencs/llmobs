@@ -11,6 +11,8 @@ use std::net::IpAddr;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use uuid::Uuid;
+
 /// How many checks are allowed, refilled evenly over `per`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Bucket {
@@ -162,6 +164,8 @@ pub(crate) struct Limits {
     pub(crate) ip_forms: KeyedLimiter<IpAddr>,
     /// 3 checks per hour per email.
     pub(crate) email_mail: KeyedLimiter<String>,
+    /// 10 requests per second per (key id, client IP) on public feedback (D-G-16).
+    pub(crate) feedback: KeyedLimiter<(Uuid, IpAddr)>,
     /// 20 failures lock password login for 15 minutes.
     pub(crate) lockout: Lockout,
 }
@@ -192,6 +196,13 @@ impl Limits {
                 },
                 MAX_KEYS,
             ),
+            feedback: KeyedLimiter::new(
+                Bucket {
+                    capacity: 10,
+                    per: Duration::from_secs(1),
+                },
+                MAX_KEYS,
+            ),
             lockout: Lockout::new(20, Duration::from_secs(15 * 60), MAX_KEYS),
         }
     }
@@ -201,6 +212,7 @@ impl Limits {
         self.login.prune(now);
         self.ip_forms.prune(now);
         self.email_mail.prune(now);
+        self.feedback.prune(now);
         self.lockout.prune(now);
     }
 }

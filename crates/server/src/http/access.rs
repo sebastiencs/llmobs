@@ -117,9 +117,11 @@ pub(crate) fn routes() -> Vec<RouteDef> {
     routes.extend(crate::routes::api_keys::routes());
     routes.extend(crate::routes::tokens::routes());
     routes.extend(crate::routes::traces::routes());
+    routes.extend(crate::routes::streams::routes());
     routes.extend(crate::routes::sessions::routes());
     routes.extend(crate::routes::users::routes());
     routes.extend(crate::routes::scores::routes());
+    routes.extend(crate::routes::feedback::routes());
     routes.extend(crate::routes::schema::routes());
     routes.extend(crate::routes::metrics::routes());
     routes.extend(crate::routes::media::routes());
@@ -459,6 +461,19 @@ async fn grant_key_only_project(
     parts: &mut Parts,
     project_id: ProjectId,
 ) -> Result<(), ApiError> {
+    let project = key_only_project(state, project_id).await?;
+    parts.extensions.insert(ProjectAccess {
+        project,
+        role: None,
+    });
+    Ok(())
+}
+
+/// The active project `project_id` in an active org, shared by HTTP and gRPC ingest.
+pub(crate) async fn key_only_project(
+    state: &AppState,
+    project_id: ProjectId,
+) -> Result<ProjectRow, ApiError> {
     let Some(project) = project_by_id(state.meta.reader(), project_id).await? else {
         return Err(ApiError::NotFound);
     };
@@ -471,11 +486,7 @@ async fn grant_key_only_project(
     if org.state != "active" {
         return Err(ApiError::NotFound);
     }
-    parts.extensions.insert(ProjectAccess {
-        project,
-        role: None,
-    });
-    Ok(())
+    Ok(project)
 }
 
 async fn load_project(state: &AppState, key: &str) -> Result<Option<ProjectRow>, ApiError> {
@@ -1124,6 +1135,10 @@ mod tests {
             }
             .unwrap_or_else(|| panic!("missing {} {}", route.method, route.path));
             let expected = match route.access {
+                // Key routes are bearer-only (D-G-15).
+                Access::Key { .. } => {
+                    Some(vec![SecurityRequirement::new("bearer", [] as [&str; 0])])
+                }
                 Access::Public => Some(Vec::new()),
                 Access::InstanceAdmin
                 | Access::User { session_only: true }
@@ -1143,10 +1158,7 @@ mod tests {
                 | Access::Project {
                     session_only: false,
                     ..
-                }
-                // M1's only key route is undocumented. M3 documents
-                // `POST /api/v1/scores` and revisits this arm.
-                | Access::Key { .. } => None,
+                } => None,
             };
             assert!(
                 operation.security == expected,

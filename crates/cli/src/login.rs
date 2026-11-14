@@ -487,13 +487,13 @@ mod tests {
         fs::write(
             &config_path,
             format!(
-                "data_dir = \"{}\"\nhttp_addr = \"127.0.0.1:0\"\notlp_http_addr = \"\"\npublic_url = \"http://127.0.0.1:8080\"\n\n[init]\nadmin_email = \"ada@example.com\"\nadmin_password = \"p17-cli-login-secret\"\norg = \"Acme\"\nproject = \"App\"\n",
+                "data_dir = \"{}\"\nhttp_addr = \"127.0.0.1:0\"\notlp_http_addr = \"\"\ngrpc_addr = \"\"\npublic_url = \"http://127.0.0.1:8080\"\n\n[init]\nadmin_email = \"ada@example.com\"\nadmin_password = \"p17-cli-login-secret\"\norg = \"Acme\"\nproject = \"App\"\n",
                 data.display()
             ),
         )
         .unwrap();
         let config = llmobs_server::config::ServerConfig::load(Some(&config_path)).unwrap();
-        let running = llmobs_server::serve::bind(config).await.unwrap();
+        let running = llmobs_server::serve::bind(config, None).await.unwrap();
         let server = format!("http://{}", running.local_addr);
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))

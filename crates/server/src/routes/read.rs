@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use llmobs_core::ids::ProjectId;
-use llmobs_storage::{ListScope, QueryContext, QueryOptions, ScoreTargets, TimeWindow};
+use llmobs_storage::{ListScope, QueryContext, QueryOptions, ScoreTargets, Storage, TimeWindow};
 
 use crate::api::common::{Limit, SortOrder, TimeParam};
 use crate::api::convert;
@@ -21,10 +21,17 @@ pub(crate) async fn open_query(
     project: ProjectId,
     around: Option<i64>,
 ) -> Result<QueryContext, ApiError> {
-    let source = state
-        .storage
-        .query(project, QueryOptions { around })
-        .await?;
+    open_query_on(&state.storage, project, around).await
+}
+
+/// [`open_query`] for a caller that holds the storage but not the whole state, such as a
+/// stream task (the task must not keep an `AppState` alive).
+pub(crate) async fn open_query_on(
+    storage: &Storage,
+    project: ProjectId,
+    around: Option<i64>,
+) -> Result<QueryContext, ApiError> {
+    let source = storage.query(project, QueryOptions { around }).await?;
     Ok(QueryContext::new(source, None)?)
 }
 

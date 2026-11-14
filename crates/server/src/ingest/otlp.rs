@@ -49,7 +49,7 @@ pub(crate) fn export_response(
 }
 
 /// `None` when nothing was rejected; otherwise the count and the message.
-fn partial_success(rejections: &Rejections) -> Option<(i64, String)> {
+pub(crate) fn partial_success(rejections: &Rejections) -> Option<(i64, String)> {
     let total = rejections.total();
     if total == 0 {
         return None;

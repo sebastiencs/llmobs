@@ -89,6 +89,7 @@ crates/
                              deletion, DataFusion providers, filter DSL, SQL sandbox  (specs 03, 05)
   server/    llmobs-server   API, auth, metadata DB, evaluation, alerts, email, MCP   (specs 04, 06–09)
   cli/       llmobs-cli      the `llmobs` binary                                       (spec 09 § CLI)
+  ui/        llmobs-ui       the web UI embedded at build time (D-G-18, D-G-35)
 web/                         React UI (Vite, TanStack, shadcn/ui, pnpm)               (spec 11)
 sdks/python/                 Python SDK (uv)                                           (spec 10)
 sdks/typescript/             TypeScript SDK (pnpm)                                     (spec 10)
@@ -96,6 +97,7 @@ fixtures/otlp/               OTLP fixtures shared by Rust golden tests and SDK t
 fixtures/api/                example API responses (UI mocks), checked against the server types (spec 09)
 tools/                       dev tools (fixture capture, benchmarks); not shipped
 tools/capture/               fixture capture: mock provider, OTLP receiver, scenarios (B2)
+tools/e2e/                   run.sh for just e2e: a real llmobs serve and both SDK suites (D-G-20)
 docs/                        decisions, specs, plans, research
 ```
 
@@ -103,7 +105,8 @@ docs/                        decisions, specs, plans, research
 - `core` depends on no workspace crate.
 - `otel` and `storage` depend only on `core`. **They never depend on each other**, so they can be built in parallel; `server` connects them.
 - `eval` depends on `core` and `otel`.
-- `server` depends on `core`, `otel`, `storage` and `eval`; `cli` depends on `server` and `core`.
+- `server` depends on `core`, `otel`, `storage` and `eval`; `cli` depends on `server`, `core` and `ui`.
+- `ui` depends on no workspace crate.
 
 ## Parallel work and ownership
 
@@ -124,6 +127,7 @@ Run everything through `just`:
 | `just check` | Rust, web, Python SDK, and TypeScript SDK (D79); **must pass before every commit** |
 | `just check-rust` | format check, clippy (`-D warnings`), tests, cargo-deny |
 | `just check-web` | web lint, types, tests, production build |
+| `just check-release` | build-release, then check the UI is embedded |
 | `just check-py` | Python SDK format, lint, types, tests |
 | `just check-ts` | TypeScript SDK lint, types, tests, package exports |
 | `just fmt` | format Rust, the web and TypeScript SDK (Biome), and the Python SDK (ruff) |
@@ -142,6 +146,7 @@ Run everything through `just`:
 | `just capture <group>/<case>` | record an OTLP fixture from a scenario, e.g. `just capture openinference/openai-chat-tool` |
 | `just capture-all` | recapture every scenario |
 | `just check-capture` | lint and type-check the capture scenarios, then recapture every scenario and compare (timing excluded) |
+| `just e2e` | run the Python and TypeScript SDKs against a real `llmobs serve` (D-G-20) |
 
 Required tools:
 - `rustup` (the toolchain is pinned in `rust-toolchain.toml`)

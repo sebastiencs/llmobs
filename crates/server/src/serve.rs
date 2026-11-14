@@ -26,8 +26,9 @@ use crate::auth::Limits;
 use crate::clock::Clock;
 use crate::config::{ConfigError, ServerConfig};
 use crate::http::{AppInner, AppState, otlp_router, router};
-use crate::ingest::Ingest;
+use crate::ingest::{Ingest, grpc};
 use crate::meta::{MetaDb, MetaError};
+use tonic::transport::server::TcpIncoming;
 
 /// How long in-flight HTTP may finish after stop-accepting (spec 12).
 const DRAIN: Duration = Duration::from_secs(20);
@@ -40,6 +41,9 @@ const PRUNE_EVERY: Duration = Duration::from_secs(60);
 
 /// How often coalesced `last_used_at` values are written (D140).
 const LAST_USED_EVERY: Duration = Duration::from_secs(60);
+
+/// How often usage counters are written (D-G-11).
+const USAGE_EVERY: Duration = Duration::from_secs(10);
 
 /// How often expired web sessions are deleted.
 const PURGE_EVERY: Duration = Duration::from_secs(60 * 60);
@@ -117,10 +121,14 @@ pub struct Running {
     pub local_addr: SocketAddr,
     /// The OTLP/HTTP listener's address, when `otlp_http_addr` is set (D-G-21).
     pub otlp_local_addr: Option<SocketAddr>,
+    /// The OTLP/gRPC listener's address, when `grpc_addr` is set (D-G-21).
+    pub grpc_local_addr: Option<SocketAddr>,
     serve: Option<JoinHandle<io::Result<()>>>,
     shutdown_tx: Option<oneshot::Sender<()>>,
     otlp_serve: Option<JoinHandle<io::Result<()>>>,
     otlp_shutdown_tx: Option<oneshot::Sender<()>>,
+    grpc_serve: Option<JoinHandle<io::Result<()>>>,
+    grpc_shutdown_tx: Option<oneshot::Sender<()>>,
     state: Option<AppState>,
     /// Background work. Shutdown aborts whatever is here.
     tasks: Vec<JoinHandle<()>>,
@@ -143,6 +151,9 @@ impl Drop for Running {
         if let Some(serve) = self.otlp_serve.take() {
             serve.abort();
         }
+        if let Some(serve) = self.grpc_serve.take() {
+            serve.abort();
+        }
         for task in &self.tasks {
             task.abort();
         }
@@ -150,6 +161,7 @@ impl Drop for Running {
 }
 
 /// Open the data directory, bind `config.http_addr`, and serve until `shutdown`.
+/// `ui` answers the main listener's non-API paths; the OTLP listeners never get it.
 ///
 /// # Errors
 ///
@@ -157,24 +169,26 @@ impl Drop for Running {
 /// or from the accept loop.
 pub async fn run(
     config: ServerConfig,
+    ui: Option<axum::Router>,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServeError> {
-    let running = bind(config).await?;
+    let running = bind(config, ui).await?;
     shutdown.await;
     running.shutdown().await
 }
 
-/// Create `data_dir`, open storage and `meta.db`, and start accepting.
+/// Create `data_dir`, open storage and `meta.db`, and start accepting. See [`run`] for `ui`.
 ///
 /// # Errors
 ///
 /// Returns a [`ServeError`] when the directory, the lock, `meta.db`, or the
 /// socket fails. Storage is shut down before a later step's error is returned,
 /// so `LOCK` is not held after `Err`.
-pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
+pub async fn bind(config: ServerConfig, ui: Option<axum::Router>) -> Result<Running, ServeError> {
     let data_dir = config.data_dir.clone();
     let http_addr = config.http_addr;
     let otlp_http_addr = config.otlp_http_addr;
+    let grpc_addr = config.grpc_addr;
     if let Err(source) = tokio::fs::create_dir_all(&data_dir).await {
         return Err(directory_error(&data_dir, &source));
     }
@@ -256,14 +270,16 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
         providers,
         oauth_key,
         ingest,
+        live: crate::live::LiveBus::new(crate::live::StreamTiming::DEFAULT),
         metrics_cache: crate::routes::metrics::MetricsCache::default(),
+        usage: crate::usage::Usage::default(),
     });
     if let Err(error) = crate::bootstrap::prepare(&state).await {
         release_state(state).await;
         return Err(serve_bootstrap(error));
     }
-    // Both sockets are bound before either server starts. A failure drops the
-    // sockets already bound and releases the state, so `LOCK` is free after `Err`.
+    // Every socket is bound before any server starts. A failure drops the sockets
+    // already bound and releases the state, so `LOCK` is free after `Err`.
     let (listener, local_addr) = match bind_listener(http_addr).await {
         Ok(bound) => bound,
         Err(error) => {
@@ -281,9 +297,19 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
             }
         },
     };
+    let grpc = match grpc_addr {
+        None => None,
+        Some(addr) => match bind_listener(addr).await {
+            Ok(bound) => Some(bound),
+            Err(error) => {
+                release_state(state).await;
+                return Err(error);
+            }
+        },
+    };
     tracing::info!(%local_addr, "listening");
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let app = router(state.clone()).into_make_service_with_connect_info::<SocketAddr>();
+    let app = router(state.clone(), ui).into_make_service_with_connect_info::<SocketAddr>();
     let serve = tokio::spawn(async move {
         axum::serve(listener, app)
             .with_graceful_shutdown(async move {
@@ -308,18 +334,40 @@ pub async fn bind(config: ServerConfig) -> Result<Running, ServeError> {
             (Some(addr), Some(serve), Some(tx))
         }
     };
+    let (grpc_local_addr, grpc_serve, grpc_shutdown_tx) = match grpc {
+        None => (None, None, None),
+        Some((listener, addr)) => {
+            tracing::info!(grpc_local_addr = %addr, "listening");
+            let (tx, rx) = oneshot::channel();
+            let service = grpc::service(state.clone());
+            let serve = tokio::spawn(async move {
+                tonic::transport::Server::builder()
+                    .add_service(service)
+                    .serve_with_incoming_shutdown(TcpIncoming::from(listener), async move {
+                        let _ = rx.await;
+                    })
+                    .await
+                    .map_err(io::Error::other)
+            });
+            (Some(addr), Some(serve), Some(tx))
+        }
+    };
     Ok(Running {
         local_addr,
         otlp_local_addr,
+        grpc_local_addr,
         serve: Some(serve),
         shutdown_tx: Some(shutdown_tx),
         otlp_serve,
         otlp_shutdown_tx,
+        grpc_serve,
+        grpc_shutdown_tx,
         state: Some(state.clone()),
         tasks: vec![
             spawn_prune(state.clone()),
             spawn_purge(state.clone()),
-            spawn_last_used(state),
+            spawn_last_used(state.clone()),
+            spawn_usage(state),
         ],
     })
 }
@@ -378,6 +426,20 @@ fn spawn_last_used(state: AppState) -> JoinHandle<()> {
     })
 }
 
+fn spawn_usage(state: AppState) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(USAGE_EVERY);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            if let Err(error) = state.usage.flush(&state.meta).await {
+                tracing::error!(error = %error, "usage flush failed");
+            }
+        }
+    })
+}
+
 fn spawn_prune(state: AppState) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(PRUNE_EVERY);
@@ -401,17 +463,24 @@ impl Running {
     ///
     /// Returns the accept loop's error when it failed before the drain finished.
     pub async fn shutdown(mut self) -> Result<(), ServeError> {
+        if let Some(state) = &self.state {
+            state.live.close();
+        }
         if let Some(sender) = self.shutdown_tx.take() {
             let _ = sender.send(());
         }
         if let Some(sender) = self.otlp_shutdown_tx.take() {
             let _ = sender.send(());
         }
-        let (serve_result, otlp_result) = tokio::join!(
+        if let Some(sender) = self.grpc_shutdown_tx.take() {
+            let _ = sender.send(());
+        }
+        let (serve_result, otlp_result, grpc_result) = tokio::join!(
             drain_optional(self.serve.take()),
             drain_optional(self.otlp_serve.take()),
+            drain_optional(self.grpc_serve.take()),
         );
-        let serve_error = serve_result.or(otlp_result);
+        let serve_error = serve_result.or(otlp_result).or(grpc_result);
         for task in self.tasks.drain(..) {
             task.abort();
             let _ = task.await;
@@ -422,6 +491,9 @@ impl Running {
             }
             if let Err(error) = state.token_last_used.flush(&state.meta).await {
                 tracing::error!(error = %error, "last_used flush failed");
+            }
+            if let Err(error) = state.usage.flush(&state.meta).await {
+                tracing::error!(error = %error, "usage flush failed");
             }
             match tokio::time::timeout(STORAGE_SHUTDOWN, state.storage.shutdown()).await {
                 Ok(Ok(())) => {}
@@ -501,6 +573,11 @@ mod tests {
     use tokio::net::TcpStream;
 
     use bytesize::ByteSize;
+    use llmobs_otel::decode_json;
+    use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+    use opentelemetry_proto::tonic::collector::trace::v1::trace_service_client::TraceServiceClient;
+    use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
+    use tonic::codec::CompressionEncoding;
 
     use super::*;
     use crate::config::{
@@ -510,7 +587,8 @@ mod tests {
     #[tokio::test]
     async fn an_empty_database_logs_the_setup_url_once() {
         let dir = tempfile::tempdir().unwrap();
-        let (running, logs) = crate::test_support::capture_logs(bind(config(dir.path()))).await;
+        let (running, logs) =
+            crate::test_support::capture_logs(bind(config(dir.path()), None)).await;
         let running = running.unwrap();
         assert_eq!(
             logs.matches("setup required: open http://localhost:8080/setup?token=")
@@ -533,7 +611,7 @@ mod tests {
             "secret_key": "not-a-secret-key",
         }))
         .unwrap();
-        let error = bind(config).await.unwrap_err();
+        let error = bind(config, None).await.unwrap_err();
         let text = error.to_string();
         assert!(matches!(error, ServeError::Init { .. }), "{text}");
         assert!(text.contains("LLMOBS_INIT_SECRET_KEY"), "{text}");
@@ -543,22 +621,22 @@ mod tests {
     #[tokio::test]
     async fn healthz_over_tcp_and_shutdown_releases_the_lock() {
         let dir = tempfile::tempdir().unwrap();
-        let running = bind(config(dir.path())).await.unwrap();
+        let running = bind(config(dir.path()), None).await.unwrap();
         let body = http_get(running.local_addr, "/healthz", "close").await;
         let text = String::from_utf8_lossy(&body);
         assert!(text.starts_with("HTTP/1.1 200"), "{text}");
         assert!(text.contains("\"status\":\"ok\""), "{text}");
         running.shutdown().await.unwrap();
 
-        let again = bind(config(dir.path())).await.unwrap();
+        let again = bind(config(dir.path()), None).await.unwrap();
         again.shutdown().await.unwrap();
     }
 
     #[tokio::test]
     async fn a_second_bind_stops_on_the_lock() {
         let dir = tempfile::tempdir().unwrap();
-        let running = bind(config(dir.path())).await.unwrap();
-        let error = bind(config(dir.path())).await.unwrap_err();
+        let running = bind(config(dir.path()), None).await.unwrap();
+        let error = bind(config(dir.path()), None).await.unwrap_err();
         let text = error.to_string();
         assert!(matches!(error, ServeError::Storage(_)), "{text}");
         assert!(text.contains("in use"), "{text}");
@@ -569,7 +647,7 @@ mod tests {
     #[tokio::test]
     async fn idle_keepalive_shuts_down_within_the_drain() {
         let dir = tempfile::tempdir().unwrap();
-        let running = bind(config(dir.path())).await.unwrap();
+        let running = bind(config(dir.path()), None).await.unwrap();
         let mut stream = TcpStream::connect(running.local_addr).await.unwrap();
         let request = b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n";
         stream.write_all(request).await.unwrap();
@@ -634,6 +712,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shutdown_flushes_usage() {
+        use crate::meta::MetaDb;
+        use llmobs_core::ids::{OrgId, ProjectId};
+
+        let dir = tempfile::tempdir().unwrap();
+        let running = bind(config(dir.path()), None).await.unwrap();
+        let state = running.state.as_ref().unwrap().clone();
+        let project = ProjectId::new_v7();
+        // Counted less than 10 s before shutdown, so only the shutdown flush can write it.
+        state
+            .usage
+            .add(OrgId::new_v7(), project, state.clock.now_ns(), 3, 0, 0);
+        running.shutdown().await.unwrap();
+        let meta = MetaDb::open(dir.path()).await.unwrap();
+        let spans: i64 = sqlx::query_scalar("SELECT spans FROM usage_daily WHERE project_id = ?")
+            .bind(project.to_string())
+            .fetch_one(meta.reader())
+            .await
+            .unwrap();
+        assert_eq!(spans, 3);
+    }
+
+    #[tokio::test]
+    async fn an_ingest_request_over_tcp_is_counted_by_the_shutdown_flush() {
+        use crate::meta::MetaDb;
+
+        let dir = tempfile::tempdir().unwrap();
+        let running = bind(with_init(config(dir.path())), None).await.unwrap();
+        let accepted = post_traces(running.local_addr, OTLP_KEY).await;
+        assert!(accepted.starts_with("HTTP/1.1 200"), "{accepted}");
+        running.shutdown().await.unwrap();
+        let meta = MetaDb::open(dir.path()).await.unwrap();
+        let spans: i64 = sqlx::query_scalar("SELECT spans FROM usage_daily")
+            .fetch_one(meta.reader())
+            .await
+            .unwrap();
+        assert!(spans > 0, "{spans}");
+        meta.close().await;
+    }
+
+    #[tokio::test]
     async fn shutdown_flushes_last_used() {
         use crate::auth::roles::{KeyScope, OrgRole};
         use crate::meta::MetaDb;
@@ -644,7 +763,7 @@ mod tests {
         use crate::meta::users::{NewUser, insert_user};
 
         let dir = tempfile::tempdir().unwrap();
-        let running = bind(config(dir.path())).await.unwrap();
+        let running = bind(config(dir.path()), None).await.unwrap();
         let state = running.state.as_ref().unwrap().clone();
         let now = state.clock.now_ns();
         let key_id = state
@@ -735,7 +854,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut both = with_init(config(dir.path()));
         both.otlp_http_addr = Some(SocketAddr::from(([127, 0, 0, 1], 0)));
-        let running = bind(both).await.unwrap();
+        let running = bind(both, None).await.unwrap();
         let otlp = running.otlp_local_addr.expect("the OTLP listener is bound");
         assert_ne!(otlp, running.local_addr);
 
@@ -754,11 +873,156 @@ mod tests {
         running.shutdown().await.unwrap();
     }
 
+    fn test_ui() -> axum::Router {
+        axum::Router::new().fallback(|| async { "ui" })
+    }
+
+    #[tokio::test]
+    async fn the_ui_answers_the_main_listener_but_not_api_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut both = config(dir.path());
+        both.otlp_http_addr = Some(SocketAddr::from(([127, 0, 0, 1], 0)));
+        let running = bind(both, Some(test_ui())).await.unwrap();
+
+        let page = http_get(running.local_addr, "/some/page", "close").await;
+        let text = String::from_utf8_lossy(&page);
+        assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+        assert!(text.ends_with("ui"), "{text}");
+
+        for path in ["/apiary", "/v1x"] {
+            let page = http_get(running.local_addr, path, "close").await;
+            let text = String::from_utf8_lossy(&page);
+            assert!(text.starts_with("HTTP/1.1 200"), "{path}: {text}");
+            assert!(text.ends_with("ui"), "{path}: {text}");
+        }
+
+        for path in ["/api", "/api/v1/nope", "/v1/nope", "/mcp/x"] {
+            let missing = http_get(running.local_addr, path, "close").await;
+            let text = String::from_utf8_lossy(&missing);
+            assert!(text.starts_with("HTTP/1.1 404"), "{path}: {text}");
+            assert!(text.contains("application/problem+json"), "{path}: {text}");
+        }
+
+        let health = http_get(running.local_addr, "/healthz", "close").await;
+        assert!(String::from_utf8_lossy(&health).starts_with("HTTP/1.1 200"));
+
+        let otlp = running.otlp_local_addr.expect("the OTLP listener is bound");
+        let on_otlp = send_raw(
+            otlp,
+            b"GET /some/page HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(on_otlp.starts_with("HTTP/1.1 404"), "{on_otlp}");
+        running.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn without_a_ui_unknown_paths_are_problems() {
+        let dir = tempfile::tempdir().unwrap();
+        let running = bind(config(dir.path()), None).await.unwrap();
+        let missing = http_get(running.local_addr, "/some/page", "close").await;
+        let text = String::from_utf8_lossy(&missing);
+        assert!(text.starts_with("HTTP/1.1 404"), "{text}");
+        assert!(text.contains("application/problem+json"), "{text}");
+        running.shutdown().await.unwrap();
+    }
+
     #[tokio::test]
     async fn no_otlp_address_binds_one_listener() {
         let dir = tempfile::tempdir().unwrap();
-        let running = bind(config(dir.path())).await.unwrap();
+        let running = bind(config(dir.path()), None).await.unwrap();
         assert!(running.otlp_local_addr.is_none());
+        assert!(running.grpc_local_addr.is_none());
+        running.shutdown().await.unwrap();
+    }
+
+    fn with_grpc(data_dir: &Path, tweak: impl FnOnce(&mut ServerConfig)) -> ServerConfig {
+        let mut config = with_init(config(data_dir));
+        config.grpc_addr = Some(SocketAddr::from(([127, 0, 0, 1], 0)));
+        tweak(&mut config);
+        config
+    }
+
+    /// `TRACES` as an export request, with the ingest key in `authorization`.
+    fn authorized(message: ExportTraceServiceRequest) -> tonic::Request<ExportTraceServiceRequest> {
+        let mut request = tonic::Request::new(message);
+        request.metadata_mut().insert(
+            "authorization",
+            format!("Bearer {OTLP_KEY}").parse().expect("ASCII token"),
+        );
+        request
+    }
+
+    #[tokio::test]
+    async fn grpc_export_over_tcp_plain_and_gzip() {
+        let dir = tempfile::tempdir().unwrap();
+        let running = bind(with_grpc(dir.path(), |_| {}), None).await.unwrap();
+        let addr = running.grpc_local_addr.expect("the gRPC listener is bound");
+        let message = decode_json(TRACES.as_bytes()).expect("fixture decodes");
+
+        let mut plain = TraceServiceClient::connect(format!("http://{addr}"))
+            .await
+            .unwrap();
+        plain
+            .export(authorized(message.clone()))
+            .await
+            .expect("plain export is accepted");
+
+        let mut gzip = TraceServiceClient::connect(format!("http://{addr}"))
+            .await
+            .unwrap()
+            .send_compressed(CompressionEncoding::Gzip);
+        gzip.export(authorized(message))
+            .await
+            .expect("gzip export is accepted");
+        drop(plain);
+        drop(gzip);
+        running.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn grpc_refuses_a_message_over_the_configured_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let running = bind(
+            with_grpc(dir.path(), |config| {
+                config.ingest.max_grpc_message_bytes = ByteSize::kib(1);
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+        let addr = running.grpc_local_addr.expect("the gRPC listener is bound");
+        let mut message = decode_json(TRACES.as_bytes()).expect("fixture decodes");
+        let padding = KeyValue {
+            key: "pad".to_owned(),
+            value: Some(AnyValue {
+                value: Some(any_value::Value::StringValue("x".repeat(4096))),
+            }),
+            ..Default::default()
+        };
+        message.resource_spans[0].scope_spans[0].spans[0]
+            .attributes
+            .push(padding);
+
+        let mut client = TraceServiceClient::connect(format!("http://{addr}"))
+            .await
+            .unwrap();
+        let status = client
+            .export(authorized(message))
+            .await
+            .expect_err("the message is over the limit");
+        assert_eq!(status.code(), tonic::Code::OutOfRange, "{status:?}");
+        drop(client);
+        running.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn empty_grpc_address_binds_no_grpc_listener() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config(dir.path());
+        config.grpc_addr = None;
+        let running = bind(config, None).await.unwrap();
+        assert!(running.grpc_local_addr.is_none());
         running.shutdown().await.unwrap();
     }
 
@@ -769,14 +1033,14 @@ mod tests {
         std::fs::write(
             &path,
             format!(
-                "data_dir = \"{}\"\nhttp_addr = \"127.0.0.1:0\"\notlp_http_addr = \"\"\n",
+                "data_dir = \"{}\"\nhttp_addr = \"127.0.0.1:0\"\notlp_http_addr = \"\"\ngrpc_addr = \"\"\n",
                 dir.path().display()
             ),
         )
         .unwrap();
         let loaded = ServerConfig::load(Some(&path)).unwrap();
         assert_eq!(loaded.otlp_http_addr, None);
-        let running = bind(loaded).await.unwrap();
+        let running = bind(loaded, None).await.unwrap();
         assert!(running.otlp_local_addr.is_none());
         running.shutdown().await.unwrap();
     }
@@ -788,7 +1052,7 @@ mod tests {
         let taken_addr = taken.local_addr().unwrap();
         let mut clash = config(dir.path());
         clash.otlp_http_addr = Some(taken_addr);
-        let error = bind(clash).await.unwrap_err();
+        let error = bind(clash, None).await.unwrap_err();
         let text = error.to_string();
         assert!(
             matches!(error, ServeError::Bind { addr, .. } if addr == taken_addr),
@@ -797,7 +1061,7 @@ mod tests {
         assert!(text.contains(&taken_addr.to_string()), "{text}");
         drop(taken);
 
-        let again = bind(config(dir.path())).await.unwrap();
+        let again = bind(config(dir.path()), None).await.unwrap();
         again.shutdown().await.unwrap();
     }
 
@@ -806,11 +1070,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut both = config(dir.path());
         both.otlp_http_addr = Some(SocketAddr::from(([127, 0, 0, 1], 0)));
-        let running = bind(both).await.unwrap();
+        both.grpc_addr = Some(SocketAddr::from(([127, 0, 0, 1], 0)));
+        let running = bind(both, None).await.unwrap();
         assert!(running.otlp_local_addr.is_some());
+        assert!(running.grpc_local_addr.is_some());
         running.shutdown().await.unwrap();
 
-        let again = bind(config(dir.path())).await.unwrap();
+        let again = bind(config(dir.path()), None).await.unwrap();
         again.shutdown().await.unwrap();
     }
 
@@ -821,6 +1087,7 @@ mod tests {
             http_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             trusted_proxies: Vec::new(),
             otlp_http_addr: None,
+            grpc_addr: None,
             storage: StorageConfig {
                 data_dir: data_dir.to_path_buf(),
                 min_free_bytes: ByteSize::b(0),

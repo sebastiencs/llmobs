@@ -8,6 +8,7 @@ use std::io::{self, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::AtomicI64;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tracing_subscriber::layer::SubscriberExt;
 
@@ -16,6 +17,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
 use bytesize::ByteSize;
+use http_body_util::BodyExt;
 use llmobs_core::batch::{scores_to_record_batch, spans_to_record_batch};
 use llmobs_core::ids::{OrgId, ProjectId};
 use llmobs_core::names::PRODUCT;
@@ -175,14 +177,16 @@ impl TestApp {
             providers,
             oauth_key: crate::auth::oidc::random_key().expect("oauth key"),
             ingest,
+            live: crate::live::LiveBus::new(crate::live::StreamTiming::TEST),
             metrics_cache: crate::routes::metrics::MetricsCache::default(),
+            usage: crate::usage::Usage::default(),
         });
         let router = if let Some(table) = table {
             serve_router(state.clone(), table)
         } else if let Some(routes) = routes {
             router_with(state.clone(), routes)
         } else {
-            router(state.clone())
+            router(state.clone(), None)
         };
         Self {
             _dir: dir,
@@ -365,13 +369,57 @@ impl TestApp {
     }
 }
 
+/// The spans of `fixtures/api/dataset/spans.json`, as written.
+fn dataset_spans() -> Vec<Span> {
+    let dataset = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/api/dataset");
+    let spans_text = std::fs::read_to_string(format!("{dataset}/spans.json")).unwrap();
+    serde_json::from_str(&spans_text).unwrap()
+}
+
+/// The `index`-th span of the example dataset, as written (its `project_id` is the fixture's).
+pub(crate) fn dataset_span(index: usize) -> Span {
+    dataset_spans()
+        .into_iter()
+        .nth(index)
+        .expect("the dataset has that many spans")
+}
+
+impl TestApp {
+    /// Commits `spans` to `project` through the ingest path: the live bus sees them and the
+    /// usage counters count them. The spans' `project_id` is set to `project`.
+    pub(crate) async fn commit_spans(&self, project: &ProjectRow, mut spans: Vec<Span>) {
+        for span in &mut spans {
+            span.project_id = project.id;
+        }
+        self.state
+            .ingest
+            .commit(
+                &self.state.storage,
+                &self.state.usage,
+                &self.state.live,
+                crate::ingest::CommitTarget {
+                    org_id: project.org_id,
+                    project_id: project.id,
+                    request_bytes: 0,
+                    now_ns: self.state.clock.now_ns(),
+                },
+                llmobs_otel::Normalized {
+                    spans,
+                    media: Vec::new(),
+                    rejections: llmobs_otel::Rejections::default(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+}
+
 impl TestApp {
     /// Appends `fixtures/api/dataset` (spans and scores) to `project` and stores the PNGs of
     /// `fixtures/api/media`. Every row's `project_id` is set to `project`.
     pub(crate) async fn load_example_dataset(&self, project: ProjectId) {
         let dataset = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/api/dataset");
-        let spans_text = std::fs::read_to_string(format!("{dataset}/spans.json")).unwrap();
-        let mut spans: Vec<Span> = serde_json::from_str(&spans_text).unwrap();
+        let mut spans = dataset_spans();
         for span in &mut spans {
             span.project_id = project;
         }
@@ -461,6 +509,8 @@ fn default_config(data_dir: &std::path::Path) -> ServerConfig {
         trusted_proxies: Vec::new(),
         // Tests must not bind the OTLP port (4318).
         otlp_http_addr: None,
+        // Tests must not bind the gRPC port (4317).
+        grpc_addr: None,
         storage: StorageConfig {
             data_dir: data_dir.to_path_buf(),
             min_free_bytes: ByteSize::b(0),
@@ -537,18 +587,8 @@ impl TestRequest {
     }
 
     pub(crate) async fn send(self) -> TestResponse {
-        let mut builder = Request::builder()
-            .method(self.method.clone())
-            .uri(&self.path);
-        if let Some(origin) = self.origin_value() {
-            builder = builder.header(axum::http::header::ORIGIN, origin);
-        }
-        for (name, value) in &self.headers {
-            builder = builder.header(name, value);
-        }
-        let mut request = builder.body(Body::from(self.body)).unwrap();
-        request.extensions_mut().insert(ConnectInfo(self.peer));
-        let response = self.router.oneshot(request).await.unwrap();
+        let (router, request) = self.build();
+        let response = router.oneshot(request).await.unwrap();
         let (parts, body) = response.into_parts();
         let body = axum::body::to_bytes(body, 8 * 1024 * 1024)
             .await
@@ -558,6 +598,35 @@ impl TestRequest {
             headers: parts.headers,
             body,
         }
+    }
+
+    /// Sends the request and keeps the body open, for an SSE response. Dropping the returned
+    /// [`TestStream`] ends the stream.
+    pub(crate) async fn send_stream(self) -> TestStream {
+        let (router, request) = self.build();
+        let response = router.oneshot(request).await.unwrap();
+        let (parts, body) = response.into_parts();
+        TestStream {
+            status: parts.status,
+            headers: parts.headers,
+            body,
+            buffer: String::new(),
+        }
+    }
+
+    fn build(self) -> (Router, Request<Body>) {
+        let mut builder = Request::builder()
+            .method(self.method.clone())
+            .uri(&self.path);
+        if let Some(origin) = self.origin_value() {
+            builder = builder.header(axum::http::header::ORIGIN, origin);
+        }
+        for (name, value) in &self.headers {
+            builder = builder.header(name, value);
+        }
+        let mut request = builder.body(Body::from(self.body.clone())).unwrap();
+        request.extensions_mut().insert(ConnectInfo(self.peer));
+        (self.router, request)
     }
 
     fn origin_value(&self) -> Option<String> {
@@ -596,6 +665,98 @@ impl TestResponse {
     pub(crate) fn header(&self, name: &str) -> Option<&str> {
         self.headers.get(name).and_then(|value| value.to_str().ok())
     }
+}
+
+/// A streaming response, read event by event (D-G-12). Dropping it ends the stream.
+pub(crate) struct TestStream {
+    pub(crate) status: StatusCode,
+    pub(crate) headers: HeaderMap,
+    body: Body,
+    /// Bytes read from the body that do not yet form a whole event.
+    buffer: String,
+}
+
+/// One server-sent event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SseEvent {
+    pub(crate) event: String,
+    pub(crate) id: Option<String>,
+    pub(crate) data: String,
+}
+
+impl TestStream {
+    /// The next event, or `None` when `wait` passes first or the body ends.
+    pub(crate) async fn next_event(&mut self, wait: Duration) -> Option<SseEvent> {
+        tokio::time::timeout(wait, self.read_event())
+            .await
+            .ok()
+            .flatten()
+    }
+
+    /// The next event that is not `ping`, within `wait` in total.
+    pub(crate) async fn next_non_ping(&mut self, wait: Duration) -> Option<SseEvent> {
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let event = self.next_event(remaining).await?;
+            if event.event != "ping" {
+                return Some(event);
+            }
+        }
+    }
+
+    /// Whether the body ends within `wait`. Frames read on the way are discarded.
+    pub(crate) async fn body_closed(&mut self, wait: Duration) -> bool {
+        let drain = async {
+            loop {
+                match self.body.frame().await {
+                    None | Some(Err(_)) => return true,
+                    Some(Ok(_)) => {}
+                }
+            }
+        };
+        tokio::time::timeout(wait, drain).await.unwrap_or(false)
+    }
+
+    async fn read_event(&mut self) -> Option<SseEvent> {
+        loop {
+            if let Some(end) = self.buffer.find("\n\n") {
+                let block: String = self.buffer.drain(..end + 2).collect();
+                if let Some(event) = parse_event(&block) {
+                    return Some(event);
+                }
+                continue;
+            }
+            let frame = self.body.frame().await?.ok()?;
+            if let Ok(data) = frame.into_data() {
+                self.buffer.push_str(&String::from_utf8_lossy(&data));
+            }
+        }
+    }
+}
+
+/// One block of an event stream. A block without `event:` (a comment) is `None`.
+fn parse_event(block: &str) -> Option<SseEvent> {
+    let mut event = None;
+    let mut id = None;
+    let mut data = Vec::new();
+    for line in block.lines() {
+        if line.is_empty() || line.starts_with(':') {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("event:") {
+            event = Some(value.trim_start().to_owned());
+        } else if let Some(value) = line.strip_prefix("id:") {
+            id = Some(value.trim_start().to_owned());
+        } else if let Some(value) = line.strip_prefix("data:") {
+            data.push(value.trim_start());
+        }
+    }
+    Some(SseEvent {
+        event: event?,
+        id,
+        data: data.join("\n"),
+    })
 }
 
 /// Runs `future` with a capturing subscriber and fails if any needle appears.

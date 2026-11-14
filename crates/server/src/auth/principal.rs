@@ -202,7 +202,11 @@ pub(crate) async fn authenticate(
     response
 }
 
-async fn bearer_principal(state: &AppState, headers: &HeaderMap) -> Result<Principal, ApiError> {
+/// The caller of a bearer token: a key, a PAT, or `Unauthorized`. Shared by HTTP and gRPC.
+pub(crate) async fn bearer_principal(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Principal, ApiError> {
     let token = bearer_token(headers)?;
     let Some(kind) = secret::parse_key(token) else {
         return Err(ApiError::Unauthorized);

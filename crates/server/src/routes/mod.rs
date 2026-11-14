@@ -4,6 +4,7 @@
 pub(crate) mod admin;
 pub(crate) mod api_keys;
 pub(crate) mod auth;
+pub(crate) mod feedback;
 pub(crate) mod invites;
 pub(crate) mod me;
 pub(crate) mod media;
@@ -17,6 +18,7 @@ pub(crate) mod read;
 pub(crate) mod schema;
 pub(crate) mod scores;
 pub(crate) mod sessions;
+pub(crate) mod streams;
 pub(crate) mod tokens;
 pub(crate) mod traces;
 pub(crate) mod users;

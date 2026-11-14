@@ -248,6 +248,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/public/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send end-user feedback
+         * @description Needs a `pk` key with the `feedback` scope. CORS allows any origin. At most 4 KiB, 10 requests per second per key and client IP.
+         */
+        post: operations["post_feedback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/settings": {
         parameters: {
             query?: never;
@@ -735,8 +755,32 @@ export interface paths {
         /** List scores */
         get: operations["list_scores"];
         put?: never;
-        post?: never;
+        /**
+         * Write scores
+         * @description Writes 1–1000 scores in one batch. The answer has one id per item, in input order.
+         */
+        post: operations["create_scores"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project}/scores/{score_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a score
+         * @description Appends a deleted version of the score. Its `created_at` is kept.
+         */
+        delete: operations["delete_score"];
         options?: never;
         head?: never;
         patch?: never;
@@ -933,6 +977,26 @@ export interface paths {
         get: operations["get_user"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/scores": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Write scores with an ingest key
+         * @description Writes 1–1000 scores in one batch. The answer has one id per item, in input order. The project comes from the `sk` key, which needs the `ingest` scope.
+         */
+        post: operations["create_key_scores"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1326,6 +1390,29 @@ export interface components {
             /** @description End-user id. */
             user_id: string;
         };
+        /** @description `POST /api/public/feedback` body (spec 06 § End-user feedback). */
+        FeedbackRequest: {
+            /** @description Free-text comment. */
+            comment?: string;
+            /** @description Default `user_feedback`. */
+            name?: string;
+            /** @description Span of the trace, when the feedback is about one span. */
+            span_id?: components["schemas"]["SpanId"];
+            /** @description Trace the feedback is about. */
+            trace_id: components["schemas"]["TraceId"];
+            /** @description The feedback value. */
+            value: components["schemas"]["FeedbackValue"];
+        };
+        /** @description Answer of `POST /api/public/feedback`. */
+        FeedbackResult: {
+            /**
+             * Format: uuid
+             * @description The id of the stored score.
+             */
+            score_id: string;
+        };
+        /** @description A number, a boolean or a string. */
+        FeedbackValue: boolean | number | string;
         /**
          * @description One field that failed validation.
          *
@@ -1996,6 +2083,11 @@ export interface components {
             /** @description The score value. Spec 01 `data_type`, `value_num`, `value_str`. */
             value: components["schemas"]["ScoreValue"];
         };
+        /** @description `POST …/scores` and `POST /api/v1/scores` body. */
+        ScoreBatch: {
+            /** @description Between 1 and 1000 scores. */
+            scores: components["schemas"]["ScoreCreate"][];
+        };
         /**
          * @description The latest score of one name on a trace or session row.
          *
@@ -2012,6 +2104,32 @@ export interface components {
             /** @description Who wrote the score. */
             source: components["schemas"]["ScoreSource"];
             /** @description Score value. */
+            value: components["schemas"]["ScoreValue"];
+        };
+        /** @description One score to write. Spec 06 § Scores, D-F-1, D-G-28. */
+        ScoreCreate: {
+            /** @description String metadata stored with the score. */
+            metadata?: {
+                [key: string]: string;
+            };
+            /** @description Score name. */
+            name: string;
+            /** @description Free-text reason for the value. */
+            reason?: string;
+            /**
+             * Format: uuid
+             * @description Client id; a UUIDv7 gives `created_at` from its time (D-G-26). Derived when absent.
+             */
+            score_id?: string;
+            /** @description Session of a span or trace target. Ignored for a session target. */
+            session_id?: string;
+            /** @description Who wrote the score. Defaults by caller (D-G-27). */
+            source?: components["schemas"]["ScoreSource"];
+            /** @description Span, trace or session the score is attached to. */
+            target: components["schemas"]["ScoreTarget"];
+            /** @description End user the score is about, when known. */
+            user_id?: string;
+            /** @description The score value. */
             value: components["schemas"]["ScoreValue"];
         };
         /** @description One page of results. `next_cursor` is null when there is no next page. */
@@ -2095,6 +2213,11 @@ export interface components {
             data_type: "text";
             /** @description Free text. */
             value: string;
+        };
+        /** @description Answer of a score write: one id per input item, in input order. */
+        ScoreWriteResult: {
+            /** @description One id per input item, in input order. */
+            score_ids: string[];
         };
         /**
          * @description Session summary plus its turns.
@@ -3490,6 +3613,84 @@ export interface operations {
             };
             /** @description The request conflicts with the current state. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    post_feedback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackRequest"];
+            };
+        };
+        responses: {
+            /** @description The stored feedback score. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackResult"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request body is larger than the limit. */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6316,6 +6517,173 @@ export interface operations {
             };
         };
     };
+    create_scores: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScoreBatch"];
+            };
+        };
+        responses: {
+            /** @description The id of each written score, in input order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScoreWriteResult"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request body is larger than the limit. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server is busy or a dependency is unavailable. Retry later. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_score: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project UUID, URL-encoded org-slug/project-slug, or `current`. */
+                project: string;
+                /** @description Score id. */
+                score_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server is busy or a dependency is unavailable. Retry later. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     list_sessions: {
         parameters: {
             query?: {
@@ -6797,8 +7165,26 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            /** @description The query took longer than its time limit or needed more memory than allowed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Too many requests. */
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server is busy or a dependency is unavailable. Retry later. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7012,6 +7398,15 @@ export interface operations {
                     "text/event-stream": string;
                 };
             };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             /** @description No credentials, or the credentials are invalid. */
             401: {
                 headers: {
@@ -7221,6 +7616,93 @@ export interface operations {
             };
             /** @description The query took longer than its time limit or needed more memory than allowed. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server is busy or a dependency is unavailable. Retry later. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_key_scores: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScoreBatch"];
+            };
+        };
+        responses: {
+            /** @description The id of each written score, in input order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScoreWriteResult"];
+                };
+            };
+            /** @description The request is malformed or a filter is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No credentials, or the credentials are invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The credentials do not allow this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The resource does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request body is larger than the limit. */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };

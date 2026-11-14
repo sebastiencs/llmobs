@@ -5,6 +5,7 @@ pub(crate) mod body;
 pub(crate) mod environment;
 #[cfg(test)]
 mod fixtures_tests;
+pub(crate) mod grpc;
 pub(crate) mod otlp;
 
 use std::sync::{Arc, PoisonError, RwLock};
@@ -13,11 +14,11 @@ use bytes::Bytes;
 use futures::{StreamExt, stream};
 use llmobs_core::batch::spans_to_record_batch;
 use llmobs_core::error::CoreError;
-use llmobs_core::ids::ProjectId;
+use llmobs_core::ids::{OrgId, ProjectId};
 use llmobs_core::media::MediaBlob as CoreBlob;
 use llmobs_otel::{
-    DecodeError, IngestContext, IngestLimits, Normalized, PriceTable, decode_json, decode_protobuf,
-    normalize,
+    DecodeError, ExportTraceServiceRequest, IngestContext, IngestLimits, Normalized, PriceTable,
+    decode_json, decode_protobuf, normalize,
 };
 use llmobs_storage::error::{AppendError, MediaError};
 use llmobs_storage::{MediaBlob, Storage};
@@ -25,7 +26,9 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::config::{IngestConfig, MediaConfig};
 use crate::http::error::ApiError;
+use crate::live::LiveBus;
 use crate::meta::projects::ProjectRow;
+use crate::usage::Usage;
 use body::{BodyEncoding, BodyError, BodyFormat, DecompressError, decompress};
 use environment::rewrite_reserved_environment;
 
@@ -55,6 +58,17 @@ pub(crate) struct Accepted {
     /// Spans whose environment was rewritten (D-G-7).
     pub(crate) rewritten: usize,
     pub(crate) reservation: Reservation,
+}
+
+/// Where a commit goes and what it counts (D-G-8, D-G-30).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CommitTarget {
+    pub(crate) org_id: OrgId,
+    pub(crate) project_id: ProjectId,
+    /// Bytes counted in `usage_daily.bytes`. In-process commits pass 0.
+    pub(crate) request_bytes: u64,
+    /// The request's `now`; its UTC day is the usage day.
+    pub(crate) now_ns: i64,
 }
 
 /// What `commit` stored.
@@ -124,9 +138,15 @@ impl Ingest {
         let amount = content_length
             .and_then(|length| usize::try_from(length).ok())
             .filter(|length| *length <= self.max_request_bytes)
-            .unwrap_or(self.max_request_bytes)
-            .max(1);
-        let amount = u32::try_from(amount).map_err(|_| IngestError::Busy)?;
+            .unwrap_or(self.max_request_bytes);
+        self.reserve_exact(u64::try_from(amount).unwrap_or(u64::MAX))
+    }
+
+    /// Reserves exactly `bytes` (at least 1) of budget, for gRPC, where tonic has already
+    /// read the message. Never waits: a count that does not fit a `u32` or the free budget
+    /// is `Busy`.
+    pub(crate) fn reserve_exact(&self, bytes: u64) -> Result<Reservation, IngestError> {
+        let amount = u32::try_from(bytes.max(1)).map_err(|_| IngestError::Busy)?;
         self.budget
             .clone()
             .try_acquire_many_owned(amount)
@@ -162,19 +182,7 @@ impl Ingest {
                 .map_err(|_| IngestError::Busy)?;
             reservation.0.merge(extra);
         }
-        let prices: Arc<PriceTable> = self
-            .prices
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        let ctx = IngestContext {
-            project_id: project.id,
-            ingest_time: now_ns,
-            retention_days: project.retention_days,
-            limits: self.limits,
-        };
         let max_bytes = self.max_request_bytes;
-        let max_spans = self.max_spans_per_request;
         let semaphore = Arc::clone(&self.budget);
         let work = tokio::task::spawn_blocking(move || -> Result<_, IngestError> {
             let decompressed = {
@@ -201,6 +209,47 @@ impl Ingest {
                 BodyFormat::Json => decode_json(&decompressed),
             }
             .map_err(IngestError::Decode)?;
+            Ok((request, decompressed_bytes, reservation))
+        });
+        let (request, decompressed_bytes, reservation) = match work.await {
+            Ok(result) => result?,
+            Err(error) => return Err(IngestError::Join(error)),
+        };
+        self.accept_request(
+            request,
+            reservation,
+            u64::try_from(request_bytes).unwrap_or(u64::MAX),
+            u64::try_from(decompressed_bytes).unwrap_or(u64::MAX),
+            project,
+            now_ns,
+        )
+        .await
+    }
+
+    /// Counts, normalizes and rewrites a decoded request (D-G-2, D-G-7). Used by OTLP/HTTP after
+    /// decoding and by gRPC, whose request tonic decodes.
+    pub(crate) async fn accept_request(
+        &self,
+        request: ExportTraceServiceRequest,
+        reservation: Reservation,
+        request_bytes: u64,
+        decompressed_bytes: u64,
+        project: &ProjectRow,
+        now_ns: i64,
+    ) -> Result<Accepted, IngestError> {
+        let prices: Arc<PriceTable> = self
+            .prices
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let ctx = IngestContext {
+            project_id: project.id,
+            ingest_time: now_ns,
+            retention_days: project.retention_days,
+            limits: self.limits,
+        };
+        let max_spans = self.max_spans_per_request;
+        let work = tokio::task::spawn_blocking(move || -> Result<_, IngestError> {
             let spans = request
                 .resource_spans
                 .iter()
@@ -213,27 +262,30 @@ impl Ingest {
             }
             let mut normalized = normalize(&request, &ctx, &prices);
             let rewritten = rewrite_reserved_environment(&mut normalized.spans);
-            Ok((normalized, decompressed_bytes, rewritten, reservation))
+            Ok((normalized, rewritten))
         });
-        let (normalized, decompressed_bytes, rewritten, reservation) = match work.await {
+        let (normalized, rewritten) = match work.await {
             Ok(result) => result?,
             Err(error) => return Err(IngestError::Join(error)),
         };
         Ok(Accepted {
             normalized,
-            request_bytes: u64::try_from(request_bytes).unwrap_or(u64::MAX),
-            decompressed_bytes: u64::try_from(decompressed_bytes).unwrap_or(u64::MAX),
+            request_bytes,
+            decompressed_bytes,
             rewritten,
             reservation,
         })
     }
 
-    /// Stores the media, then appends the spans (D-G-8, D-G-9). Nothing is appended when a
-    /// blob fails. The caller's reservation covers the spans until this returns.
+    /// Stores the media, then appends the spans (D-G-8, D-G-9), then counts them and the
+    /// request bytes (D-G-30). Nothing is appended when a blob fails, and nothing is counted
+    /// then. The caller's reservation covers the spans until this returns.
     pub(crate) async fn commit(
         &self,
         storage: &Storage,
-        project_id: ProjectId,
+        usage: &Usage,
+        live: &LiveBus,
+        target: CommitTarget,
         normalized: Normalized,
     ) -> Result<CommitReceipt, IngestError> {
         let Normalized { spans, media, .. } = normalized;
@@ -243,27 +295,34 @@ impl Ingest {
             .collect::<Result<Vec<_>, _>>()?;
         let mut stored = 0_usize;
         let mut puts = stream::iter(blobs)
-            .map(|blob| storage.put_media(project_id, blob))
+            .map(|blob| storage.put_media(target.project_id, blob))
             .buffer_unordered(MEDIA_CONCURRENCY);
         while let Some(result) = puts.next().await {
             result.map_err(IngestError::Media)?;
             stored += 1;
         }
-        if spans.is_empty() {
-            return Ok(CommitReceipt {
-                accepted: 0,
-                media: stored,
-            });
-        }
         let accepted = spans.len();
-        let batch = tokio::task::spawn_blocking(move || spans_to_record_batch(&spans))
+        if !spans.is_empty() {
+            let (batch, spans) = tokio::task::spawn_blocking(move || {
+                spans_to_record_batch(&spans).map(|batch| (batch, spans))
+            })
             .await
             .map_err(IngestError::Join)?
             .map_err(IngestError::Batch)?;
-        storage
-            .append_spans(project_id, batch)
-            .await
-            .map_err(IngestError::Append)?;
+            storage
+                .append_spans(target.project_id, batch)
+                .await
+                .map_err(IngestError::Append)?;
+            live.publish(target.project_id, &spans);
+        }
+        usage.add(
+            target.org_id,
+            target.project_id,
+            target.now_ns,
+            u64::try_from(accepted).unwrap_or(u64::MAX),
+            target.request_bytes,
+            0,
+        );
         Ok(CommitReceipt {
             accepted,
             media: stored,
@@ -419,6 +478,16 @@ mod tests {
             limits: app.state.config.ingest.limits(&app.state.config.media),
         };
         normalize(request, &ctx, prices)
+    }
+
+    /// The commit target of `project` at the app's clock, with no request bytes.
+    fn target(app: &TestApp, project: &ProjectRow) -> CommitTarget {
+        CommitTarget {
+            org_id: project.org_id,
+            project_id: project.id,
+            request_bytes: 0,
+            now_ns: app.state.clock.now_ns(),
+        }
     }
 
     /// Reserves for `body` and runs `accept` on it.
@@ -650,6 +719,54 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn accept_request_gives_what_accept_gives_for_the_same_bytes() {
+        let app = TestApp::new().await;
+        let seeded = app.seed().await;
+        let json = fixture("genai/openai-v2-chat-tool/input.json");
+        let request = decode_json(&json).expect("fixture decodes");
+        let len = u64::try_from(json.len()).unwrap_or(u64::MAX);
+        let reservation = app.state.ingest.reserve_exact(len).expect("reserved");
+        let via_request = app
+            .state
+            .ingest
+            .accept_request(
+                request,
+                reservation,
+                len,
+                len,
+                &seeded.project,
+                app.state.clock.now_ns(),
+            )
+            .await
+            .expect("accepted");
+        let via_bytes = accept_body(
+            &app,
+            &seeded.project,
+            json,
+            BodyFormat::Json,
+            BodyEncoding::Identity,
+        )
+        .await
+        .expect("accepted");
+        assert_eq!(via_request.normalized, via_bytes.normalized);
+        assert_eq!(via_request.rewritten, via_bytes.rewritten);
+        assert_eq!(via_request.request_bytes, len);
+        assert_eq!(via_request.decompressed_bytes, len);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reserve_exact_refuses_a_count_that_does_not_fit_a_u32() {
+        let app = TestApp::new().await;
+        let ingest = &app.state.ingest;
+        assert!(matches!(
+            ingest.reserve_exact(u64::MAX),
+            Err(IngestError::Busy)
+        ));
+        let minimum = ingest.reserve_exact(0).expect("zero reserves one byte");
+        assert_eq!(minimum.0.num_permits(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn commit_stores_media_and_spans() {
         let app = TestApp::with_config(|config| config.media.min_bytes = ByteSize::b(1)).await;
         let seeded = app.seed().await;
@@ -664,7 +781,13 @@ mod tests {
         let receipt = app
             .state
             .ingest
-            .commit(&app.state.storage, seeded.project.id, normalized)
+            .commit(
+                &app.state.storage,
+                &app.state.usage,
+                &app.state.live,
+                target(&app, &seeded.project),
+                normalized,
+            )
             .await
             .expect("committed");
         assert_eq!(
@@ -722,7 +845,16 @@ mod tests {
         let error = app
             .state
             .ingest
-            .commit(&app.state.storage, seeded.project.id, normalized)
+            .commit(
+                &app.state.storage,
+                &app.state.usage,
+                &app.state.live,
+                CommitTarget {
+                    request_bytes: 7,
+                    ..target(&app, &seeded.project)
+                },
+                normalized,
+            )
             .await
             .expect_err("the hash does not match");
         assert!(
@@ -730,6 +862,16 @@ mod tests {
             "{error:?}"
         );
         assert_eq!(stored_spans(&app, seeded.project.id).await, 0);
+        app.state
+            .usage
+            .flush(&app.state.meta)
+            .await
+            .expect("usage flushes");
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM usage_daily")
+            .fetch_one(app.state.meta.reader())
+            .await
+            .expect("count");
+        assert_eq!(rows, 0, "a failed commit counts nothing");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -747,7 +889,13 @@ mod tests {
         let error = app
             .state
             .ingest
-            .commit(&app.state.storage, seeded.project.id, normalized)
+            .commit(
+                &app.state.storage,
+                &app.state.usage,
+                &app.state.live,
+                target(&app, &seeded.project),
+                normalized,
+            )
             .await
             .expect_err("the MIME type is too long");
         assert!(
@@ -766,7 +914,12 @@ mod tests {
             .ingest
             .commit(
                 &app.state.storage,
-                seeded.project.id,
+                &app.state.usage,
+                &app.state.live,
+                CommitTarget {
+                    request_bytes: 7,
+                    ..target(&app, &seeded.project)
+                },
                 Normalized {
                     spans: Vec::new(),
                     media: Vec::new(),
@@ -783,6 +936,18 @@ mod tests {
             }
         );
         assert_eq!(stored_spans(&app, seeded.project.id).await, 0);
+        app.state
+            .usage
+            .flush(&app.state.meta)
+            .await
+            .expect("usage flushes");
+        let counted: (i64, i64) =
+            sqlx::query_as("SELECT spans, bytes FROM usage_daily WHERE project_id = ?")
+                .bind(seeded.project.id.to_string())
+                .fetch_one(app.state.meta.reader())
+                .await
+                .expect("one usage row for the day");
+        assert_eq!(counted, (0, 7));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -803,7 +968,13 @@ mod tests {
         let error = app
             .state
             .ingest
-            .commit(&app.state.storage, seeded.project.id, normalized)
+            .commit(
+                &app.state.storage,
+                &app.state.usage,
+                &app.state.live,
+                target(&app, &seeded.project),
+                normalized,
+            )
             .await
             .expect_err("a dropped project takes no spans");
         assert!(

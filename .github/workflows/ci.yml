@@ -186,6 +186,25 @@ jobs:
       - run: just check-workflows
       - run: just assert-clean
 
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/rust # zizmor: ignore[self-repository] actionlint 1.7.12 rejects the $/ form
+        with:
+          cache: "false"
+      - uses: ./.github/actions/js # zizmor: ignore[self-repository] actionlint 1.7.12 rejects the $/ form
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+          enable-cache: true
+          cache-dependency-glob: sdks/python/uv.lock
+      - run: just e2e
+      - run: just assert-clean
+
   ci-ok:
     if: always()
     needs:
@@ -198,6 +217,7 @@ jobs:
         ts-sdk-min-node,
         python-sdk,
         workflows,
+        e2e,
       ]
     runs-on: ubuntu-latest
     timeout-minutes: 5

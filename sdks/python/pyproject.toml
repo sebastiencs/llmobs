@@ -82,5 +82,6 @@ mypy_path = "src"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --strict-config"
+markers = ["e2e: needs a running llmobs serve (just e2e)"]
 xfail_strict = true
 filterwarnings = ["error"]
